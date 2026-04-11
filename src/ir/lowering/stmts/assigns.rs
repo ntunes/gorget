@@ -423,27 +423,20 @@ pub(super) fn lower_field_assign(
 /// Clone a Ptr-typed RHS (borrowed reference) to produce an independently owned copy.
 /// Without this, storing a borrowed param into a struct field creates aliased ownership —
 /// when the caller drops its copy, the field becomes a dangling pointer.
+// Thin wrapper over `ensure_owned_at_boundary` for field-store paths that want
+// to clone a Ptr(T) RHS to an owned T before writing into a struct field.
+// Kept as a standalone helper only so the call sites can pass `&mut rhs`
+// instead of passing/returning the operand.
 fn clone_ptr_rhs_if_needed(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     rhs: &mut Operand,
     span: crate::span::Span,
 ) {
-    if let Operand::Copy(ref p) | Operand::Move(ref p) = *rhs {
-        if p.projections.is_empty() {
-            let src_type = builder.local_type(p.local);
-            if let Some(inner) = ctx.pointee_type(src_type) {
-                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                    ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::StructFieldFromBorrow);
-                    let cloned = ctx.call_tracked(builder, &clone_fn,
-                        vec![FunctionBuilder::copy(p.local)], inner);
-                    ctx.drops.register_local(cloned, inner, &ctx.type_registry);
-                    ctx.set_owned(cloned);
-                    *rhs = FunctionBuilder::copy(cloned);
-                }
-            }
-        }
-    }
+    let taken = std::mem::replace(rhs, Operand::Constant(Constant::Unit));
+    *rhs = ctx.ensure_owned_at_boundary(
+        builder, taken, span, crate::ir::ImplicitCloneReason::StructFieldFromBorrow,
+    );
 }
 
 /// Emit a field store with full cleanup: drop old value, unregister string temps,
@@ -559,8 +552,17 @@ pub(super) fn lower_index_assign(
     let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
         || type_name == "GorgetMap";
 
+    // Auto-clone borrow sources for consuming args at `Dict[k]=v` / `Vec[i]=v` sites.
+    // The runtime is symmetric with gorget_array_push: gorget_map_put / _set /
+    // _insert take ownership via raw memcpy without an internal clone, so the
+    // compiler must guarantee independence at the call site. Delegate the
+    // decision to the shared `ensure_owned_at_consuming_arg` helper — same rule
+    // used by `lower_method_call` for push/put/set method calls.
+
     if is_vector {
         // Vector[i] = val → Vector__T__set(&arr, index, val)
+        let val = ctx.ensure_owned_at_consuming_arg(
+            builder, val, value, crate::ir::ImplicitCloneReason::ConsumingArg);
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
             let ptr_type = ctx.register_mut_ptr_type(obj_type);
             let ptr_local = builder.add_local(ptr_type, None);
@@ -573,6 +575,10 @@ pub(super) fn lower_index_assign(
         }
     } else if is_dict {
         // Dict[key] = val → Dict__K__V__put(&dict, key, val)
+        let idx = ctx.ensure_owned_at_consuming_arg(
+            builder, idx, index, crate::ir::ImplicitCloneReason::ConsumingArg);
+        let val = ctx.ensure_owned_at_consuming_arg(
+            builder, val, value, crate::ir::ImplicitCloneReason::ConsumingArg);
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
             let ptr_type = ctx.register_mut_ptr_type(obj_type);
             let ptr_local = builder.add_local(ptr_type, None);

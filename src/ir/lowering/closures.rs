@@ -242,14 +242,21 @@ impl ClosureLowering {
                                 ctx.move_zero_and_mark(builder, cap.local_id);
                                 return FunctionBuilder::copy(deref_local);
                             }
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                ctx.warn_implicit_clone(closure_span, inner, crate::ir::ImplicitCloneReason::ClosureCapture);
-                                let cloned = builder.call(&clone_fn,
-                                    vec![FunctionBuilder::copy(cap.local_id)], inner);
-                                return FunctionBuilder::copy(cloned);
-                            }
                         }
-                        FunctionBuilder::copy(cap.local_id)
+                        // Unified boundary clone: the closure struct needs an
+                        // independently owned value. `ensure_owned_at_boundary`
+                        // clones Ptr(T) borrows and by-value resource borrows.
+                        // Owned local captures pass through (no over-clone) —
+                        // the source keeps ownership, the closure field aliases
+                        // its 8-byte value. The source's scope-exit drop and
+                        // the closure struct's drop must not both fire; this is
+                        // currently handled at individual call sites.
+                        ctx.ensure_owned_at_boundary(
+                            builder,
+                            FunctionBuilder::copy(cap.local_id),
+                            closure_span,
+                            crate::ir::ImplicitCloneReason::ClosureCapture,
+                        )
                     }
                     CaptureMode::ByMutRef => {
                         // Borrow the captured variable

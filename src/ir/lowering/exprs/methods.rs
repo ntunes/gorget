@@ -1236,11 +1236,34 @@ pub(super) fn lower_method_call(
                 lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1)
             })
             .collect();
-        // CoW: materialize borrowed args at consuming positions BEFORE building call_args.
+        // Pre-call ownership materialization at consuming arg positions.
+        // Two cases handled here:
+        //   (a) Ptr(inner) args — always clone to materialize the borrow.
+        //   (b) By-value resource args that are NON-last-use named locals —
+        //       clone so the source retains its value. Last-use + temps are
+        //       handled via post-call MoveZero (built below into consuming_arg_move_zeros).
+        //
+        // Why a single section: the thin-pointer String design makes String args
+        // pass by-value (ParamABI::ByValue on collection methods). Without a
+        // pre-call clone, a non-last-use `s` in `v.push(s); use(s)` would alias
+        // the collection element — and reverting materialize_inplace's safety-net
+        // clone requires the compiler to guarantee independence at the push site.
+        //
+        // Cloned temps are tracked in `pre_call_clone_temps` so the scope-exit
+        // drop pass doesn't double-free: we MoveZero each clone right after the
+        // call (same idiom as `consuming_clone_temps` below). Delegates the
+        // clone-vs-move decision to `ensure_owned_at_consuming_arg` — the same
+        // helper `lower_index_assign` uses for `Dict[k]=v` / `Vec[i]=v`.
+        let mut pre_call_clone_temps: Vec<LocalId> = Vec::new();
         {
-            use crate::ir::types::GirType;
+            // Positions that semantically consume (take ownership of) their arg.
+            // `GorgetString.push/push_line/push_char` are StringBuilder appends — they
+            // READ the arg and copy its bytes, they do NOT take ownership. Exclude
+            // them here so we don't MoveZero the caller's source and orphan the data.
+            let is_string_builder = type_name == "GorgetString";
             let consuming: Vec<usize> = match method_name {
-                "push" | "add" | "extend" | "send" | "push_back" | "push_front" => vec![0],
+                "push" | "add" | "extend" | "send" | "push_back" | "push_front"
+                    if !is_string_builder => vec![0],
                 "put" | "set" | "insert" => {
                     let mut p = vec![];
                     if lowered_method_args.len() >= 1 { p.push(0); }
@@ -1250,24 +1273,28 @@ pub(super) fn lower_method_call(
                 _ => vec![],
             };
             for &idx in &consuming {
-                let arg_local = lowered_method_args.get(idx).and_then(|op| {
-                    match op {
-                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
-                        _ => None,
-                    }
-                });
-                if let Some(local) = arg_local {
-                    let arg_type = builder.local_type(local);
-                    if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(arg_type).cloned() {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                            let span = args.get(idx).map(|a| a.span).unwrap_or(receiver.span);
-                            ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
-                            let cloned = builder.call(&clone_fn,
-                                vec![FunctionBuilder::copy(local)], inner);
-                            lowered_method_args[idx] = FunctionBuilder::copy(cloned);
-                        }
+                let Some(ast_arg) = args.get(idx) else { continue; };
+                // Explicit `!` → caller wants a move; handled by post-call move_zero.
+                if matches!(ast_arg.node.ownership, Ownership::Move) { continue; }
+                let orig = lowered_method_args[idx].clone();
+                let new_op = ctx.ensure_owned_at_consuming_arg(
+                    builder,
+                    orig.clone(),
+                    &ast_arg.node.value,
+                    crate::ir::ImplicitCloneReason::ConsumingArg,
+                );
+                // Detect whether a clone was emitted (distinct local) — if so, it's
+                // a fresh owned temp whose data was just consumed by the call, so we
+                // track it for post-call MoveZero.
+                if let (
+                    Operand::Copy(orig_place) | Operand::Move(orig_place),
+                    Operand::Copy(new_place) | Operand::Move(new_place),
+                ) = (&orig, &new_op) {
+                    if orig_place.local != new_place.local {
+                        pre_call_clone_temps.push(new_place.local);
                     }
                 }
+                lowered_method_args[idx] = new_op;
             }
         }
         call_args.extend(lowered_method_args.iter().cloned());
@@ -1418,32 +1445,99 @@ pub(super) fn lower_method_call(
             effective_name
         };
 
-        // Collect Move-ownership Move-type arg locals for post-call MoveZero.
-        // Includes: (a) explicit !arg at call site, (b) bare args whose callee
-        // param is declared Move, (c) resource-type args to consuming methods
-        // (push, put, set, send) — these transfer ownership to the collection.
-        let consuming_method = matches!(method_name,
-            "push" | "put" | "set" | "push_back" | "push_front" | "send" | "add");
+        // Collect locals to MoveZero after the call — transfers ownership to callee.
+        // Coordinates with the pre-call clone section above:
+        //   - Explicit `!arg`  → always move_zero (caller wants move).
+        //   - Bare arg, identifier, named, last-use → move_zero (zero-cost transfer).
+        //   - Bare arg, identifier, named, NON-last-use → already cloned pre-call;
+        //     the source must NOT be zeroed (it's still live).
+        //   - Bare arg, expression temp (non-identifier) → move_zero the lowered
+        //     temp local (always effectively "last use"). Its scope-exit drop
+        //     becomes a no-op on the NULL'd resource.
+        //   - Bare arg, bare param → already cloned pre-call; caller's data stays.
+        //
+        // Builtin consuming methods (push/put/set/insert/...) don't always have
+        // fn_param_ownerships entries, so we fall back to a method-name whitelist
+        // matching the pre-call clone section's `consuming` list. Keep
+        // `GorgetString.push/push_line/push_char` out of this list — those are
+        // StringBuilder appends that READ the arg, they don't take ownership.
+        let is_string_builder_method = type_name == "GorgetString";
+        let consuming_arg_idx: std::collections::HashSet<usize> = match method_name {
+            "push" | "add" | "extend" | "send" | "push_back" | "push_front"
+                if !is_string_builder_method => [0].into_iter().collect(),
+            "put" | "set" | "insert" => {
+                let mut s = std::collections::HashSet::new();
+                if lowered_method_args.len() >= 1 { s.insert(0); }
+                if lowered_method_args.len() >= 2 { s.insert(1); }
+                s
+            }
+            _ => std::collections::HashSet::new(),
+        };
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()
             .filter_map(|(i, arg)| {
-                // Check call-site explicit Move
                 let call_site_move = matches!(arg.node.ownership, Ownership::Move);
-                // Check callee param Move (i+1 because index 0 is self)
                 let callee_move = ctx.fn_param_ownerships.get(&sig_name)
                     .and_then(|ownerships| ownerships.get(i + 1))
                     .map(|o| matches!(o, Ownership::Move))
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                    || consuming_arg_idx.contains(&i);
                 if !call_site_move && !callee_move { return None; }
-                // Resolve the original local from the arg expression
-                if let Expr::Identifier(name) = &arg.node.value.node {
-                    if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        if is_resource_type_local(local_id, builder, &ctx.type_registry) {
-                            return Some(Place::local(local_id));
+
+                // For explicit `!`: always move_zero the identifier source.
+                if call_site_move {
+                    if let Expr::Identifier(name) = &arg.node.value.node {
+                        if let Some((local_id, _)) = ctx.lookup_local(name) {
+                            if is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                                return Some(Place::local(local_id));
+                            }
                         }
                     }
+                    return None;
                 }
-                None
+
+                // Bare arg with callee_move: two sub-cases.
+                if let Expr::Identifier(name) = &arg.node.value.node {
+                    // Identifier: only move_zero if last use (non-last-use was cloned pre-call).
+                    let (local_id, _) = ctx.lookup_local(name)?;
+                    if !is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                        return None;
+                    }
+                    // Skip non-drop-tracked locals — they're borrows (for-loop string
+                    // vars aliasing the outer collection, bare params, etc.). The
+                    // pre-call clone section already produced an owned copy for them.
+                    if !ctx.drops.is_registered(local_id) { return None; }
+                    // Skip bare params / ref locals / CoW borrows (same reasoning).
+                    if ctx.is_bare_param(local_id) { return None; }
+                    if ctx.is_ref_local(local_id) { return None; }
+                    if ctx.is_cow_borrow(local_id) { return None; }
+                    // Skip non-named locals (should be rare — falls through via temp path).
+                    if !ctx.is_named_local(local_id) { return None; }
+                    // Only zero on last use.
+                    if !ctx.is_last_use_at(name, arg.node.value.span) { return None; }
+                    return Some(Place::local(local_id));
+                }
+
+                // Non-identifier (expression temp): zero the lowered temp local.
+                // Expression temps are always "last use" by construction.
+                let op = lowered_method_args.get(i)?;
+                let place = match op {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
+                    _ => return None,
+                };
+                if !is_resource_type_local(place.local, builder, &ctx.type_registry) {
+                    return None;
+                }
+                // Skip Ptr wrappers (CoW clone already replaced them with a temp that
+                // the callee owns; the original Ptr source doesn't need zeroing).
+                let local_type = builder.local_type(place.local);
+                if matches!(
+                    ctx.type_registry.get(local_type),
+                    Some(crate::ir::types::GirType::Ptr(_)) | Some(crate::ir::types::GirType::MutPtr(_))
+                ) {
+                    return None;
+                }
+                Some(place)
             })
             .collect();
 
@@ -1685,6 +1779,13 @@ pub(super) fn lower_method_call(
         for local in &consuming_clone_temps {
             ctx.move_zero_and_mark(builder, *local);
         }
+        // Same for the earlier CoW pre-call clone section — those cloned temps
+        // (Ptr borrow materialized, or by-value resource cloned for non-last-use /
+        // untracked borrow) have their owned data memcpy'd into the collection.
+        // Zero them so the scope-exit drop pass doesn't double-free.
+        for local in &pre_call_clone_temps {
+            ctx.move_zero_and_mark(builder, *local);
+        }
 
         // Zero source fields for resource-type args that came from field loads.
         // This handles e.g. items.push(h.data) where the C backend zeros the temp
@@ -1709,37 +1810,11 @@ pub(super) fn lower_method_call(
             builder.move_zero(Place::local(local));
         }
 
-        // Phase 1f: auto-move for push/put/set/add value args.
-        // Single-use named locals: MoveZero after push (zero-cost transfer).
-        // TODO: multi-use locals need clone BEFORE push. Requires proper liveness
-        // analysis — is_single_use over-counts across branches.
-        // All positions that consume their argument (take ownership)
-        // Single-use auto-move at consuming positions
-        let consuming_positions: Vec<usize> = match method_name {
-            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => vec![0],
-            "put" | "set" | "insert" => {
-                let mut pos = vec![];
-                if lowered_method_args.len() >= 1 { pos.push(0); }
-                if lowered_method_args.len() >= 2 { pos.push(1); }
-                pos
-            }
-            _ => vec![],
-        };
-        for &value_idx in &consuming_positions {
-            if let Some(ast_arg) = args.get(value_idx) {
-                if let Expr::Identifier(name) = &ast_arg.node.value.node {
-                    if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        if ctx.is_named_local(local_id)
-                            && is_resource_type_local(local_id, builder, &ctx.type_registry)
-                            && !ctx.is_bare_param(local_id)
-                            && ctx.is_last_use_at(name, ast_arg.node.value.span)
-                        {
-                            ctx.move_zero_and_mark(builder, local_id);
-                        }
-                    }
-                }
-            }
-        }
+        // NOTE: the former "Phase 1f auto-move for push/put/set" section was removed.
+        // Its job (MoveZero for last-use named locals at consuming positions) is now
+        // covered by the unified `move_zero_locals` collection above, which also
+        // handles expression temps and coordinates with the pre-call clone section
+        // that fires for non-last-use args.
         result
     } else {
         // Can't determine receiver type — fallback

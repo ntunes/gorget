@@ -202,13 +202,17 @@ fn lower_for_string(
     );
 
     // ch = (Str){ .data = iter.data + byte_pos, .len = cplen }
-    // We'll construct this as a StructInit with computed fields via extern
+    // We'll construct this as a StructInit with computed fields via extern.
+    // `gorget_str_codepoint_at` returns an owned Str (allocates via
+    // `gorget_str_own_region`), so drop-register the local for the loop body
+    // scope — without this, every iteration leaked one codepoint copy.
     let ch_local = builder.call_extern(
         "gorget_str_codepoint_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
         owned_string_type,
     );
     ctx.register_local(var_name, ch_local, owned_string_type);
+    ctx.drops.register_local(ch_local, owned_string_type, &ctx.type_registry);
 
     // Lower the body
     lower_block(ctx, builder, body);

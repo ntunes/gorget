@@ -168,9 +168,11 @@ typedef struct {
     __gorget_hash_fn hash_fn;
     __gorget_eq_fn eq_fn;
     __gorget_drop_fn val_drop;
-    __gorget_drop_fn val_clone;
+    __gorget_drop_fn val_clone;         // Full clone (always-clone). Used by dict.clone() and gorget_map_put_cloned() for intentional aliasing.
     __gorget_drop_fn key_drop;
-    __gorget_drop_fn key_clone;
+    __gorget_drop_fn key_clone;         // Full clone (always-clone). Same as val_clone but for keys.
+    __gorget_drop_fn val_materialize;   // CoW materialize on insert (cap==0-only for strings). NULL = no-op.
+    __gorget_drop_fn key_materialize;   // CoW materialize on insert. Symmetric with gorget_array's elem_materialize.
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;
@@ -1374,16 +1376,18 @@ static inline GorgetString gorget_string_borrow(const GorgetString* src) {
     return *src;
 }
 
-// Materialize: clone to ensure the stored copy is independently owned.
-// With thin pointers, pointer copies create aliases. This clone at the
-// push boundary is equivalent to the old 32-byte struct copy (which
-// implicitly created independent copies via separate cap fields).
-// Future optimization: GIR auto-move for last-use args would eliminate
-// this clone by zeroing the source instead.
+// Materialize: clone static/stack literals (cap == 0) to owned copies.
+// Owned strings (cap > 0) are passed through unchanged — the GIR ensures
+// independence at consuming boundaries via auto-move (last-use + temps) or
+// auto-clone (non-last-use named locals), so pointer copies into collection
+// buffers are already safe. Static literals still need a clone because
+// their backing memory is .rodata and can't be freed by the collection.
 static inline void gorget_string_materialize_inplace(void* p) {
     Str* s = (Str*)p;
     if (*s == NULL || *s == GORGET_EMPTY_STR) return;
-    *s = gorget_string_clone_to_owned(s);
+    if (STR_CAP(*s) == 0) {
+        *s = gorget_string_clone_to_owned(s);
+    }
 }
 
 static inline GorgetString gorget_string_concat(const GorgetString* a, const GorgetString* b) {
@@ -5252,7 +5256,7 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL};
+    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order
@@ -5277,6 +5281,8 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     m.val_clone = NULL;
     m.key_drop = NULL;
     m.key_clone = NULL;
+    m.val_materialize = NULL;
+    m.key_materialize = NULL;
     return m;
 }
 
@@ -5287,6 +5293,7 @@ static inline GorgetMap gorget_map_new_str(size_t val_size) {
     m.eq_fn = __gorget_str_key_eq;
     m.key_drop = (__gorget_drop_fn)gorget_string_free;
     m.key_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
+    m.key_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;
     return m;
 }
 static inline GorgetMap gorget_dict_new_str(size_t val_size) {
@@ -5295,28 +5302,29 @@ static inline GorgetMap gorget_dict_new_str(size_t val_size) {
     m.eq_fn = __gorget_str_key_eq;
     m.key_drop = (__gorget_drop_fn)gorget_string_free;
     m.key_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
+    m.key_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;
     return m;
 }
 
-// Materialize a string key view to owned after memcpy into the map's key buffer.
-// Uses key_clone as the signal that keys are strings. Only materializes views
-// (cap=0, alloc=NULL) — owned keys and literals are left untouched.
-// CoW materialize for dict keys — currently a no-op. The existing
-// ownership-transfer pattern (caller zeros cap/alloc after put) is
-// incompatible with clone-on-put because set algebra operations create
-// new sets with byte-based hash/eq that don't match cloned keys.
-// TODO: enable when set/dict operations use content-based comparison.
-// After inserting a key into the map, clone it so the map owns an independent copy.
-// In the thin-pointer design, memcpy of a String copies just the 8-byte pointer —
-// the map must clone to avoid aliasing with the caller's local.
+// CoW materialize after memcpy of a key/value into the map's slot.
+//
+// Symmetric with `gorget_array_push`'s elem_materialize: for owned resource
+// data (cap>0 strings, owned arrays/dicts/sets/user structs) the compiler
+// guarantees independence at the call site — clone-before-put for borrows,
+// MoveZero after for owned temps / last-use. So this hook is cap==0-only for
+// strings (clones static/stack literals into owned copies) and NULL for other
+// resource types (ownership transferred via the C backend post-call zero).
+// `*_clone` (full always-clone) is kept separately for dict.clone() and the
+// gorget_map_put_cloned helper used by filter/map/update when deliberately
+// duplicating entries from another map.
 static inline void __gorget_map_materialize_key(GorgetMap* m, size_t idx) {
-    if (m->key_clone) {
-        m->key_clone((char*)m->keys + idx * m->key_size);
+    if (m->key_materialize) {
+        m->key_materialize((char*)m->keys + idx * m->key_size);
     }
 }
 static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
-    if (m->val_clone) {
-        m->val_clone((char*)m->values + idx * m->val_size);
+    if (m->val_materialize) {
+        m->val_materialize((char*)m->values + idx * m->val_size);
     }
 }
 
@@ -5401,6 +5409,53 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         }
         m->states[first_tombstone] = 1;
         m->count++;
+    }
+}
+
+// Put with full deep-clone of key/value via key_clone/val_clone hooks. Used by
+// inline helpers (filter/map/update/etc.) that deliberately insert pointers
+// borrowed from another map's slots: the caller does not own the source, so
+// we must materialize independent copies after the raw memcpy done by
+// gorget_map_put. gorget_map_put is the no-clone ownership-transfer variant
+// used at Dict[k]=v and .put() call sites (where the compiler manages
+// ownership). Skips the second clone for static literals (cap==0) — those
+// were already cloned by gorget_string_materialize_inplace via key_materialize.
+static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const void* value) {
+    gorget_map_put(m, key, value);
+    uint64_t h = __GORGET_MAP_HASH(m, key);
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {
+        if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
+            if (m->key_clone) {
+                // Skip for strings that were already cloned by key_materialize
+                // (cap==0 literal case). key_materialize leaves cap>0 strings
+                // untouched, so we need to clone those here.
+                void* kp = (char*)m->keys + idx * m->key_size;
+                if (m->key_materialize == (__gorget_drop_fn)gorget_string_materialize_inplace) {
+                    // gorget_string_materialize_inplace already cloned cap==0;
+                    // for cap>0 we still need a deep clone to avoid aliasing.
+                    Str* ks = (Str*)kp;
+                    if (*ks && *ks != GORGET_EMPTY_STR) {
+                        *ks = gorget_string_clone_to_owned(ks);
+                    }
+                } else {
+                    m->key_clone(kp);
+                }
+            }
+            if (m->val_size > 0 && m->val_clone) {
+                void* vp = (char*)m->values + idx * m->val_size;
+                if (m->val_materialize == (__gorget_drop_fn)gorget_string_materialize_inplace) {
+                    Str* vs = (Str*)vp;
+                    if (*vs && *vs != GORGET_EMPTY_STR) {
+                        *vs = gorget_string_clone_to_owned(vs);
+                    }
+                } else {
+                    m->val_clone(vp);
+                }
+            }
+            return;
+        }
+        idx = (idx + 1) % m->cap;
     }
 }
 
@@ -5497,6 +5552,8 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.val_clone = src->val_clone;
     dst.key_drop = src->key_drop;
     dst.key_clone = src->key_clone;
+    dst.val_materialize = src->val_materialize;
+    dst.key_materialize = src->key_materialize;
     dst.alloc = a;
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);

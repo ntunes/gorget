@@ -1245,9 +1245,17 @@ impl<'a> LoweringContext<'a> {
     /// Ensure an operand is independently owned before crossing an ownership boundary
     /// (return, struct init, enum init, push, closure capture, Move param).
     ///
-    /// Checks the local's ownership state:
-    /// - Owned / untracked: no-op (already independent)
-    /// - Ref/CowBorrow/CollectionRef/BareParam/Alias: clone through Ptr to produce owned T
+    /// Rule: clone if the local is any kind of borrow — Ptr(T), Ref/CowBorrow/
+    /// CollectionRef/BareParam/Alias ownership state, a bare param, or a resource-
+    /// type local that is NOT drop-tracked (for-loop string var borrowing from the
+    /// outer collection, etc.). Owned drop-tracked locals and untracked non-resource
+    /// locals (call result temps, primitives) are pass-through.
+    ///
+    /// Shape:
+    ///   - Ptr(T) borrow  → clone through the pointer via `clone_fn_for_ptr(T)`
+    ///   - by-value T     → clone the value via the same `clone_fn_for_ptr(T)`
+    ///                      (string/array/map/set runtime clone fns accept a
+    ///                      pointer to the value; C backend auto-addresses it)
     ///
     /// Returns the (possibly cloned) operand. Call sites should use the returned
     /// operand instead of the original.
@@ -1258,31 +1266,140 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
         reason: crate::ir::ImplicitCloneReason,
     ) -> Operand {
-        if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-            if place.projections.is_empty() {
-                // Check ownership state — Owned and untracked locals are already
-                // independent (call result temps aren't explicitly tracked).
-                let is_borrowed = self.func_state.local_ownership.get(&place.local)
-                    .map_or(false, |s| s.is_ref());
-                if !is_borrowed {
-                    return operand;
-                }
-                let local_type = builder.local_type(place.local);
-                // Ptr(T) → clone through pointer
-                if let Some(inner) = self.pointee_type(local_type) {
-                    if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                        self.warn_implicit_clone(span, inner, reason);
-                        let cloned = builder.call(
-                            &clone_fn,
-                            vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
-                            inner,
-                        );
-                        self.drops.register_local(cloned, inner, &self.type_registry);
-                        self.set_owned(cloned);
-                        return crate::ir::builder::FunctionBuilder::copy(cloned);
-                    }
-                }
+        let (place, place_copy) = match &operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                (p.clone(), p.local)
             }
+            _ => return operand,
+        };
+        let _ = place; // silence unused if not needed below
+        let local = place_copy;
+        let local_type = builder.local_type(local);
+
+        // Case 1: Ptr(T) → clone inner
+        if let Some(inner) = self.pointee_type(local_type) {
+            // String Ptr params can be read through without clone unless actually
+            // crossing a boundary that requires an owned copy — since this helper
+            // is only called at real boundaries, always clone borrowed Ptr(T).
+            if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                self.warn_implicit_clone(span, inner, reason);
+                let cloned = builder.call(
+                    &clone_fn,
+                    vec![crate::ir::builder::FunctionBuilder::copy(local)],
+                    inner,
+                );
+                self.drops.register_local(cloned, inner, &self.type_registry);
+                self.set_owned(cloned);
+                return crate::ir::builder::FunctionBuilder::copy(cloned);
+            }
+            return operand;
+        }
+
+        // Case 2: by-value resource type (GorgetString, GorgetArray, etc.)
+        if !self.type_registry.is_resource_type(local_type) {
+            return operand;
+        }
+
+        // Decide whether this local is a borrow that needs materializing.
+        // - Tracked ref state (Ref, CowBorrow, CollectionRef, BareParam, Alias)
+        // - Bare params (caller owns the data)
+        //
+        // Note: we intentionally DON'T treat "not drop-registered" as a proxy for
+        // borrow. Several lowering paths emit correctly-independent locals without
+        // explicit drop registration (LIR string assign auto-clones, `builder.call`
+        // results for fresh allocating externs, etc.). Only explicit ref-state
+        // flags represent aliasing relationships that require materialization.
+        let ownership_is_ref = self.func_state.local_ownership.get(&local)
+            .map_or(false, |s| s.is_ref());
+        let is_borrow = ownership_is_ref
+            || self.is_bare_param(local)
+            || self.is_ref_local(local)
+            || self.is_cow_borrow(local);
+        if !is_borrow {
+            return operand;
+        }
+
+        if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
+            self.warn_implicit_clone(span, local_type, reason);
+            let cloned = builder.call(
+                &clone_fn,
+                vec![crate::ir::builder::FunctionBuilder::copy(local)],
+                local_type,
+            );
+            self.drops.register_local(cloned, local_type, &self.type_registry);
+            self.set_owned(cloned);
+            return crate::ir::builder::FunctionBuilder::copy(cloned);
+        }
+        operand
+    }
+
+    /// Clone an operand at a consuming-position boundary if the caller may still
+    /// need the source after this site. Used at collection consuming-method args
+    /// (push / put / set / etc.) and index-assign sugar (`v[i]=x`, `d[k]=v`).
+    ///
+    /// Rule:
+    ///   1. Ptr(T) borrow → clone through the pointer (always, regardless of last-use).
+    ///   2. By-value resource:
+    ///      - Not an identifier expression → temp, treat as last-use, NO clone
+    ///        (caller will MoveZero after the call).
+    ///      - Not a named local → same (rare — fall back to temp path).
+    ///      - A borrow (bare param, ref/cow state) → clone.
+    ///      - Non-last-use named local → clone (source still live).
+    ///      - Last-use drop-tracked owned named local → NO clone (caller MoveZeros).
+    ///
+    /// Returns the (possibly cloned) operand. If a clone was emitted, the cloned
+    /// temp is drop-tracked and set as Owned so the caller can MoveZero it after
+    /// the consuming call (the usual post-call clean-up path).
+    pub fn ensure_owned_at_consuming_arg(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        arg_expr: &crate::span::Spanned<crate::parser::ast::Expr>,
+        reason: crate::ir::ImplicitCloneReason,
+    ) -> Operand {
+        use crate::parser::ast::Expr;
+        let place = match &operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
+            _ => return operand,
+        };
+        let local = place.local;
+        let arg_type = builder.local_type(local);
+
+        // Case 1: Ptr(T) — always clone to materialize.
+        if let Some(inner) = self.pointee_type(arg_type) {
+            if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                self.warn_implicit_clone(arg_expr.span, inner, reason);
+                let cloned = builder.call(
+                    &clone_fn,
+                    vec![crate::ir::builder::FunctionBuilder::copy(local)],
+                    inner,
+                );
+                return crate::ir::builder::FunctionBuilder::copy(cloned);
+            }
+            return operand;
+        }
+
+        // Case 2: by-value resource.
+        if !self.type_registry.is_resource_type(arg_type) {
+            return operand;
+        }
+        // Non-identifier args are expression temps — always last-use.
+        let Expr::Identifier(ref name) = arg_expr.node else { return operand; };
+        if !self.is_named_local(local) { return operand; }
+        let is_borrow = !self.drops.is_registered(local)
+            || self.is_bare_param(local)
+            || self.is_ref_local(local)
+            || self.is_cow_borrow(local);
+        let needs_clone = is_borrow || !self.is_last_use_at(name, arg_expr.span);
+        if !needs_clone { return operand; }
+        if let Some(clone_fn) = self.clone_fn_for_ptr(arg_type) {
+            self.warn_implicit_clone(arg_expr.span, arg_type, reason);
+            let cloned = builder.call(
+                &clone_fn,
+                vec![crate::ir::builder::FunctionBuilder::copy(local)],
+                arg_type,
+            );
+            return crate::ir::builder::FunctionBuilder::copy(cloned);
         }
         operand
     }

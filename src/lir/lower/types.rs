@@ -223,8 +223,11 @@ pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                 let runtime_size = match sd.name.as_str() {
                     // GorgetArray: {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
                     "GorgetArray" => Some(64usize),
-                    // GorgetMap / GorgetSet: 17 fields × 8 = 136 (includes key_drop, key_clone)
-                    "GorgetMap" | "GorgetSet" => Some(136usize),
+                    // GorgetMap / GorgetSet: 19 fields × 8 = 152
+                    // (adds val_materialize/key_materialize for symmetry with array's
+                    // elem_materialize — cap==0-only on put, separate from val_clone
+                    // which remains the full-clone hook for dict.clone()).
+                    "GorgetMap" | "GorgetSet" => Some(152usize),
                     // GorgetString: thin pointer (char*) = 8
                     "GorgetString" => Some(8usize),
                     _ if sd.name.starts_with("Task__") => Some(16usize),

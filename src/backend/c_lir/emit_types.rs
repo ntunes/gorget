@@ -342,14 +342,20 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
     let vr = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
     match method {
         "filter" => {
-            // filter(closure(K, V) → bool) → GorgetMap
+            // filter(closure(K, V) → bool) → GorgetMap.
+            // __key/__val shallow-copy slots of __src → use put_cloned to avoid aliasing.
             writeln!(out, "static inline GorgetMap {full_name}(void* __map_ptr, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
             writeln!(out, "    GorgetMap __result = {ctor_fn}({ctor_args});").unwrap();
+            if val_c == "Str" || val_c == "GorgetString" {
+                writeln!(out, "    __result.val_drop = (__gorget_drop_fn)gorget_string_free;").unwrap();
+                writeln!(out, "    __result.val_clone = (__gorget_drop_fn)gorget_string_clone_inplace;").unwrap();
+                writeln!(out, "    __result.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
+            }
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {key_read}").unwrap();
             writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) gorget_map_put(&__result, &__key, &__val);").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) gorget_map_put_cloned(&__result, &__key, &__val);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -402,14 +408,16 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "}}").unwrap();
         }
         "update" => {
-            // update(other_map): merge other dict entries into self
+            // update(other_map): merge other dict entries into self.
+            // __k/__v point into __other's storage — use put_cloned so the new slot
+            // gets independent key/value copies via key_clone / val_clone.
             writeln!(out, "static inline void {full_name}(void* __map_ptr, GorgetMap __other) {{").unwrap();
             writeln!(out, "    GorgetMap* __dst = (GorgetMap*)__map_ptr;").unwrap();
             writeln!(out, "    for (size_t __i = 0; __i < __other.cap; __i++) {{").unwrap();
             writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
             writeln!(out, "        void* __k = (char*)__other.keys + __i * __other.key_size;").unwrap();
             writeln!(out, "        void* __v = (char*)__other.values + __i * __other.val_size;").unwrap();
-            writeln!(out, "        gorget_map_put(__dst, __k, __v);").unwrap();
+            writeln!(out, "        gorget_map_put_cloned(__dst, __k, __v);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
@@ -458,7 +466,16 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             if (__src.states[__i] != 1) continue;"
         )
     };
-    let ctor = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+    // Use the _str variants when the element type is String so __result has
+    // content-based hash/eq (otherwise pointer-compare would fail to dedupe
+    // semantically equal strings from different allocations).
+    let elem_is_str = elem_c == "Str" || elem_c == "GorgetString";
+    let (ctor, ctor_args) = match (is_ordered, elem_is_str) {
+        (true, true)  => ("gorget_ordered_set_new_str", String::new()),
+        (true, false) => ("gorget_ordered_set_new", format!("sizeof({elem_c})")),
+        (false, true) => ("gorget_set_new_str", String::new()),
+        (false, false)=> ("gorget_set_new", format!("sizeof({elem_c})")),
+    };
     let elem_read = format!("{elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size);");
 
     // Determine which closure params need & prefix (Ptr ABI for resource types)
@@ -468,10 +485,10 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
         "filter" => {
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -550,10 +567,10 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             // union: combine all elements from self and other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             if is_ordered {
                 writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
@@ -564,7 +581,7 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
                 writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
             }
             writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
-            writeln!(out, "        gorget_set_add(&__result, &__elem2);").unwrap();
+            writeln!(out, "        gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -573,10 +590,10 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             // intersection: elements in both self and other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -585,10 +602,10 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             // difference: elements in self but not in other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -597,10 +614,10 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             // symmetric_difference: elements in self xor other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
             writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}(sizeof({elem_c}));").unwrap();
+            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_set_add(&__result, &__elem);").unwrap();
+            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             if is_ordered {
                 writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
@@ -611,7 +628,7 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
                 writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
             }
             writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_set_add(&__result, &__elem2);").unwrap();
+            writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -2800,13 +2817,19 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     // gorget_signal_ignore is already in the C runtime — no duplicate emission needed.
 
     // gorget_task_group_submit is a MACRO in the runtime, not a function.
-    // The LLVM backend calls it as a function with (TaskGroup*, Task__T) args.
-    // Task__T = { void* __task, void(*__drop)(void*) }.
+    // The LLVM/C backend calls it as a function with (TaskGroup*, Task__T) args.
+    // Every `Task__T` has layout { void* __task, void(*__drop)(void*) }, so we
+    // emit a replacement that receives the task by address (cast to void*) and
+    // reads the two fields through that pointer. This is struct-type-agnostic:
+    // it works uniformly for Task__void / Task__int / Task__String / etc.,
+    // avoiding C's nominal-type rejection when a concrete Task__T is passed
+    // where the function signature nominally wants __TaskHandle.
     if has(&|n| n == "gorget_task_group_submit") {
         writeln!(out, "#undef gorget_task_group_submit").unwrap();
-        writeln!(out, "typedef struct {{ void* __task; void (*__drop)(void*); }} __TaskHandle;").unwrap();
-        writeln!(out, "void gorget_task_group_submit(void* g, __TaskHandle t) {{ \
-            gorget_task_group_submit_raw(g, t.__task, t.__drop); t.__task = NULL; }}").unwrap();
+        writeln!(out, "#define gorget_task_group_submit(g, task) do {{ \\").unwrap();
+        writeln!(out, "    gorget_task_group_submit_raw((g), (task).__task, (task).__drop); \\").unwrap();
+        writeln!(out, "    (task).__task = NULL; \\").unwrap();
+        writeln!(out, "}} while(0)").unwrap();
     }
 
     writeln!(out).unwrap();

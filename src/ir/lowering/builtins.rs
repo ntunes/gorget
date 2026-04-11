@@ -274,8 +274,20 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_map_len"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "is_empty", runtime_callee: Some("gorget_map_is_empty"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_map_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, params: no_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "keys", runtime_callee: Some("gorget_map_keys"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_gorget_array },
-        BuiltinMethodDecl { name: "values", runtime_callee: Some("gorget_map_values"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: ret_gorget_array },
+        BuiltinMethodDecl { name: "keys", runtime_callee: Some("gorget_map_keys"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: |_a, ctx| {
+            // keys() → Vector[K]
+            let vec_name = format!("Vector__{}", ctx.elem_name);
+            (ctx.lookup_type_by_name)(&vec_name)
+                .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
+                .unwrap_or(UNIT_TYPE)
+        }},
+        BuiltinMethodDecl { name: "values", runtime_callee: Some("gorget_map_values"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: |_a, ctx| {
+            // values() → Vector[V]
+            let vec_name = format!("Vector__{}", ctx.val_name);
+            (ctx.lookup_type_by_name)(&vec_name)
+                .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
+                .unwrap_or(UNIT_TYPE)
+        }},
         BuiltinMethodDecl { name: "items", runtime_callee: Some("gorget_map_items"), self_conv: SelfConvention::Borrow, is_mutating: false, params: no_params, return_type: |_a, ctx| {
             // items() → Vector[Tuple[K, V]] — construct from elem_name (K) and val_name (V)
             let tuple_name = format!("Tuple__{}__{}", ctx.elem_name, ctx.val_name);

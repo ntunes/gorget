@@ -287,3 +287,59 @@ a shallow `memcpy`, causing double-free on `Set[String]` drop.
 | 2b | Self-cleaning collections — elem_drop/val_drop/key_drop | Done |
 | 2c | CoW materialization points 3-6 | Done |
 | 2d | Delete `ensure_owned_string` — replaced by CoW materialization | Done |
+| 3  | Thin-pointer String (32B→8B) + symmetric consuming-method contract | Done (2026-04-11) |
+
+## Phase 3: Thin-pointer String + symmetric consuming-method contract
+
+### Runtime contract (all consuming functions are identical in shape)
+
+Every runtime function that consumes a value into a collection — `gorget_array_push`, `gorget_map_put`, `gorget_set_add`, `gorget_heap_push`, `gorget_channel_send`, `gorget_array_set`, `gorget_array_insert` — obeys the same three-step shape:
+
+1. `memcpy` the caller's bytes into the slot.
+2. Call a `*_materialize` hook: cap==0-only for strings (clones static/stack literals into owned copies), NULL for everything else.
+3. Return.
+
+No internal deep-clone at any consuming call site. The old `*_clone` function pointer hooks on `GorgetArray`/`GorgetMap` still exist but only for `.clone()` on a whole collection and for the `gorget_map_put_cloned` helper used by aliasing inline helpers (filter/map/update/union/intersection/difference on Dict/HashMap/Set).
+
+After every consuming call the C backend emits a post-call zero on the source pointer (via the `zero_arg_indices` table in `emit_call_extern.rs`). That's the "MoveZero" that transfers ownership from the caller's stack slot to the collection.
+
+### Compiler contract (one rule at every ownership boundary)
+
+At every consuming-position arg — whether invoked as a method call (`v.push(x)`, `d.put(k, v)`, `s.add(x)`) or as index-assign sugar (`v[i] = x`, `d[k] = v`) — the compiler makes exactly one decision per arg:
+
+```
+explicit !arg         → move_zero after call
+expression temp       → move_zero after call   (always last-use by construction)
+named local, last use → move_zero after call   (zero-cost transfer)
+bare param            → clone before call      (caller still owns it)
+borrow (Ptr/Ref/CoW)  → clone before call      (source stays live)
+non-last-use local    → clone before call      (caller needs its value)
+static literal        → *_materialize in runtime (cap==0 clone)
+```
+
+`GorgetString.push` / `push_line` / `push_char` are excluded — those are StringBuilder appends that READ the arg (copy the content bytes into the builder), not take ownership of it.
+
+### The two helpers that enforce it
+
+Two shared helpers in `src/ir/lowering/context.rs` implement the compiler side:
+
+1. **`ensure_owned_at_boundary(operand, span, reason)`** — unconditional "clone if borrow" for boundaries with no concept of last-use (returns, struct field init, enum variant init, closure capture, field store). Handles both Ptr(T) and by-value resource borrows. Used by:
+   - `exprs/mod.rs` struct field init loop (`lower_struct_init`)
+   - `closures.rs` non-last-use by-value capture
+   - `stmts/assigns.rs::clone_ptr_rhs_if_needed` field-store helper
+
+2. **`ensure_owned_at_consuming_arg(operand, arg_expr, reason)`** — last-use-aware "clone if borrow OR not last use" for consuming-position args. Takes the AST expression so it can call `is_last_use_at(name, span)` for named-local identifiers. Used by:
+   - `exprs/methods.rs::lower_method_call` for push/put/set/add/extend/send/push_back/push_front/insert
+   - `stmts/assigns.rs::lower_index_assign` for `Vec[i] = x` and `Dict[k] = v`
+
+Both helpers emit the clone via `clone_fn_for_ptr(T)` which resolves to the appropriate runtime function (`gorget_string_clone_to_owned`, `gorget_array_clone`, `gorget_map_clone`, `gorget_set_clone`, or the compiler-generated `{Type}__clone` for user structs with `Recursive`/`Custom` drop).
+
+### Why the helpers differ
+
+`ensure_owned_at_boundary` doesn't take a last-use hint because its call sites are points where the function body is about to leave the local behind (return, struct field init that stores-and-moves). For consuming-position args, the caller may still use the local after the call — so the last-use check distinguishes "transfer ownership" from "clone and keep".
+
+### Interaction with thin-pointer String
+
+The thin-pointer String design (8-byte `char*` + 24-byte header behind the pointer) makes copies of a String aliases by default — the compiler cannot rely on per-copy markers to distinguish owned from view, as the 32-byte struct design did via its `cap` field. This forces the compiler to decide "move or clone" eagerly at every ownership boundary, rather than lazily at drop time. The three-step runtime contract + two-helper compiler rule is the result: every boundary is a decision point, and the decision is always one of `move_zero` or `clone`.
+
+See the project memory `project_thin_pointer_string.md` for the full migration details.

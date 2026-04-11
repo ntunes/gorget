@@ -81,11 +81,27 @@ pub(super) fn emit_call_extern(
                     for a in actual_args {
                         let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                         let pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref());
-                        // If the arg is a pointer-to-aggregate, the callee expects by-value.
+                        // If the arg is a pointer-to-aggregate, the callee expects by-value
+                        // (primitive structs like tuples/user structs are passed by value in
+                        // closure ABI). But resource types — GorgetString, GorgetArray,
+                        // GorgetMap, GorgetSet, GorgetClosure — are passed by pointer to
+                        // match `compute_param_abi → ByPtr` for closure params, so the
+                        // closure body can deref `*src` safely for cloning. Deref only for
+                        // non-resource aggregates.
                         if let Some(pt) = pointee {
                             if pt.is_aggregate() {
-                                param_types.push(c_type_named(pt, sn));
-                                deref_args.push(Some(c_type_named(pt, sn)));
+                                let is_resource = if let LirType::Struct(sid) = pt {
+                                    module.structs.get(sid.0 as usize).map_or(false, |sd| matches!(sd.name.as_str(),
+                                        "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure"))
+                                } else { false };
+                                if !is_resource {
+                                    param_types.push(c_type_named(pt, sn));
+                                    deref_args.push(Some(c_type_named(pt, sn)));
+                                    continue;
+                                }
+                                // Resource → pass the pointer directly (ByPtr ABI).
+                                param_types.push("void*".to_string());
+                                deref_args.push(None);
                                 continue;
                             }
                         }
@@ -1357,13 +1373,21 @@ pub(super) fn emit_call_extern(
                     let ctor_args = if key_c == "Str" { format!("sizeof({val_c})") } else { format!("sizeof({key_c}), sizeof({val_c})") };
                     match method {
                         "filter" => {
+                            // __key/__val are shallow copies of slots in __src — use
+                            // put_cloned so __result's inserted slot holds independent
+                            // key/value copies instead of aliasing __src's buffers.
+                            let val_setup = if val_c == "Str" || val_c == "GorgetString" {
+                                " __result.val_drop = (__gorget_drop_fn)gorget_string_free; \
+                                  __result.val_clone = (__gorget_drop_fn)gorget_string_clone_inplace; \
+                                  __result.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;"
+                            } else { "" };
                             write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                GorgetMap __result = {ctor_fn}({ctor_args}); \
+                                GorgetMap __result = {ctor_fn}({ctor_args});{val_setup} \
                                 for (size_t __i = 0; __i < __src.cap; __i++) {{ \
                                 if (__src.states[__i] != 1) continue; \
                                 {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
                                 {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) gorget_map_put(&__result, &__key, &__val); \
+                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) gorget_map_put_cloned(&__result, &__key, &__val); \
                                 }} __result; }});").unwrap();
                         }
                         "fold" if emit_args.len() >= 3 => {
@@ -2096,15 +2120,27 @@ pub(super) fn emit_call_extern(
                                 {
                                     write!(out, " {dv}.val_clone = (__gorget_drop_fn){val_type}__clone_inplace;").unwrap();
                                 }
+                                // CoW materialize on insert — only strings need this
+                                // (clones cap==0 literals so the dict owns the backing).
+                                if val_type == "GorgetString" {
+                                    write!(out, " {dv}.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
+                                }
                             }
                         }
                     }
                 }
             }
 
-            // Post-push zeroing: after gorget_array_push / gorget_map_put / gorget_set_add / gorget_heap_push,
-            // if the element argument points to a collection-type value (GorgetArray, GorgetMap, GorgetSet,
-            // GorgetString, GorgetClosure), zero the source to prevent double-free from shallow-copy aliasing.
+            // Post-push zeroing: after consuming runtime calls that take ownership via
+            // a raw memcpy (no internal clone), zero the source pointer so the scope-
+            // exit drop becomes a no-op and the collection is the sole owner.
+            //
+            // All entries below are symmetric: their runtime memcpy+materialize hooks
+            // are cap==0-only for strings and NULL for other resource types — the
+            // compiler handles ownership (clone-before-call for borrows, MoveZero-after
+            // for owned temps/last-use). `gorget_map_put_cloned` is the explicit
+            // full-clone variant used by inline helpers when inserting from aliased
+            // sources (filter/map/update/...).
             let zero_arg_indices: &[usize] = match name {
                 "gorget_array_push" | "gorget_heap_push" => &[1],
                 "gorget_array_set" | "gorget_array_insert" => &[2],
