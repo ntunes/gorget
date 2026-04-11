@@ -1554,47 +1554,10 @@ pub(super) fn is_gorget_string_type(ty: Option<&LirType>, sn: &HashMap<u32, Stri
         false
     }
 }
-/// Emit drop functions for user structs with Recursive drop strategy.
-/// Emit inline tag-checked drops for Option fields containing resources.
-/// Option types have DropStrategy::None (to avoid double-free in match/unwrap)
-/// but struct fields of type Option[String] etc. still need dropping.
-fn emit_option_field_drops(
-    out: &mut String,
-    sdef: &crate::lir::StructDef,
-    prefix: &str,      // "self->" for drops, "dst." for clones
-    already_handled: &std::collections::HashSet<String>,
-    module: &crate::lir::LirModule,
-) {
-    for (fname, fty) in &sdef.fields {
-        if already_handled.contains(fname) { continue; }
-        if let crate::lir::LirType::Struct(fsid) = fty {
-            if let Some(fdef) = module.structs.get(fsid.0 as usize) {
-                if fdef.enum_kind == crate::lir::EnumKind::Option {
-                    // Find resource payload fields in the Option enum
-                    for (vfname, vfty) in &fdef.fields {
-                        if vfname == "tag" { continue; }
-                        if let crate::lir::LirType::Struct(vfsid) = vfty {
-                            if let Some(vfdef) = module.structs.get(vfsid.0 as usize) {
-                                let drop_fn = match vfdef.name.as_str() {
-                                    "GorgetString" => Some("gorget_string_free"),
-                                    "GorgetArray"  => Some("gorget_array_free"),
-                                    "GorgetMap"    => Some("gorget_map_free"),
-                                    "GorgetSet"    => Some("gorget_set_free"),
-                                    _ => None,
-                                };
-                                if let Some(dfn) = drop_fn {
-                                    writeln!(out, "    if ({prefix}{fname}.tag != 0) {{ {dfn}(&{prefix}{fname}.{vfname}); }}").unwrap();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Emit inline tag-checked clones for Option fields containing resources.
+/// Drop-side intentionally does nothing — Option types have DropStrategy::None
+/// to avoid double-free with match/unwrap paths, and struct-field drops rely
+/// on that. Clone-side deep-copies because cloning is always safe.
 fn emit_option_field_clones(
     out: &mut String,
     sdef: &crate::lir::StructDef,

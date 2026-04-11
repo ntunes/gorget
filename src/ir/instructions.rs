@@ -90,16 +90,6 @@ pub enum AssignMode {
     Borrow,
 }
 
-/// How a field load handles ownership of the extracted value.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FieldLoadMode {
-    /// Bitwise copy — trivial field type (int, bool, simple struct).
-    Copy,
-    /// Consuming extraction — copy value + zero source field.
-    /// Used for tuple/enum destructuring of resource-type fields.
-    MoveZeroSource,
-}
-
 /// How a function argument transfers ownership.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArgOwnership {
@@ -126,7 +116,6 @@ pub enum Instruction {
         value: Operand,
     },
     FieldLoad {
-        mode: FieldLoadMode,
         dst: LocalId,
         base: Place,
         field: u32,
@@ -232,8 +221,12 @@ pub enum Instruction {
     },
     /// Load a field from an enum variant's data (union access).
     /// C: `type _N = base.data.{variant}._{field};`
+    ///
+    /// Always zeros the source field after extraction for resource-type
+    /// payloads (string / collection thin pointers), preventing shallow-copy
+    /// double-free when the caller subsequently drops either the extracted
+    /// local or the original enum.
     EnumFieldLoad {
-        mode: FieldLoadMode,
         dst: LocalId,
         base: Place,
         variant: String,

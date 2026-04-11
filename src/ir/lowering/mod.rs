@@ -1989,50 +1989,6 @@ fn lower_bench_items(
     }
 }
 
-/// Late pass: upgrade only Option/Result types registered during function lowering.
-/// User enums are handled by the early `upgrade_types_from_fields` call.
-fn upgrade_option_result_types(module: &mut Module) {
-    use crate::ir::types::*;
-
-    let all_names: Vec<String> = module.type_registry.all_type_def_names().cloned().collect();
-    for name in &all_names {
-        if !name.starts_with("Option__") && !name.starts_with("Result__") {
-            continue;
-        }
-        let td = match module.type_registry.get_type_def(name) {
-            Some(td) => td,
-            None => continue,
-        };
-        // Skip if already upgraded
-        if td.metadata.drop_strategy != DropStrategy::None {
-            continue;
-        }
-        // Check if any variant has droppable fields
-        let needs_upgrade = if let TypeDefKind::Enum(ref edef) = td.kind {
-            edef.variants.iter().any(|v| {
-                v.fields.iter().any(|f| {
-                    if let Some(GirType::Named(field_type_name)) = module.type_registry.get(f.type_id) {
-                        module.type_registry.needs_drop(f.type_id)
-                            || module.type_registry.is_resource_type(f.type_id)
-                            || field_type_name == "GorgetString"
-                            || module.type_registry.is_collection_type_name(field_type_name)
-                    } else {
-                        false
-                    }
-                })
-            })
-        } else {
-            false
-        };
-        if needs_upgrade {
-            if let Some(td) = module.type_registry.get_type_def_mut(name) {
-                td.metadata.drop_strategy = DropStrategy::Recursive;
-                td.metadata.copy_semantics = CopySemantics::Resource;
-            }
-        }
-    }
-}
-
 /// Scan types for droppable fields and upgrade to Resource+Recursive.
 /// Called twice: once early (for types registered during type setup) and once
 /// late (for types registered lazily during function lowering, e.g. Option[Vector[int]]).

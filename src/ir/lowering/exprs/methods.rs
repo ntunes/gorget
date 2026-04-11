@@ -1236,6 +1236,24 @@ pub(super) fn lower_method_call(
                 lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1)
             })
             .collect();
+        // Positions that semantically consume (take ownership of) their arg.
+        // `GorgetString.push/push_line/push_char` are StringBuilder appends — they
+        // READ the arg and copy its bytes, they do NOT take ownership. Collection
+        // mutating methods (push/add/extend/send/push_back/push_front) consume
+        // arg 0; (put/set/insert) consume the value at arg 1 (dict) or arg 1 (vec).
+        let is_string_builder_method = type_name == "GorgetString";
+        let consuming_positions: Vec<usize> = match method_name {
+            "push" | "add" | "extend" | "send" | "push_back" | "push_front"
+                if !is_string_builder_method => vec![0],
+            "put" | "set" | "insert" => {
+                let mut p = vec![];
+                if lowered_method_args.len() >= 1 { p.push(0); }
+                if lowered_method_args.len() >= 2 { p.push(1); }
+                p
+            }
+            _ => vec![],
+        };
+
         // Pre-call ownership materialization at consuming arg positions.
         // Two cases handled here:
         //   (a) Ptr(inner) args — always clone to materialize the borrow.
@@ -1256,23 +1274,7 @@ pub(super) fn lower_method_call(
         // helper `lower_index_assign` uses for `Dict[k]=v` / `Vec[i]=v`.
         let mut pre_call_clone_temps: Vec<LocalId> = Vec::new();
         {
-            // Positions that semantically consume (take ownership of) their arg.
-            // `GorgetString.push/push_line/push_char` are StringBuilder appends — they
-            // READ the arg and copy its bytes, they do NOT take ownership. Exclude
-            // them here so we don't MoveZero the caller's source and orphan the data.
-            let is_string_builder = type_name == "GorgetString";
-            let consuming: Vec<usize> = match method_name {
-                "push" | "add" | "extend" | "send" | "push_back" | "push_front"
-                    if !is_string_builder => vec![0],
-                "put" | "set" | "insert" => {
-                    let mut p = vec![];
-                    if lowered_method_args.len() >= 1 { p.push(0); }
-                    if lowered_method_args.len() >= 2 { p.push(1); }
-                    p
-                }
-                _ => vec![],
-            };
-            for &idx in &consuming {
+            for &idx in &consuming_positions {
                 let Some(ast_arg) = args.get(idx) else { continue; };
                 // Explicit `!` → caller wants a move; handled by post-call move_zero.
                 if matches!(ast_arg.node.ownership, Ownership::Move) { continue; }
@@ -1457,22 +1459,8 @@ pub(super) fn lower_method_call(
         //   - Bare arg, bare param → already cloned pre-call; caller's data stays.
         //
         // Builtin consuming methods (push/put/set/insert/...) don't always have
-        // fn_param_ownerships entries, so we fall back to a method-name whitelist
-        // matching the pre-call clone section's `consuming` list. Keep
-        // `GorgetString.push/push_line/push_char` out of this list — those are
-        // StringBuilder appends that READ the arg, they don't take ownership.
-        let is_string_builder_method = type_name == "GorgetString";
-        let consuming_arg_idx: std::collections::HashSet<usize> = match method_name {
-            "push" | "add" | "extend" | "send" | "push_back" | "push_front"
-                if !is_string_builder_method => [0].into_iter().collect(),
-            "put" | "set" | "insert" => {
-                let mut s = std::collections::HashSet::new();
-                if lowered_method_args.len() >= 1 { s.insert(0); }
-                if lowered_method_args.len() >= 2 { s.insert(1); }
-                s
-            }
-            _ => std::collections::HashSet::new(),
-        };
+        // fn_param_ownerships entries, so we fall back to the method-name
+        // `consuming_positions` whitelist computed once above.
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()
             .filter_map(|(i, arg)| {
@@ -1481,7 +1469,7 @@ pub(super) fn lower_method_call(
                     .and_then(|ownerships| ownerships.get(i + 1))
                     .map(|o| matches!(o, Ownership::Move))
                     .unwrap_or(false)
-                    || consuming_arg_idx.contains(&i);
+                    || consuming_positions.contains(&i);
                 if !call_site_move && !callee_move { return None; }
 
                 // For explicit `!`: always move_zero the identifier source.
@@ -1558,25 +1546,37 @@ pub(super) fn lower_method_call(
             ret_type
         };
 
-        // Auto-clone Ptr(resource) args at consuming method positions.
-        // IndexLoad returns Ptr(T) for CoW. Consuming methods (push/put/set)
-        // need an OWNED copy — clone the pointed-to data.
-        // Track cloned temps so we can move-zero them after the call.
+        // Auto-clone Ptr(resource) args at consuming method positions — the
+        // Ptr(Ptr(resource)) fallback for cases the pre-call section above
+        // missed (e.g. call arg is wrapped in an extra Ptr layer by
+        // `lower_call_arg`'s borrow materialization).
+        //
+        // Uses the last consuming position (value position for put/set/insert,
+        // element for push/add/...) — same `consuming_positions` list computed
+        // at the top of the function.
         let mut consuming_clone_temps: Vec<LocalId> = Vec::new();
-        {
-            let consuming_pos: Option<usize> = match method_name {
-                "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
-                "put" | "set" | "insert" => if lowered_method_args.len() >= 2 { Some(1) } else { None },
-                _ => None,
-            };
-            if let Some(value_idx) = consuming_pos {
-                let call_idx = 1 + value_idx;
-                // Check call_args first (ptr-wrapped). For Ptr(resource) field
-                // accesses the call arg is Ptr(Ptr(resource)) — pointee_type
-                // gives Ptr(resource) which is_resource_type misses. Fall back
-                // to lowered_method_args (pre-wrapping) which has Ptr(resource)
-                // → pointee_type gives resource → is_resource_type matches.
-                let needs_clone = call_args.get(call_idx).and_then(|op| {
+        if let Some(&value_idx) = consuming_positions.last() {
+            let call_idx = 1 + value_idx;
+            // Check call_args first (ptr-wrapped). For Ptr(resource) field
+            // accesses the call arg is Ptr(Ptr(resource)) — pointee_type
+            // gives Ptr(resource) which is_resource_type misses. Fall back
+            // to lowered_method_args (pre-wrapping) which has Ptr(resource)
+            // → pointee_type gives resource → is_resource_type matches.
+            let needs_clone = call_args.get(call_idx).and_then(|op| {
+                if let Operand::Copy(place) | Operand::Move(place) = op {
+                    if place.projections.is_empty() {
+                        let local_type = builder.local_type(place.local);
+                        if let Some(inner) = ctx.pointee_type(local_type) {
+                            if ctx.type_registry.is_resource_type(inner) {
+                                return Some((place.local, inner));
+                            }
+                        }
+                    }
+                }
+                None
+            }).or_else(|| {
+                // Fallback: check pre-wrapped arg (handles Ptr(resource) from field access)
+                lowered_method_args.get(value_idx).and_then(|op| {
                     if let Operand::Copy(place) | Operand::Move(place) = op {
                         if place.projections.is_empty() {
                             let local_type = builder.local_type(place.local);
@@ -1588,36 +1588,21 @@ pub(super) fn lower_method_call(
                         }
                     }
                     None
-                }).or_else(|| {
-                    // Fallback: check pre-wrapped arg (handles Ptr(resource) from field access)
-                    lowered_method_args.get(value_idx).and_then(|op| {
-                        if let Operand::Copy(place) | Operand::Move(place) = op {
-                            if place.projections.is_empty() {
-                                let local_type = builder.local_type(place.local);
-                                if let Some(inner) = ctx.pointee_type(local_type) {
-                                    if ctx.type_registry.is_resource_type(inner) {
-                                        return Some((place.local, inner));
-                                    }
-                                }
-                            }
-                        }
-                        None
-                    })
-                });
-                if let Some((ptr_local, inner_type)) = needs_clone {
-                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
-                        let span = args.get(value_idx).map(|a| a.span).unwrap_or(receiver.span);
-                        ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
-                        let cloned = builder.call(&clone_fn,
-                            vec![FunctionBuilder::copy(ptr_local)], inner_type);
-                        ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
-                        ctx.set_owned(cloned);
-                        consuming_clone_temps.push(cloned);
-                        let ptr_type = ctx.register_ptr_type(inner_type);
-                        let ptr = builder.add_local(ptr_type, None);
-                        builder.emit_borrow(ptr, Place::local(cloned));
-                        call_args[call_idx] = FunctionBuilder::copy(ptr);
-                    }
+                })
+            });
+            if let Some((ptr_local, inner_type)) = needs_clone {
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
+                    let span = args.get(value_idx).map(|a| a.span).unwrap_or(receiver.span);
+                    ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
+                    let cloned = builder.call(&clone_fn,
+                        vec![FunctionBuilder::copy(ptr_local)], inner_type);
+                    ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
+                    ctx.set_owned(cloned);
+                    consuming_clone_temps.push(cloned);
+                    let ptr_type = ctx.register_ptr_type(inner_type);
+                    let ptr = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(ptr, Place::local(cloned));
+                    call_args[call_idx] = FunctionBuilder::copy(ptr);
                 }
             }
         }

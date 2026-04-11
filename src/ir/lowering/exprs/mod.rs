@@ -1536,10 +1536,7 @@ fn lower_field_access(
                             || field_type == ctx.type_mapper.owned_string_type
                             || ctx.type_registry.is_resource_type(field_type))
                     {
-                        let dst = builder.field_load_mode(
-                            FieldLoadMode::MoveZeroSource,
-                            base_place.clone(), field_idx, field_type,
-                        );
+                        let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         // Zero the source field to prevent double-free when
                         // the struct is dropped at scope exit.
                         builder.move_zero(Place {
@@ -1590,10 +1587,7 @@ fn lower_field_access(
                             || field_type == ctx.type_mapper.owned_string_type
                             || ctx.type_registry.is_resource_type(field_type))
                     {
-                        let dst = builder.field_load_mode(
-                            FieldLoadMode::MoveZeroSource,
-                            base_place.clone(), field_idx, field_type,
-                        );
+                        let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         builder.move_zero(Place {
                             local: base_place.local,
                             projections: {
@@ -2433,29 +2427,16 @@ fn clone_multi_use_resource_args(
     args: &mut Vec<Operand>,
     ast_args: &[Spanned<Expr>],
 ) {
+    // Ptr(resource) borrows are handled by the preceding
+    // `ensure_owned_at_boundary` call in `lower_struct_init`. This pass only
+    // handles the by-value multi-use / field-access / loop-carried / string-view
+    // cases that need a clone even though the local isn't in a ref ownership
+    // state.
     for (i, op) in args.iter_mut().enumerate() {
         if let Operand::Copy(place) = op {
             if place.projections.is_empty() {
                 let local = place.local;
                 let local_type = builder.local_type(local);
-
-                // Materialization point #3: Ptr(Resource) args MUST be cloned —
-                // they borrow from someone else's storage and can't be stored
-                // in an owned slot (struct field, enum variant) without cloning.
-                if let Some(inner) = ctx.pointee_type(local_type) {
-                    if ctx.type_registry.is_resource_type(inner) {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                            if let Some(span) = ast_args.get(i).map(|a| a.span) {
-                                ctx.warn_implicit_clone(span, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
-                            }
-                            let cloned = builder.call(&clone_fn,
-                                vec![FunctionBuilder::copy(local)], inner);
-                            ctx.drops.register_local(cloned, inner, &ctx.type_registry);
-                            *op = FunctionBuilder::copy(cloned);
-                        }
-                        continue;
-                    }
-                }
 
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
                     // Already owned (call results, cloned temps) — skip

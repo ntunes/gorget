@@ -1057,7 +1057,6 @@ fn emit_function(
                         let is_callable = name.starts_with("__callable_");
                         let is_closure_call = name.starts_with("__gorget_closure_call_");
                         let is_map_get = name == "gorget_map_get" || name == "gorget_map_safe_get";
-                        let is_box_get = name.starts_with("Box__") && name.contains("__get");
                         let is_void_ret = matches!(name.as_str(),
                             "gorget_guard_get" | "gorget_shared_get"
                             | "gorget_read_guard_get" | "gorget_write_guard_get");
