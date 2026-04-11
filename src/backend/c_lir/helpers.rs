@@ -1333,17 +1333,6 @@ pub(super) fn emit_bench_runner_main(out: &mut String, module: &LirModule) {
     writeln!(out, "    return 0;").unwrap();
     writeln!(out, "}}").unwrap();
 }
-/// Returns true if a struct IS a direct resource type (GorgetArray, GorgetMap, etc.).
-/// Used for post-push zeroing where only the direct resource needs to be zeroed.
-pub(super) fn is_direct_resource_type(sid: crate::lir::StructId, module: &crate::lir::LirModule) -> bool {
-    if let Some(sdef) = module.structs.get(sid.0 as usize) {
-        return matches!(sdef.name.as_str(),
-            "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" | "GorgetClosure"
-        );
-    }
-    false
-}
-
 /// Returns true if a struct (by StructId) directly is a resource type (GorgetArray, etc.)
 /// or transitively contains resource-type fields that would be double-freed on shallow copy.
 #[allow(dead_code)]
