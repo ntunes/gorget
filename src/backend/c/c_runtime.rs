@@ -5367,15 +5367,6 @@ static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
     }
 }
 
-// Safety net macro: zero source key/value after map_put takes ownership.
-// Prevents double-free when the GIR MoveZero doesn't reach the LIR slot
-// (value/slot split — see TODO.md). Only fires for resource-type elements
-// (key_drop/val_drop non-NULL); zero cost for primitives.
-#define __MAP_PUT_ZERO_SOURCES() do { \
-    if (m->key_drop) memset((void*)key, 0, m->key_size); \
-    if (m->val_drop && value) memset((void*)value, 0, m->val_size); \
-} while(0)
-
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
     // Ordered mode (order != NULL): count tombstones in load factor to force grow,
     // and never reuse tombstone slots. This ensures stale order-array entries
@@ -5397,7 +5388,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 m->states[idx] = 1;
                 m->count++;
                 m->order[m->order_len++] = idx;
-                __MAP_PUT_ZERO_SOURCES();
                 return;
             }
             if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
@@ -5408,12 +5398,10 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                     __gorget_map_materialize_value(m, idx);
                 }
-                __MAP_PUT_ZERO_SOURCES();
                 return;
             }
             idx = (idx + 1) % m->cap;
         }
-        __MAP_PUT_ZERO_SOURCES();
         return;
     }
     // Unordered mode (HashMap/Set): reuse tombstones for efficiency
@@ -5463,10 +5451,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         m->states[first_tombstone] = 1;
         m->count++;
     }
-    __MAP_PUT_ZERO_SOURCES();
 }
-
-#undef __MAP_PUT_ZERO_SOURCES
 
 // Put with full deep-clone of key/value via key_clone/val_clone hooks. Used by
 // inline helpers (filter/map/update/etc.) that deliberately insert pointers
