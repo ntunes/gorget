@@ -1596,12 +1596,34 @@ void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Di
     while i < stmts.len():
         Stmt s = stmts.get(i).unwrap()
         match s:
-            case SVarDecl(_, _, init, _, _, _):
+            case SVarDecl(_, name, init, _, sk, _):
+                if sk > 0:
+                    shared_vars.put(name, true)
                 scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod)
             case SExpr(expr):
                 scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod)
             case SAssign(_, val):
                 scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod)
+            case SWhile(cond, body):
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod)
+            case SIf(cond, then_body, branches):
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_spawn_wrappers(then_body, &shared_vars, &async_fns, &emitted, &gmod)
+                int bi = 0
+                while bi < branches.len():
+                    ElseBranch eb = branches.get(bi).unwrap()
+                    scan_spawn_wrappers(eb.body, &shared_vars, &async_fns, &emitted, &gmod)
+                    bi += 1
+            case SFor(_, iter_expr, body, _, _):
+                scan_expr_for_spawn(iter_expr, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod)
+            case SReturn(opt):
+                match opt:
+                    case Some(rexpr):
+                        scan_expr_for_spawn(rexpr, &shared_vars, &async_fns, &emitted, &gmod)
+                    case None:
+                        pass
             else:
                 pass
         i += 1
