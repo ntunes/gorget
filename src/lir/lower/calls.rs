@@ -141,6 +141,11 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
 
     // Shorthand: signature with explicit ABI tags.
     let sig = |params: Vec<LirType>, ret: LirType, abis: Vec<AbiKind>| -> Option<RuntimeSig> {
+        debug_assert_eq!(
+            params.len(), abis.len(),
+            "runtime_extern_sig: param count ({}) != ABI tag count ({})",
+            params.len(), abis.len(),
+        );
         Some(RuntimeSig { params, ret, param_abis: abis })
     };
 
