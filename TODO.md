@@ -19,22 +19,13 @@
 
 - **GIR call resolution confuses functions with similar first-param types**: Reported but could NOT reproduce with targeted multi-file test cases. Original symptom (ownership mismatch for variable not in scope) disappeared after code restructuring. May have been a transient issue from specific code patterns. Keep as low-priority — reopen if it recurs with a reproducible case. Root cause may be in `fn_sigs` lookup or borrow checker scope handling in multi-file compilation. [updated: 2026-04-08]
 
-- ~~**View-return optimization**~~: DONE — zero-alloc slice/trim/strip/char_at via cap=0 views. ViewOf(source) tracking + auto-materialize on source mutation. Copy-as-view via gorget_string_copy_cow. 956/956 passing. [completed: 2026-04-12]
-
 - **float(x) cast codegen bug**: `float(x)` emits `CallExtern("float", [x])` which clashes with C keyword. Workaround: C backend intercepts and emits `(double)x`. But LIR types the result as I64 (wrong — should be F64), so the value is truncated to 0 when stored. Fix: resolve `float()` as IntToFloat instruction in the GIR lowering, not as a function call. [added: 2026-04-12]
-
-- ~~**CoW: nested field mutation gap**~~: FIXED. Two-part fix: (1) IndexLoad uses `FieldPath` provenance when base is a field access (`s.v[0]` → `CollectionId::FieldPath("s.v")`). (2) VarDecl auto-reinfer propagates `CollectionRef` from source to named variable. `cow_before_field_mutation("s.v")` now finds and materializes the ref. Added `cow_nested_field_mutation.gg` regression test. [updated: 2026-04-09]
-
-- ~~**MutationWhileBorrowed: extend to implicit CoW borrows**~~: DONE. `index_borrow_sources` map tracks variables bound from `.get().unwrap()` / `vec[i]` on collections with resource-type elements. Borrow checker emits `CowBorrowMutation` warning (not error) when collection is mutated while borrow is alive. CoW system handles correctness; warning is informational. [updated: 2026-04-10]
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 
 - **Borrow checker: reject multi-use `!` on strings**: `!` on strings now triggers real MoveZero (pragmatic skip removed). Borrow checker should catch use-after-move for `!key` in loops. [updated: 2026-04-08]
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source. [added: 2026-03-26]
-
-- ~~**IndexLoad reference semantics — borrow checker integration**~~: DONE (merged with MutationWhileBorrowed for implicit CoW borrows). `index_borrow_sources` tracks borrows from `vec[i]`, `.get()`, `.first()`, `.last()` chains. Borrow checker emits `CowBorrowMutation` warning when source collection is mutated. Remaining: borrow propagation through fields/destructuring (low priority — rare pattern). [updated: 2026-04-10]
-
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
