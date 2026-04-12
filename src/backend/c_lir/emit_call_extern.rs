@@ -1229,7 +1229,7 @@ pub(super) fn emit_call_extern(
                             let acc_is_str_lit = str_lit_vals.get(emit_args[1].0 as usize).copied().unwrap_or(false);
                             let acc_is_gs = acc_c == "GorgetString";
                             if closure_returns_gorget_string && dst_is_str {
-                                // Str and GorgetString are both char* — no coercion needed.
+                                // Str and GorgetString are the same 32-byte struct — no coercion needed.
                                 let acc_init = if acc_is_str_lit {
                                     format!("{acc_arg}")
                                 } else {
@@ -2034,7 +2034,7 @@ pub(super) fn emit_call_extern(
                         write!(out, "*(Str*){}", v(*a)).unwrap();
                     }
                 }
-                // GorgetString arg to a gorget_str_* function — both are char*, no coercion needed.
+                // GorgetString arg to a gorget_str_* function — same 32-byte struct, no coercion needed.
                 else if name.starts_with("gorget_str_") && is_gorget_string_type(arg_ty, sn)
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "{}", v(*a)).unwrap();

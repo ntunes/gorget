@@ -1278,16 +1278,13 @@ typedef struct {
 } Str;
 
 typedef Str GorgetString;
-typedef Str StringHeader;  // legacy alias: StringHeader* now means Str*
+// StringHeader typedef removed — no longer needed. Str IS the header.
 
-// Accessor macros — `s` is a Str value.
-//   STR_LEN(s)  — rvalue byte length
-//   STR_CAP(s)  — rvalue capacity (0 = view)
-//   STR_HDR(s)  — pointer to the header (which IS the Str itself); used by
-//                 legacy code written in the thin-pointer era
-#define STR_LEN(s)  ((s).len)
-#define STR_CAP(s)  ((s).cap)
-#define STR_HDR(s)  (&(s))
+// Legacy accessor macros — no longer used by any runtime or emit code.
+// Kept as documentation of the compat layer used during migration.
+// #define STR_LEN(s)  ((s).len)
+// #define STR_CAP(s)  ((s).cap)
+// #define STR_HDR(s)  (&(s))
 
 // Generic view discriminator shared across resource types: the field at
 // offset +8 is "cap"; 0 means the resource is a view, nonzero means owned.
@@ -1351,8 +1348,8 @@ static inline GorgetString gorget_string_new(const char* s) {
     return str_alloc_copy(s, strlen(s), __gorget_current_alloc);
 }
 
-// Adopt a freshly-allocated char* into a String. Copies into header+data layout,
-// frees original. Caller must have allocated with GORGET_ALLOC or similar.
+// Adopt a freshly-allocated char* into a Str. Allocates a new buffer, copies
+// data, frees original. Caller must have allocated with GORGET_ALLOC or similar.
 static inline GorgetString gorget_string_adopt(char* s) {
     if (s == NULL) return GORGET_EMPTY_STR;
     size_t len = strlen(s);

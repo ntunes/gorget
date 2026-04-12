@@ -1994,11 +1994,11 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
                 }));
             if src_is_str_ptr {
-                // Value is a pointer to Str (char**) — deref and extract first byte.
-                write!(out, "{} = ({})((uint8_t)(*(Str*)({}))[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
+                // Value is a pointer to Str struct — deref and extract first byte of .data.
+                write!(out, "{} = ({})((uint8_t)((const char*)((Str*)({}))-> data)[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             } else if src_is_str_val {
-                // Value is a Str (char*) by value — the pointer IS the data.
-                write!(out, "{} = ({})((uint8_t){}[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
+                // Value is a Str struct by value — extract first byte of .data.
+                write!(out, "{} = ({})((uint8_t)((const char*){}.data)[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             } else {
                 write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
             }
