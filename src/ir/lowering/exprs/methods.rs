@@ -839,12 +839,13 @@ pub(super) fn lower_method_call(
         }
     }
     // Handle .byte_len() for strings → direct field access
+    // Under 32-byte Str layout {data, cap, len, alloc}, len is at field index 2.
     if method_name == "byte_len" {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
         if ctx.type_mapper.is_string_type(recv_type) {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 let mut len_place = place.clone();
-                len_place.projections.push(Projection::Field(1));
+                len_place.projections.push(Projection::Field(2));
                 let tmp = builder.add_local(I64_TYPE, None);
                 builder.assign(Place::local(tmp), Operand::Copy(len_place));
                 return FunctionBuilder::copy(tmp);

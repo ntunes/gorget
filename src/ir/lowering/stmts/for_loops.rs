@@ -159,10 +159,10 @@ fn lower_for_string(
 
     // len = iter.len (byte length)
     let len_local = builder.add_local(I64_TYPE, None);
-    // Access .len field (field index 1 for Str: {data, len})
+    // Access .len field (field index 2 for 32-byte Str: {data, cap, len, alloc})
     let len_place = Place {
         local: iter_local,
-        projections: vec![Projection::Field(1)],
+        projections: vec![Projection::Field(2)],
     };
     builder.assign(Place::local(len_local), Operand::Copy(len_place));
 

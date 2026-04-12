@@ -1877,14 +1877,14 @@ impl<'a> FuncLowering<'a> {
                         base
                     };
 
-                    // Str fields: 0=data (Ptr), 1=len (I64), 2=cap (I64), 3=alloc (Ptr)
-                    // Load .len (field 1) → cast to I32 for printf %.*s precision
+                    // 32-byte Str fields: 0=data (Ptr), 1=cap (I64), 2=len (I64), 3=alloc (Ptr)
+                    // Load .len (field 2) → cast to I32 for printf %.*s precision
                     let len_ptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: len_ptr,
                         base: str_base,
                         struct_id,
-                        field: 1,
+                        field: 2,
                     });
                     let len_load = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
@@ -1959,12 +1959,12 @@ impl<'a> FuncLowering<'a> {
                     is_move: true,
                 });
 
-                // Decompose: load .len (field 1) → i32, load .data (field 0) → ptr
+                // Decompose: load .len (field 2 under 32-byte layout) → i32, load .data (field 0) → ptr
                 let str_sid = self.struct_reg.lookup("GorgetString").unwrap();
                 let base = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot: str_slot });
                 let len_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: len_ptr, base, struct_id: str_sid, field: 1 });
+                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: len_ptr, base, struct_id: str_sid, field: 2 });
                 let len_load = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::Load { dst: len_load, ptr: len_ptr, ty: LirType::I64 });
                 let len_i32 = self.lir_func.next_value();
