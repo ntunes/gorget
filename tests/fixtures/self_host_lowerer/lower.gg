@@ -1580,6 +1580,21 @@ void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirMod
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
 
+    # Pre-scan: detect if module has a main() function.
+    # Test blocks are skipped when main exists (normal build mode),
+    # emitted when no main (test-only file).
+    bool has_main = false
+    int hmi = 0
+    while hmi < m.items.len():
+        Item hm_item = m.items.get(hmi).unwrap()
+        match hm_item:
+            case IFunction(fdef):
+                if fdef.name == "main":
+                    has_main = true
+            else:
+                pass
+        hmi += 1
+
     # Pre-scan function signatures for call resolution
     Dict[String, int] fn_sigs = {}
     int ii = 0
@@ -1772,9 +1787,53 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # Skip generic templates — they'll be monomorphized below
                 if fdef.type_params.len() == 0:
                     gmod.functions.push(lower_function(fdef, &gmod))
-            case ITest(_, _, _, _):
-                # Skip test blocks in normal builds (Rust compiler strips them too)
-                pass
+            case ITest(tname, decorators, tags, test_body):
+                # Skip test blocks when main() exists (normal build mode).
+                # Emit __test_N for test-only files (no main).
+                if not has_main:
+                    # Check for @skip decorator — Rust skips these too
+                    bool is_skipped = false
+                    int dci = 0
+                    while dci < decorators.len():
+                        SpannedExpr dec = decorators.get(dci).unwrap()
+                        match dec.expr:
+                            case ECall(callee_box, _, _):
+                                match (*callee_box).expr:
+                                    case EIdentifier(dname):
+                                        if dname == "skip":
+                                            is_skipped = true
+                                    else:
+                                        pass
+                            case EIdentifier(dname):
+                                if dname == "skip":
+                                    is_skipped = true
+                            else:
+                                pass
+                        dci += 1
+                    if not is_skipped:
+                        String test_fn_name = "__test_" + int_to_str(test_idx)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, {})
+                        Vector[Instruction] tinit = []
+                        tctx.block_insts.push(!tinit)
+                        tctx.block_terms.push(TNone())
+                        add_local(&tctx, UNIT_TYPE, NO_NAME)
+                        lower_stmts(&tctx, test_body, &gmod, false)
+                        Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
+                        match tterm:
+                            case TNone():
+                                set_terminator(&tctx, TReturn(OpConstUnit()))
+                            else:
+                                pass
+                        Vector[BasicBlock] tblocks = []
+                        int tbi = 0
+                        while tbi < tctx.block_insts.len():
+                            Vector[Instruction] tinsts = tctx.block_insts.get(tbi).unwrap()
+                            Terminator tt = tctx.block_terms.get(tbi).unwrap()
+                            tblocks.push(BasicBlock(tinsts, tt))
+                            tbi += 1
+                        Vector[int] tparams = []
+                        gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
+                test_idx += 1
             case IEquip(eqblk):
                 # Skip generic equip blocks (detected by target having type args)
                 bool skip_equip = eqblk.type_params.len() > 0
