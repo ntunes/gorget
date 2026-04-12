@@ -40,7 +40,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 688/913 (75.4%) fn-count match, 99 process failures (24 httpserver + 75 error tests)**. Remaining blockers: ~39 shared/spawn (missing `__shared_token_*` / `__spawn_wrap_*` spawn wrappers), ~56 import-heavy (parser corrupts large equip blocks — local vars leak into method list after ~6 methods), ~2 via delegation (`equip X with T via field:`), ~3 generic equip monomorphization, closures inside f-string interpolation invisible to scanner. Loader body-length relaxed, implicit `it` detection via `expr_has_it`, test block conditional emission, trait default methods generated. [updated: 2026-04-12]
+- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 716/913 (78.4%) fn-count match, 99 process failures**. Remaining blockers: ~56 import-heavy (parser corrupts large equip blocks after ~6 methods), ~4 closure/method spawn wrappers (`__spawn_wrap_*`), ~2 via delegation, ~3 generic equip, f-string closures invisible. Done: shared-token spawn stubs, trait defaults, `it` detection, test conditional emission, loader body-length relaxation, find() workaround. [updated: 2026-04-12]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
