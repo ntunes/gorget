@@ -1386,6 +1386,15 @@ static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src)
     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
 }
 
+// Copy-on-write aware copy: views (cap=0) are struct-copied (zero alloc),
+// owned strings (cap>0) are deep-cloned (allocates new buffer).
+// Used by the C backend for `String t = s` assignment Copy path.
+static inline GorgetString gorget_string_copy_cow(const GorgetString* src) {
+    if (src->cap == 0) return *src;  // view: 32-byte struct copy, no alloc
+    if (src->len == 0) return GORGET_EMPTY_STR;
+    return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
+}
+
 // Borrow: shallow struct copy. The caller promises not to drop the borrow;
 // the compiler emits no free for Ref locals. If a borrow escapes to storage
 // the compiler materializes (clones) it at the ownership boundary.

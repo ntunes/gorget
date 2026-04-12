@@ -1708,8 +1708,9 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                         // instruction will zero the source, preventing double-free.
                         write!(out, "memcpy(&{}, {}, sizeof({}));", s(*slot), v(*value), ty_name).unwrap();
                     } else {
-                        // Copy: clone to prevent double-free (source stays alive).
-                        write!(out, "{} = gorget_string_clone((const GorgetString*){});", s(*slot), v(*value)).unwrap();
+                        // Copy: CoW-aware — views (cap=0) get a 32-byte struct copy
+                        // (zero alloc), owned strings get a deep clone.
+                        write!(out, "{} = gorget_string_copy_cow((const GorgetString*){});", s(*slot), v(*value)).unwrap();
                     }
                 } else if val_is_ptr {
                     // Value is a pointer to source data — use memcpy.
