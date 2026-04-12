@@ -2192,7 +2192,10 @@ fn emit_inst(
                     };
                     let pfx = format!("unwraperr.{block_id}.{uid}");
                     writeln!(out, "  %{pfx}.ptr = getelementptr i8, ptr %v{}, i64 {err_offset}", args[0].0).unwrap();
-                    if err_ty_str == "ptr" || err_ty_str.starts_with('%') {
+                    if err_ty_str.starts_with('%') {
+                        // Aggregate payload: return pointer to inline struct (no load)
+                        writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 {err_offset}", d.0, args[0].0).unwrap();
+                    } else if err_ty_str == "ptr" {
                         writeln!(out, "  %v{} = load ptr, ptr %{pfx}.ptr", d.0).unwrap();
                     } else {
                         writeln!(out, "  %v{} = load {err_ty_str}, ptr %{pfx}.ptr", d.0).unwrap();
@@ -2249,8 +2252,11 @@ fn emit_inst(
                     );
                     let payload_ptr = format!("unwrap.{block_id}.{uid}.ptr");
                     writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
-                    if payload_ty == "ptr" || payload_ty.starts_with('%') {
-                        // Aggregate or pointer payload — load as ptr
+                    if payload_ty.starts_with('%') {
+                        // Aggregate payload — the struct is inline at offset 8,
+                        // return a pointer to it (no load needed)
+                        writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 8", d.0, args[0].0).unwrap();
+                    } else if payload_ty == "ptr" {
                         writeln!(out, "  %v{} = load ptr, ptr %{payload_ptr}", d.0).unwrap();
                     } else {
                         writeln!(out, "  %v{} = load {payload_ty}, ptr %{payload_ptr}", d.0).unwrap();
@@ -2278,7 +2284,10 @@ fn emit_inst(
                     writeln!(out, "  %{tag_val} = load i32, ptr %{tag_ptr}").unwrap();
                     writeln!(out, "  %{cmp} = icmp eq i32 %{tag_val}, 0").unwrap();
                     writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
-                    if payload_ty == "ptr" || payload_ty.starts_with('%') {
+                    if payload_ty.starts_with('%') {
+                        // Aggregate payload: select between pointer to inline payload vs default
+                        writeln!(out, "  %v{} = select i1 %{cmp}, ptr %{payload_ptr}, ptr %v{}", d.0, args[1].0).unwrap();
+                    } else if payload_ty == "ptr" {
                         writeln!(out, "  %{payload_val} = load ptr, ptr %{payload_ptr}").unwrap();
                         writeln!(out, "  %v{} = select i1 %{cmp}, ptr %{payload_val}, ptr %v{}", d.0, args[1].0).unwrap();
                     } else {
@@ -2335,7 +2344,7 @@ fn emit_inst(
                     writeln!(out, "  %{pfx} = alloca %GorgetString").unwrap();
                     writeln!(out, "  %{pfx}.fp = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 0").unwrap();
                     writeln!(out, "  store ptr @.str.{fixed_idx}, ptr %{pfx}.fp").unwrap();
-                    // cap = 0 (view/literal) — field 1
+                    // cap = 0 (view/literal) — field 1 (cap at offset +8)
                     writeln!(out, "  %{pfx}.fc = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 1").unwrap();
                     writeln!(out, "  store i64 0, ptr %{pfx}.fc").unwrap();
                     // len — field 2
