@@ -261,11 +261,11 @@ pub(super) fn lower_list_comprehension(
         let idx = builder.add_local(I64_TYPE, None);
         builder.assign(Place::local(idx), Operand::Constant(Constant::I64(0)));
 
-        // len = iter.len (field index 1 of GorgetArray)
+        // len = iter.len (field index 2 of GorgetArray: {data, cap, len, elem_size})
         let len = builder.add_local(I64_TYPE, None);
         let len_place = Place {
             local: iter_local,
-            projections: vec![Projection::Field(1)],
+            projections: vec![Projection::Field(2)],
         };
         builder.assign(Place::local(len), Operand::Copy(len_place));
 

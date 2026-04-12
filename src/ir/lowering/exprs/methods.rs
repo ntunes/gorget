@@ -819,7 +819,8 @@ pub(super) fn lower_method_call(
             );
             return FunctionBuilder::copy(dst);
         }
-        // GorgetArray: .len is field 1 (element count, no function call needed)
+        // GorgetArray: .len is field 2 (element count, no function call needed)
+        // Under uniform layout {data, cap, len, elem_size}, .len is at offset +16.
         // Resolve through Ptr for field-load refs (Ptr(Vector__T) → Vector__T)
         let resolved_type = ctx.pointee_type(recv_type).unwrap_or(recv_type);
         let is_ptr_recv = resolved_type != recv_type;
@@ -830,7 +831,7 @@ pub(super) fn lower_method_call(
                     if is_ptr_recv {
                         len_place.projections.push(Projection::Deref);
                     }
-                    len_place.projections.push(Projection::Field(1));
+                    len_place.projections.push(Projection::Field(2));
                     let tmp = builder.add_local(I64_TYPE, None);
                     builder.assign(Place::local(tmp), Operand::Copy(len_place));
                     return FunctionBuilder::copy(tmp);

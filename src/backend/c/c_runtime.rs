@@ -142,8 +142,8 @@ static inline uint64_t __gorget_hash_str_len(const char* s, size_t len) {
 typedef void (*__gorget_drop_fn)(void*);
 typedef struct {
     void* data;
+    size_t cap;              // offset +8: generic view discriminator (0 = view)
     size_t len;
-    size_t cap;
     size_t elem_size;
     GorgetAllocator* alloc;
     __gorget_drop_fn elem_drop;  // drop function for resource-type elements (NULL if trivial)
@@ -155,10 +155,10 @@ typedef uint64_t (*__gorget_hash_fn)(const void*);
 typedef bool (*__gorget_eq_fn)(const void*, const void*);
 typedef struct {
     void* keys;
+    size_t cap;              // offset +8: generic view discriminator (0 = view)
     void* values;
     uint8_t* states;
     size_t count;
-    size_t cap;
     size_t key_size;
     size_t val_size;
     GorgetAllocator* alloc;

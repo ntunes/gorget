@@ -62,14 +62,15 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             computed_c_size: Some(32),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
-        // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.
+        // C layout: { data, cap, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.
+        // Field order: cap at offset +8 matches the generic view-discriminator prefix.
         // LIR only models 4 fields; the extra 4 are runtime-internal.
         StructDef {
             name: "GorgetArray".into(),
             fields: vec![
                 ("data".into(), LirType::Ptr),
-                ("len".into(), LirType::I64),
                 ("cap".into(), LirType::I64),
+                ("len".into(), LirType::I64),
                 ("elem_size".into(), LirType::I64),
             ],
             enum_kind: EnumKind::NotEnum,
@@ -110,17 +111,17 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             computed_c_size: Some(16),
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
-        // C layout: 19 fields × 8 = 152 bytes (adds val_materialize/key_materialize).
-        // LIR models 13 fields; the extra 6 (val_drop/val_clone/key_drop/key_clone/
-        // val_materialize/key_materialize) are runtime-internal function pointers.
+        // C layout: 20 fields × 8 = 160 bytes. cap at offset +8 matches the
+        // generic view-discriminator prefix shared with Str and GorgetArray.
+        // LIR models 13 fields; the extra 7 are runtime-internal function pointers.
         StructDef {
             name: "GorgetMap".into(),
             fields: vec![
                 ("keys".into(), LirType::Ptr),
+                ("cap".into(), LirType::I64),
                 ("values".into(), LirType::Ptr),
                 ("states".into(), LirType::Ptr),
                 ("count".into(), LirType::I64),
-                ("cap".into(), LirType::I64),
                 ("key_size".into(), LirType::I64),
                 ("val_size".into(), LirType::I64),
                 ("alloc".into(), LirType::Ptr),
@@ -135,15 +136,15 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             computed_c_size: Some(152),
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
-        // Same C layout as GorgetMap: 152 bytes.
+        // Same C layout as GorgetMap: 160 bytes.
         StructDef {
             name: "GorgetSet".into(),
             fields: vec![
                 ("keys".into(), LirType::Ptr),
+                ("cap".into(), LirType::I64),
                 ("values".into(), LirType::Ptr),
                 ("states".into(), LirType::Ptr),
                 ("count".into(), LirType::I64),
-                ("cap".into(), LirType::I64),
                 ("key_size".into(), LirType::I64),
                 ("val_size".into(), LirType::I64),
                 ("alloc".into(), LirType::Ptr),
