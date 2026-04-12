@@ -358,11 +358,14 @@ fn lower_for_enumerate(
     let idx = builder.add_local(I64_TYPE, None);
     builder.assign(Place::local(idx), Operand::Constant(Constant::I64(0)));
 
-    // len = iter.len (field index 1 of GorgetArray)
+    // len = iter.len
+    // Under 32-byte Str {data, cap, len, alloc}, .len is at field index 2.
+    // For GorgetArray {data, len, cap, elem_size}, .len is at field index 1.
+    let len_field_idx = if ctx.type_mapper.is_string_type(iter_type) { 2 } else { 1 };
     let len = builder.add_local(I64_TYPE, None);
     let len_place = Place {
         local: iter_local,
-        projections: vec![Projection::Field(1)],
+        projections: vec![Projection::Field(len_field_idx)],
     };
     builder.assign(Place::local(len), Operand::Copy(len_place));
 

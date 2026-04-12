@@ -9900,8 +9900,8 @@ static inline int64_t gorget_process_pid(GorgetProcess* proc) {
     return (int64_t)proc->pid;
 }
 
-static inline void gorget_process_write_stdin(GorgetProcess* proc, Str data) {
-    if (proc->stdin_fd >= 0 && data.len > 0) write(proc->stdin_fd, data.data, data.len);
+static inline void gorget_process_write_stdin(GorgetProcess* proc, const char* data) {
+    if (proc->stdin_fd >= 0 && data) { size_t len = strlen(data); if (len > 0) write(proc->stdin_fd, data, len); }
 }
 
 static inline void gorget_process_close_stdin(GorgetProcess* proc) {
