@@ -1102,6 +1102,37 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // CoW: if the receiver came from an IndexLoad on a collection (tracked via
+        // CollectionRef or cow_borrow_source), also sever the SOURCE collection's
+        // aliases. This handles `d2["key"].push(x)` where d2 is a CoW alias — the
+        // push mutates through a pointer into d2's shared storage, so d2 must be
+        // severed before the mutation.
+        if needs_mut {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                if place.projections.is_empty() {
+                    // Check CollectionRef (from index_load) and CowBorrow (from .get().unwrap())
+                    let source = match ctx.func_state.local_ownership.get(&place.local) {
+                        Some(crate::ir::lowering::context::LocalOwnershipState::CollectionRef { collection: CollectionId::Local(src) }) => Some(*src),
+                        _ => ctx.cow_borrow_source(place.local)
+                            .and_then(|c| if let CollectionId::Local(src) = c { Some(*src) } else { None }),
+                    };
+                    if let Some(source_local) = source {
+                        ctx.cow_before_mutation(builder, source_local, receiver.span);
+                        // Re-resolve: the source collection may have been replaced
+                        // by cow_before_mutation (alias severed → new owned local).
+                        // The receiver must be re-lowered to point into the new copy.
+                        if let Some(hint) = builder.local_name(source_local).map(|s| s.to_string()) {
+                            if let Some((new_local, _)) = ctx.lookup_local(&hint) {
+                                if new_local != source_local {
+                                    recv = lower_expr(ctx, builder, receiver);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // CoW: field-access receiver mutation — materialize any collection refs
         // that borrow from this field path (e.g., self.data.push(x) severs refs
         // created by self.data.get(i).unwrap()).
