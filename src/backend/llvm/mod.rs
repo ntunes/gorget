@@ -2535,10 +2535,30 @@ fn emit_inst(
 
                     let expects_agg = expected_ty.map_or(false, |t| t.is_aggregate());
 
+                    // Detect GorgetString value passed to const char* param:
+                    // Only for known runtime functions where a specific param is const char*
+                    // (NOT void*). Most runtime functions taking Ptr want a pointer to the
+                    // struct, not the inner .data pointer.
+                    let is_str_to_cstr = expects_ptr && match actual_ty {
+                        Some(LirType::PtrTo(sid)) if snames.get(&sid.0).map_or(false, |n| n == "GorgetString") => {
+                            match (name.as_str(), i) {
+                                ("gorget_assert_fail_values", 0) => true,
+                                ("gorget_panic", 0) => true,
+                                _ => false,
+                            }
+                        }
+                        _ => false,
+                    };
+
                     if expects_agg && is_ptr {
                         // Aggregate params are declared as ptr in the extern (C ABI).
                         // Just pass the pointer directly — no struct load needed.
                         format!("ptr %v{}", a.0)
+                    } else if is_str_to_cstr {
+                        // GorgetString → const char*: load .data pointer from field 0
+                        let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
+                        spill_lines.push(format!("  %{cstr_name} = load ptr, ptr %v{}", a.0));
+                        format!("ptr %{cstr_name}")
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
                         let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames);
