@@ -1536,12 +1536,18 @@ pub(super) fn emit_coerced_arg(
             write!(out, "gorget_string_new({})", format!("__v{}", a.0)).unwrap();
         } else if ty_name == "Str" {
             // Ptr to Str (from SlotAddr of GorgetString slot?) — try coercion.
-            // Check if the slot is a GorgetString.
             write!(out, "*({ty_name}*)__v{}", a.0).unwrap();
         } else {
             write!(out, "*({ty_name}*)__v{}", a.0).unwrap();
         }
-    } else {
+    }
+    // Str struct arg → unknown callee (no param_ty info): extract .data for const char*.
+    // This is the catch-all for runtime functions like gorget_file_open, gorget_file_write,
+    // gorget_socket_write_str, etc. that take const char* but receive Str structs.
+    else if param_ty.is_none() && (arg_name.as_deref() == Some("Str") || arg_name.as_deref() == Some("GorgetString")) {
+        write!(out, "(const char*)__v{}.data", a.0).unwrap();
+    }
+    else {
         write!(out, "__v{}", a.0).unwrap();
     }
 }

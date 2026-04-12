@@ -689,8 +689,10 @@ pub(super) fn emit_call_extern(
             if emit_name == "gorget_file_create" && args.len() == 1 {
                 let a = args[0];
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                let path_expr = if is_str_lit {
-                    format!("{}", v(a))
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_gs = is_str_lit || matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                let path_expr = if is_gs {
+                    format!("(const char*){}.data", v(a))
                 } else {
                     format!("gorget_str_to_cstr({})", v(a))
                 };
@@ -725,8 +727,10 @@ pub(super) fn emit_call_extern(
             if emit_name == "gorget_file_open" && args.len() == 1 {
                 let a = args[0];
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                let path_expr = if is_str_lit {
-                    format!("{}", v(a))
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_gs = is_str_lit || matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                let path_expr = if is_gs {
+                    format!("(const char*){}.data", v(a))
                 } else {
                     format!("gorget_str_to_cstr({})", v(a))
                 };

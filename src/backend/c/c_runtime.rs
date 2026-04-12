@@ -5873,8 +5873,8 @@ static inline GorgetString gorget_file_read_all(GorgetFile* f) {
     return gorget_string_adopt(buf);
 }
 
-static inline void gorget_file_write(GorgetFile* f, Str s) {
-    if (s.len > 0) fwrite(s.data, 1, s.len, f->handle);
+static inline void gorget_file_write(GorgetFile* f, const char* s) {
+    if (s) fputs(s, f->handle);
 }
 
 // Free functions
@@ -7780,12 +7780,12 @@ static int64_t gorget_socket_write(GorgetSocket* sock, const GorgetArray* data) 
 }
 
 // Write a str (convenience for text protocols)
-static int64_t gorget_socket_write_str(GorgetSocket* sock, Str s) {
-    if (sock->fd < 0 || s.len == 0) return 0;
-    const char* d = (const char*)s.data;
+static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
+    if (sock->fd < 0 || !s) return 0;
+    size_t len = strlen(s);
     size_t total = 0;
-    while (total < s.len) {
-        ssize_t sent = send(sock->fd, d + total, s.len - total, 0);
+    while (total < len) {
+        ssize_t sent = send(sock->fd, s + total, len - total, 0);
         if (sent <= 0) return -1;
         total += (size_t)sent;
     }
@@ -7886,9 +7886,11 @@ static int gorget_socket_async_read_is_pending(GorgetArray* a) {
 
 /* Non-blocking write_str: try send once.
  * Returns bytes sent (>=0), -1 on error, GORGET_IO_PENDING on WOULD_BLOCK. */
-static int64_t gorget_socket_async_write_str(GorgetSocket* sock, Str s) {
-    if (sock->fd < 0 || s.len == 0) return 0;
-    ssize_t sent = send(sock->fd, s.data, s.len, MSG_NOSIGNAL);
+static int64_t gorget_socket_async_write_str(GorgetSocket* sock, const char* s) {
+    if (sock->fd < 0 || !s) return 0;
+    size_t len = strlen(s);
+    if (len == 0) return 0;
+    ssize_t sent = send(sock->fd, s, len, MSG_NOSIGNAL);
     if (sent >= 0) return (int64_t)sent;
     if (errno == EAGAIN || errno == EWOULDBLOCK) return GORGET_IO_PENDING;
     return -1;
@@ -8434,12 +8436,12 @@ static int64_t gorget_tls_write(GorgetTlsSocket* sock, const GorgetArray* data) 
     return (int64_t)total;
 }
 
-static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, Str s) {
-    if (!sock->ssl || s.len == 0) return 0;
-    const char* d = (const char*)s.data;
+static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
+    if (!sock->ssl || !s) return 0;
+    size_t len = strlen(s);
     size_t total = 0;
-    while (total < s.len) {
-        int sent = SSL_write(sock->ssl, d + total, (int)(s.len - total));
+    while (total < len) {
+        int sent = SSL_write(sock->ssl, s + total, (int)(len - total));
         if (sent <= 0) return -1;
         total += (size_t)sent;
     }

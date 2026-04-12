@@ -768,10 +768,23 @@ pub fn lower_module(
     generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
     // Register ABI tags for compiler-emitted runtime calls (not declared in .gg files).
+    // Under 32-byte Str, functions that take const char* for Str params need CStr
+    // marshalling so the caller extracts .data from the Str struct.
     {
         use crate::ir::abi::AbiKind;
-        // gorget_panic takes const char* — needs CStr marshalling.
         ctx.fn_extern_abi_kinds.insert("gorget_panic".to_string(), vec![AbiKind::CStr]);
+        // File operations: gorget_file_open(path, mode), gorget_file_write(file*, content)
+        ctx.fn_extern_abi_kinds.insert("gorget_file_open".to_string(), vec![AbiKind::CStr, AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_file_write".to_string(), vec![AbiKind::Auto, AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_read_file".to_string(), vec![AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_write_file".to_string(), vec![AbiKind::CStr, AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_append_file".to_string(), vec![AbiKind::CStr, AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_file_exists".to_string(), vec![AbiKind::CStr]);
+        ctx.fn_extern_abi_kinds.insert("gorget_read_file_bytes".to_string(), vec![AbiKind::CStr]);
+        // Process operations
+        ctx.fn_extern_abi_kinds.insert("gorget_process_write_stdin".to_string(), vec![AbiKind::Auto, AbiKind::CStr]);
+        // Bytes conversion
+        ctx.fn_extern_abi_kinds.insert("gorget_bytes_from_str".to_string(), vec![AbiKind::CStr]);
     }
 
     // Pre-scan: register non-generic equip method signatures
