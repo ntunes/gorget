@@ -413,7 +413,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         }
 
         // Bytes (Vector[uint8]) operations
-        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![Opaque]),
+        // gorget_bytes_from_str/hex(const char*) — may receive Str reference
+        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![CStr]),
         "gorget_bytes_to_str" | "gorget_bytes_to_hex" => sig(vec![LirType::Ptr], s(), vec![Ptr]),
         "gorget_bytes_utf8_valid" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
         "gorget_bytes_concat" => sig(vec![LirType::Ptr, LirType::Ptr], arr_ty(), vec![Ptr, Ptr]),

@@ -981,6 +981,11 @@ pub(super) fn emit_call_extern(
                                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                                 // ABI-driven marshalling: explicit tag or whitelist-derived.
                                 {
+                                    let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                                    if inst_abi != crate::ir::abi::AbiKind::Auto {
+                                        emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                                        continue;
+                                    }
                                     let abi = resolve_param_abi(ext_decl, emit_name, i);
                                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                         continue;
@@ -1091,8 +1096,13 @@ pub(super) fn emit_call_extern(
                     if i > 0 { write!(out, ", ").unwrap(); }
                     let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                     let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                    // ABI-driven marshalling.
+                    // ABI-driven marshalling: instruction-level tags first.
                     {
+                        let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                        if inst_abi != crate::ir::abi::AbiKind::Auto {
+                            emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                            continue;
+                        }
                         let abi = resolve_param_abi(ext_decl, emit_name, i);
                         if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                             continue;
@@ -1601,6 +1611,11 @@ pub(super) fn emit_call_extern(
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                             // ABI-driven marshalling: explicit tag or whitelist-derived.
                             {
+                                let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                                if inst_abi != crate::ir::abi::AbiKind::Auto {
+                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                                    continue;
+                                }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                     continue;
@@ -1662,6 +1677,11 @@ pub(super) fn emit_call_extern(
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                             // ABI-driven marshalling: explicit tag or whitelist-derived.
                             {
+                                let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                                if inst_abi != crate::ir::abi::AbiKind::Auto {
+                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                                    continue;
+                                }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                     continue;
@@ -1700,6 +1720,11 @@ pub(super) fn emit_call_extern(
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                             // ABI-driven marshalling.
                             {
+                                let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                                if inst_abi != crate::ir::abi::AbiKind::Auto {
+                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                                    continue;
+                                }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                                     continue;
