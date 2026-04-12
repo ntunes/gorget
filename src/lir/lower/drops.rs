@@ -86,6 +86,15 @@ impl<'a> FuncLowering<'a> {
             (None, DropStrategy::None)
         };
 
+        // Sanity check: non-None drop strategies should only apply to named types.
+        // A scalar or unknown type getting a Trivial/Custom/Recursive drop is a type system bug.
+        debug_assert!(
+            matches!(strategy, DropStrategy::None) || type_name.is_some(),
+            "Non-None drop strategy ({:?}) for unnamed/scalar type (type_id={:?}, local={}). \
+             This indicates a type resolution bug in the drop elaboration.",
+            strategy, type_id, local_idx,
+        );
+
         match strategy {
             DropStrategy::None => {
                 // Fallback for force-registered Option/Result types.
