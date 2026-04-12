@@ -327,7 +327,26 @@ pub(super) fn lower_call(
                         "gorget_array_len"
                     }
                 } else { "gorget_array_len" }
-            } else { "gorget_array_len" };
+            } else {
+                // Check for user-defined Measurable.len() before falling back
+                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(resolved) {
+                    let method_name = format!("{n}__len");
+                    if ctx.fn_sigs.contains_key(&method_name) {
+                        let ptr_type = ctx.register_ptr_type(resolved);
+                        let borrow = match &recv {
+                            Operand::Copy(p) | Operand::Move(p) => builder.borrow(p.clone(), ptr_type),
+                            _ => {
+                                let l = builder.add_local(resolved, None);
+                                builder.assign(Place::local(l), recv.clone());
+                                builder.borrow(Place::local(l), ptr_type)
+                            }
+                        };
+                        let dst = builder.call(&method_name, vec![FunctionBuilder::copy(borrow)], I64_TYPE);
+                        return FunctionBuilder::copy(dst);
+                    }
+                }
+                "gorget_array_len"
+            };
             let dst = builder.call_extern(runtime_fn, vec![recv], I64_TYPE);
             return FunctionBuilder::copy(dst);
         }
