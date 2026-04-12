@@ -787,9 +787,11 @@ String mangle_prim_type(String name):
 
 String mangle_trait_name(String raw):
     # Parse "TraitName[Type1, Type2]" → "TraitName__type1__type2"
-    int bracket = raw.find("[")
-    if bracket < 0:
+    # Note: use contains() guard because find() returns 0 (not -1) when not found
+    # due to sentinel-to-Option unwrap bug in the compiler.
+    if not raw.contains("["):
         return raw
+    int bracket = raw.find("[")
     String base = raw.slice(0, bracket)
     String args_str = raw.slice(bracket + 1, raw.len() - 1)
     # Split args by ", " and mangle each
@@ -826,7 +828,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             case Some(tname):
                 # Derive-generated traits use short form (Type__method)
                 # Explicit trait impls use prefix (Trait_for_Type__method)
-                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0 or tname.find("Add[") == 0 or tname.find("Sub[") == 0 or tname.find("Mul[") == 0 or tname.find("Div[") == 0
+                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
                 if not is_derive:
                     String mangled_trait = mangle_trait_name(tname)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
@@ -859,7 +861,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         bool is_explicit_trait = false
         match eqblk.trait_name:
             case Some(tname):
-                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.find("Iterator") == 0 or tname.find("Iterable") == 0 or tname.find("Add[") == 0 or tname.find("Sub[") == 0 or tname.find("Mul[") == 0 or tname.find("Div[") == 0
+                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
                 if not is_derive_trait:
                     is_explicit_trait = true
             case None:
@@ -1121,6 +1123,23 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
 
             # Scan closure body for nested closures
             next_id = scan_stmts_for_closures(body, next_id, &gmod)
+        case EImplicitClosure(body_box):
+            # Implicit `it` closure: single implicit parameter, expression body
+            String ic_name = "__Closure_" + int_to_str(next_id)
+            String ic_call = ic_name + "__call"
+            int ic_tid = lookup_or_register_named(&gmod, ic_name)
+            int ic_self_ptr = register_ptr(&gmod, ic_tid)
+            # Implicit param type defaults to I64 (type checker infers the real type)
+            Vector[int] ic_params = [ic_self_ptr, I64_TYPE]
+            int ic_ret = guess_return_type(*body_box, &gmod)
+            if ic_ret == STRING_MARKER:
+                ic_ret = lookup_or_register_named(&gmod, "GorgetString")
+            Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
+            Vector[BasicBlock] ic_blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+            gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
+            next_id = next_id + 1
+            # Scan body for nested closures
+            next_id = scan_expr_for_closures(*body_box, next_id, &gmod)
         case EBinaryOp(lhs, _, rhs):
             next_id = scan_expr_for_closures(*lhs, next_id, &gmod)
             next_id = scan_expr_for_closures(*rhs, next_id, &gmod)

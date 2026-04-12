@@ -14,6 +14,10 @@
 
 - **LIR value/slot split loses GIR MoveZero for consuming args**: Runtime safety net covers `gorget_array_set` and `gorget_array_insert`. `gorget_map_put` can't use it (called internally by put_cloned/grow/rehash — zeroing corrupts source). `gorget_set_add` delegates to map_put. The dict[key].push() CoW sever fix handles the dict double-free case at the GIR level. Proper LIR fix: value→slot ownership propagation. [updated: 2026-04-12]
 
+- **String.find() returns 0 instead of -1 when not found**: `gorget_str_find` returns -1 correctly, but the sentinel-to-Option wrapping converts it to `Option::None`. When assigned to `int` via auto-unwrap, the None payload reads as 0 (from zero-init), not -1. Affects `index_of()` too. Workaround: use `contains()` to guard, or compare with `Option[int]` directly. [added: 2026-04-12]
+
+- **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
+
 - **Borrow checker: reject multi-use `!` on strings**: `!` on strings now triggers real MoveZero (pragmatic skip removed). Borrow checker should catch use-after-move for `!key` in loops. [updated: 2026-04-08]
 
 - **Box.new should enforce `!` at borrow checker level**: Currently Box.new implicitly MoveZeros the source. [added: 2026-03-26]
@@ -37,7 +41,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison — 16 type checker mismatches**: At 861 fixtures (2026-04-07). Parser: 856/861 (99.4%). Resolver: 854/861 (99.2%). Type checker: 845/861 (98.1%), **0 crashes**. GIR Lowerer: 586/901 (65.0%), **0 crashes** — remaining: ~105 imported functions (equip methods from library modules, transitive import functions), ~76 error tests, ~35 `*mut` generic String params, ~26 trait `*unit` self, ~73 other. Import loading + module-path mangling + name-based filtering done. Full BFS reachability blocked by CoW segfault on instruction iteration. 16 type checker mismatches remain (type var numbering, closure param inference, Gorget-more-correct). [updated: 2026-04-08]
+- **Self-host comparison**: At 913 fixtures (2026-04-12). Parser: ~856/913. Resolver: ~854/913. Type checker: ~845/913. **GIR Lowerer: 669/913 (73.3%) fn-count match, 0 crashes on 814 fixtures, 99 process failures (24 httpserver + 75 error tests)**. Remaining blockers: ~28 shared_* (missing `__shared_token_*` spawn wrappers), ~13 p2p_* (missing imported equip method), ~56 import-heavy (parser corrupts large equip blocks — local vars leak into method list), ~5 spawn_* (missing `__spawn_wrap_*`/`__spawn_method_wrap_*`), implicit `it` closures (parser `expr_contains_it` doesn't traverse sub-expressions). Trait name mangling and find() workaround applied. [updated: 2026-04-12]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
