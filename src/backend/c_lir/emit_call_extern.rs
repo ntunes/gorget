@@ -1989,6 +1989,20 @@ pub(super) fn emit_call_extern(
                     write!(out, "(int)((Str*){v})->len, (const char*)((Str*){v})->data", v = v(*a)).unwrap();
                     continue;
                 }
+                // Pre-decomposed %.*s data arg: the LIR lowering splits Str into
+                // (int32)len + (Ptr)data as separate args. The len was already emitted;
+                // the data arg is a raw void* from a FieldPtr→Load on Str.data.
+                // Cast to (const char*) to satisfy printf's %s expectation.
+                if _need_fmt_fix && is_printf && i > 1
+                    && matches!(arg_ty, Some(LirType::Ptr))
+                {
+                    // Check if the preceding arg was i32 (the len half of a %.*s pair)
+                    let prev_ty = val_types.get(emit_args[i-1].0 as usize).and_then(|t| t.as_ref());
+                    if matches!(prev_ty, Some(LirType::I32)) {
+                        write!(out, "(const char*){}", v(*a)).unwrap();
+                        continue;
+                    }
+                }
                 if false {
                     // Placeholder
                 }
