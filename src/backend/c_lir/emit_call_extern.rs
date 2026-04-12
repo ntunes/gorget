@@ -142,13 +142,22 @@ pub(super) fn emit_call_extern(
                 return;
             }
 
-            // ── Builtin type cast: float(x) ─────────────────────────────
-            // `float` is a C keyword — can't emit as a function call. Emit inline cast.
-            if name == "float" && args.len() == 1 {
-                if let Some(d) = dst {
-                    write!(out, "{} = (double){};", v(*d), v(args[0])).unwrap();
+            // ── Builtin type casts ────────────────────────────────────────
+            // `float`, `int`, `bool` are C keywords — can't emit as function calls.
+            // Gorget's `float(x)`, `int(x)`, `bool(x)` are type casts. Emit inline C casts.
+            if args.len() == 1 {
+                let cast_to = match name.as_ref() {
+                    "float" => Some("double"),
+                    "int"   => Some("int64_t"),
+                    "bool"  => Some("bool"),
+                    _ => None,
+                };
+                if let Some(c_type) = cast_to {
+                    if let Some(d) = dst {
+                        write!(out, "{} = ({c_type}){};", v(*d), v(args[0])).unwrap();
+                    }
+                    return;
                 }
-                return;
             }
 
             // ── Inline string codepoint helpers (synthetic GIR functions) ──

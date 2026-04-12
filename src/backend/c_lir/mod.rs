@@ -442,7 +442,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     // Extern declarations (skip functions already provided by included headers or runtime)
     // Builtin type cast names that are C keywords — can't be used as function names.
     // Handled as inline casts in emit_call_extern; skip forward declarations.
-    let builtin_cast_names: &[&str] = &["float"];
+    let builtin_cast_names: &[&str] = &["float", "int", "bool"];
 
     for ext in &module.externs {
         if is_std_header_fn(&ext.name) || is_runtime_fn(&ext.name)

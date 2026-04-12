@@ -1654,6 +1654,16 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
             Some(module.functions[func.0 as usize].return_type.clone())
         }
         Inst::CallExtern { name, .. } => {
+            // Builtin type casts: float(x)→F64, int(x)→I64, bool(x)→Bool.
+            // These are emitted as inline C casts in emit_call_extern; the extern
+            // declaration is suppressed. Override the return type here so the
+            // destination variable gets the correct C type.
+            match name.as_ref() {
+                "float" => return Some(LirType::F64),
+                "int"   => return Some(LirType::I64),
+                "bool"  => return Some(LirType::Bool),
+                _ => {}
+            }
             // Polymorphic externs (option/result unwrap, expect, combinators) are
             // called with different return types at different call sites. The single
             // extern declaration merges all sites, producing the wrong type.
