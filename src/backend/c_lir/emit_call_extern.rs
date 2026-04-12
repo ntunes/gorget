@@ -825,10 +825,10 @@ pub(super) fn emit_call_extern(
                                     })
                                 });
                             let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                            if is_str_lit {
-                                // String literals are already const char*
-                                format!("(const char*){}", v(a))
-                            } else if arg_is_str {
+                            if is_str_lit || arg_is_str {
+                                // 32-byte Str struct — extract .data for const char*
+                                format!("(const char*){}.data", v(a))
+                            } else if false { // arg_is_str handled above
                                 format!("gorget_str_to_cstr({})", v(a))
                             } else if is_ptr_to_str {
                                 format!("gorget_str_to_cstr(*(Str*){})", v(a))

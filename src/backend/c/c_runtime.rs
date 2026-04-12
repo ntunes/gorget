@@ -8637,12 +8637,14 @@ pub const BYTES_RUNTIME: &str = r#"
 // ── Byte Buffer Helpers (std.bytes) ─────────────────────────
 
 // Convert a str to Vector[uint8]
-static inline GorgetArray gorget_bytes_from_str(Str s) {
+static inline GorgetArray gorget_bytes_from_str(const char* s) {
     GorgetArray arr = gorget_array_new(sizeof(uint8_t));
-    const char* d = (const char*)s.data;
-    for (size_t i = 0; i < s.len; i++) {
-        uint8_t b = (uint8_t)d[i];
-        gorget_array_push(&arr, &b);
+    if (s) {
+        size_t len = strlen(s);
+        for (size_t i = 0; i < len; i++) {
+            uint8_t b = (uint8_t)s[i];
+            gorget_array_push(&arr, &b);
+        }
     }
     return arr;
 }

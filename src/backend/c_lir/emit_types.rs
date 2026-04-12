@@ -1443,26 +1443,22 @@ pub(super) fn emit_abi_arg(
     let is_struct = arg_ty.map_or(false, |t| t.is_aggregate());
     match abi {
         AbiKind::CStr => {
-            if is_str_lit {
-                write!(out, "{val}").unwrap();
+            // Under 32-byte Str, extract .data for const char* params.
+            if is_str_lit || is_struct {
+                write!(out, "(const char*){val}.data").unwrap();
             } else if is_ptr {
                 write!(out, "({val} ? gorget_str_to_cstr(*(Str*){val}) : NULL)").unwrap();
-            } else if is_struct {
-                write!(out, "gorget_str_to_cstr({val})").unwrap();
             } else {
                 write!(out, "{val}").unwrap();
             }
             true
         }
         AbiKind::BytePtr => {
-            if is_str_lit {
-                write!(out, "{val}").unwrap();
+            if is_str_lit || is_struct {
+                write!(out, "(const char*){val}.data").unwrap();
             } else if is_ptr {
-                // Str* → char** → deref to get char*
-                write!(out, "({val} ? *(Str*){val} : NULL)").unwrap();
-            } else if is_struct {
-                // Str is char* — just use it directly as const char*
-                write!(out, "(const char*){val}").unwrap();
+                // Ptr(Str) → deref to get Str, then .data for char*
+                write!(out, "({val} ? (const char*)((Str*){val})->data : NULL)").unwrap();
             } else {
                 write!(out, "{val}").unwrap();
             }
