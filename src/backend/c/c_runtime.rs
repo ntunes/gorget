@@ -1271,7 +1271,7 @@ pub const RUNTIME_STRING: &str = r#"
 // generic view-discriminator prefix shared with GorgetArray / GorgetMap / GorgetSet.
 
 typedef struct {
-    void*            data;
+    char*            data;   // char* instead of void* so .data is directly usable as const char*
     size_t           cap;
     size_t           len;
     GorgetAllocator* alloc;
@@ -1303,12 +1303,12 @@ static inline StrView str_view_raw(const char* data, size_t len) {
 
 // Global empty string — static view into an empty rodata literal.
 // Drop is a no-op because cap == 0.
-static const Str GORGET_EMPTY_STR = { .data = (void*)"", .cap = 0, .len = 0, .alloc = NULL };
+static const Str GORGET_EMPTY_STR = { .data = "", .cap = 0, .len = 0, .alloc = NULL };
 
 // Stack-allocated string literal — compound literal yielding a Str struct (C99).
 // Zero allocation; data points at the C string literal in .rodata. cap = 0 = view.
 #define GORGET_SLIT(lit) \
-    ((Str){ .data = (void*)(lit), .cap = 0, .len = sizeof(lit) - 1, .alloc = NULL })
+    ((Str){ .data = (char*)(lit), .cap = 0, .len = sizeof(lit) - 1, .alloc = NULL })
 
 // ── Allocation helpers ─────────────────────────────────────────
 // Under 32-byte layout we allocate just the data bytes. The Str struct lives
@@ -5254,7 +5254,8 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 }
 
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
-    return (GorgetMap){NULL, NULL, NULL, 0, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    // Field order: { keys, cap, values, states, count, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn, val_drop, val_clone, key_drop, key_clone, val_materialize, key_materialize }
+    return (GorgetMap){NULL, 0, NULL, NULL, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order

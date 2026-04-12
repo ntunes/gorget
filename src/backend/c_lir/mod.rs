@@ -581,7 +581,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             let len = value.len();
             // 32-byte Str struct: { data, cap, len, alloc }.
             // cap=0 marks view into static .rodata (free is a no-op).
-            writeln!(out, "static const Str __slit_{} = {{ .data = (void*)\"{}\", .cap = 0, .len = {}, .alloc = NULL }};",
+            writeln!(out, "static const Str __slit_{} = {{ .data = (char*)\"{}\", .cap = 0, .len = {}, .alloc = NULL }};",
                 idx, escaped, len).unwrap();
         }
         writeln!(out).unwrap();
