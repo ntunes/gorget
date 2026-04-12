@@ -113,6 +113,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     has_real_body = true
                                 case SAssign(_, _):
                                     has_real_body = true
+                                case SExpr(sexpr):
+                                    # Accept SExpr if it's a call (not a string literal
+                                    # which is an extern stub marker)
+                                    match sexpr.expr:
+                                        case EStringLiteral(_, _):
+                                            pass
+                                        else:
+                                            has_real_body = true
                                 else:
                                     pass
                         if has_real_body:
@@ -142,7 +150,11 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     if ep.param_name == "self":
                                         has_self = true
                                     epi += 1
-                                if has_self or emdef.name == "new":
+                                # Accept: instance methods (self), constructors (new/with_*),
+                                # or any method with real params (garbled stubs have 0 or
+                                # wrong params like just "unit" or a type name)
+                                bool is_constructor = emdef.name == "new" or emdef.name.starts_with("with_")
+                                if has_self or is_constructor:
                                     is_real = true
                             if is_real:
                                 real_methods.push(emdef)
