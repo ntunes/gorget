@@ -1777,6 +1777,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
         si += 1
 
+    # Build trait lookup map for default method generation
+    Dict[String, TraitDef] trait_defs = {}
+    int tdi = 0
+    while tdi < m.items.len():
+        Item td_item = m.items.get(tdi).unwrap()
+        match td_item:
+            case ITrait(tdef):
+                trait_defs.put(tdef.name.clone(), tdef)
+            else:
+                pass
+        tdi += 1
+
     # Lower each non-generic function, equip method, and test block
     int fi = 0
     int test_idx = 0
@@ -1845,6 +1857,36 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         pass
                 if not skip_equip:
                     lower_equip_block(eqblk, &gmod)
+                    # Generate default trait methods not overridden by the equip
+                    match eqblk.trait_name:
+                        case Some(tname):
+                            if trait_defs.contains(tname):
+                                TraitDef tdef = trait_defs.get(tname).unwrap()
+                                # Collect overridden method names
+                                Dict[String, bool] overridden = {}
+                                int oi = 0
+                                while oi < eqblk.methods.len():
+                                    FunctionDef om = eqblk.methods.get(oi).unwrap()
+                                    overridden.put(om.name.clone(), true)
+                                    oi += 1
+                                # Emit defaults for trait methods with bodies not in equip
+                                int dti = 0
+                                while dti < tdef.methods.len():
+                                    FunctionDef tmeth = tdef.methods.get(dti).unwrap()
+                                    if tmeth.body.len() > 0 and not overridden.contains(tmeth.name):
+                                        # Lower this default method inline — construct the mangled
+                                        # name and call lower_function directly.
+                                        String eq_target = type_to_c_name(eqblk.target, &gmod)
+                                        String dm_trait = mangle_trait_name(tname)
+                                        String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
+                                        gmod.functions.push(lower_function(tmeth, &gmod))
+                                        # Fix up the function name to the equip-mangled form
+                                        int last_idx = gmod.functions.len() - 1
+                                        GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
+                                        gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
+                                    dti += 1
+                        case None:
+                            pass
             else:
                 pass
         fi = fi + 1
