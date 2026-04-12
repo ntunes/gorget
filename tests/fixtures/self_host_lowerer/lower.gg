@@ -1895,11 +1895,16 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Build trait lookup map for default method generation
     Dict[String, TraitDef] trait_defs = {}
     int tdi = 0
+    Dict[String, bool] local_struct_names = {}
     while tdi < m.items.len():
         Item td_item = m.items.get(tdi).unwrap()
         match td_item:
             case ITrait(tdef):
                 trait_defs.put(tdef.name.clone(), tdef)
+            case IStruct(sdef):
+                local_struct_names.put(sdef.name.clone(), true)
+            case IEnum(edef):
+                local_struct_names.put(edef.name.clone(), true)
             else:
                 pass
         tdi += 1
@@ -1976,15 +1981,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
                     test_idx += 1
             case IEquip(eqblk):
-                # Skip generic equip blocks (detected by target having type args)
-                bool skip_equip = eqblk.type_params.len() > 0
+                # Generic equip blocks: emit template for imported types
+                # (Rust emits Heap__T__push for imported Heap but not local Stack).
+                bool is_generic_equip = false
+                String eq_type_name = ""
                 match eqblk.target.ty:
-                    case TNamed(_, eq_targs):
-                        if eq_targs.len() > 0:
-                            skip_equip = true
+                    case TNamed(tname, eq_targs):
+                        eq_type_name = tname
+                        if eq_targs.len() > 0 or eqblk.type_params.len() > 0:
+                            is_generic_equip = true
                     else:
                         pass
-                if not skip_equip:
+                if is_generic_equip and eq_type_name.len() > 0 and not local_struct_names.contains(eq_type_name):
+                    # Imported generic type: emit template (e.g., Heap__T__push)
+                    lower_equip_block(eqblk, &gmod)
+                if not is_generic_equip:
                     lower_equip_block(eqblk, &gmod)
                     # Generate default trait methods not overridden by the equip
                     match eqblk.trait_name:
