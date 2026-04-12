@@ -881,7 +881,20 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         for inst in &block.insts {
             if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee, func) {
                 if let Some(dst) = inst.dst() {
-                    val_types[dst.0 as usize] = Some(norm(ty));
+                    let nty = norm(ty);
+                    // Catch conflicting type assignments: a value should not be inferred
+                    // as two different concrete types (Ptr is compatible with anything since
+                    // it's the default for unresolved types).
+                    if let Some(existing) = &val_types[dst.0 as usize] {
+                        debug_assert!(
+                            *existing == nty
+                                || *existing == LirType::Ptr || nty == LirType::Ptr
+                                || existing.is_aggregate() != nty.is_aggregate(),
+                            "SSA type conflict for __v{}: previously {:?}, now {:?} (in {})",
+                            dst.0, existing, nty, func.name,
+                        );
+                    }
+                    val_types[dst.0 as usize] = Some(nty);
                 }
             }
             // Detect runtime struct returns that aren't in module.structs
