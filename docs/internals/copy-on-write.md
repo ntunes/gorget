@@ -338,8 +338,21 @@ Both helpers emit the clone via `clone_fn_for_ptr(T)` which resolves to the appr
 
 `ensure_owned_at_boundary` doesn't take a last-use hint because its call sites are points where the function body is about to leave the local behind (return, struct field init that stores-and-moves). For consuming-position args, the caller may still use the local after the call — so the last-use check distinguishes "transfer ownership" from "clone and keep".
 
-### Interaction with thin-pointer String
+### String design: 32-byte fat struct with lazy CoW views
 
-The thin-pointer String design (8-byte `char*` + 24-byte header behind the pointer) makes copies of a String aliases by default — the compiler cannot rely on per-copy markers to distinguish owned from view, as the 32-byte struct design did via its `cap` field. This forces the compiler to decide "move or clone" eagerly at every ownership boundary, rather than lazily at drop time. The three-step runtime contract + two-helper compiler rule is the result: every boundary is a decision point, and the decision is always one of `move_zero` or `clone`.
+String is a 32-byte struct: `{ char* data, size_t cap, size_t len, GorgetAllocator* alloc }`. The `cap` field at offset +8 is the generic view discriminator shared with GorgetArray and GorgetMap:
 
-See the project memory `project_thin_pointer_string.md` for the full migration details.
+- `cap == 0` → **view** (borrowed buffer — .rodata literal, slice result, or copy-as-view). Drop is a no-op.
+- `cap > 0` → **owned** (heap-allocated, freed via `alloc->dealloc` at drop).
+
+**Literals** are zero-alloc views into `.rodata`: `static const Str __slit_N = { .data = "hello", .cap = 0, .len = 5 }`.
+
+**Slicing/trim/strip/char_at** return views (zero alloc). The compiler tracks `ViewOf(source_local)` provenance and auto-materializes views before source mutation via `cow_before_mutation` Case 4.
+
+**Copy-as-view**: `gorget_string_copy_cow` checks `cap == 0` at runtime — views get a 32-byte struct memcpy (zero alloc), owned strings get a deep clone. This makes `String t = s` free when `s` is a literal or view.
+
+**Escape boundaries** (return, struct field, closure capture, collection push) clone views automatically because `ViewOf.is_ref() == true`, triggering `ensure_owned_at_boundary`.
+
+**Runtime materialize hooks** (`elem_materialize` on GorgetArray/GorgetMap) handle views pushed into collections: `gorget_string_materialize_inplace` clones cap==0 elements into owned copies inside the collection buffer.
+
+The two-helper compiler rule from Phase 3 still applies: `ensure_owned_at_boundary` for non-liveness-aware contexts, `ensure_owned_at_consuming_arg` for liveness-aware consuming positions.

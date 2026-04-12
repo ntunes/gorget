@@ -240,7 +240,7 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 | `f"""`    | Multi-line format | Yes    | Yes     |
 | `c`       | C string   | No            | Yes     |
 
-Type: `String`. The compiler's provenance inference pass automatically determines whether a `String` value is a lightweight view (when derived from a literal, parameter, or collection access) or an owned, heap-allocated value (when produced by concatenation, f-strings, or allocating methods like `to_upper()`).
+Type: `String`. Internally a 32-byte struct `{ data, cap, len, alloc }`. String literals and slicing/trim results are zero-allocation views (`cap == 0`). Concatenation, f-strings, and methods like `to_upper()` produce owned copies (`cap > 0`). The compiler auto-materializes views when the source is mutated (copy-on-write).
 
 #### None Literal
 

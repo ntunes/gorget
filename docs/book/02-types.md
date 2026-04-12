@@ -88,11 +88,12 @@ String name = "world"
 String combined = greeting + " " + name   # concatenation creates new String
 ```
 
-Behind the scenes, the compiler uses **provenance inference** to decide the
-representation: string literals and function parameters are lightweight views
-(no allocation), while concatenation, f-strings, and explicit construction
-produce owned, heap-allocated strings. You don't need to think about this —
-just use `String` everywhere.
+Behind the scenes, `String` is a 32-byte value type. String literals, `slice()`,
+`trim()`, and `char_at()` are **zero-allocation views** — they point into
+existing data without copying. Concatenation, f-strings, and methods like
+`to_upper()` produce **owned** copies. The compiler auto-materializes views
+when you mutate the source (copy-on-write). You don't need to think about
+this — just use `String` everywhere.
 
 ### String Interpolation
 

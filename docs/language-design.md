@@ -220,7 +220,7 @@ void greet(String name):
 int double(int x): x * 2
 ```
 
-`void` means no return value. `String` is Gorget's unified string type — the compiler infers whether a value is a lightweight view or a heap-allocated owned string.
+`void` means no return value. `String` is Gorget's unified string type — a 32-byte value with copy-on-write semantics. Literals and slicing operations are zero-allocation views; the compiler auto-materializes when the source is mutated.
 
 #### Multiple Return Values
 
@@ -1537,7 +1537,7 @@ Box[Point] heap_point = Box.new(Point(1.0, 2.0))
 
 Gorget is a Python-like language: string concatenation, f-strings, `upper()`, `replace()`, and collection construction all allocate without ceremony. This is a deliberate trade-off — ergonomic code on the default path, explicit control when you need it.
 
-**What allocates implicitly:** `+` on strings, f-strings, `upper()`, `replace()`, `split()`, `Vector()`, `Dict()`, format conversions. The provenance inference pass eliminates unnecessary copies at compile time (e.g., turning an owned string into a non-owning view when safe), but this optimization is invisible to the programmer.
+**What allocates implicitly:** `+` on strings, f-strings, `upper()`, `replace()`, `split()`, `Vector()`, `Dict()`, format conversions. **What doesn't allocate:** string literals, `slice()`, `trim()`, `strip()`, `char_at()`, `removeprefix()`, `removesuffix()`, and `String t = s` when `s` is a view — these are zero-cost views via copy-on-write. The compiler auto-materializes views when the source is mutated.
 
 **How to take control:** All allocations go through `__gorget_current_alloc`, a thread-local allocator pointer. Two mechanisms redirect it:
 
@@ -2193,9 +2193,9 @@ Vector[float] row = matrix[0]   # calls matrix.get(0)
 
 ## 23. String Types in Depth
 
-Gorget has a single `String` type. The compiler automatically infers whether a value is a **view** (lightweight, no allocation — backed by a pointer and length into existing data) or **owned** (heap-allocated, growable). Programmers write `String` everywhere and the compiler picks the cheapest representation.
+Gorget has a single `String` type — a 32-byte struct `{ data, cap, len, alloc }`. The `cap` field distinguishes **views** (`cap == 0` — zero allocation, backed by a pointer into existing data like `.rodata` or another string's buffer) from **owned** strings (`cap > 0` — heap-allocated, growable). Programmers write `String` everywhere; the compiler infers which operations produce views and which produce owned copies.
 
-This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type, but Gorget's provenance inference is fully compile-time — there is no reference-counting or copy-on-write at runtime.
+This is similar to how Swift's `String` unifies owned and borrowed representations behind a single type. Gorget uses compile-time `ViewOf(source)` provenance tracking to auto-materialize views when the source is mutated — a targeted, lazy copy-on-write that avoids unnecessary allocations.
 
 **Provenance inference rules:**
 - String literals (`"hello"`) are views into static data — zero allocation.

@@ -9,9 +9,10 @@ hash maps, sets, arrays, tuples, and comprehensions.
 
 ### String
 
-Gorget has a single string type: **`String`**. The compiler automatically decides
-whether a value is an owned, heap-allocated string or a lightweight view (borrowed
-slice) via **provenance inference** — you just write `String` everywhere.
+Gorget has a single string type: **`String`** — a 32-byte value with copy-on-write
+semantics. Literals and slicing operations are zero-allocation **views**; concatenation
+and f-strings produce **owned** copies. The compiler auto-materializes views when the
+source is mutated — you just write `String` everywhere.
 
 ```gorget
 String greeting = "hello"     # literal — view (no allocation)
