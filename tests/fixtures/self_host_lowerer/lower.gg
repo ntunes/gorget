@@ -1716,31 +1716,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # Skip generic templates — they'll be monomorphized below
                 if fdef.type_params.len() == 0:
                     gmod.functions.push(lower_function(fdef, &gmod))
-            case ITest(name, decorators, tags, test_body):
-                # Emit __test_N() -> unit
-                String test_name = "__test_" + int_to_str(test_idx)
-                LowerCtx tctx = LowerCtx([], [], [], 0, {})
-                Vector[Instruction] tinit = []
-                tctx.block_insts.push(!tinit)
-                tctx.block_terms.push(TNone())
-                add_local(&tctx, UNIT_TYPE, NO_NAME)
-                lower_stmts(&tctx, test_body, &gmod, false)
-                Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
-                match tterm:
-                    case TNone():
-                        set_terminator(&tctx, TReturn(OpConstUnit()))
-                    else:
-                        pass
-                Vector[BasicBlock] tblocks = []
-                int tbi = 0
-                while tbi < tctx.block_insts.len():
-                    Vector[Instruction] tinsts = tctx.block_insts.get(tbi).unwrap()
-                    Terminator tt = tctx.block_terms.get(tbi).unwrap()
-                    tblocks.push(BasicBlock(tinsts, tt))
-                    tbi += 1
-                Vector[int] tparams = []
-                gmod.functions.push(GirFunction(test_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
-                test_idx += 1
+            case ITest(_, _, _, _):
+                # Skip test blocks in normal builds (Rust compiler strips them too)
+                pass
             case IEquip(eqblk):
                 # Skip generic equip blocks (detected by target having type args)
                 bool skip_equip = eqblk.type_params.len() > 0

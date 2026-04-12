@@ -88,14 +88,30 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             loaded.put(sub_imp.module_path, true)
                     case IFunction(fdef):
                         # Skip extern stubs and forward declarations.
-                        # Real functions have >=2 body statements, OR 1 statement
-                        # that is a SReturn (single-return-statement functions).
-                        # Extern stubs have 0 statements or 1 SExpr (string literal).
-                        bool has_real_body = fdef.body.len() >= 2
+                        # Real functions: >=2 body statements, OR expression body,
+                        # OR 1 statement that is SIf/SWhile/SFor/SMatch.
+                        # Stubs have 0 statements or 1 trivial statement.
+                        bool has_real_body = fdef.body.len() >= 2 or fdef.is_expr_body
                         if not has_real_body and fdef.body.len() == 1:
                             Stmt first_s = fdef.body.get(0).unwrap()
                             match first_s:
-                                case SReturn(_):
+                                case SIf(_, _, _):
+                                    has_real_body = true
+                                case SWhile(_, _):
+                                    has_real_body = true
+                                case SFor(_, _, _, _, _):
+                                    has_real_body = true
+                                case SMatch(_, _):
+                                    has_real_body = true
+                                case SReturn(opt_ret):
+                                    match opt_ret:
+                                        case Some(_):
+                                            has_real_body = true
+                                        case None:
+                                            pass
+                                case SVarDecl(_, _, _, _, _, _):
+                                    has_real_body = true
+                                case SAssign(_, _):
                                     has_real_body = true
                                 else:
                                     pass
@@ -112,6 +128,8 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # Filter individual methods: extern equip methods get
                         # parsed with the return type as the method name and a
                         # trivial body.  Real methods have >=2 body statements.
+                        # (Equip blocks keep strict check because extern "C"
+                        # stubs produce parser artifacts with non-SExpr bodies.)
                         Vector[FunctionDef] real_methods = []
                         int emi = 0
                         while emi < eqblk.methods.len():
