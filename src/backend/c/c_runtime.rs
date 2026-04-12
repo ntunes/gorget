@@ -4770,16 +4770,22 @@ static inline void gorget_map_materialize_keys(GorgetMap* m) {
     }
 }
 
-static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
+static inline void gorget_array_set(GorgetArray* arr, size_t index, void* elem) {
     if (index >= arr->len) {
         fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
         exit(1);
     }
-    // Drop old element before overwriting (prevents resource leak)
+    void* slot = (char*)arr->data + index * arr->elem_size;
+    // Drop old element before overwriting (prevents resource leak).
     if (arr->elem_drop) {
-        arr->elem_drop((char*)arr->data + index * arr->elem_size);
+        arr->elem_drop(slot);
     }
-    memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
+    memcpy(slot, elem, arr->elem_size);
+    // Zero the source to prevent double-free: set takes ownership of the
+    // element bytes, but the caller's stack local still holds the same
+    // resource pointers. Without MoveZero from the GIR (TODO: fix at
+    // the lowering level), zero here as a safety net.
+    memset(elem, 0, arr->elem_size);
 }
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
