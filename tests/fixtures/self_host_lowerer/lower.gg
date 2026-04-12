@@ -1575,6 +1575,97 @@ void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirMod
     lower_equip_block(eqblk, &gmod)
     clear_type_subs(&gmod)
 
+# ── Spawn wrapper scanning ───────────────────────────────
+
+# Collect shared variable names from a list of statements
+void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SVarDecl(_, name, _, _, sk, _):
+                if sk > 0:
+                    shared_vars.put(name, true)
+            else:
+                pass
+        i += 1
+
+# Scan for ESpawn expressions and emit wrapper function stubs
+void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SVarDecl(_, _, init, _, _, _):
+                scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod)
+            case SExpr(expr):
+                scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod)
+            case SAssign(_, val):
+                scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod)
+            else:
+                pass
+        i += 1
+
+void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod):
+    match sexpr.expr:
+        case ESpawn(inner_box):
+            # Check if inner is a call with shared args
+            match (*inner_box).expr:
+                case ECall(callee_box, args, _):
+                    match (*callee_box).expr:
+                        case EIdentifier(callee_name):
+                            # Check if any arg is a shared variable
+                            bool has_shared = false
+                            int ai = 0
+                            while ai < args.len():
+                                SpannedExpr arg = args.get(ai).unwrap()
+                                match arg.expr:
+                                    case EIdentifier(aname):
+                                        if shared_vars.contains(aname):
+                                            has_shared = true
+                                    case EMutableBorrow(inner):
+                                        match (*inner).expr:
+                                            case EIdentifier(aname):
+                                                if shared_vars.contains(aname):
+                                                    has_shared = true
+                                            else:
+                                                pass
+                                    else:
+                                        pass
+                                ai += 1
+                            if has_shared and not emitted.contains(callee_name):
+                                # Determine prefix: __shared_async_ for async, __shared_token_ otherwise
+                                String prefix = "__shared_token_"
+                                if async_fns.contains(callee_name):
+                                    prefix = "__shared_async_"
+                                String wrapper_name = prefix + callee_name
+                                # Emit a stub function
+                                Vector[int] wp = [I64_TYPE]
+                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
+                                Vector[BasicBlock] wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                emitted.put(callee_name, true)
+                        else:
+                            pass
+                else:
+                    pass
+        case EAwait(inner):
+            scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod)
+        case EMethodCall(obj, _, margs, _):
+            scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod)
+            int mi = 0
+            while mi < margs.len():
+                scan_expr_for_spawn(margs.get(mi).unwrap(), &shared_vars, &async_fns, &emitted, &gmod)
+                mi += 1
+        case ECall(callee, cargs, _):
+            scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod)
+            int ci = 0
+            while ci < cargs.len():
+                scan_expr_for_spawn(cargs.get(ci).unwrap(), &shared_vars, &async_fns, &emitted, &gmod)
+                ci += 1
+        else:
+            pass
+
 # ── Module lowering ──────────────────────────────────────
 
 GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
@@ -1937,4 +2028,31 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         ci += 1
+
+    # Scan for spawn wrappers: shared-token and closure/method spawn
+    # Collect shared variable names, async function names, then scan for ESpawn
+    Dict[String, bool] shared_vars = {}
+    Dict[String, bool] async_fns = {}
+    Dict[String, bool] emitted_wrappers = {}
+    int swi = 0
+    while swi < m.items.len():
+        Item sw_item = m.items.get(swi).unwrap()
+        match sw_item:
+            case IFunction(fdef):
+                # Detect async functions
+                match fdef.return_type.ty:
+                    case TPrimitive(rn):
+                        if rn == "void":
+                            # Check if params include &self or &mut patterns typical of async
+                            pass
+                    else:
+                        pass
+                # Collect shared vars from this function's body
+                collect_shared_vars(fdef.body, &shared_vars)
+                # Scan for spawn calls
+                scan_spawn_wrappers(fdef.body, &shared_vars, &async_fns, &emitted_wrappers, &gmod)
+            else:
+                pass
+        swi += 1
+
     return gmod
