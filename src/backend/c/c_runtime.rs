@@ -4807,10 +4807,12 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
         arr->elem_drop(slot);
     }
     memcpy(slot, elem, arr->elem_size);
-    // Zero the source for resource-type elements to prevent double-free.
-    // The GIR consuming-position MoveZero doesn't reach the intermediate
-    // slot created by the LIR for &-passing. This runtime zero is the
-    // correct fix until the LIR drop elaboration respects GIR mark_moved.
+    // Safety net: zero source for resource elements to prevent double-free.
+    // The GIR MoveZero targets the clone temp's value register, but the data
+    // lives in a persistent LIR slot that the scope-exit drop targets. Zeroing
+    // here ensures gorget_array_free on the slot is a no-op (data=NULL, cap=0).
+    // Zero cost for primitives (elem_drop is NULL). See TODO.md for the
+    // proper LIR fix (value→slot ownership propagation).
     if (arr->elem_drop) {
         memset((void*)elem, 0, arr->elem_size);
     }
@@ -5016,6 +5018,10 @@ static inline void gorget_array_insert(GorgetArray* arr, size_t index, const voi
     }
     memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
     arr->len++;
+    // Safety net: zero source for resource elements (same as gorget_array_set).
+    if (arr->elem_drop) {
+        memset((void*)elem, 0, arr->elem_size);
+    }
 }
 
 static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src) {
@@ -5361,6 +5367,15 @@ static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
     }
 }
 
+// Safety net macro: zero source key/value after map_put takes ownership.
+// Prevents double-free when the GIR MoveZero doesn't reach the LIR slot
+// (value/slot split — see TODO.md). Only fires for resource-type elements
+// (key_drop/val_drop non-NULL); zero cost for primitives.
+#define __MAP_PUT_ZERO_SOURCES() do { \
+    if (m->key_drop) memset((void*)key, 0, m->key_size); \
+    if (m->val_drop && value) memset((void*)value, 0, m->val_size); \
+} while(0)
+
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
     // Ordered mode (order != NULL): count tombstones in load factor to force grow,
     // and never reuse tombstone slots. This ensures stale order-array entries
@@ -5382,6 +5397,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 m->states[idx] = 1;
                 m->count++;
                 m->order[m->order_len++] = idx;
+                __MAP_PUT_ZERO_SOURCES();
                 return;
             }
             if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
@@ -5392,10 +5408,12 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                     __gorget_map_materialize_value(m, idx);
                 }
+                __MAP_PUT_ZERO_SOURCES();
                 return;
             }
             idx = (idx + 1) % m->cap;
         }
+        __MAP_PUT_ZERO_SOURCES();
         return;
     }
     // Unordered mode (HashMap/Set): reuse tombstones for efficiency
@@ -5416,6 +5434,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
             }
             m->states[target] = 1;
             m->count++;
+            __MAP_PUT_ZERO_SOURCES();
             return;
         }
         if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {
@@ -5429,6 +5448,7 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 __gorget_map_materialize_value(m, idx);
             }
+            __MAP_PUT_ZERO_SOURCES();
             return;
         }
         idx = (idx + 1) % m->cap;
@@ -5443,7 +5463,10 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         m->states[first_tombstone] = 1;
         m->count++;
     }
+    __MAP_PUT_ZERO_SOURCES();
 }
+
+#undef __MAP_PUT_ZERO_SOURCES
 
 // Put with full deep-clone of key/value via key_clone/val_clone hooks. Used by
 // inline helpers (filter/map/update/etc.) that deliberately insert pointers
