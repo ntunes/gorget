@@ -2144,7 +2144,17 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 }
             } else {
                 // Fallback: field index exceeds struct definition — use byte offset.
-                // This can happen for runtime-opaque structs (e.g., GorgetArray, Dict).
+                // Expected for runtime-opaque structs (GorgetArray, GorgetMap, etc.)
+                // whose LIR definitions have fewer fields than the actual C struct.
+                // Unexpected for user-defined structs — likely a lowering bug.
+                debug_assert!(
+                    struct_def.fields.is_empty()
+                        || sname.starts_with("Gorget") || sname.starts_with("__gg_Gorget"),
+                    "FieldPtr field index {} out of bounds for non-opaque struct '{sname}' \
+                     ({} fields). This is likely a LIR lowering bug — the struct has known \
+                     fields but FieldPtr accesses beyond them.",
+                    field, struct_def.fields.len(),
+                );
                 write!(
                     out,
                     "{} = (void*)((char*)({}) + {} * sizeof(void*)); /* {}.{} (oob) */",
