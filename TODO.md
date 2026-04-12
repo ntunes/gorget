@@ -40,7 +40,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 743/913 (81.3%, 91.3% of processable), 99 process failures**. Remaining: ~32 import-heavy (generic monomorphization from `meta for type_variants` not supported), ~12 medium (generic equip Heap__T__*, ecs import), ~21 small-diff (closure/method spawn, generic equip, via delegation, f-string closures), ~4 bench (0/0). Equip filter: self-param + "new" + "with_*" for single-body. IFunction filter: SExpr with non-string-literal. [updated: 2026-04-12]
+- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 747/913 (81.8%, 91.8% of processable), 99 process failures**. Remaining: ~32 import-heavy (generic monomorphization from `meta for type_variants` not supported), ~9 generic equip (Rust selectively emits `T__method` templates — can't replicate without Rust's heuristic), ~19 small-diff (closure/method spawn, via delegation, f-string closures, trait inheritance). Equip filter: self-param + "new" + "with_*" for single-body. IFunction filter: SExpr with non-string-literal. [updated: 2026-04-12]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
