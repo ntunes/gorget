@@ -1004,6 +1004,48 @@ fn emit_function(
         }
     }
 
+    // Guard/shared value accessor type override: gorget_guard_get / gorget_shared_get
+    // return void* but the value needs to be loaded as the actual inner type.
+    // Infer from downstream consumers (arithmetic, slot store, printf format).
+    for block in &func.blocks {
+        let insts = &block.insts;
+        for (i, inst) in insts.iter().enumerate() {
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                let is_guard_value = matches!(name.as_str(),
+                    "gorget_guard_get" | "gorget_shared_get"
+                    | "gorget_read_guard_get" | "gorget_write_guard_get"
+                );
+                if !is_guard_value { continue; }
+                let vid = d.0 as usize;
+                if !matches!(val_types.get(vid), Some(Some(LirType::Ptr)) | Some(None)) { continue; }
+                let mut inferred = None;
+                for ci in (i+1)..insts.len().min(i+10) {
+                    match &insts[ci] {
+                        Inst::Add { ty, lhs, .. } | Inst::Sub { ty, lhs, .. }
+                        | Inst::Mul { ty, lhs, .. } | Inst::Div { ty, lhs, .. }
+                        | Inst::Rem { ty, lhs, .. } if *lhs == *d => {
+                            inferred = Some(ty.clone()); break;
+                        }
+                        Inst::IntCast { value, .. } if *value == *d => {
+                            inferred = Some(LirType::I64); break;
+                        }
+                        Inst::FloatCast { value, .. } if *value == *d => {
+                            inferred = Some(LirType::F64); break;
+                        }
+                        Inst::SlotStore { value, slot, .. } if *value == *d => {
+                            let slot_ty = &func.slots[slot.0 as usize].ty;
+                            if !slot_ty.is_ptr() {
+                                inferred = Some(slot_ty.clone()); break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                val_types[vid] = Some(inferred.unwrap_or(LirType::I64));
+            }
+        }
+    }
+
     // Entry block: emit allocas for non-promoted slots
     writeln!(out, "entry.prelude:").unwrap();
 
@@ -2068,8 +2110,8 @@ fn emit_inst(
             }
 
             // Functions like gorget_guard_get, gorget_shared_get etc. return void*.
-            // Only dereference when the value is EXCLUSIVELY used as a scalar
-            // (never as a pointer for null checks, memcpy, etc.).
+            // The type inference pre-pass determined the actual inner type from
+            // downstream consumers. If the type is scalar, load through the void*.
             {
                 let is_void_return_fn = matches!(name.as_str(),
                     "gorget_guard_get" | "gorget_shared_get"
@@ -2077,50 +2119,22 @@ fn emit_inst(
                 );
                 if is_void_return_fn {
                     if let Some(d) = dst {
-                        // Check if ALL uses of this value expect a scalar (no ptr uses)
-                        let block = &func.blocks[block_id as usize];
-                        let mut needs_scalar = false;
-                        let mut needs_ptr = false;
-                        for i in &block.insts {
-                            match i {
-                                Inst::SlotStore { slot, value, .. } if value.0 == d.0 => {
-                                    let sty = &func.slots[slot.0 as usize].ty;
-                                    if sty.is_integer() || sty.is_float() || matches!(sty, LirType::Bool) {
-                                        needs_scalar = true;
-                                    } else { needs_ptr = true; }
-                                }
-                                Inst::Call { func: fid, args: call_args, .. } => {
-                                    for (ci, ca) in call_args.iter().enumerate() {
-                                        if ca.0 == d.0 {
-                                            let target = &module.functions[fid.0 as usize];
-                                            if let Some(pty) = target.params.get(ci) {
-                                                if pty.is_integer() || pty.is_float() { needs_scalar = true; }
-                                                else { needs_ptr = true; }
-                                            }
-                                        }
-                                    }
-                                }
-                                Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
-                                | Inst::Mul { lhs, rhs, .. } => {
-                                    if lhs.0 == d.0 || rhs.0 == d.0 { needs_scalar = true; }
-                                }
-                                Inst::Cmp { lhs, rhs, .. } => {
-                                    if lhs.0 == d.0 || rhs.0 == d.0 { needs_ptr = true; } // cmp could be null check
-                                }
-                                _ => {}
-                            }
-                        }
-                        if needs_scalar && !needs_ptr {
+                        let inferred_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
+                        let is_scalar = inferred_ty.map_or(false, |t| {
+                            t.is_integer() || t.is_float() || matches!(t, LirType::Bool)
+                        });
+                        if is_scalar {
                             let uid = *trap_counter;
                             *trap_counter += 1;
                             let pfx = format!("voidret.{block_id}.{uid}");
+                            let load_ty = llvm_type_full(inferred_ty.unwrap(), snames);
                             let arg_strs: Vec<String> = args.iter().map(|a| {
                                 let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                                 let ty_str = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "ptr".to_string());
                                 format!("{ty_str} %v{}", a.0)
                             }).collect();
                             writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
-                            writeln!(out, "  %v{} = load i64, ptr %{pfx}.raw", d.0).unwrap();
+                            writeln!(out, "  %v{} = load {load_ty}, ptr %{pfx}.raw", d.0).unwrap();
                             return;
                         }
                     }
