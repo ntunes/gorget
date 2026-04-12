@@ -1466,7 +1466,8 @@ pub(super) fn emit_abi_arg(
         }
         AbiKind::GorgetString => {
             if is_str_lit {
-                write!(out, "gorget_str_from_literal({val}, strlen({val}))").unwrap();
+                // StrLit values are already valid Str structs (static const Str __slit_N).
+                write!(out, "{val}").unwrap();
             } else if is_ptr {
                 write!(out, "*(Str*){val}").unwrap();
             } else {
