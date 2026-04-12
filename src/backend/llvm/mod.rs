@@ -973,6 +973,35 @@ fn emit_function(
                 }
             }
         }
+
+        // Sentinel-based Option wrapping type override: when a CallExtern returns scalar
+        // but the result is stored into an Option slot, the emitter will construct an
+        // Option alloca (ptr) instead. Override the value type so SlotStore uses memcpy.
+        for inst in &block.insts {
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                let vid = d.0 as usize;
+                let is_scalar = val_types.get(vid).and_then(|t| t.as_ref())
+                    .map_or(false, |t| t.is_integer() || t.is_float());
+                if !is_scalar { continue; }
+                let skip = name.ends_with("__upgrade")
+                    || name.ends_with("__recv_timeout")
+                    || name.contains("try_parse");
+                if skip { continue; }
+                // Scan block for SlotStore of this value into an Option slot
+                for next in &block.insts {
+                    if let Inst::SlotStore { slot, value, .. } = next {
+                        if value.0 == d.0 {
+                            if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
+                                if module.structs.get(sid.0 as usize)
+                                    .map_or(false, |s| s.name.starts_with("Option__")) {
+                                    val_types[vid] = Some(LirType::PtrTo(*sid));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Entry block: emit allocas for non-promoted slots
@@ -2363,6 +2392,101 @@ fn emit_inst(
                     }
                 }
                 return;
+            }
+
+            // ── Sentinel-based Option wrapping ──────────────────────
+            // Runtime functions that return a scalar (int64_t) with -1 sentinel for "not found".
+            // The GIR expects Option[T] — wrap: if (raw >= 0) Some(raw) else None.
+            // Uses branchless select to avoid splitting basic blocks (which breaks phi nodes).
+            if let Some(d) = dst {
+                // Check if the result will be stored into an Option slot
+                let opt_slot_info = func.blocks[block_id as usize].insts.iter().find_map(|next_inst| {
+                    if let Inst::SlotStore { slot, value, .. } = next_inst {
+                        if value.0 == d.0 {
+                            let slot_ty = &func.slots[slot.0 as usize].ty;
+                            if let LirType::Struct(sid) = slot_ty {
+                                let sdef = &module.structs[sid.0 as usize];
+                                if sdef.name.starts_with("Option__") {
+                                    return Some(*sid);
+                                }
+                            }
+                        }
+                    }
+                    None
+                });
+                let ext_decl = module.externs.iter().find(|e| e.name == *name);
+                let ext_ret_is_scalar = ext_decl.map_or(false, |e| matches!(e.return_type,
+                    LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8
+                    | LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8
+                    | LirType::F64 | LirType::F32));
+                // Skip functions that already return Option natively
+                let skip = name.ends_with("__upgrade")
+                    || name.ends_with("__recv_timeout")
+                    || name.contains("try_parse");
+                if let Some(sid) = opt_slot_info {
+                    if ext_ret_is_scalar && !skip {
+                        let uid = *trap_counter;
+                        *trap_counter += 1;
+                        let pfx = format!("optwrap.{block_id}.{uid}");
+                        let opt_ty = format!("%{}", snames.get(&sid.0).unwrap_or(&"Option".to_string()));
+                        let ext_ret = ext_decl.map(|e| &e.return_type).unwrap_or(&LirType::I64);
+                        let raw_ty = llvm_type_full(ext_ret, snames);
+
+                        // Build args — match the generic extern handler's coercion rules:
+                        // aggregate expected + ptr actual → pass as ptr
+                        // ptr expected + scalar actual → spill to alloca
+                        let ext_params = ext_decl.map(|e| &e.params);
+                        let mut spill_lines = Vec::new();
+                        let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                            let expected = ext_params.and_then(|p| p.get(i));
+                            let actual = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                            let expects_ptr = expected.map_or(false, |t| t.is_ptr());
+                            let expects_agg = expected.map_or(false, |t| t.is_aggregate());
+                            let is_ptr = actual.map_or(false, |t| t.is_ptr());
+                            if expects_agg && is_ptr {
+                                // Aggregate params are declared as ptr in extern (C ABI)
+                                format!("ptr %v{}", a.0)
+                            } else if expects_ptr && !is_ptr && actual.is_some() {
+                                let alty = llvm_arg_type(actual.unwrap(), snames);
+                                let sn = format!("{pfx}.spill.{i}");
+                                spill_lines.push(format!("  %{sn} = alloca {alty}"));
+                                spill_lines.push(format!("  store {alty} %v{}, ptr %{sn}", a.0));
+                                format!("ptr %{sn}")
+                            } else {
+                                let pty = if let Some(ety) = expected {
+                                    llvm_arg_type(ety, snames)
+                                } else {
+                                    actual.map(|t| llvm_arg_type(t, snames))
+                                        .unwrap_or_else(|| "i64".to_string())
+                                };
+                                format!("{pty} %v{}", a.0)
+                            }
+                        }).collect();
+                        for s in &spill_lines { writeln!(out, "{s}").unwrap(); }
+
+                        // Call the function → raw scalar
+                        writeln!(out, "  %{pfx}.raw = call {raw_ty} @{name}({})", arg_strs.join(", ")).unwrap();
+
+                        // Alloca the Option struct
+                        writeln!(out, "  %v{} = alloca {opt_ty}", d.0).unwrap();
+
+                        // Branchless Option construction (same pattern as gorget_map_get):
+                        // tag = select(raw >= 0, 0, 1); store tag; store payload.
+                        let is_signed = matches!(ext_ret, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8);
+                        if is_signed {
+                            writeln!(out, "  %{pfx}.isneg = icmp slt {raw_ty} %{pfx}.raw, 0").unwrap();
+                            writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.isneg, i32 1, i32 0").unwrap();
+                        } else {
+                            // Unsigned/float: always Some (tag=0)
+                            writeln!(out, "  %{pfx}.tag = add i32 0, 0").unwrap();
+                        }
+                        writeln!(out, "  %{pfx}.tagp = getelementptr {opt_ty}, ptr %v{}, i32 0, i32 0", d.0).unwrap();
+                        writeln!(out, "  store i32 %{pfx}.tag, ptr %{pfx}.tagp").unwrap();
+                        writeln!(out, "  %{pfx}.payp = getelementptr {opt_ty}, ptr %v{}, i32 0, i32 1", d.0).unwrap();
+                        writeln!(out, "  store {raw_ty} %{pfx}.raw, ptr %{pfx}.payp").unwrap();
+                        return;
+                    }
+                }
             }
 
             // Look up the extern declaration

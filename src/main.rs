@@ -2080,6 +2080,7 @@ fn main() {
         .position(|a| a == "--backend")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
+        .or_else(|| args.iter().find_map(|a| a.strip_prefix("--backend=")))
         .unwrap_or("c-lir");
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
