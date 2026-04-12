@@ -106,6 +106,79 @@ fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     }
 }
 
+/// Parse a monomorphized name like `Vector__int64_t__map` into (elem_c_name, method).
+/// Returns None if not a vector higher-order operation.
+fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
+    let rest = name.strip_prefix("Vector__")?;
+    let sep = rest.rfind("__")?;
+    let method = &rest[sep + 2..];
+    match method {
+        "filter" | "map" | "each" | "any" | "all" | "fold" | "reduce"
+        | "find" | "find_index" | "flat_map" | "count" => {}
+        _ => return None,
+    }
+    let elem = &rest[..sep];
+    Some((elem, method))
+}
+
+/// Map a C element type name (from Vector__<elem>__method) to an LLVM type string and size.
+fn elem_c_to_llvm(elem: &str, module: &LirModule, snames: &HashMap<u32, String>) -> (String, usize) {
+    match elem {
+        "int64_t" => ("i64".to_string(), 8),
+        "int32_t" => ("i32".to_string(), 4),
+        "int16_t" => ("i16".to_string(), 2),
+        "int8_t" => ("i8".to_string(), 1),
+        "uint64_t" => ("i64".to_string(), 8),
+        "uint32_t" => ("i32".to_string(), 4),
+        "uint16_t" => ("i16".to_string(), 2),
+        "uint8_t" => ("i8".to_string(), 1),
+        "double" => ("double".to_string(), 8),
+        "float" => ("float".to_string(), 4),
+        "bool" => ("i1".to_string(), 1),
+        "GorgetString" | "Str" => ("%GorgetString".to_string(), 32),
+        _ => {
+            // Look up as a struct name (e.g., Option__int64_t, user struct, etc.)
+            for (i, def) in module.structs.iter().enumerate() {
+                if def.name == elem {
+                    let sid = StructId(i as u32);
+                    let llvm_ty = llvm_type_full(&LirType::Struct(sid), snames);
+                    let size = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+                    return (llvm_ty, size);
+                }
+            }
+            // Fallback: assume pointer-sized (8 bytes)
+            ("i64".to_string(), 8)
+        }
+    }
+}
+
+/// Resolve the __Closure_N__call function for a closure argument at a specific call site.
+/// Returns (call_fn_name, return_type, params_are_ptr) or None.
+fn resolve_closure_call_fn(
+    closure_arg: ValueId,
+    val_types: &[Option<LirType>],
+    module: &LirModule,
+) -> Option<(String, LirType, Vec<bool>)> {
+    // Strategy 1: look at val_types[closure_arg] for Struct(sid) or PtrTo(sid)
+    let ty = val_types.get(closure_arg.0 as usize).and_then(|t| t.as_ref());
+    let sid = match ty {
+        Some(LirType::Struct(sid)) => Some(*sid),
+        Some(LirType::PtrTo(sid)) => Some(*sid),
+        _ => None,
+    };
+    if let Some(sid) = sid {
+        let sdef = &module.structs[sid.0 as usize];
+        let call_name = format!("{}__call", sdef.name);
+        if let Some(func) = module.functions.iter().find(|f| f.name == call_name) {
+            let params_are_ptr = func.params.iter().skip(1)
+                .map(|t| matches!(t, LirType::PtrTo(_) | LirType::Ptr))
+                .collect();
+            return Some((call_name, func.return_type.clone(), params_are_ptr));
+        }
+    }
+    None
+}
+
 /// Check if a LirType is PtrTo(GorgetString).
 /// Infer the payload type of an Option/Result struct from its struct definition.
 /// The first field is always the tag (i32), the second is the payload.
@@ -1148,10 +1221,24 @@ fn emit_function(
                             || name.ends_with("__unwrap_or");
                         let is_str_push = name == "gorget_str_push" || name == "gorget_str_push_line";
 
+                        // Detect Vector HOF calls that create inline loops (labels)
+                        let is_vector_hof = parse_vector_hof(name).is_some();
+                        let vector_hof_needs_inline = if is_vector_hof {
+                            let (_, method) = parse_vector_hof(name).unwrap();
+                            match method {
+                                "each" => true,
+                                _ => dst.is_some(),
+                            }
+                        } else { false };
+
                         // Count ALL counter increments to stay in sync with emission
                         if is_drop_guard { /* no counter */ }
                         else if is_callable && !args.is_empty() { counter += 1; }
                         else if is_closure_call && !args.is_empty() { counter += 1; }
+                        else if vector_hof_needs_inline && !args.is_empty() {
+                            label = format!("hof.{bid}.{counter}.done");
+                            counter += 1;
+                        }
                         else if is_map_get && dst.is_some() { counter += 1; }
                         else if is_void_ret && dst.is_some() { counter += 1; }
                         else if is_str_push && args.len() == 2 { /* no counter for type dispatch */ }
@@ -1943,6 +2030,537 @@ fn emit_inst(
                         writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
                     }
                     return;
+                }
+            }
+
+            // ── Inline Vector higher-order methods (map/filter/each/any/all/etc.) ──
+            // These must be inlined at each call site because the C wrapper functions
+            // hardcode a single closure — calling with a different closure at a
+            // different site would invoke the wrong function.
+            if let Some((elem_c, method)) = parse_vector_hof(name) {
+                let has_dst = dst.is_some();
+                let needs_inline = match method {
+                    "each" => true,
+                    "filter" | "map" | "flat_map" | "fold" | "reduce"
+                    | "any" | "all" | "find" | "find_index" | "count" => has_dst,
+                    _ => false,
+                };
+                if needs_inline && !args.is_empty() {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("hof.{block_id}.{uid}");
+                    let arr_arg = args[0];
+                    let (elem_llvm_ty, elem_size) = elem_c_to_llvm(elem_c, module, snames);
+                    let elem_is_aggregate = elem_llvm_ty.starts_with('%');
+
+                    // Resolve closure call function
+                    let closure_arg = if method == "fold" && args.len() >= 3 {
+                        Some(args[2])
+                    } else if args.len() >= 2 {
+                        Some(*args.last().unwrap())
+                    } else {
+                        None
+                    };
+                    let closure_info = closure_arg.and_then(|ca| resolve_closure_call_fn(ca, val_types, module));
+
+                    // Determine the closure call function name and return type
+                    let (call_fn, ret_ty, params_are_ptr) = match &closure_info {
+                        Some((name, rty, pap)) => (name.clone(), rty.clone(), pap.clone()),
+                        None => {
+                            // Can't resolve closure — fall through to generic handler
+                            // (This shouldn't happen for well-formed HOF calls)
+                            writeln!(out, "  ; WARNING: could not resolve closure for {name}").unwrap();
+                            // Fall through below will handle it
+                            ("".to_string(), LirType::Void, vec![])
+                        }
+                    };
+
+                    if closure_info.is_some() {
+                        let closure_val = closure_arg.unwrap();
+                        // Check if the closure param takes the element by pointer
+                        let elem_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
+
+                        match method {
+                            "map" => {
+                                let d = dst.unwrap();
+                                let ret_llvm = llvm_type_full(&ret_ty, snames);
+                                let ret_is_agg = ret_llvm.starts_with('%');
+                                let ret_size = sizeof_lir_type(&ret_ty, &module.structs, snames);
+                                // Determine if call_fn uses sret for aggregate return
+                                let map_ret_sret = ret_is_agg && !is_small_aggregate(&ret_ty, &module.structs);
+                                let map_ret_small_agg = ret_is_agg && is_small_aggregate(&ret_ty, &module.structs);
+
+                                // Alloca for result array
+                                writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {ret_size})", d.0).unwrap();
+                                // Loop
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                // Load element
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                // Call closure with element
+                                if elem_by_ptr {
+                                    // Pass element by pointer
+                                    if map_ret_sret {
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm}) %{pfx}.tmp, ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else if map_ret_small_agg {
+                                        writeln!(out, "  %{pfx}.out.v = call {ret_llvm} @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  store {ret_llvm} %{pfx}.out.v, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else {
+                                        let ret_ll = llvm_type_full(&ret_ty, snames);
+                                        writeln!(out, "  %{pfx}.out = call {ret_ll} @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_ll}").unwrap();
+                                        writeln!(out, "  store {ret_ll} %{pfx}.out, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    }
+                                } else if elem_is_aggregate {
+                                    // Aggregate element — pass pointer to it
+                                    if map_ret_sret {
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm}) %{pfx}.tmp, ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else if map_ret_small_agg {
+                                        writeln!(out, "  %{pfx}.out.v = call {ret_llvm} @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  store {ret_llvm} %{pfx}.out.v, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else {
+                                        let ret_ll = llvm_type_full(&ret_ty, snames);
+                                        writeln!(out, "  %{pfx}.out = call {ret_ll} @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_ll}").unwrap();
+                                        writeln!(out, "  store {ret_ll} %{pfx}.out, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    }
+                                } else {
+                                    // Scalar element — load and pass by value
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    if map_ret_sret {
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm}) %{pfx}.tmp, ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else if map_ret_small_agg {
+                                        writeln!(out, "  %{pfx}.out.v = call {ret_llvm} @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
+                                        writeln!(out, "  store {ret_llvm} %{pfx}.out.v, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    } else {
+                                        let ret_ll = llvm_type_full(&ret_ty, snames);
+                                        writeln!(out, "  %{pfx}.out = call {ret_ll} @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                        writeln!(out, "  %{pfx}.tmp = alloca {ret_ll}").unwrap();
+                                        writeln!(out, "  store {ret_ll} %{pfx}.out, ptr %{pfx}.tmp").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                    }
+                                }
+                                // Increment
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "filter" => {
+                                let d = dst.unwrap();
+                                // Alloca for result array
+                                writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {elem_size})", d.0).unwrap();
+                                // Loop
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                // Load element pointer
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                // Call closure with element → bool
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.keep = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.keep = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                // Conditional push
+                                writeln!(out, "  br i1 %{pfx}.keep, label %{pfx}.push, label %{pfx}.skip").unwrap();
+                                writeln!(out, "{pfx}.push:").unwrap();
+                                writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.ep)", d.0).unwrap();
+                                writeln!(out, "  br label %{pfx}.skip").unwrap();
+                                writeln!(out, "{pfx}.skip:").unwrap();
+                                // Increment
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "each" => {
+                                // Loop without collecting results
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  call void @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  call void @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "any" => {
+                                let d = dst.unwrap();
+                                // any: return true if any element matches
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
+                                writeln!(out, "{pfx}.cont:").unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.found:").unwrap();
+                                writeln!(out, "  br label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                // Use i64 (0/1) to match C ABI bool convention
+                                writeln!(out, "  %{pfx}.b = phi i1 [true, %{pfx}.found], [false, %{pfx}.check]").unwrap();
+                                writeln!(out, "  %v{} = zext i1 %{pfx}.b to i64", d.0).unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "all" => {
+                                let d = dst.unwrap();
+                                // all: return false if any element doesn't match
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.cont, label %{pfx}.fail").unwrap();
+                                writeln!(out, "{pfx}.cont:").unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.fail:").unwrap();
+                                writeln!(out, "  br label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                // Use i64 (0/1) to match C ABI bool convention
+                                writeln!(out, "  %{pfx}.b = phi i1 [false, %{pfx}.fail], [true, %{pfx}.check]").unwrap();
+                                writeln!(out, "  %v{} = zext i1 %{pfx}.b to i64", d.0).unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "fold" if args.len() >= 3 => {
+                                let d = dst.unwrap();
+                                let acc_arg = args[1];
+                                let acc_ty = val_types.get(d.0 as usize)
+                                    .and_then(|t| t.as_ref())
+                                    .cloned()
+                                    .unwrap_or(LirType::I64);
+                                let acc_llvm = llvm_type_full(&acc_ty, snames);
+                                let acc_is_agg = acc_llvm.starts_with('%');
+                                // fold: accumulate over array
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                if acc_is_agg {
+                                    writeln!(out, "  %{pfx}.acc = phi ptr [%v{}, %{current_label}], [%{pfx}.accnew, %{pfx}.body]", acc_arg.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.acc = phi {acc_llvm} [%v{}, %{current_label}], [%{pfx}.accnew, %{pfx}.body]", acc_arg.0).unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                // fold closure takes (env, acc, elem)
+                                let fold_needs_ref = params_are_ptr.clone();
+                                let acc_ref = fold_needs_ref.first().copied().unwrap_or(false);
+                                let elem_ref = fold_needs_ref.get(1).copied().unwrap_or(false);
+                                // Build call: the return is the new accumulator
+                                let acc_param = if acc_is_agg || acc_ref {
+                                    format!("ptr %{pfx}.acc")
+                                } else {
+                                    format!("{acc_llvm} %{pfx}.acc")
+                                };
+                                let elem_param = if elem_by_ptr || elem_is_aggregate || elem_ref {
+                                    format!("ptr %{pfx}.ep")
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    format!("{elem_llvm_ty} %{pfx}.elem")
+                                };
+                                let fold_ret_sret = acc_is_agg && !is_small_aggregate(&acc_ty, &module.structs);
+                                let fold_ret_small = acc_is_agg && is_small_aggregate(&acc_ty, &module.structs);
+                                if fold_ret_sret {
+                                    writeln!(out, "  %{pfx}.accnew = alloca {acc_llvm}").unwrap();
+                                    writeln!(out, "  call void @{call_fn}(ptr sret({acc_llvm}) %{pfx}.accnew, ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                } else if fold_ret_small {
+                                    writeln!(out, "  %{pfx}.accret = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                    writeln!(out, "  %{pfx}.accnew = alloca {acc_llvm}").unwrap();
+                                    writeln!(out, "  store {acc_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.accnew = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                // Result is the final accumulator (comes from check block only)
+                                if acc_is_agg {
+                                    writeln!(out, "  %v{} = phi ptr [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %v{} = phi {acc_llvm} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                }
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "reduce" => {
+                                let d = dst.unwrap();
+                                let red_needs_ref = params_are_ptr.clone();
+                                let acc_ref = red_needs_ref.first().copied().unwrap_or(false);
+                                let elem_ref = red_needs_ref.get(1).copied().unwrap_or(false);
+                                // reduce: like fold but init with first element
+                                // Load first element as initial accumulator
+                                writeln!(out, "  %{pfx}.datap0 = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                if elem_is_aggregate || acc_ref {
+                                    // Aggregate: acc is a pointer
+                                    writeln!(out, "  %{pfx}.acc0 = getelementptr i8, ptr %{pfx}.datap0, i64 0").unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.acc0 = load {elem_llvm_ty}, ptr %{pfx}.datap0").unwrap();
+                                }
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [1, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                if elem_is_aggregate || acc_ref {
+                                    writeln!(out, "  %{pfx}.acc = phi ptr [%{pfx}.acc0, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.acc = phi {elem_llvm_ty} [%{pfx}.acc0, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                let acc_param = if elem_is_aggregate || acc_ref {
+                                    format!("ptr %{pfx}.acc")
+                                } else {
+                                    format!("{elem_llvm_ty} %{pfx}.acc")
+                                };
+                                let elem_param = if elem_by_ptr || elem_is_aggregate || elem_ref {
+                                    format!("ptr %{pfx}.ep")
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    format!("{elem_llvm_ty} %{pfx}.elem")
+                                };
+                                if elem_is_aggregate {
+                                    let ret_sret = !is_small_aggregate(&LirType::Struct(StructId(0)), &module.structs);
+                                    if ret_sret {
+                                        writeln!(out, "  %{pfx}.accnew = alloca {elem_llvm_ty}").unwrap();
+                                        writeln!(out, "  call void @{call_fn}(ptr sret({elem_llvm_ty}) %{pfx}.accnew, ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                    } else {
+                                        writeln!(out, "  %{pfx}.accnew = call ptr @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                    }
+                                } else {
+                                    writeln!(out, "  %{pfx}.accnew = call {elem_llvm_ty} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                if elem_is_aggregate || acc_ref {
+                                    writeln!(out, "  %v{} = phi ptr [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %v{} = phi {elem_llvm_ty} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                }
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "find" => {
+                                let d = dst.unwrap();
+                                // find: return Option — alloca, set tag=1 (None), loop and set tag=0+payload on match
+                                writeln!(out, "  %v{} = alloca i8, i64 {}", d.0, 8 + elem_size.max(8)).unwrap();
+                                // Init to None (tag=1)
+                                writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", d.0).unwrap();
+                                writeln!(out, "  store i32 1, ptr %{pfx}.tagp").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
+                                writeln!(out, "{pfx}.found:").unwrap();
+                                // Set tag=0 (Some) and copy element to payload at offset 8
+                                writeln!(out, "  store i32 0, ptr %{pfx}.tagp").unwrap();
+                                writeln!(out, "  %{pfx}.payp = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                                writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payp, ptr %{pfx}.ep, i64 {elem_size})").unwrap();
+                                writeln!(out, "  br label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.cont:").unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "find_index" => {
+                                let d = dst.unwrap();
+                                // find_index: return i64 (-1 if not found)
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
+                                writeln!(out, "{pfx}.found:").unwrap();
+                                writeln!(out, "  br label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.cont:").unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                writeln!(out, "  %v{} = phi i64 [%{pfx}.i, %{pfx}.found], [-1, %{pfx}.check]", d.0).unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "count" => {
+                                let d = dst.unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                writeln!(out, "  %{pfx}.cnt = phi i64 [0, %{current_label}], [%{pfx}.cntnew, %{pfx}.body]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  %{pfx}.inc = zext i1 %{pfx}.pred to i64").unwrap();
+                                writeln!(out, "  %{pfx}.cntnew = add i64 %{pfx}.cnt, %{pfx}.inc").unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                writeln!(out, "  %v{} = phi i64 [%{pfx}.cnt, %{pfx}.check]", d.0).unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            "flat_map" => {
+                                let d = dst.unwrap();
+                                // flat_map: map to arrays and extend
+                                writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {elem_size})", d.0).unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.check:").unwrap();
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                writeln!(out, "{pfx}.body:").unwrap();
+                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                // Call closure → returns GorgetArray
+                                writeln!(out, "  %{pfx}.sub = alloca %GorgetArray").unwrap();
+                                if elem_by_ptr || elem_is_aggregate {
+                                    writeln!(out, "  call void @{call_fn}(ptr sret(%GorgetArray) %{pfx}.sub, ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
+                                } else {
+                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                    writeln!(out, "  call void @{call_fn}(ptr sret(%GorgetArray) %{pfx}.sub, ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
+                                }
+                                writeln!(out, "  call void @gorget_array_extend(ptr %v{}, ptr %{pfx}.sub)", d.0).unwrap();
+                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
+                                writeln!(out, "{pfx}.done:").unwrap();
+                                *current_label = format!("{pfx}.done");
+                                return;
+                            }
+                            _ => {} // Fall through for unsupported methods
+                        }
+                    }
+                    // If closure resolution failed or method not handled, fall through
                 }
             }
 
