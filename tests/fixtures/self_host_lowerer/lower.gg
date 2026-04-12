@@ -1961,6 +1961,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[int] tparams = []
                         gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks))
                 test_idx += 1
+            case ISuiteSetup(setup_body):
+                if not has_main:
+                    Vector[int] sp = []
+                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                    Vector[BasicBlock] sb = [BasicBlock([], TReturn(OpConstUnit()))]
+                    gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
+                    test_idx += 1
+            case ISuiteTeardown(teardown_body):
+                if not has_main:
+                    Vector[int] tp = []
+                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                    Vector[BasicBlock] tb = [BasicBlock([], TReturn(OpConstUnit()))]
+                    gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
+                    test_idx += 1
             case IEquip(eqblk):
                 # Skip generic equip blocks (detected by target having type args)
                 bool skip_equip = eqblk.type_params.len() > 0
