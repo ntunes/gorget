@@ -1449,6 +1449,14 @@ pub(super) fn emit_abi_arg(
             } else if is_ptr {
                 write!(out, "({val} ? gorget_str_to_cstr(*(Str*){val}) : NULL)").unwrap();
             } else {
+                // Scalar/void reaching CStr is likely a misclassified ABI tag.
+                // CStr should only receive Str structs (extract .data), Ptr-to-Str
+                // (deref + extract), or raw const char* (pass through).
+                debug_assert!(
+                    false,
+                    "CStr ABI received non-Str, non-Ptr value '{val}' (type {arg_ty:?}). \
+                     This param should probably be Opaque, not CStr."
+                );
                 write!(out, "{val}").unwrap();
             }
             true
@@ -1457,16 +1465,25 @@ pub(super) fn emit_abi_arg(
             if is_str_lit || is_struct {
                 write!(out, "(const char*){val}.data").unwrap();
             } else if is_ptr {
-                // Ptr(Str) → deref to get Str, then .data for char*
                 write!(out, "({val} ? (const char*)((Str*){val})->data : NULL)").unwrap();
             } else {
+                debug_assert!(
+                    false,
+                    "BytePtr ABI received non-Str, non-Ptr value '{val}' (type {arg_ty:?}). \
+                     This param should probably be Opaque, not BytePtr."
+                );
                 write!(out, "{val}").unwrap();
             }
             true
         }
         AbiKind::GorgetString => {
+            // GorgetString should receive: StrLit (Str struct), Ptr (deref to Str), or Struct (pass through).
+            debug_assert!(
+                is_str_lit || is_ptr || is_struct,
+                "GorgetString ABI received non-Str, non-Ptr value '{val}' (type {arg_ty:?}). \
+                 Scalars should use Scalar, raw pointers should use Opaque."
+            );
             if is_str_lit {
-                // StrLit values are already valid Str structs (static const Str __slit_N).
                 write!(out, "{val}").unwrap();
             } else if is_ptr {
                 write!(out, "*(Str*){val}").unwrap();
@@ -1476,7 +1493,13 @@ pub(super) fn emit_abi_arg(
             true
         }
         AbiKind::Ptr => {
-            // Callee expects a pointer. If arg is a struct, take its address.
+            // Ptr should receive: Struct (take address) or Ptr (pass through).
+            // Scalars reaching Ptr means the ABI tag is wrong — scalars should use Scalar.
+            debug_assert!(
+                is_struct || is_ptr || arg_ty.map_or(true, |t| matches!(t, LirType::Void)),
+                "Ptr ABI received scalar value '{val}' (type {arg_ty:?}). \
+                 Scalars should use Scalar, not Ptr."
+            );
             if is_struct {
                 write!(out, "&{val}").unwrap();
             } else {

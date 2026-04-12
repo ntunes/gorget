@@ -1756,6 +1756,7 @@ impl<'a> FuncLowering<'a> {
             .map(|e| e.param_abis.clone())
             .unwrap_or_default();
 
+
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
