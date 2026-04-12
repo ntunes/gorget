@@ -1051,6 +1051,55 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
 
 # ── Closure scanning ─────────────────────────────────────
 
+# Check if an expression tree contains the implicit `it` parameter.
+# Unlike the parser's expr_contains_it (which only checks top-level to
+# avoid borrow issues), this traverses owned values — safe to recurse.
+bool expr_has_it(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EIt():
+            return true
+        case EIdentifier(name):
+            return name == "it"
+        case EBinaryOp(lhs, _, rhs):
+            return expr_has_it(*lhs) or expr_has_it(*rhs)
+        case EUnaryOp(_, inner):
+            return expr_has_it(*inner)
+        case ECall(callee, args, _):
+            if expr_has_it(*callee):
+                return true
+            int i = 0
+            while i < args.len():
+                if expr_has_it(args.get(i).unwrap()):
+                    return true
+                i += 1
+            return false
+        case EMethodCall(obj, _, args, _):
+            if expr_has_it(*obj):
+                return true
+            int i = 0
+            while i < args.len():
+                if expr_has_it(args.get(i).unwrap()):
+                    return true
+                i += 1
+            return false
+        case EIf(cond, _, _):
+            return expr_has_it(*cond)
+        else:
+            return false
+
+# Emit a __Closure_N__call function for an implicit `it` closure.
+int emit_it_closure(int next_id, GirModule &gmod):
+    String ic_name = "__Closure_" + int_to_str(next_id)
+    String ic_call = ic_name + "__call"
+    int ic_tid = lookup_or_register_named(&gmod, ic_name)
+    int ic_self_ptr = register_ptr(&gmod, ic_tid)
+    Vector[int] ic_params = [ic_self_ptr, I64_TYPE]
+    int ic_ret = I64_TYPE
+    Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
+    Vector[BasicBlock] ic_blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+    gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
+    return next_id + 1
+
 int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
     match sexpr.expr:
         case EClosure(params, body):
@@ -1150,14 +1199,21 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             int ai = 0
             while ai < args.len():
                 SpannedExpr arg = args.get(ai).unwrap()
-                next_id = scan_expr_for_closures(arg, next_id, &gmod)
+                if expr_has_it(arg):
+                    # Implicit `it` closure — generate __Closure_N__call(self, it)
+                    next_id = emit_it_closure(next_id, &gmod)
+                else:
+                    next_id = scan_expr_for_closures(arg, next_id, &gmod)
                 ai += 1
         case EMethodCall(obj, _, args, _):
             next_id = scan_expr_for_closures(*obj, next_id, &gmod)
             int ai = 0
             while ai < args.len():
                 SpannedExpr arg = args.get(ai).unwrap()
-                next_id = scan_expr_for_closures(arg, next_id, &gmod)
+                if expr_has_it(arg):
+                    next_id = emit_it_closure(next_id, &gmod)
+                else:
+                    next_id = scan_expr_for_closures(arg, next_id, &gmod)
                 ai += 1
         case EIf(cond, then_body, branches):
             next_id = scan_expr_for_closures(*cond, next_id, &gmod)
