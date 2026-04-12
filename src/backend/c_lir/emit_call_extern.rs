@@ -145,7 +145,28 @@ pub(super) fn emit_call_extern(
             // ── Builtin type casts ────────────────────────────────────────
             // `float`, `int`, `bool` are C keywords — can't emit as function calls.
             // Gorget's `float(x)`, `int(x)`, `bool(x)` are type casts. Emit inline C casts.
+            // Special case: `int(string)` → gorget_str_ord (Unicode codepoint value).
             if args.len() == 1 {
+                let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
+                let arg_is_str = matches!(arg_ty, Some(LirType::Struct(sid))
+                    if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                let arg_is_str_ptr = matches!(arg_ty, Some(LirType::Ptr))
+                    && ptr_pointee.get(args[0].0 as usize)
+                        .and_then(|p| p.as_ref())
+                        .map_or(false, |p| is_str_struct(p, module));
+
+                if name == "int" && (arg_is_str || arg_is_str_ptr) {
+                    // int(string) → Unicode codepoint of first character
+                    if let Some(d) = dst {
+                        if arg_is_str {
+                            write!(out, "{} = gorget_str_ord({});", v(*d), v(args[0])).unwrap();
+                        } else {
+                            write!(out, "{} = gorget_str_ord(*(Str*){});", v(*d), v(args[0])).unwrap();
+                        }
+                    }
+                    return;
+                }
+
                 let cast_to = match name.as_ref() {
                     "float" => Some("double"),
                     "int"   => Some("int64_t"),

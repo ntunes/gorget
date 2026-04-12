@@ -2733,9 +2733,8 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     if has(&|n| n == "gorget_char_chr") {
         writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
     }
-    if has(&|n| n == "gorget_str_ord") {
-        writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode((const char*)s.data, s.len, &pos); }}").unwrap();
-    }
+    // Always emit gorget_str_ord — needed by .ord() method AND int(string) cast.
+    writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode((const char*)s.data, s.len, &pos); }}").unwrap();
     // Default value functions for primitive types
     writeln!(out, "static inline Str gorget_str_default(void) {{ return GORGET_EMPTY_STR; }}").unwrap();
     writeln!(out, "static inline int64_t int64_t__default(void) {{ return 0; }}").unwrap();
