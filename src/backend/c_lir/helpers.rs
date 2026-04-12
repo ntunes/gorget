@@ -1470,22 +1470,9 @@ pub(super) fn resolve_param_abi(
     if param_idx == 0 && legacy_self_by_ptr(_fn_name) {
         return AbiKind::Ptr;
     }
-    // Runtime functions that take Str by value (not const char*)
-    if runtime_param_is_gorget_string(fn_name, param_idx) {
-        return AbiKind::GorgetString;
-    }
     AbiKind::Auto
 }
 
-/// Returns true if the given param of a runtime function takes `Str` by value.
-/// Without this, the C backend's catch-all coerces Str structs to `const char*` via .data.
-fn runtime_param_is_gorget_string(name: &str, idx: usize) -> bool {
-    match name {
-        "gorget_assert_fail_values" => idx == 1 || idx == 2,
-        "__gorget_snapshot_write_str" => idx == 1,
-        _ => false,
-    }
-}
 /// Sanitize a field name for C.
 pub(super) fn c_field_name(name: &str) -> String {
     name.replace('.', "_").replace('-', "_")

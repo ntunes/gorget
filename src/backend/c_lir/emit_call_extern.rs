@@ -2120,14 +2120,6 @@ pub(super) fn emit_call_extern(
                 else if void_params.contains(&i) && is_str_lit {
                     write!(out, "&{v}", v = v(*a)).unwrap();
                 }
-                // gorget_int_to_str / gorget_float_to_str: always cast arg to expected type.
-                // The LIR lowerer emits str() coercion for unknown source types, which can
-                // produce void* args. macOS clang rejects implicit void*→int64_t conversion.
-                // Casting is a no-op when the arg is already the correct type.
-                else if emit_name == "gorget_int_to_str" || emit_name == "gorget_float_to_str" {
-                    let cast_ty = if emit_name == "gorget_float_to_str" { "double" } else { "int64_t" };
-                    write!(out, "({cast_ty}){}", v(*a)).unwrap();
-                }
                 // Ptr(Str) → Str by-value deref: when arg is a pointer to a Str
                 // (tracked by ptr_pointee) and no other handler matched, deref
                 // to pass Str by value. Handles functions like sqlite wrappers
