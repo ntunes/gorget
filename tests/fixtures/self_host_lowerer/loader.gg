@@ -125,17 +125,26 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
                             m.items.push(IFunction(renamed))
                     case IEquip(eqblk):
-                        # Filter individual methods: extern equip methods get
-                        # parsed with garbled names and wrong signatures.
-                        # Strict body.len() >= 2 is the only safe filter — the
-                        # extern parsing garbles both names AND params, so no
-                        # heuristic on name/params can distinguish real 1-body
-                        # methods from extern artifacts.
+                        # Filter: real methods have >=2 body stmts, OR 1 stmt
+                        # with a "self" param (instance method) or name "new".
+                        # Extern stubs produce garbled AST with no self param.
                         Vector[FunctionDef] real_methods = []
                         int emi = 0
                         while emi < eqblk.methods.len():
                             FunctionDef emdef = eqblk.methods.get(emi).unwrap()
-                            if emdef.body.len() >= 2:
+                            bool is_real = emdef.body.len() >= 2
+                            if not is_real and emdef.body.len() == 1:
+                                # Check for self param or static constructor
+                                bool has_self = false
+                                int epi = 0
+                                while epi < emdef.params.len():
+                                    Param ep = emdef.params.get(epi).unwrap()
+                                    if ep.param_name == "self":
+                                        has_self = true
+                                    epi += 1
+                                if has_self or emdef.name == "new":
+                                    is_real = true
+                            if is_real:
                                 real_methods.push(emdef)
                             emi += 1
                         if real_methods.len() > 0:
