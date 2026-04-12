@@ -158,7 +158,7 @@ pub(super) fn emit_call_extern(
                 if let Some(d) = dst {
                     let s = format!("((Str*){})", v(args[0]));
                     let pos = v(args[1]);
-                    write!(out, "{} = gorget_str_own_region((const char*){s}->data + {pos}, (size_t)gorget_utf8_codepoint_len(((const unsigned char*){s}->data)[{pos}]));",
+                    write!(out, "{} = gorget_str_view_region((const char*){s}->data + {pos}, (size_t)gorget_utf8_codepoint_len(((const unsigned char*){s}->data)[{pos}]));",
                         v(*d)).unwrap();
                 }
                 return;

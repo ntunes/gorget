@@ -515,6 +515,7 @@ fn lower_var_decl(
                 }
             }
 
+
             builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
             // Propagate ownership: if RHS local owned its data (call result),

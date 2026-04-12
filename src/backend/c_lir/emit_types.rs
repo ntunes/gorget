@@ -2779,7 +2779,7 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
             if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return GORGET_EMPTY_STR; \
             int cplen = gorget_utf8_codepoint_len(((const unsigned char*)s.data)[byte_pos]); \
             if (byte_pos + cplen > (int64_t)s.len) cplen = (int)(s.len - (size_t)byte_pos); \
-            return gorget_str_own_region((const char*)s.data + byte_pos, (size_t)cplen); }}").unwrap();
+            return gorget_str_view_region((const char*)s.data + byte_pos, (size_t)cplen); }}").unwrap();
     }
     // gorget_signal_ignore is already in the C runtime — no duplicate emission needed.
 

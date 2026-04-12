@@ -45,6 +45,10 @@ pub enum LocalOwnershipState {
     /// Currently set by `.get().unwrap()` on collection elements. Future
     /// candidates: BareParam, CollectionRef, Alias could all unify under this.
     CowBorrow,
+    /// String view: a cap=0 Str whose .data borrows from `source`'s buffer.
+    /// Created by view-returning methods (slice, trim, char_at, etc.).
+    /// Auto-materialized (cloned to owned) before source mutation.
+    ViewOf { source: LocalId },
 }
 
 impl LocalOwnershipState {
@@ -631,6 +635,18 @@ impl<'a> LoweringContext<'a> {
         }
 
         Some(ret)
+    }
+
+    /// Check if a builtin method returns a view (cap=0 Str borrowing from receiver).
+    pub fn builtin_returns_view(&self, type_name: &str, method_name: &str) -> bool {
+        use crate::ir::lowering::builtins;
+        if let Some(protocol) = builtins::protocol_for_mangled_name(type_name) {
+            protocol.methods.iter()
+                .find(|m| m.name == method_name)
+                .map_or(false, |m| m.returns_view)
+        } else {
+            false
+        }
     }
 
     /// Emit an implicit clone warning for a resource type being auto-cloned.
@@ -1492,6 +1508,24 @@ impl<'a> LoweringContext<'a> {
         matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::CowBorrow))
     }
 
+    /// Mark a local as a string view borrowing from `source`'s buffer.
+    pub fn set_view_of(&mut self, local: LocalId, source: LocalId) {
+        self.func_state.local_ownership.insert(local, LocalOwnershipState::ViewOf { source });
+    }
+
+    /// Find all locals that are views of `source`.
+    pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
+        self.func_state.local_ownership.iter()
+            .filter_map(|(local, state)| {
+                if matches!(state, LocalOwnershipState::ViewOf { source: s } if *s == source) {
+                    Some(*local)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Record the source collection for a CowBorrow local.
     pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: CollectionId) {
         self.func_state.cow_borrow_sources.insert(local, collection);
@@ -1524,7 +1558,8 @@ impl<'a> LoweringContext<'a> {
                     // CoW borrows that may have been materialized on some paths
                     LocalOwnershipState::Alias { .. }
                     | LocalOwnershipState::CollectionRef { .. }
-                    | LocalOwnershipState::CowBorrow => {
+                    | LocalOwnershipState::CowBorrow
+                    | LocalOwnershipState::ViewOf { .. } => {
                         crate::ir::OwnershipState::MaybeBorrowed
                     }
                 };
@@ -1634,6 +1669,14 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
+
+        // Case 4: local is a string with live views → materialize each view
+        // before the source is mutated (push/append/clear/reassign).
+        let views = self.views_of_source(local);
+        for view_local in views {
+            self.func_state.local_ownership.remove(&view_local);
+            self.cow_materialize_view(builder, view_local, span);
+        }
     }
 
     /// Before mutating a field-accessed collection (e.g., `self.data.push(x)`),
@@ -1676,10 +1719,50 @@ impl<'a> LoweringContext<'a> {
         for r in refs {
             self.func_state.local_ownership.remove(&r);
         }
+        // Materialize string views borrowing from this source
+        let views = self.views_of_source(source_local);
+        for view_local in views {
+            self.func_state.local_ownership.remove(&view_local);
+            self.cow_materialize_view(builder, view_local, span);
+        }
     }
 
     /// Materialize an alias: clone the source's data into the alias local.
     /// Changes the alias from Ptr(T) to owned T, registers for drop.
+    /// Materialize a string view: clone the view into an owned Str so the
+    /// source can be safely mutated. The view local gets a fresh owned buffer.
+    fn cow_materialize_view(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        view_local: LocalId,
+        span: crate::span::Span,
+    ) {
+        // First, materialize any transitive views (views of THIS view)
+        let sub_views = self.views_of_source(view_local);
+        for sub in sub_views {
+            self.func_state.local_ownership.remove(&sub);
+            self.cow_materialize_view(builder, sub, span);
+        }
+
+        let view_type = builder.local_type(view_local);
+        if let Some(clone_fn) = self.clone_fn_for_ptr(view_type) {
+            self.warn_implicit_clone(span, view_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+            let cloned = builder.call(&clone_fn,
+                vec![crate::ir::builder::FunctionBuilder::copy(view_local)], view_type);
+            let name_hint = builder.local_name(view_local).map(|s| s.to_string());
+            let owned_local = builder.add_local(view_type, name_hint.as_deref());
+            builder.assign(crate::ir::instructions::Place::local(owned_local),
+                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            self.drops.register_local(owned_local, view_type, &self.type_registry);
+            self.set_owned(owned_local);
+            if let Some(ref hint) = builder.local_name(view_local).map(|s| s.to_string()) {
+                let name = hint.clone();
+                self.register_local(&name, owned_local, view_type);
+                self.func_state.named_locals.insert(owned_local);
+            }
+        }
+    }
+
     fn cow_materialize_alias(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,

@@ -1797,6 +1797,29 @@ pub(super) fn lower_method_call(
             builder.move_zero(Place::local(local));
         }
 
+        // Track ViewOf provenance for view-returning builtin methods (slice, trim, etc.).
+        // The result is a cap=0 Str borrowing from the receiver's buffer.
+        // Keep it drop-registered (gorget_string_free short-circuits on cap==0).
+        // Mark ViewOf(receiver) so cow_before_mutation materializes if source mutates.
+        if ctx.builtin_returns_view(&type_name, method_name)
+            && ctx.type_mapper.is_string_type(ret_type)
+        {
+            if let Operand::Copy(ref result_place) | Operand::Move(ref result_place) = result {
+                if result_place.projections.is_empty() {
+                    let result_local = result_place.local;
+                    // Track provenance: result borrows from receiver.
+                    // Only for named locals — expression temps in chains should
+                    // NOT be marked as refs (it changes receiver borrow semantics).
+                    if ctx.is_named_local(result_local) {
+                        if let Some(recv_local) = recv_local_for_move_zero {
+                            ctx.set_view_of(result_local, recv_local);
+                        }
+                        ctx.func_state.has_string_borrows = true;
+                    }
+                }
+            }
+        }
+
         result
     } else {
         // Can't determine receiver type — fallback

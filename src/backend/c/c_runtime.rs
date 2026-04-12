@@ -1789,6 +1789,7 @@ static inline int64_t gorget_str_codepoint_count(Str s) {
 
 // Forward declarations
 static inline Str gorget_str_own_region(const char* data, size_t len);
+static inline Str gorget_str_view_region(const char* data, size_t len);
 
 // Return owned copy of ith codepoint (0-based). Supports negative indexing.
 static inline Str gorget_str_index(Str s, int64_t idx) {
@@ -1805,7 +1806,7 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
         i++;
     }
     int cplen = gorget_utf8_codepoint_len((unsigned char)d[byte_off]);
-    return gorget_str_own_region(d + byte_off, (size_t)cplen);
+    return gorget_str_view_region(d + byte_off, (size_t)cplen);
 }
 
 // Return owned copy of codepoint range [start, end). Supports negative indices.
@@ -1830,13 +1831,21 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     for (int64_t i = start; i < end; i++) {
         end_byte += (size_t)gorget_utf8_codepoint_len((unsigned char)d[end_byte]);
     }
-    return gorget_str_own_region(d + start_byte, end_byte - start_byte);
+    return gorget_str_view_region(d + start_byte, end_byte - start_byte);
 }
 
 // Clone a region of memory into an owned Str.
 static inline Str gorget_str_own_region(const char* data, size_t len) {
     if (len == 0) return GORGET_EMPTY_STR;
     return str_alloc_copy(data, len, __gorget_current_alloc);
+}
+
+// Return a zero-allocation view into an existing buffer. cap=0 marks it as a view;
+// gorget_string_free is a no-op on views. The data pointer borrows from the source.
+// NOT NUL-terminated at data[len] (points into the middle of another string).
+static inline Str gorget_str_view_region(const char* data, size_t len) {
+    if (len == 0) return GORGET_EMPTY_STR;
+    return (Str){ .data = (char*)data, .cap = 0, .len = len, .alloc = NULL };
 }
 
 // Borrow region — returns StrView (internal use only, never stored).
@@ -1850,15 +1859,15 @@ static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
         fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
         exit(1);
     }
-    return gorget_str_own_region((const char*)s.data + start, (size_t)(end - start));
+    return gorget_str_view_region((const char*)s.data + start, (size_t)(end - start));
 }
 
-// Return an owned copy of the character at the given byte index.
+// Return a view of the character at the given byte index.
 static inline Str gorget_str_char_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
         return GORGET_EMPTY_STR;
     }
-    return gorget_str_own_region((const char*)s.data + index, 1);
+    return gorget_str_view_region((const char*)s.data + index, 1);
 }
 
 // Return the byte at index (byte-level). Bounds-checked against byte length.
@@ -2174,7 +2183,7 @@ static inline Str gorget_str_trim(Str s) {
         int64_t cp = gorget_utf8_decode(d, s.len, &pos);
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
     }
-    return gorget_str_own_region(d + start, end - start);
+    return gorget_str_view_region(d + start, end - start);
 }
 static inline Str gorget_str_lstrip_ws(Str s) {
     const char* d = (const char*)s.data;
@@ -2185,7 +2194,7 @@ static inline Str gorget_str_lstrip_ws(Str s) {
         if (!gorget_is_unicode_whitespace(cp)) break;
         start = pos;
     }
-    return gorget_str_own_region(d + start, s.len - start);
+    return gorget_str_view_region(d + start, s.len - start);
 }
 static inline Str gorget_str_rstrip_ws(Str s) {
     const char* d = (const char*)s.data;
@@ -2195,7 +2204,7 @@ static inline Str gorget_str_rstrip_ws(Str s) {
         int64_t cp = gorget_utf8_decode(d, s.len, &pos);
         if (!gorget_is_unicode_whitespace(cp)) end = pos;
     }
-    return gorget_str_own_region(d, end);
+    return gorget_str_view_region(d, end);
 }
 // Check if a codepoint is in a set of codepoints given as a Str.
 static inline bool gorget_cp_in_str(int64_t cp, Str chars) {
@@ -2223,7 +2232,7 @@ static inline Str gorget_str_strip(Str s, Str chars) {
         int64_t cp = gorget_utf8_decode(d, s.len, &pos);
         if (!gorget_cp_in_str(cp, chars)) end = pos;
     }
-    return gorget_str_own_region(d + start, end - start);
+    return gorget_str_view_region(d + start, end - start);
 }
 static inline Str gorget_str_lstrip(Str s, Str chars) {
     const char* d = (const char*)s.data;
@@ -2234,7 +2243,7 @@ static inline Str gorget_str_lstrip(Str s, Str chars) {
         if (!gorget_cp_in_str(cp, chars)) break;
         start = pos;
     }
-    return gorget_str_own_region(d + start, s.len - start);
+    return gorget_str_view_region(d + start, s.len - start);
 }
 static inline Str gorget_str_rstrip(Str s, Str chars) {
     const char* d = (const char*)s.data;
@@ -2244,19 +2253,19 @@ static inline Str gorget_str_rstrip(Str s, Str chars) {
         int64_t cp = gorget_utf8_decode(d, s.len, &pos);
         if (!gorget_cp_in_str(cp, chars)) end = pos;
     }
-    return gorget_str_own_region(d, end);
+    return gorget_str_view_region(d, end);
 }
 static inline Str gorget_str_removeprefix(Str s, Str prefix) {
     const char* d = (const char*)s.data;
     if (gorget_str_starts_with(s, prefix))
-        return gorget_str_own_region(d + prefix.len, s.len - prefix.len);
-    return gorget_str_own_region(d, s.len);
+        return gorget_str_view_region(d + prefix.len, s.len - prefix.len);
+    return gorget_str_view_region(d, s.len);
 }
 static inline Str gorget_str_removesuffix(Str s, Str suffix) {
     const char* d = (const char*)s.data;
     if (gorget_str_ends_with(s, suffix))
-        return gorget_str_own_region(d, s.len - suffix.len);
-    return gorget_str_own_region(d, s.len);
+        return gorget_str_view_region(d, s.len - suffix.len);
+    return gorget_str_view_region(d, s.len);
 }
 // Group B: Allocating returns — return String.
 
@@ -2617,7 +2626,15 @@ static inline GorgetString gorget_string_from_str(Str s) {
 // Views from slice/char_at/... are NOT NUL-terminated — callers of cstr
 // should not be passing those (this plan keeps slice/char_at allocating).
 static inline const char* gorget_str_to_cstr(Str s) {
-    return s.data ? (const char*)s.data : "";
+    if (!s.data) return "";
+    // Owned strings (cap>0) and literal views are NUL-terminated at data[len].
+    // Mid-string views (from slice/trim/char_at) may NOT be NUL-terminated.
+    if (s.cap > 0 || s.len == 0 || s.data[s.len] == '\0') return s.data;
+    // Non-NUL-terminated view — allocate a NUL-terminated copy for C FFI.
+    char* buf = (char*)__gorget_current_alloc->alloc(__gorget_current_alloc->ctx, s.len + 1);
+    memcpy(buf, s.data, s.len);
+    buf[s.len] = '\0';
+    return buf;
 }
 
 // Check for embedded null bytes.
