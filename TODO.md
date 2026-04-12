@@ -12,7 +12,7 @@
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 6 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks, struct+enum init). All work correctly — this is cleanup, not a bug. [demoted from High: 2026-04-12]
 
-- **LIR value/slot split loses GIR MoveZero for consuming args**: Runtime safety net now covers all 4 consuming functions (`gorget_array_set`, `gorget_map_put`, `gorget_array_insert`, `gorget_set_add`). Proper LIR fix: track value→slot ownership so MoveZero on a value also zeros its backing slot. Benefits: eliminate runtime memset, eliminate DropIfAlive guards, enable LLVM mem2reg. [updated: 2026-04-12]
+- **LIR value/slot split loses GIR MoveZero for consuming args**: Runtime safety net covers `gorget_array_set` and `gorget_array_insert`. `gorget_map_put` can't use it (called internally by put_cloned/grow/rehash — zeroing corrupts source). `gorget_set_add` delegates to map_put. The dict[key].push() CoW sever fix handles the dict double-free case at the GIR level. Proper LIR fix: value→slot ownership propagation. [updated: 2026-04-12]
 
 - **Borrow checker: reject multi-use `!` on strings**: `!` on strings now triggers real MoveZero (pragmatic skip removed). Borrow checker should catch use-after-move for `!key` in loops. [updated: 2026-04-08]
 
