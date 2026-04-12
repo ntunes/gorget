@@ -1385,6 +1385,8 @@ impl<'a> LoweringContext<'a> {
                     vec![crate::ir::builder::FunctionBuilder::copy(local)],
                     inner,
                 );
+                // Register for drops so mark_moved works in pre_call_clone_temps
+                self.drops.register_local(cloned, inner, &self.type_registry);
                 return crate::ir::builder::FunctionBuilder::copy(cloned);
             }
             return operand;

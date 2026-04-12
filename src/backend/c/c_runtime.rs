@@ -4808,9 +4808,9 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
     }
     memcpy(slot, elem, arr->elem_size);
     // Zero the source for resource-type elements to prevent double-free.
-    // The GIR consuming-position system should MoveZero the source, but
-    // Ptr-wrapped args (from .get().unwrap()) create intermediate slots
-    // that the MoveZero doesn't reach. Zeroing here is a safety net.
+    // The GIR consuming-position MoveZero doesn't reach the intermediate
+    // slot created by the LIR for &-passing. This runtime zero is the
+    // correct fix until the LIR drop elaboration respects GIR mark_moved.
     if (arr->elem_drop) {
         memset((void*)elem, 0, arr->elem_size);
     }
