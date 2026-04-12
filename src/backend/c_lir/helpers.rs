@@ -766,42 +766,22 @@ pub(super) fn is_option_result_combinator(name: &str) -> bool {
             || name.ends_with("__and_then") || name.ends_with("__or_else")
             || name.ends_with("__unwrap_err") || name.ends_with("__unwrap_error") || name.ends_with("__map_err"))
 }
-/// String (GorgetString) methods that take self by pointer (GorgetString*).
-/// These are `gorget_str_` prefixed but operate on the owned String type,
-/// unlike Str view methods that take Str by value.
-pub(super) const GORGET_STRING_PTR_METHODS: &[&str] = &[
-    "gorget_str_str",
-    "gorget_str_push",
-    "gorget_str_push_line",
-    "gorget_str_clear",
-    "gorget_str_capacity",
-    "gorget_str_push_char",
-    "gorget_string_free",
-    "gorget_string_clone",
-    "gorget_string_concat",
-    "gorget_string_eq",
-    "gorget_string_cstr",
-    "gorget_string_append",
-    "gorget_string_push_byte",
-    "gorget_string_push_int",
-    "gorget_string_push_float",
-    "gorget_string_push_bool",
-    "gorget_string_push_line",
-];
-
-pub(super) fn collection_self_by_ptr(name: &str) -> bool {
-    ((name.starts_with("gorget_array_") || name.starts_with("gorget_map_")
+/// Returns true if the runtime function takes self (arg 0) by pointer.
+/// LEGACY: only needed for unmapped GIR names (gorget_str_push etc.) that bypass
+/// runtime_extern_sig. Tagged functions use arg_abis directly.
+fn legacy_self_by_ptr(name: &str) -> bool {
+    // gorget_str_push/push_line/push_char/clear — GIR names that don't always get remapped
+    matches!(name, "gorget_str_push" | "gorget_str_push_line" | "gorget_str_push_char"
+        | "gorget_str_clear" | "gorget_str_capacity" | "gorget_str_str"
+        | "gorget_array_extend")
+    || ((name.starts_with("gorget_array_") || name.starts_with("gorget_map_")
         || name.starts_with("gorget_set_") || name.starts_with("gorget_heap_")
         || name.starts_with("gorget_bytes_"))
-        && !name.ends_with("_new")
-        // gorget_bytes_from_str/from_hex take const char* (not GorgetArray*) as arg 0
-        && name != "gorget_bytes_from_str" && name != "gorget_bytes_from_hex")
-    // Dict/Set monomorphized inline methods also take self by pointer
+        && !name.ends_with("_new"))
     || parse_dict_higher_order(name).is_some()
     || parse_set_higher_order(name).is_some()
-    // String (GorgetString) methods that take self by pointer
-    || GORGET_STRING_PTR_METHODS.contains(&name)
 }
+
 /// Returns true if a gorget_str_* function has a non-Str parameter at index `i`.
 /// Used to prevent Str wrapping for args that are actually GorgetArray, etc.
 pub(super) fn str_fn_non_str_arg(name: &str, i: usize) -> bool {
@@ -925,24 +905,6 @@ pub(super) fn emit_collection_constructor(
         // Fallback — shouldn't happen
         write!(out, "/* unknown constructor: {name} */ {{0}};").unwrap();
     }
-}
-/// Returns true if the runtime function expects arg at `idx` to be passed by pointer
-/// (i.e. the C prototype uses `const GorgetArray*`, `const GorgetX25519KeyPair*`, etc.)
-/// but LIR passes it as a Struct value. The codegen must emit `&(val)` or pass the pointer directly.
-/// Identifies runtime functions whose self arg (idx 0) is passed by pointer.
-/// This is structural: the C backend emits `*(T*)ptr` deref for these calls
-/// (different from AbiKind::Ptr which emits `&val`). Collection/string methods
-/// always receive self as a pointer because the GIR passes objects by reference.
-pub(super) fn runtime_arg_by_ptr(name: &str, idx: usize) -> bool {
-    // String clone/free take Str by pointer (compiler-emitted)
-    if name == "gorget_string_clone_to_owned" || name == "gorget_string_clone" || name == "gorget_string_free" {
-        return true;
-    }
-    // Self-by-pointer for collection/string methods (arg 0)
-    if idx == 0 && collection_self_by_ptr(name) {
-        return true;
-    }
-    false
 }
 
 /// Maps a runtime function name to its thread-local error check function.
@@ -1494,7 +1456,7 @@ pub(super) fn deep_clone_resource_fields(
 /// then structural runtime_arg_by_ptr fallback, then Auto.
 pub(super) fn resolve_param_abi(
     ext_decl: Option<&LirExtern>,
-    fn_name: &str,
+    _fn_name: &str,
     param_idx: usize,
 ) -> crate::ir::abi::AbiKind {
     use crate::ir::abi::AbiKind;
@@ -1504,8 +1466,8 @@ pub(super) fn resolve_param_abi(
             return abi;
         }
     }
-    // Structural: collection/string self-by-ptr
-    if runtime_arg_by_ptr(fn_name, param_idx) {
+    // Legacy fallback for unmapped GIR names that bypass runtime_extern_sig.
+    if param_idx == 0 && legacy_self_by_ptr(_fn_name) {
         return AbiKind::Ptr;
     }
     // Runtime functions that take Str by value (not const char*)

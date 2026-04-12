@@ -411,6 +411,31 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_overflow_add" | "gorget_overflow_sub" | "gorget_overflow_mul" => {
             sig(vec![], LirType::Void, vec![])
         }
+
+        // Bytes (Vector[uint8]) operations
+        "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![Opaque]),
+        "gorget_bytes_to_str" | "gorget_bytes_to_hex" => sig(vec![LirType::Ptr], s(), vec![Ptr]),
+        "gorget_bytes_utf8_valid" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
+        "gorget_bytes_concat" => sig(vec![LirType::Ptr, LirType::Ptr], arr_ty(), vec![Ptr, Ptr]),
+        "gorget_bytes_slice" => sig(vec![LirType::Ptr, LirType::I64, LirType::I64], arr_ty(), vec![Ptr, Scalar, Scalar]),
+        // gorget_bytes_write_* / read_* — self by ptr + offset + value
+        "gorget_bytes_write_u32_be" | "gorget_bytes_write_u16_be"
+        | "gorget_bytes_write_u32_le" | "gorget_bytes_write_u16_le"
+        | "gorget_bytes_write_i32_le" | "gorget_bytes_write_i64_le" => {
+            sig(vec![LirType::Ptr, LirType::I64, LirType::I64], LirType::Void, vec![Ptr, Scalar, Scalar])
+        }
+        "gorget_bytes_write_f32_le" | "gorget_bytes_write_f64_le" => {
+            sig(vec![LirType::Ptr, LirType::I64, LirType::F64], LirType::Void, vec![Ptr, Scalar, Scalar])
+        }
+        "gorget_bytes_read_u32_be" | "gorget_bytes_read_u16_be"
+        | "gorget_bytes_read_u32_le" | "gorget_bytes_read_u16_le"
+        | "gorget_bytes_read_i32_le" | "gorget_bytes_read_i64_le" => {
+            sig(vec![LirType::Ptr, LirType::I64], LirType::I64, vec![Ptr, Scalar])
+        }
+        "gorget_bytes_read_f32_le" | "gorget_bytes_read_f64_le" => {
+            sig(vec![LirType::Ptr, LirType::I64], LirType::F64, vec![Ptr, Scalar])
+        }
+
         _ => None,
     }
 }

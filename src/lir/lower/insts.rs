@@ -57,8 +57,7 @@ impl<'a> FuncLowering<'a> {
 
                 if is_vector_add {
                     // Emit: result = gorget_array_clone(&lhs); gorget_array_extend(&result, &rhs);
-                    // The c_lir backend handles &-address-of for array functions via
-                    // takes_array_ptr_args / collection_self_by_ptr.
+                    // The c_lir backend handles &-address-of via arg_abis (AbiKind::Ptr).
                     let result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(result),

@@ -946,8 +946,7 @@ pub(super) fn emit_call_extern(
             // the LIR extern params use ptr for Str args. Set a flag so we can
             // coerce string literal args to Str at the call site.
             let force_str_coerce = parse_dict_higher_order(name).is_some()
-                || parse_set_higher_order(name).is_some()
-                || GORGET_STRING_PTR_METHODS.contains(&name);
+                || parse_set_higher_order(name).is_some();
             // For trait box method calls, determine which specific arg positions need Str coercion.
             let trait_str_arg_positions = trait_box_str_arg_positions(module, name);
             let ext_params: Option<&[LirType]> = if fn_params_owned.is_some() {
