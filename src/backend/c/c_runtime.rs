@@ -5422,7 +5422,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
             }
             m->states[target] = 1;
             m->count++;
-            __MAP_PUT_ZERO_SOURCES();
             return;
         }
         if (m->states[idx] == 2 && first_tombstone == (size_t)-1) {
@@ -5436,7 +5435,6 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                 memcpy((char*)m->values + idx * m->val_size, value, m->val_size);
                 __gorget_map_materialize_value(m, idx);
             }
-            __MAP_PUT_ZERO_SOURCES();
             return;
         }
         idx = (idx + 1) % m->cap;
