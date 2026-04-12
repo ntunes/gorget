@@ -2,7 +2,7 @@
 
 ## High
 
-- **Type-aware ABI resolution — Phases 2-5**: Phase 1 done (collection + concurrency functions tagged via `RuntimeSig::param_abis`). Remaining: Phase 2 (string functions — gorget_str_*, gorget_string_*), Phase 3 (I/O, math, conversion), Phase 4 (printf/fprintf, spawn/await, closure dispatch, Box, traits), Phase 5 (delete all whitelist functions, assert Auto never appears for runtime calls). The Ptr(Str) auto-deref catch-all (emit_call_extern.rs ~line 2130) is bypassed for tagged functions but still fires for untagged ones. [updated: 2026-04-12]
+- **Type-aware ABI resolution — remaining cleanup**: Phases 1-5 done. Major whitelists deleted (`runtime_arg_by_ptr`, `collection_self_by_ptr`, `GORGET_STRING_PTR_METHODS`). Minimal `legacy_self_by_ptr` fallback remains for unmapped GIR names (`gorget_str_push` etc.). Diagnostic confirmed zero `gorget_*` functions use whitelist fallback. Remaining: (a) printf/fprintf structural rewriting uses `is_printf` flag not names — fine. (b) spawn/await uses module.spawned_fns — structural, leave as-is. (c) `collection_void_param_indices` still exists for dynamically-generated higher-order collection helpers (Dict__K__V__filter etc.) — needs arg_abis on their LirExtern at generation time. (d) `str_fn_non_str_arg` only has gorget_str_join — can be removed once str_join gets a ByValue aggregate ABI kind. [demoted from High: 2026-04-12]
 
 - **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 
