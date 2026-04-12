@@ -1699,7 +1699,13 @@ impl<'a> FuncLowering<'a> {
         let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
             || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
             || emit_name == "snprintf" || emit_name == "sprintf";
+        // Clone functions (e.g. EquipBlock__clone) take void* — force Ptr params.
+        // operand_lir_type derives from GIR types (aggregate struct), but the
+        // generated C clone function signature is always `T clone(void* __p)`.
+        let is_clone_fn = emit_name.ends_with("__clone") && !emit_name.starts_with("gorget_");
         let arg_types: Vec<LirType> = if is_printf_like {
+            lir_args.iter().map(|_| LirType::Ptr).collect()
+        } else if is_clone_fn {
             lir_args.iter().map(|_| LirType::Ptr).collect()
         } else {
             let mut types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
