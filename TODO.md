@@ -40,7 +40,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 721/913 (79.0%) fn-count match, 99 process failures**. Remaining: ~56 import-heavy (equip body.len()>=2 filter drops single-statement methods; can't relax because extern equip stubs garble both names AND params), ~4 closure/method spawn wrappers, ~2 via delegation, ~3 generic equip, f-string closures invisible. Done: shared-token spawn stubs (auto-mutex only, not atomic/rwlock), trait defaults, `it` detection, test conditional emission, loader body-length relaxation, find() workaround. [updated: 2026-04-12]
+- **Self-host comparison**: At 913 fixtures (2026-04-12). **GIR Lowerer: 739/913 (80.9%) fn-count match, 99 process failures**. Remaining: ~20 import-heavy w/ many missing methods (parser corrupts equip blocks containing extern "C" stubs), ~10 small-diff (closure/method spawn wrappers, generic equip, via delegation, trait inheritance naming), ~4 bench (both produce 0 fns). Equip import filter uses self-param check (accept single-statement methods with param named "self" or name "new"). [updated: 2026-04-12]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
