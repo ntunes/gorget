@@ -4770,7 +4770,7 @@ static inline void gorget_map_materialize_keys(GorgetMap* m) {
     }
 }
 
-static inline void gorget_array_set(GorgetArray* arr, size_t index, void* elem) {
+static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
     if (index >= arr->len) {
         fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
         exit(1);
@@ -4781,11 +4781,13 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, void* elem) 
         arr->elem_drop(slot);
     }
     memcpy(slot, elem, arr->elem_size);
-    // Zero the source to prevent double-free: set takes ownership of the
-    // element bytes, but the caller's stack local still holds the same
-    // resource pointers. Without MoveZero from the GIR (TODO: fix at
-    // the lowering level), zero here as a safety net.
-    memset(elem, 0, arr->elem_size);
+    // Zero the source for resource-type elements to prevent double-free.
+    // The GIR consuming-position system should MoveZero the source, but
+    // Ptr-wrapped args (from .get().unwrap()) create intermediate slots
+    // that the MoveZero doesn't reach. Zeroing here is a safety net.
+    if (arr->elem_drop) {
+        memset((void*)elem, 0, arr->elem_size);
+    }
 }
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
