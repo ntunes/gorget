@@ -126,10 +126,11 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             m.items.push(IFunction(renamed))
                     case IEquip(eqblk):
                         # Filter individual methods: extern equip methods get
-                        # parsed with the return type as the method name and a
-                        # trivial body.  Real methods have >=2 body statements.
-                        # (Equip blocks keep strict check because extern "C"
-                        # stubs produce parser artifacts with non-SExpr bodies.)
+                        # parsed with garbled names and wrong signatures.
+                        # Strict body.len() >= 2 is the only safe filter — the
+                        # extern parsing garbles both names AND params, so no
+                        # heuristic on name/params can distinguish real 1-body
+                        # methods from extern artifacts.
                         Vector[FunctionDef] real_methods = []
                         int emi = 0
                         while emi < eqblk.methods.len():

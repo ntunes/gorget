@@ -1584,7 +1584,9 @@ void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
         Stmt s = stmts.get(i).unwrap()
         match s:
             case SVarDecl(_, name, _, _, sk, _):
-                if sk > 0:
+                # Only auto-mutex (sk=1) gets __shared_token_ wrappers.
+                # Atomic (sk=3) and rwlock (sk=2) use different patterns.
+                if sk == 1:
                     shared_vars.put(name, true)
             else:
                 pass
@@ -1597,7 +1599,7 @@ void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Di
         Stmt s = stmts.get(i).unwrap()
         match s:
             case SVarDecl(_, name, init, _, sk, _):
-                if sk > 0:
+                if sk == 1:
                     shared_vars.put(name, true)
                 scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod)
             case SExpr(expr):
