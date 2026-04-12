@@ -1331,12 +1331,12 @@ fn emit_inst(
             let fa = format!("strlit.{}.fa", dst.0);
             writeln!(out, "  %{fp} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 0", dst.0).unwrap();
             writeln!(out, "  store ptr @.str.{idx}, ptr %{fp}").unwrap();
-            // Store length
-            writeln!(out, "  %{fl} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 1", dst.0).unwrap();
-            writeln!(out, "  store i64 {byte_len}, ptr %{fl}").unwrap();
-            // Store capacity = 0 (view/literal)
-            writeln!(out, "  %{fc} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 2", dst.0).unwrap();
+            // Store capacity = 0 (view/literal) — field 1 (cap at offset +8)
+            writeln!(out, "  %{fc} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 1", dst.0).unwrap();
             writeln!(out, "  store i64 0, ptr %{fc}").unwrap();
+            // Store length — field 2
+            writeln!(out, "  %{fl} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 2", dst.0).unwrap();
+            writeln!(out, "  store i64 {byte_len}, ptr %{fl}").unwrap();
             // Store alloc = null
             writeln!(out, "  %{fa} = getelementptr %GorgetString, ptr %strlit.{}, i32 0, i32 3", dst.0).unwrap();
             writeln!(out, "  store ptr null, ptr %{fa}").unwrap();
@@ -2306,10 +2306,12 @@ fn emit_inst(
                     writeln!(out, "  %{pfx} = alloca %GorgetString").unwrap();
                     writeln!(out, "  %{pfx}.fp = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 0").unwrap();
                     writeln!(out, "  store ptr @.str.{fixed_idx}, ptr %{pfx}.fp").unwrap();
-                    writeln!(out, "  %{pfx}.fl = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 1").unwrap();
-                    writeln!(out, "  store i64 {fixed_len}, ptr %{pfx}.fl").unwrap();
-                    writeln!(out, "  %{pfx}.fc = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 2").unwrap();
+                    // cap = 0 (view/literal) — field 1
+                    writeln!(out, "  %{pfx}.fc = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 1").unwrap();
                     writeln!(out, "  store i64 0, ptr %{pfx}.fc").unwrap();
+                    // len — field 2
+                    writeln!(out, "  %{pfx}.fl = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 2").unwrap();
+                    writeln!(out, "  store i64 {fixed_len}, ptr %{pfx}.fl").unwrap();
                     writeln!(out, "  %{pfx}.fa = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 3").unwrap();
                     writeln!(out, "  store ptr null, ptr %{pfx}.fa").unwrap();
                     writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %{pfx}, i32 0, i32 0").unwrap();

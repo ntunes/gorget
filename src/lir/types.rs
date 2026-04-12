@@ -206,7 +206,7 @@ mod tests {
         let defs = builtin_struct_defs();
         assert!(defs.len() >= 8);
         assert_eq!(defs[0].name, "GorgetString");
-        assert_eq!(defs[0].fields.len(), 1);
+        assert_eq!(defs[0].fields.len(), 4);
         assert_eq!(defs[1].name, "GorgetArray");
         assert_eq!(defs[1].fields.len(), 4);
     }
