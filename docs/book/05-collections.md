@@ -370,6 +370,153 @@ All three forms support the optional `if` filter.
 
 ---
 
+## Higher-Order Methods
+
+Vectors, dicts, sets, and hash maps all support functional-style operations. These
+methods take closures and return new collections — the originals are not modified.
+
+### Vector: map, filter, fold, reduce
+
+```gorget
+auto numbers = [1, 2, 3, 4, 5]
+
+Vector[int] doubled = numbers.map((int x): x * 2)     # [2, 4, 6, 8, 10]
+Vector[int] evens = numbers.filter((int x): x % 2 == 0) # [2, 4]
+int total = numbers.fold(0, (int acc, int x): acc + x) # 15
+int product = numbers.reduce((int a, int b): a * b)    # 120
+```
+
+`fold` takes an initial accumulator value. `reduce` uses the first element as the
+initial value — it panics on an empty vector.
+
+### Vector: any, all
+
+```gorget
+auto numbers = [1, 2, 3, 4, 5]
+
+bool has_even = numbers.any((int x): x % 2 == 0)     # true
+bool all_positive = numbers.all((int x): x > 0)      # true
+```
+
+### Vector: sort, sorted
+
+```gorget
+auto v = [3, 1, 4, 1, 5]
+
+v.sort()                       # in-place: [1, 1, 3, 4, 5]
+auto copy = v.sorted()         # new sorted copy, original unchanged
+```
+
+Elements must implement the `Comparable` trait. All primitive types do.
+
+### Implicit `it` Closures
+
+For single-parameter closures, you can use the implicit `it` parameter:
+
+```gorget
+auto names = ["Alice", "Bob", "Charlie"]
+auto lengths = names.map(it.len())           # [5, 3, 7]
+auto long = names.filter(it.len() > 3)      # ["Alice", "Charlie"]
+```
+
+### Dict and Set
+
+Dicts and sets also support `filter` and `fold`:
+
+```gorget
+auto scores = {"Alice": 90, "Bob": 75, "Carol": 85}
+
+auto passing = scores.filter((String k, int v): v >= 80)
+int total = scores.fold(0, (int acc, String k, int v): acc + v)
+```
+
+Sets support `filter`, `fold`, `any`, and `all`:
+
+```gorget
+from std.collections import Set
+
+Set[int] s = Set[int]()
+s.add(1)
+s.add(2)
+s.add(3)
+
+bool has_even = s.any((int x): x % 2 == 0)   # true
+```
+
+---
+
+## Built-in Functions for Collections
+
+Several functions are available without any import. They work with any collection
+that implements the `Iterable` trait.
+
+### range
+
+Creates a range of integers. Used in `for` loops and comprehensions:
+
+```gorget
+for i in range(5):
+    print(f"{i}")          # 0, 1, 2, 3, 4
+
+for i in range(2, 8):
+    print(f"{i}")          # 2, 3, 4, 5, 6, 7
+```
+
+The range syntax `0..5` is equivalent to `range(0, 5)`.
+
+### enumerate
+
+Iterates with an index:
+
+```gorget
+auto names = ["Alice", "Bob", "Carol"]
+
+for i, name in enumerate(names):
+    print(f"{i}: {name}")
+# 0: Alice
+# 1: Bob
+# 2: Carol
+```
+
+### zip
+
+Combines two collections element-by-element:
+
+```gorget
+auto names = ["Alice", "Bob"]
+auto ages = [30, 25]
+
+for name, age in zip(names, ages):
+    print(f"{name} is {age}")
+# Alice is 30
+# Bob is 25
+```
+
+Stops at the shorter collection.
+
+### map and filter (free functions)
+
+`map` and `filter` are also available as free functions (in addition to methods):
+
+```gorget
+auto doubled = map([1, 2, 3], (int x): x * 2)
+auto evens = filter([1, 2, 3, 4], (int x): x % 2 == 0)
+```
+
+### type
+
+Returns the runtime type name of any value:
+
+```gorget
+int x = 42
+print(type(x))             # "int"
+
+auto v = [1, 2, 3]
+print(type(v))             # "Vector[int]"
+```
+
+---
+
 ## Summary
 
 | Type | Literal | Key Operations |

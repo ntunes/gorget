@@ -30,7 +30,9 @@ need prior exposure to follow along.
 
 5. **[Strings and Collections](05-collections.md)**
    The `String` type (unified, provenance-inferred), f-string interpolation,
-   `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, arrays, tuples, slices, comprehensions.
+   `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, arrays, tuples, slices,
+   comprehensions, higher-order methods (`map`, `filter`, `fold`, `reduce`,
+   `any`, `all`, `sort`), built-in functions (`range`, `enumerate`, `zip`, `type`).
 
 6. **[Structs and Enums](06-structs-enums.md)**
    Defining structs, field access, methods via `equip`, enums with payloads,
@@ -94,10 +96,18 @@ need prior exposure to follow along.
     `with` resources, test filtering, HTML reports.
 
 19. **[The Standard Library](19-stdlib.md)**
-    Tour of `std.*` and `xtd.*` modules: I/O, networking, HTTP, JSON, CSV,
-    crypto, regex, tensors, dataframes, process management.
+    Core `std.*` modules: file system, path ops, OS interface, process management,
+    signals, I/O, terminal colors, type conversions, string formatting, bytes,
+    encoding, math, time/datetime, collections, concurrency (threads, channels,
+    sync primitives), networking (TCP/TLS/UDP), memory allocators.
 
-20. **[Interop and Unsafe](20-interop.md)**
+20. **[The Extended Library](20-xtd.md)**
+    Batteries-included `xtd.*` modules: HTTP client and server, JSON/YAML/TOML/XML/CSV,
+    JSONPath queries, regex, databases (SQLite, InfluxDB), crypto, compression,
+    SSH, P2P, tensors, dataframes, 3D math, graphics (SDL2/OpenGL/Metal/GPU),
+    image processing, audio, ECS, CLI parsing, logging, UUID.
+
+21. **[Interop and Unsafe](21-interop.md)**
     `extern` blocks, calling C from Gorget, `unsafe` blocks, the C backend,
     compilation model.
 

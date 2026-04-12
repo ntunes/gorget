@@ -1,14 +1,40 @@
 # The Standard Library
 
-Gorget ships with a comprehensive standard library split into two namespaces:
-`std.*` for core utilities and `xtd.*` for domain-specific libraries. This chapter
-is a tour, not a reference — it shows what's available and how to get started.
+Gorget's `std.*` namespace provides the core building blocks you reach for in every
+program: file I/O, networking, concurrency, string manipulation, math, and system
+interfaces. These modules have no external dependencies beyond libc — they're always
+available and always lightweight.
+
+For the domain-specific "batteries included" libraries (HTTP, JSON, databases,
+graphics, etc.), see [Chapter 20 — The Extended Library](20-xtd.md).
+
+For full method signatures, see the [Language Reference](../language-reference.md) §15.
 
 ---
 
-## Core: `std.*`
+## Built-in Functions (no import needed)
 
-### File System (`std.fs`)
+Before diving into modules, remember that several functions are available everywhere
+without any import:
+
+| Function | Description |
+|----------|-------------|
+| `print(s)` | Print to stdout with newline |
+| `len(x)` | Length of any `Measurable` |
+| `range(start, end)` | Create an integer range (also `0..5` syntax) |
+| `enumerate(collection)` | Iterate with `(index, element)` pairs |
+| `zip(a, b)` | Combine two collections element-by-element |
+| `map(collection, fn)` | Transform elements |
+| `filter(collection, fn)` | Filter elements |
+| `type(value)` | Runtime type name as `String` |
+| `panic(msg)` | Abort with message |
+
+These work with any type that implements `Iterable`. See
+[Chapter 5](05-collections.md) for usage examples.
+
+---
+
+## File System (`std.fs`)
 
 ```gorget
 from std.fs import read_file, write_file, file_exists, mkdir
@@ -22,10 +48,11 @@ if file_exists("data.json"):
 mkdir("logs")
 ```
 
-Key functions: `read_file`, `write_file`, `append_file`, `file_exists`,
-`delete_file`, `mkdir`, `rmdir`, `rename`, `copy_file`, `file_size`, `is_dir`.
+Key functions: `read_file`, `read_file_bytes`, `write_file`, `write_file_bytes`,
+`append_file`, `file_exists`, `delete_file`, `mkdir`, `rmdir`, `rename`,
+`copy_file`, `file_size`, `is_dir`, `readdir`.
 
-### Path Operations (`std.path`)
+## Path Operations (`std.path`)
 
 ```gorget
 from std.path import path_join, path_basename, path_extension
@@ -35,9 +62,9 @@ String base = path_basename(full)       # "readme.md"
 String ext = path_extension(full)       # "md"
 ```
 
-Also: `path_parent`, `path_stem`, `path_normalize`.
+Also: `path_parent`, `path_stem`, `path_normalize`, `path_absolute`.
 
-### OS Interface (`std.os`)
+## OS Interface (`std.os`)
 
 ```gorget
 from std.os import getenv, getcwd, args, platform, exit
@@ -52,51 +79,9 @@ if argv.len() < 2:
     exit(1)
 ```
 
-### Type Conversions (`std.conv`)
+Also: `setenv`, `mem_allocated`, `mem_freed`, `mem_live` (live allocation tracking).
 
-```gorget
-from std.conv import int_to_str, parse_int, parse_float, ord, chr
-
-String s = int_to_str(42)          # "42"
-int n = parse_int("100")        # 100
-String c = chr(65)              # "A"
-int code = ord('A')             # 65
-```
-
-### Math (`std.math`)
-
-```gorget
-from std.math import sqrt, pow, sin, cos, abs, min, max, floor, ceil
-
-float root = sqrt(2.0)          # 1.414...
-float area = pow(radius, 2.0) * 3.14159
-int smaller = min(a, b)
-float rounded = floor(3.7)      # 3.0
-```
-
-Also: `log`, `log2`, `log10`, `tan`, `asin`, `acos`, `atan`, `atan2`, `round`.
-
-### Time (`std.time`)
-
-```gorget
-from std.time import time, time_ms, sleep_ms
-
-int now = time()               # Unix timestamp (seconds)
-int precise = time_ms()        # milliseconds
-sleep_ms(100)                  # sleep 100ms
-```
-
-### Random (`std.random`)
-
-```gorget
-from std.random import rand, seed, rand_range
-
-seed(42)
-int n = rand()                 # random int
-int die = rand_range(1, 7)     # 1..6 inclusive
-```
-
-### Process Execution (`std.process`)
+## Process Execution (`std.process`)
 
 ```gorget
 from std.process import exec, exec_output, ExecResult
@@ -119,28 +104,199 @@ String output = proc.read_stdout()
 proc.kill()
 ```
 
-### I/O (`std.io`)
+Also: `getpid`, `wait`, `wait_timeout`, `read_all`, `read_stderr`.
+
+## Signal Handling (`std.signal`)
 
 ```gorget
-from std.io import readline, input
+from std.signal import signal_trap, signal_check, SIGINT, SIGTERM
+
+signal_trap(SIGINT)
+signal_trap(SIGTERM)
+
+# ... main loop ...
+if signal_check(SIGINT):
+    print("interrupted!")
+```
+
+Also: `signal_wait`, `signal_ignore`, `signal_reset`, `signal_send`.
+
+Constants: `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGABRT`, `SIGKILL`, `SIGUSR1`,
+`SIGUSR2`, `SIGPIPE`, `SIGALRM`, `SIGTERM`, `SIGCHLD`.
+
+---
+
+## I/O and Terminal
+
+### Standard I/O (`std.io`)
+
+```gorget
+from std.io import readline, input, stderr
 
 String line = readline()              # read line from stdin
 String name = input("Your name: ")   # prompt + read
 ```
 
-### Collections (`std.collections`)
+Also: `stdout`, `stderr` (static `File` handles), `getchar`, `stdin_eof`,
+`term_cols`, `term_rows`.
+
+### Terminal Colors (`std.term`)
+
+```gorget
+from std.term import red, green, bold, is_tty
+
+if is_tty():
+    print(bold(green("SUCCESS")) + " all tests passed")
+    print(red("ERROR") + " something went wrong")
+```
+
+Colors: `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`.
+Styles: `bold`, `dim`, `underline`. Also: `strip_ansi`.
+
+---
+
+## Text and Data
+
+### Type Conversions (`std.conv`)
+
+```gorget
+from std.conv import int_to_str, parse_int, parse_float, ord, chr, int_to_float
+
+String s = int_to_str(42)                  # "42"
+Result[int, String] n = parse_int("100")   # Ok(100)
+String c = chr(65)                         # "A"
+int code = ord("A")                        # 65
+float f = int_to_float(42)                 # 42.0
+```
+
+Also: `float_to_str`, `bool_to_str`, `codepoint_to_str`.
+
+### String Formatting (`std.fmt`)
+
+```gorget
+from std.fmt import pad_left, pad_right, center, join, str_truncate
+
+String padded = pad_left("42", 6, "0")      # "000042"
+String centered = center("title", 20, "-")   # "-------title--------"
+String joined = join(["a", "b", "c"], ", ")  # "a, b, c"
+String short = str_truncate("hello world", 8, "...")  # "hello..."
+```
+
+Also: `repeat`.
+
+### Bytes and Binary (`std.bytes`)
+
+```gorget
+from std.bytes import bytes_from_str, bytes_to_hex, base64_encode, base64_decode
+
+Vector[uint8] raw = bytes_from_str("hello")
+String hex = bytes_to_hex(raw)               # "68656c6c6f"
+String b64 = base64_encode(raw)              # "aGVsbG8="
+
+auto decoded = base64_decode(b64).unwrap()   # back to raw bytes
+```
+
+Also: `bytes_to_str` (with UTF-8 validation), `bytes_from_hex`,
+`bytes_concat`, `bytes_slice`, `random_bytes`, big/little-endian
+read/write helpers (`bytes_read_u32_be`, `bytes_write_u16_le`, etc.).
+
+### Text Encoding (`std.encoding`)
+
+```gorget
+from std.encoding import url_encode, url_decode, html_escape
+
+String encoded = url_encode("hello world!")   # "hello%20world%21"
+String safe = html_escape("<script>alert('xss')</script>")
+
+from std.encoding import latin1_encode, latin1_decode
+auto bytes = latin1_encode("cafe").unwrap()
+```
+
+Also: `form_encode`, `form_decode`, `html_unescape`, `utf8_len`,
+`utf8_codepoints`, `utf8_is_valid`, `utf8_char_at`.
+
+---
+
+## Math and Random
+
+### Math (`std.math`)
+
+```gorget
+from std.math import sqrt, pow, sin, cos, abs, min, max, floor, ceil
+
+float root = sqrt(2.0)          # 1.414...
+float area = pow(radius, 2.0) * 3.14159
+int smaller = min(a, b)
+float rounded = floor(3.7)      # 3.0
+```
+
+Also: `log`, `log2`, `log10`, `tan`, `asin`, `acos`, `atan`, `atan2`, `round`.
+
+Constants: `PI`, `E`, `TAU`, `INFINITY`, `NAN`.
+
+### Random (`std.random`)
+
+```gorget
+from std.random import rand, seed, rand_range
+
+seed(42)
+int n = rand()                 # random int
+int die = rand_range(1, 7)     # 1..6 inclusive
+```
+
+---
+
+## Time
+
+### Timestamps (`std.time`)
+
+```gorget
+from std.time import time, time_ms, sleep_ms, format_time
+
+int now = time()               # Unix timestamp (seconds)
+int precise = time_ms()        # milliseconds
+sleep_ms(100)                  # sleep 100ms
+String formatted = format_time(now, "%Y-%m-%d %H:%M:%S")
+```
+
+For async code, use `sleep(seconds)` which suspends without blocking the thread.
+
+### Calendar (`std.datetime`)
+
+```gorget
+from std.datetime import DateTime
+
+DateTime now = DateTime.now()
+DateTime utc = DateTime.utc_now()
+print(now.to_string())           # "2026-04-12T14:30:00+01:00"
+
+DateTime tomorrow = now.add_days(1)
+int diff = tomorrow.diff_seconds(now)   # 86400
+
+String pretty = now.format("YYYY-MM-DD")
+int day = now.weekday()          # 0=Monday, 6=Sunday
+```
+
+Also: `from_epoch`, `from_epoch_utc`, `add_seconds`, `add_hours`,
+`add_minutes`, `day_of_year`, `to_epoch`.
+
+---
+
+## Collections
+
+### Core Types (`std.collections`)
 
 Beyond the prelude types (`Vector`, `Dict`):
 
 ```gorget
-from std.collections import HashMap, Set, Box
+from std.collections import HashMap, Set, HashSet, Box
 
 HashMap[String, int] map = HashMap[String, int]()
 Set[int] unique = Set[int]()
 Box[int] heap_val = Box(42)
 ```
 
-### Heap / Priority Queue (`std.heap`)
+### Priority Queue (`std.heap`)
 
 ```gorget
 from std.heap import Heap
@@ -157,138 +313,148 @@ Min-heap by default. Elements must implement `Comparable`.
 
 ---
 
-## Domain Libraries: `xtd.*`
+## Concurrency
 
-### HTTP Client (`xtd.http`)
-
-```gorget
-from xtd.http import get, post, HttpResponse
-
-HttpResponse resp = get("https://api.example.com/data")
-print(f"{resp.status_code}")
-print(resp.body_text)
-
-HttpResponse resp2 = post("https://api.example.com/submit", body)
-```
-
-Pure Gorget implementation — no C dependencies. Supports TLS.
-
-### HTTP Server (`xtd.httpserver`)
+### Threads (`std.thread`)
 
 ```gorget
-from xtd.httpserver import Server, Request, Response
+from std.thread import thread_spawn, current_thread_id
 
-async void main():
-    Server s = Server()
-    s.get("/", (Request req): Response.ok("Hello!"))
-    s.get("/users/:id", handle_user)
-    s.listen(8080)
+auto handle = thread_spawn(():
+    print("hello from thread")
+    42
+)
+int result = handle.join()     # blocks until thread finishes -> 42
 ```
 
-Features: routing, middleware, query string parsing, JSON body parsing, static
-files, keep-alive.
-
-### JSON (`xtd.json`)
+### Channels (`std.channel`)
 
 ```gorget
-from xtd.json import json_parse, json_stringify, Json
+from std.channel import Channel
 
-Json doc = json_parse("{\"name\": \"Alice\", \"age\": 30}")
-String name = doc["name"].as_str()
-int age = doc["age"].as_int()
+Channel[int] ch = Channel[int](10)    # buffered, capacity 10
 
-String output = json_stringify(doc)
+# producer
+ch.send(42)
+
+# consumer
+int val = ch.recv()
+ch.close()
 ```
 
-### Serialization
+MPSC (multi-producer, single-consumer). Also: `recv_timeout`, `is_closed`, `len`.
 
-For automatic JSON conversion, use `@derive`:
+### Synchronization Primitives (`std.sync`)
 
 ```gorget
-@derive(Serializable, Deserializable)
-struct User:
-    String name
-    int age
+from std.sync import AtomicInt, Barrier, WaitGroup, Semaphore, RWLock
 
-User u = User("Alice", 30)
-String json = serialize(u)
-User u2 = deserialize[User](json)
+AtomicInt counter = AtomicInt()
+counter.add(1)
+int val = counter.load()
+
+WaitGroup wg = WaitGroup()
+wg.add(3)
+# ... spawn 3 tasks, each calls wg.done() ...
+wg.wait()
 ```
 
-### CSV (`xtd.csv`)
+Also: `AtomicBool`, `CondVar`, `OnceFlag`, `ReadGuard`, `WriteGuard`.
+
+---
+
+## Networking
+
+### TCP (`std.net.socket`)
 
 ```gorget
-from xtd.csv import parse_table
+from std.net.socket import socket_connect, server_socket_bind
 
-Vector[Vector[String]] rows = parse_table(csv_text)
-for row in rows:
-    print(f"{row[0]}, {row[1]}")
+auto conn = socket_connect("example.com", 80).unwrap()
+conn.write_str("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+String response = conn.read_line().unwrap()
+conn.close()
 ```
 
-### YAML / TOML / XML
+Server side:
 
 ```gorget
-from xtd.yaml import yaml_parse
-from xtd.toml import toml_parse
-from xtd.xml import xml_parse, xml_query
+auto srv = server_socket_bind("0.0.0.0", 8080).unwrap()
+auto client = srv.accept().unwrap()
 ```
 
-All parsers return structured data that can be queried and traversed.
+Also: `read`, `read_exact`, `set_timeout`, async variants (`nb_read`, `nb_write`,
+`nb_accept`).
 
-### Database (`xtd.db`, `xtd.sqlite`)
+### TLS (`std.net.tls`)
 
 ```gorget
-from xtd.sqlite import sqlite_connect
-from xtd.db import Row, Param
+from std.net.tls import tls_connect
 
-auto db = sqlite_connect("app.db").unwrap()
-db.exec_simple("CREATE TABLE users (name TEXT, age INTEGER)")
-Vector[Row] rows = db.query_raw("SELECT * FROM users", Vector[Param]()).unwrap()
+auto conn = tls_connect("example.com", 443).unwrap()
+conn.write_str("GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+String line = conn.read_line().unwrap()
+conn.close()
 ```
 
-### Logging (`xtd.log`)
+Also: `tls_server_bind` (TLS server with cert/key), `read`, `read_exact`,
+`set_timeout`.
+
+### UDP (`std.net.udp`)
 
 ```gorget
-from xtd.log import log_info, log_warn, log_error
+from std.net.udp import udp_bind, UdpPacket
 
-log_info("server started on port 8080")
-log_warn("disk usage above 80%")
-log_error(f"connection failed: {reason}")
+auto sock = udp_bind("0.0.0.0", 5000).unwrap()
+sock.sendto(bytes_from_str("ping"), "127.0.0.1", 5001)
+
+UdpPacket pkt = sock.recvfrom(1024).unwrap()
+print(f"from {pkt.sender.host}:{pkt.sender.port}")
 ```
 
-### UUID (`xtd.uuid`)
+Also: `join_multicast`, `leave_multicast`, `poll`, `set_nonblocking`.
+
+---
+
+## Memory Allocators (`std.alloc`)
+
+Custom allocators for performance-critical or embedded code:
 
 ```gorget
-from xtd.uuid import uuid4
+from std.alloc import Arena, PoolAllocator, TrackingAllocator
 
-String id = uuid4()    # "550e8400-e29b-41d4-a716-446655440000"
+Arena a = Arena()
+# ... allocate within the arena ...
+auto cp = a.checkpoint()
+# ... more allocations ...
+a.restore(cp)                  # free everything since checkpoint
+a.destroy()
 ```
 
-### SSH (`xtd.ssh`)
+Five allocator types:
 
-```gorget
-from xtd.ssh import ssh_connect
-
-auto client = ssh_connect("host", 22, "user", "key.pem").unwrap()
-auto result = client.exec("ls -la").unwrap()
-print(result)
-```
+| Type | Use case |
+|------|----------|
+| `Arena` | Bulk allocate, checkpoint/restore, reset all at once |
+| `PoolAllocator` | Fixed-size blocks — game entities, packet buffers |
+| `TrackingAllocator` | Count allocations, track peak usage, find leaks |
+| `TlsfAllocator` | Real-time — O(1) alloc/free with low fragmentation |
+| `FixedBufferAllocator` | Stack-like allocation within a fixed buffer |
+| `FallbackAllocator` | Try primary allocator, fall back to secondary |
 
 ---
 
 ## Summary
 
-The standard library covers:
-
 | Area | Modules |
 |------|---------|
-| Core I/O | `std.fs`, `std.io`, `std.path` |
-| System | `std.os`, `std.process`, `std.time` |
-| Data | `std.collections`, `std.heap`, `std.bytes` |
-| Utilities | `std.conv`, `std.math`, `std.random`, `std.fmt` |
-| Networking | `xtd.http`, `xtd.httpserver`, `xtd.ssh`, `xtd.p2p` |
-| Data formats | `xtd.json`, `xtd.csv`, `xtd.yaml`, `xtd.toml`, `xtd.xml` |
-| Storage | `xtd.db`, `xtd.sqlite`, `xtd.influx` |
-| Applications | `xtd.cli`, `xtd.uuid`, `xtd.log`, `xtd.ecs`, `xtd.gfx` |
-
-Everything is pure Gorget unless noted. No C dependencies for the core modules.
+| File system | `std.fs`, `std.path` |
+| System | `std.os`, `std.process`, `std.signal` |
+| I/O & terminal | `std.io`, `std.term` |
+| Time | `std.time`, `std.datetime` |
+| Data structures | `std.collections`, `std.heap` |
+| Text & encoding | `std.conv`, `std.fmt`, `std.bytes`, `std.encoding` |
+| Math | `std.math`, `std.random` |
+| Concurrency | `std.thread`, `std.sync`, `std.channel`, `std.async` |
+| Networking | `std.net.socket`, `std.net.tls`, `std.net.udp` |
+| Memory | `std.alloc` |
