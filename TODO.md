@@ -19,7 +19,7 @@
 
 - **GIR call resolution confuses functions with similar first-param types**: Reported but could NOT reproduce with targeted multi-file test cases. Original symptom (ownership mismatch for variable not in scope) disappeared after code restructuring. May have been a transient issue from specific code patterns. Keep as low-priority — reopen if it recurs with a reproducible case. Root cause may be in `fn_sigs` lookup or borrow checker scope handling in multi-file compilation. [updated: 2026-04-08]
 
-- **float(x) cast codegen bug**: `float(x)` emits `CallExtern("float", [x])` which clashes with C keyword. Workaround: C backend intercepts and emits `(double)x`. But LIR types the result as I64 (wrong — should be F64), so the value is truncated to 0 when stored. Fix: resolve `float()` as IntToFloat instruction in the GIR lowering, not as a function call. [added: 2026-04-12]
+- ~~**float(x) cast codegen bug**~~: FIXED. C backend intercepts float/int/bool CallExtern and emits inline casts. infer_inst_type overrides return types (float→F64, int→I64, bool→Bool). [fixed: 2026-04-12]
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 
