@@ -1522,6 +1522,7 @@ mod tests {
                 name: "puts".into(),
                 args: vec![],
                 original_name: None,
+                arg_abis: vec![],
             },
             Inst::Printf {
                 fmt: "hello\n".into(),

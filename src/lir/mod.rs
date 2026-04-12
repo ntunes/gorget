@@ -292,7 +292,7 @@ pub enum Inst {
     /// Call to an external (C) function by name.
     /// `original_name` preserves the pre-mapping GIR name (e.g., "Vector__GorgetArray__push")
     /// so the C backend can determine element types for drop function assignment.
-    CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId>, original_name: Option<String> },
+    CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId>, original_name: Option<String>, arg_abis: Vec<crate::ir::abi::AbiKind> },
     /// Indirect call through a function pointer.
     CallPtr { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId> },
 

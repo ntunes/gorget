@@ -64,13 +64,13 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: "gorget_array_clone".to_string(),
                         args: vec![l],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None,
                         name: "gorget_array_extend".to_string(),
                         args: vec![result, r],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     self.store_to_local(*dst, result, bb);
                 } else {
@@ -171,7 +171,7 @@ impl<'a> FuncLowering<'a> {
                             dst: Some(cstr_result),
                             name: "gorget_str_from_cstr".to_string(),
                             args: vec![val],
-                            original_name: None,
+                            original_name: None, arg_abis: vec![],
                         });
                         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
                         self.store_to_local(*dst, cstr_result, bb);
@@ -192,7 +192,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(cstr_result),
                         name: conv_fn.to_string(),
                         args: vec![val],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     let str_ty = if let Some(sid) = self.struct_reg.lookup("Str") { LirType::Struct(sid) } else { LirType::Ptr };
                     self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &str_ty);
@@ -638,7 +638,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: fn_name.to_string(),
                         args: vec![base_val, start, end],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_str {
@@ -654,7 +654,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(result),
                         name: "gorget_str_index".to_string(),
                         args: vec![base_val, idx],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_array || is_dict {
@@ -685,7 +685,7 @@ impl<'a> FuncLowering<'a> {
                         dst: Some(ptr_val),
                         name: fn_name.to_string(),
                         args: vec![base_val, idx],
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                     // gorget_array_get / gorget_map_get return void* pointing to the element.
                     // If dst is Ptr(T), return the raw pointer (borrowed reference).
@@ -753,7 +753,7 @@ impl<'a> FuncLowering<'a> {
                             dst: Some(result),
                             name: actual_fn.to_string(),
                             args: vec![ptr_val],
-                            original_name: None,
+                            original_name: None, arg_abis: vec![],
                         });
                         self.store_to_local(*dst, result, bb);
                     } else {
@@ -770,7 +770,7 @@ impl<'a> FuncLowering<'a> {
                                 dst: Some(result),
                                 name: clone_fn,
                                 args: vec![ptr_val],
-                                original_name: None,
+                                original_name: None, arg_abis: vec![],
                             });
                             self.store_to_local(*dst, result, bb);
                         } else {
@@ -1179,7 +1179,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: "__gorget_alloc".into(),
                     args: vec![alloc],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -1197,7 +1197,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: "__gorget_alloc_array".into(),
                     args: vec![cnt, alloc],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -1209,7 +1209,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_dealloc".into(),
                     args: vec![p, a],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
             }
 
@@ -1219,7 +1219,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(result),
                     name: format!("__gorget_tls_{name}"),
                     args: vec![],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -1230,7 +1230,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_push_allocator".into(),
                     args: vec![alloc],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
             }
 
@@ -1239,7 +1239,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: "__gorget_pop_allocator".into(),
                     args: vec![],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
             }
 
@@ -1392,7 +1392,7 @@ impl<'a> FuncLowering<'a> {
                         dst: result,
                         name: func.clone(),
                         args: lir_args,
-                        original_name: None,
+                        original_name: None, arg_abis: vec![],
                     });
                 }
 
@@ -1689,7 +1689,7 @@ impl<'a> FuncLowering<'a> {
                     dst: None,
                     name: to_name,
                     args: lir_args,
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
                 return;
             }
@@ -1749,11 +1749,20 @@ impl<'a> FuncLowering<'a> {
 
         let is_void_ret = matches!(ret_ty, LirType::Void);
         let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
+
+        // Look up ABI tags from the extern declaration (populated by ensure_extern
+        // from runtime_extern_sig's explicit tags or user-declared extern "C" annotations).
+        let call_arg_abis = self.pending_externs.iter()
+            .find(|e| e.name == actual_emit_name)
+            .map(|e| e.param_abis.clone())
+            .unwrap_or_default();
+
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
             args: lir_args,
             original_name: Some(effective_original_name),
+            arg_abis: call_arg_abis,
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);
@@ -1956,7 +1965,7 @@ impl<'a> FuncLowering<'a> {
                     dst: Some(str_result),
                     name: "gorget_bool_to_str".to_string(),
                     args: vec![bool_val],
-                    original_name: None,
+                    original_name: None, arg_abis: vec![],
                 });
                 // Store result to slot
                 self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {

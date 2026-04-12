@@ -1487,6 +1487,36 @@ pub(super) fn emit_abi_arg(
             write!(out, "{val}").unwrap();
             true
         }
+        AbiKind::VoidElem => {
+            // void* element parameter: wrap non-pointer values with &(Type){val}.
+            if is_str_lit {
+                // StrLit (const char*) → take address for memcpy: &__vN.
+                write!(out, "&{val}").unwrap();
+            } else if is_ptr {
+                // Already a pointer (SlotAddr, gorget_array_get result, etc.) — pass through.
+                write!(out, "{val}").unwrap();
+            } else if is_struct {
+                // Struct value — take its address directly.
+                write!(out, "&{val}").unwrap();
+            } else {
+                // Scalar — compound literal with the correct type to preserve bits.
+                let c_ty = match arg_ty {
+                    Some(LirType::F64) => "double",
+                    Some(LirType::F32) => "float",
+                    Some(LirType::Bool) => "_Bool",
+                    Some(LirType::I32) => "int32_t",
+                    Some(LirType::I16) => "int16_t",
+                    Some(LirType::I8)  => "int8_t",
+                    Some(LirType::U8)  => "uint8_t",
+                    Some(LirType::U16) => "uint16_t",
+                    Some(LirType::U32) => "uint32_t",
+                    Some(LirType::U64) => "uint64_t",
+                    _ => "int64_t",
+                };
+                write!(out, "&({c_ty}){{{val}}}").unwrap();
+            }
+            true
+        }
         AbiKind::Auto => false, // fall back to existing logic
     }
 }

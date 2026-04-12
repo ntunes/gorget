@@ -1,6 +1,7 @@
 //! Call and extern dispatch helpers for GIR → LIR lowering.
 
 use super::*;
+use crate::ir::abi::AbiKind;
 
 /// Printf argument type — used to select the correct format specifier.
 #[derive(Clone, Copy, PartialEq)]
@@ -121,255 +122,284 @@ pub(super) fn map_cmp_op(op: GirCmpOp) -> CmpOp {
     }
 }
 
-/// Return canonical (params, return_type) for known Gorget runtime functions.
+/// Canonical signature for a known Gorget runtime function.
+pub(super) struct RuntimeSig {
+    pub params: Vec<LirType>,
+    pub ret: LirType,
+    pub param_abis: Vec<AbiKind>,
+}
+
+/// Return canonical signature + ABI tags for known Gorget runtime functions.
 /// This prevents call-site inference from producing wrong parameter types
 /// (e.g. GorgetString instead of Str for gorget_str_* functions).
-pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<(Vec<LirType>, LirType)> {
+pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<RuntimeSig> {
+    use AbiKind::*;
     let str_ty = || sr.lookup("GorgetString").map(LirType::Struct).unwrap_or(LirType::Ptr);
     let arr_ty = || sr.lookup("GorgetArray").map(LirType::Struct).unwrap_or(LirType::Ptr);
     let s = str_ty;
     let g = str_ty;
 
+    // Shorthand: plain signature with all-Auto ABI tags (migration shim for non-collection fns).
+    let auto = |params: Vec<LirType>, ret: LirType| -> Option<RuntimeSig> {
+        let n = params.len();
+        Some(RuntimeSig { params, ret, param_abis: vec![Auto; n] })
+    };
+    // Shorthand: signature with explicit ABI tags.
+    let sig = |params: Vec<LirType>, ret: LirType, abis: Vec<AbiKind>| -> Option<RuntimeSig> {
+        Some(RuntimeSig { params, ret, param_abis: abis })
+    };
+
     match name {
         // String concatenation and conversion
-        "gorget_str_cat" => Some((vec![s(), s()], g())),
-        "gorget_str_eq" => Some((vec![s(), s()], LirType::Bool)),
-        "gorget_str_cmp" => Some((vec![s(), s()], LirType::I64)),
-        "gorget_str_from_cstr" => Some((vec![LirType::Ptr], s())),
-        "gorget_str_to_cstr" => Some((vec![s()], LirType::Ptr)),
-        "gorget_str_empty" => Some((vec![], s())),
-        "gorget_str_index" => Some((vec![s(), LirType::I64], s())),
-        "gorget_str_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
-        "gorget_str_byte_slice" => Some((vec![s(), LirType::I64, LirType::I64], s())),
-        "gorget_str_char_at" => Some((vec![s(), LirType::I64], s())),
-        "gorget_str_codepoint_at" => Some((vec![s(), LirType::I64], s())),
-        "gorget_utf8_codepoint_len_at" => Some((vec![s(), LirType::I64], LirType::I64)),
-        "gorget_str_byte_at" => Some((vec![s(), LirType::I64], LirType::U8)),
-        "gorget_str_byte_len" => Some((vec![s()], LirType::I64)),
-        "gorget_str_codepoint_count" => Some((vec![s()], LirType::I64)),
-        "gorget_str_is_empty" => Some((vec![s()], LirType::Bool)),
-        "gorget_str_contains" => Some((vec![s(), s()], LirType::Bool)),
-        "gorget_str_starts_with" => Some((vec![s(), s()], LirType::Bool)),
-        "gorget_str_ends_with" => Some((vec![s(), s()], LirType::Bool)),
-        "gorget_str_find" => Some((vec![s(), s()], LirType::I64)),
-        "gorget_str_index_of" => Some((vec![s(), s()], LirType::I64)),
-        "gorget_str_count" => Some((vec![s(), s()], LirType::I64)),
-        "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" => Some((vec![s()], s())),
-        "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip" => Some((vec![s(), s()], s())),
-        "gorget_str_removeprefix" | "gorget_str_removesuffix" => Some((vec![s(), s()], s())),
-        "gorget_str_to_upper" | "gorget_str_to_lower" => Some((vec![s()], g())),
-        "gorget_str_replace" => Some((vec![s(), s(), s()], g())),
-        "gorget_str_repeat" => Some((vec![s(), LirType::I64], g())),
-        "gorget_str_pad_left" | "gorget_str_pad_right" => Some((vec![s(), LirType::I64, s()], g())),
+        "gorget_str_cat" => auto(vec![s(), s()], g()),
+        "gorget_str_eq" => auto(vec![s(), s()], LirType::Bool),
+        "gorget_str_cmp" => auto(vec![s(), s()], LirType::I64),
+        "gorget_str_from_cstr" => auto(vec![LirType::Ptr], s()),
+        "gorget_str_to_cstr" => auto(vec![s()], LirType::Ptr),
+        "gorget_str_empty" => auto(vec![], s()),
+        "gorget_str_index" => auto(vec![s(), LirType::I64], s()),
+        "gorget_str_slice" => auto(vec![s(), LirType::I64, LirType::I64], s()),
+        "gorget_str_byte_slice" => auto(vec![s(), LirType::I64, LirType::I64], s()),
+        "gorget_str_char_at" => auto(vec![s(), LirType::I64], s()),
+        "gorget_str_codepoint_at" => auto(vec![s(), LirType::I64], s()),
+        "gorget_utf8_codepoint_len_at" => auto(vec![s(), LirType::I64], LirType::I64),
+        "gorget_str_byte_at" => auto(vec![s(), LirType::I64], LirType::U8),
+        "gorget_str_byte_len" => auto(vec![s()], LirType::I64),
+        "gorget_str_codepoint_count" => auto(vec![s()], LirType::I64),
+        "gorget_str_is_empty" => auto(vec![s()], LirType::Bool),
+        "gorget_str_contains" => auto(vec![s(), s()], LirType::Bool),
+        "gorget_str_starts_with" => auto(vec![s(), s()], LirType::Bool),
+        "gorget_str_ends_with" => auto(vec![s(), s()], LirType::Bool),
+        "gorget_str_find" => auto(vec![s(), s()], LirType::I64),
+        "gorget_str_index_of" => auto(vec![s(), s()], LirType::I64),
+        "gorget_str_count" => auto(vec![s(), s()], LirType::I64),
+        "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" => auto(vec![s()], s()),
+        "gorget_str_strip" | "gorget_str_lstrip" | "gorget_str_rstrip" => auto(vec![s(), s()], s()),
+        "gorget_str_removeprefix" | "gorget_str_removesuffix" => auto(vec![s(), s()], s()),
+        "gorget_str_to_upper" | "gorget_str_to_lower" => auto(vec![s()], g()),
+        "gorget_str_replace" => auto(vec![s(), s(), s()], g()),
+        "gorget_str_repeat" => auto(vec![s(), LirType::I64], g()),
+        "gorget_str_pad_left" | "gorget_str_pad_right" => auto(vec![s(), LirType::I64, s()], g()),
         "gorget_str_is_alpha" | "gorget_str_is_digit" | "gorget_str_is_alphanumeric"
         | "gorget_str_is_whitespace" | "gorget_str_is_upper" | "gorget_str_is_lower"
         | "gorget_str_is_hex_digit" | "gorget_str_is_ascii" | "gorget_str_has_null" => {
-            Some((vec![s()], LirType::Bool))
+            auto(vec![s()], LirType::Bool)
         }
-        "gorget_str_split" => Some((vec![s(), s()], arr_ty())),
-        "gorget_str_join" => Some((vec![s(), arr_ty()], g())),
+        "gorget_str_split" => auto(vec![s(), s()], arr_ty()),
+        "gorget_str_join" => auto(vec![s(), arr_ty()], g()),
         "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_chars" => {
-            Some((vec![s()], arr_ty()))
+            auto(vec![s()], arr_ty())
         }
         // GorgetString methods
-        "gorget_string_new" => Some((vec![LirType::Ptr], g())),
-        "gorget_string_from_str" => Some((vec![s()], g())),
-        "gorget_string_clone" => Some((vec![LirType::Ptr], g())),
-        "gorget_string_clone_to_owned" => Some((vec![LirType::Ptr], g())),
-        "gorget_string_free" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_string_eq" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
-        "gorget_string_cstr" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_string_concat" => Some((vec![LirType::Ptr, LirType::Ptr], g())),
-        "gorget_string_append" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_str_str" => Some((vec![s(), s()], s())),
+        "gorget_string_new" => auto(vec![LirType::Ptr], g()),
+        "gorget_string_from_str" => auto(vec![s()], g()),
+        "gorget_string_clone" => auto(vec![LirType::Ptr], g()),
+        "gorget_string_clone_to_owned" => auto(vec![LirType::Ptr], g()),
+        "gorget_string_free" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_string_eq" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Bool),
+        "gorget_string_cstr" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_string_concat" => auto(vec![LirType::Ptr, LirType::Ptr], g()),
+        "gorget_string_append" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
+        "gorget_str_str" => auto(vec![s(), s()], s()),
         // (gorget_str_slice handled above, from Str__substring → gorget_str_slice mapping)
-        "gorget_str_from_literal" => Some((vec![LirType::Ptr, LirType::I64], s())),
+        "gorget_str_from_literal" => auto(vec![LirType::Ptr, LirType::I64], s()),
         "gorget_str_from_int" | "gorget_str_from_float" | "gorget_str_from_bool" => {
-            Some((vec![LirType::I64], s()))
+            auto(vec![LirType::I64], s())
         }
 
         // Collection methods
-        "gorget_array_new" => Some((vec![LirType::I64], arr_ty())),
-        "gorget_array_with_capacity" => Some((vec![LirType::I64, LirType::I64], arr_ty())),
+        "gorget_array_new" => auto(vec![LirType::I64], arr_ty()),
+        "gorget_array_with_capacity" => auto(vec![LirType::I64, LirType::I64], arr_ty()),
+        // ── Collection functions — explicit ABI tags ──
         "gorget_array_push" => {
-            Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void))
+            // void gorget_array_push(GorgetArray* arr, const void* elem)
+            sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem])
         }
         "gorget_array_set" | "gorget_array_insert" => {
-            // C signature: void gorget_array_set(void* arr, size_t idx, void* val)
-            Some((vec![LirType::Ptr, LirType::I64, LirType::Ptr], LirType::Void))
+            // void gorget_array_set(GorgetArray* arr, size_t idx, const void* val)
+            sig(vec![LirType::Ptr, LirType::I64, LirType::Ptr], LirType::Void, vec![Ptr, Scalar, VoidElem])
         }
         "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
         | "gorget_array_safe_get" => {
-            Some((vec![LirType::Ptr, LirType::I64], LirType::Ptr))
+            sig(vec![LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, Scalar])
         }
         "gorget_array_safe_pop" => {
-            Some((vec![LirType::Ptr], LirType::Ptr))
+            sig(vec![LirType::Ptr], LirType::Ptr, vec![Ptr])
         }
-        "gorget_array_remove" => Some((vec![LirType::Ptr, LirType::I64], LirType::Void)),
-        "gorget_array_remove_opt" => Some((vec![LirType::Ptr, LirType::I64], LirType::Ptr)),
-        "gorget_array_len" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_array_contains" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Bool)),
-        "gorget_array_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
-        "gorget_array_index_of" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
-        "gorget_array_binary_search" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
+        "gorget_array_remove" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
+        "gorget_array_remove_opt" => sig(vec![LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, Scalar]),
+        "gorget_array_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
+        // gorget_array_contains(arr*, elem*, elem_size)
+        "gorget_array_contains" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Bool, vec![Ptr, VoidElem, Scalar]),
+        "gorget_array_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
+        "gorget_array_index_of" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::I64, vec![Ptr, VoidElem]),
+        "gorget_array_binary_search" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::I64, vec![Ptr, VoidElem]),
         "gorget_array_clear" | "gorget_array_free" | "gorget_array_reverse"
         | "gorget_array_dedup" | "gorget_array_extend" | "gorget_array_reserve" => {
-            Some((vec![LirType::Ptr], LirType::Void))
+            sig(vec![LirType::Ptr], LirType::Void, vec![Ptr])
         }
-        "gorget_array_clone" | "gorget_array_slice" => Some((vec![LirType::Ptr], arr_ty())),
+        "gorget_array_clone" | "gorget_array_slice" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
         // Map methods (unordered)
-        "gorget_map_new" => Some((vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
-        "gorget_map_new_str" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
+        "gorget_map_new" => sig(vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar, Scalar]),
+        "gorget_map_new_str" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar]),
         // Dict methods (ordered — only new differs; put/get/etc. use gorget_map_*)
-        "gorget_dict_new" => Some((vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
-        "gorget_dict_new_str" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
-        "gorget_map_put" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_map_get" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Ptr)),
-        "gorget_map_remove" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
-        "gorget_map_contains" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
-        "gorget_map_len" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_map_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
-        "gorget_map_clear" | "gorget_map_free" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_map_clone" => Some((vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))))),
-        "gorget_map_keys" | "gorget_map_values" | "gorget_map_items" => Some((vec![LirType::Ptr], arr_ty())),
+        "gorget_dict_new" => sig(vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar, Scalar]),
+        "gorget_dict_new_str" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar]),
+        // gorget_map_put(map*, key*, val*)
+        "gorget_map_put" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem, VoidElem]),
+        // gorget_map_get(map*, key*) → void*
+        "gorget_map_get" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, VoidElem]),
+        "gorget_map_remove" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
+        "gorget_map_contains" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
+        "gorget_map_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
+        "gorget_map_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
+        "gorget_map_clear" | "gorget_map_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
+        "gorget_map_clone" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Ptr]),
+        "gorget_map_keys" | "gorget_map_values" | "gorget_map_items" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
         // Set methods
-        "gorget_set_new" | "gorget_ordered_set_new" => Some((vec![LirType::I64], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
-        "gorget_set_new_str" | "gorget_ordered_set_new_str" => Some((vec![], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
-        "gorget_set_add" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_set_contains" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
-        "gorget_set_remove" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Bool)),
-        "gorget_set_len" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_set_is_empty" => Some((vec![LirType::Ptr], LirType::Bool)),
-        "gorget_set_clear" | "gorget_set_free" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_set_clone" => Some((vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))))),
-        "gorget_set_to_array" => Some((vec![LirType::Ptr], arr_ty())),
+        "gorget_set_new" | "gorget_ordered_set_new" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![Scalar]),
+        "gorget_set_new_str" | "gorget_ordered_set_new_str" => sig(vec![], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![]),
+        "gorget_set_add" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem]),
+        "gorget_set_contains" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
+        "gorget_set_remove" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
+        "gorget_set_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
+        "gorget_set_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
+        "gorget_set_clear" | "gorget_set_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
+        "gorget_set_clone" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![Ptr]),
+        "gorget_set_to_array" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
         // Heap methods
-        "gorget_heap_new" => Some((vec![LirType::I64], LirType::Ptr)),
-        "gorget_heap_push" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_heap_pop" | "gorget_heap_peek" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_heap_len" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_heap_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_heap_new" => sig(vec![LirType::I64], LirType::Ptr, vec![Scalar]),
+        "gorget_heap_push" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem]),
+        "gorget_heap_pop" | "gorget_heap_peek" => sig(vec![LirType::Ptr], LirType::Ptr, vec![Ptr]),
+        "gorget_heap_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
+        "gorget_heap_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
 
         // Mutex / Guard methods
-        "gorget_mutex_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
-        "gorget_mutex_lock" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_mutex_lock_to" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_mutex_free" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_guard_get" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_guard_set" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
-        "gorget_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        // gorget_mutex_new(size, void* initial_val)
+        "gorget_mutex_new" => sig(vec![LirType::I64, LirType::Ptr], LirType::Ptr, vec![Scalar, VoidElem]),
+        "gorget_mutex_lock" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_mutex_lock_to" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
+        "gorget_mutex_free" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_guard_release" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_guard_get" => auto(vec![LirType::Ptr], LirType::Ptr),
+        // gorget_guard_set(guard*, void* val, size_t size)
+        "gorget_guard_set" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, VoidElem, Scalar]),
+        "gorget_guard_get_ptr" => auto(vec![LirType::Ptr], LirType::Ptr),
 
         // Shared methods
-        "gorget_shared_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
-        "gorget_shared_clone" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_shared_drop" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_shared_get" | "gorget_shared_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_shared_strong_count" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_shared_downgrade" => Some((vec![LirType::Ptr], LirType::Ptr)),
+        // gorget_shared_new(size, void* initial_val)
+        "gorget_shared_new" => sig(vec![LirType::I64, LirType::Ptr], LirType::Ptr, vec![Scalar, VoidElem]),
+        "gorget_shared_clone" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_shared_drop" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_shared_get" | "gorget_shared_get_ptr" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_shared_strong_count" => auto(vec![LirType::Ptr], LirType::I64),
+        "gorget_shared_downgrade" => auto(vec![LirType::Ptr], LirType::Ptr),
 
         // Weak methods
-        "gorget_weak_clone" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_weak_drop" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_weak_upgrade" => Some((vec![LirType::Ptr], LirType::I64)),
+        "gorget_weak_clone" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_weak_drop" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_weak_upgrade" => auto(vec![LirType::Ptr], LirType::I64),
 
         // Channel methods
-        "gorget_channel_new" => Some((vec![LirType::I64, LirType::I64], LirType::Ptr)),
-        "gorget_channel_send" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_channel_recv" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_channel_close" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_channel_len" | "gorget_channel_capacity" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_channel_is_closed" => Some((vec![LirType::Ptr], LirType::Bool)),
-        "gorget_channel_retain" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_channel_release" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_channel_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_channel_new" => auto(vec![LirType::I64, LirType::I64], LirType::Ptr),
+        // gorget_channel_send(ch*, void* elem)
+        "gorget_channel_send" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem]),
+        "gorget_channel_recv" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
+        "gorget_channel_close" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_channel_len" | "gorget_channel_capacity" => auto(vec![LirType::Ptr], LirType::I64),
+        "gorget_channel_is_closed" => auto(vec![LirType::Ptr], LirType::Bool),
+        "gorget_channel_retain" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_channel_release" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_channel_free" => auto(vec![LirType::Ptr], LirType::Void),
 
         // RWLock / ReadGuard / WriteGuard methods
-        "gorget_rwlock_new" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
-        "gorget_rwlock_read" | "gorget_rwlock_write" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_rwlock_read_to" | "gorget_rwlock_write_to" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_rwlock_free" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_read_guard_get" | "gorget_read_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_read_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_write_guard_get" | "gorget_write_guard_get_ptr" => Some((vec![LirType::Ptr], LirType::Ptr)),
-        "gorget_write_guard_set" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
-        "gorget_write_guard_release" => Some((vec![LirType::Ptr], LirType::Void)),
+        // gorget_rwlock_new(size, void* initial_val)
+        "gorget_rwlock_new" => sig(vec![LirType::I64, LirType::Ptr], LirType::Ptr, vec![Scalar, VoidElem]),
+        "gorget_rwlock_read" | "gorget_rwlock_write" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_rwlock_read_to" | "gorget_rwlock_write_to" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
+        "gorget_rwlock_free" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_read_guard_get" | "gorget_read_guard_get_ptr" => auto(vec![LirType::Ptr], LirType::Ptr),
+        "gorget_read_guard_release" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_write_guard_get" | "gorget_write_guard_get_ptr" => auto(vec![LirType::Ptr], LirType::Ptr),
+        // gorget_write_guard_set(guard*, void* val, size_t size)
+        "gorget_write_guard_set" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, VoidElem, Scalar]),
+        "gorget_write_guard_release" => auto(vec![LirType::Ptr], LirType::Void),
 
         // Allocator push/pop stubs
-        "__gorget_push_allocator" => Some((vec![LirType::Ptr], LirType::Void)),
-        "__gorget_pop_allocator" => Some((vec![], LirType::Void)),
+        "__gorget_push_allocator" => auto(vec![LirType::Ptr], LirType::Void),
+        "__gorget_pop_allocator" => auto(vec![], LirType::Void),
 
         // chr/ord
-        "gorget_char_chr" => Some((vec![LirType::I64], s())),
-        "gorget_str_ord" => Some((vec![s()], LirType::I64)),
+        "gorget_char_chr" => auto(vec![LirType::I64], s()),
+        "gorget_str_ord" => auto(vec![s()], LirType::I64),
         // Conversion helpers
-        "gorget_int_to_str" => Some((vec![LirType::I64], s())),
-        "gorget_float_to_str" => Some((vec![LirType::F64], s())),
-        "gorget_bool_to_str" => Some((vec![LirType::Bool], s())),
-        "gorget_codepoint_to_utf8" => Some((vec![LirType::I64], s())),
-        "gorget_int_to_float" => Some((vec![LirType::I64], LirType::F64)),
+        "gorget_int_to_str" => auto(vec![LirType::I64], s()),
+        "gorget_float_to_str" => auto(vec![LirType::F64], s()),
+        "gorget_bool_to_str" => auto(vec![LirType::Bool], s()),
+        "gorget_codepoint_to_utf8" => auto(vec![LirType::I64], s()),
+        "gorget_int_to_float" => auto(vec![LirType::I64], LirType::F64),
         // I/O
-        "gorget_read_file" => Some((vec![LirType::Ptr], g())),
-        "gorget_write_file" | "gorget_append_file" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
-        "gorget_file_exists" | "gorget_is_dir" => Some((vec![LirType::Ptr], LirType::Bool)),
+        "gorget_read_file" => auto(vec![LirType::Ptr], g()),
+        "gorget_write_file" | "gorget_append_file" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
+        "gorget_file_exists" | "gorget_is_dir" => auto(vec![LirType::Ptr], LirType::Bool),
         // Math (integer)
-        "gorget_abs" => Some((vec![LirType::I64], LirType::I64)),
-        "gorget_min" | "gorget_max" => Some((vec![LirType::I64, LirType::I64], LirType::I64)),
+        "gorget_abs" => auto(vec![LirType::I64], LirType::I64),
+        "gorget_min" | "gorget_max" => auto(vec![LirType::I64, LirType::I64], LirType::I64),
         // Math (float)
-        "gorget_fabs" => Some((vec![LirType::F64], LirType::F64)),
-        "gorget_fmin" | "gorget_fmax" => Some((vec![LirType::F64, LirType::F64], LirType::F64)),
+        "gorget_fabs" => auto(vec![LirType::F64], LirType::F64),
+        "gorget_fmin" | "gorget_fmax" => auto(vec![LirType::F64, LirType::F64], LirType::F64),
         "gorget_sqrt" | "gorget_floor" | "gorget_ceil" | "gorget_round"
         | "gorget_log" | "gorget_log2" | "gorget_log10"
         | "gorget_sin" | "gorget_cos" | "gorget_tan"
         | "gorget_asin" | "gorget_acos" | "gorget_atan" => {
-            Some((vec![LirType::F64], LirType::F64))
+            auto(vec![LirType::F64], LirType::F64)
         }
-        "gorget_pow" | "gorget_atan2" => Some((vec![LirType::F64, LirType::F64], LirType::F64)),
+        "gorget_pow" | "gorget_atan2" => auto(vec![LirType::F64, LirType::F64], LirType::F64),
         // Random
-        "gorget_rand" => Some((vec![], LirType::I64)),
-        "gorget_rand_range" => Some((vec![LirType::I64, LirType::I64], LirType::I64)),
-        "gorget_seed" => Some((vec![LirType::I64], LirType::Void)),
+        "gorget_rand" => auto(vec![], LirType::I64),
+        "gorget_rand_range" => auto(vec![LirType::I64, LirType::I64], LirType::I64),
+        "gorget_seed" => auto(vec![LirType::I64], LirType::Void),
         // Time
-        "gorget_time" | "gorget_time_ms" => Some((vec![], LirType::I64)),
-        "gorget_sleep_ms" | "gorget_reactor_sleep_ms" => Some((vec![LirType::I64], LirType::Void)),
-        "gorget_format_time" => Some((vec![LirType::I64, LirType::Ptr], LirType::Ptr)),
-        "gorget_parse_time" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::I64)),
+        "gorget_time" | "gorget_time_ms" => auto(vec![], LirType::I64),
+        "gorget_sleep_ms" | "gorget_reactor_sleep_ms" => auto(vec![LirType::I64], LirType::Void),
+        "gorget_format_time" => auto(vec![LirType::I64, LirType::Ptr], LirType::Ptr),
+        "gorget_parse_time" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::I64),
 
         // Barrier
-        "gorget_barrier_new" => Some((vec![LirType::I64], LirType::Ptr)),
-        "gorget_barrier_wait" | "gorget_barrier_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_barrier_new" => auto(vec![LirType::I64], LirType::Ptr),
+        "gorget_barrier_wait" | "gorget_barrier_free" => auto(vec![LirType::Ptr], LirType::Void),
         // CondVar
-        "gorget_condvar_new" => Some((vec![], LirType::Ptr)),
+        "gorget_condvar_new" => auto(vec![], LirType::Ptr),
         "gorget_condvar_notify_one" | "gorget_condvar_notify_all" | "gorget_condvar_free" => {
-            Some((vec![LirType::Ptr], LirType::Void))
+            auto(vec![LirType::Ptr], LirType::Void)
         }
-        "gorget_condvar_wait_guard" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Void)),
+        "gorget_condvar_wait_guard" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Void),
         // AtomicInt
-        "gorget_atomic_int_new" => Some((vec![LirType::I64], LirType::Ptr)),
-        "gorget_atomic_int_load" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_atomic_int_store" => Some((vec![LirType::Ptr, LirType::I64], LirType::Void)),
-        "gorget_atomic_int_add" | "gorget_atomic_int_sub" => Some((vec![LirType::Ptr, LirType::I64], LirType::I64)),
-        "gorget_atomic_int_compare_exchange" => Some((vec![LirType::Ptr, LirType::I64, LirType::I64], LirType::Bool)),
-        "gorget_atomic_int_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_atomic_int_new" => auto(vec![LirType::I64], LirType::Ptr),
+        "gorget_atomic_int_load" => auto(vec![LirType::Ptr], LirType::I64),
+        "gorget_atomic_int_store" => auto(vec![LirType::Ptr, LirType::I64], LirType::Void),
+        "gorget_atomic_int_add" | "gorget_atomic_int_sub" => auto(vec![LirType::Ptr, LirType::I64], LirType::I64),
+        "gorget_atomic_int_compare_exchange" => auto(vec![LirType::Ptr, LirType::I64, LirType::I64], LirType::Bool),
+        "gorget_atomic_int_free" => auto(vec![LirType::Ptr], LirType::Void),
         // AtomicBool
-        "gorget_atomic_bool_new" => Some((vec![LirType::Bool], LirType::Ptr)),
-        "gorget_atomic_bool_load" => Some((vec![LirType::Ptr], LirType::Bool)),
-        "gorget_atomic_bool_store" => Some((vec![LirType::Ptr, LirType::Bool], LirType::Void)),
-        "gorget_atomic_bool_swap" => Some((vec![LirType::Ptr, LirType::Bool], LirType::Bool)),
-        "gorget_atomic_bool_compare_exchange" => Some((vec![LirType::Ptr, LirType::Bool, LirType::Bool], LirType::Bool)),
-        "gorget_atomic_bool_free" => Some((vec![LirType::Ptr], LirType::Void)),
+        "gorget_atomic_bool_new" => auto(vec![LirType::Bool], LirType::Ptr),
+        "gorget_atomic_bool_load" => auto(vec![LirType::Ptr], LirType::Bool),
+        "gorget_atomic_bool_store" => auto(vec![LirType::Ptr, LirType::Bool], LirType::Void),
+        "gorget_atomic_bool_swap" => auto(vec![LirType::Ptr, LirType::Bool], LirType::Bool),
+        "gorget_atomic_bool_compare_exchange" => auto(vec![LirType::Ptr, LirType::Bool, LirType::Bool], LirType::Bool),
+        "gorget_atomic_bool_free" => auto(vec![LirType::Ptr], LirType::Void),
         // Process
-        "gorget_process_spawn" => Some((vec![LirType::Ptr, LirType::Ptr], LirType::Ptr)),
-        "gorget_process_wait" | "gorget_process_pid" => Some((vec![LirType::Ptr], LirType::I64)),
-        "gorget_process_kill" | "gorget_process_close_stdin" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_process_write_stdin" => Some((vec![LirType::Ptr, s()], LirType::Void)),
-        "gorget_process_read_stdout" | "gorget_process_read_stderr" => Some((vec![LirType::Ptr], g())),
+        "gorget_process_spawn" => auto(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr),
+        "gorget_process_wait" | "gorget_process_pid" => auto(vec![LirType::Ptr], LirType::I64),
+        "gorget_process_kill" | "gorget_process_close_stdin" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_process_write_stdin" => auto(vec![LirType::Ptr, s()], LirType::Void),
+        "gorget_process_read_stdout" | "gorget_process_read_stderr" => auto(vec![LirType::Ptr], g()),
 
         // Panic / abort functions (void return)
-        "gorget_panic" => Some((vec![LirType::Ptr], LirType::Void)),
-        "gorget_assert_fail" => Some((vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void)),
+        "gorget_panic" => auto(vec![LirType::Ptr], LirType::Void),
+        "gorget_assert_fail" => auto(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void),
         "gorget_overflow_add" | "gorget_overflow_sub" | "gorget_overflow_mul" => {
-            Some((vec![], LirType::Void))
+            auto(vec![], LirType::Void)
         }
         _ => None,
     }

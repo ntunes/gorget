@@ -212,18 +212,27 @@ impl<'a> FuncLowering<'a> {
             .copied()
             .unwrap_or_default();
 
-        // For known runtime functions, use canonical signatures instead of call-site inference.
-        if let Some((canon_params, canon_ret)) = runtime_extern_sig(name, self.struct_reg) {
+        // For known runtime functions, use canonical signatures + ABI tags.
+        if let Some(rsig) = runtime_extern_sig(name, self.struct_reg) {
+            // Prefer runtime ABI tags; fall back to user-declared extern ABI.
+            let abis = if rsig.param_abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
+                rsig.param_abis
+            } else {
+                abi_tags.clone()
+            };
             if let Some(existing) = self.pending_externs.iter_mut().find(|e| e.name == name) {
-                existing.params = canon_params;
-                existing.return_type = canon_ret;
+                existing.params = rsig.params;
+                existing.return_type = rsig.ret;
+                if existing.param_abis.iter().all(|a| *a == crate::ir::abi::AbiKind::Auto) {
+                    existing.param_abis = abis;
+                }
             } else {
                 self.pending_externs.push(LirExtern {
                     name: name.to_string(),
-                    params: canon_params,
-                    return_type: canon_ret,
+                    params: rsig.params,
+                    return_type: rsig.ret,
                     is_variadic: false,
-                    param_abis: abi_tags.clone(),
+                    param_abis: abis,
                     return_abi: ret_abi,
                 });
             }

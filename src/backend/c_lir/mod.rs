@@ -2239,8 +2239,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             }
             write!(out, ");").unwrap();
         }
-        Inst::CallExtern { dst, name, args, .. } => {
-            emit_call_extern::emit_call_extern(out, inst, dst, name, args, ctx);
+        Inst::CallExtern { dst, name, args, arg_abis, .. } => {
+            emit_call_extern::emit_call_extern(out, inst, dst, name, args, arg_abis, ctx);
         }
         Inst::CallPtr { dst, callee, args } => {
             if let Some(d) = dst {

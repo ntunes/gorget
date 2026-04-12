@@ -2,7 +2,7 @@
 
 ## High
 
-- **C backend Ptr(Str) auto-deref in CallExtern**: emit_call_extern.rs line ~2014 has a fallback that dereferences Ptr(Str) args to pass Str by value. Correct for runtime functions expecting Str by value (sqlite wrappers) but wrong when callee expects void*. Can't simply check LIR extern param type — LIR uses Ptr for struct-by-address too. Needs: either C-level param type annotation on externs, or distinguishing "real Ptr" from "by-address Ptr" in LIR. The `len()` free function case is fixed (resolved at IR level). [updated: 2026-04-10]
+- **Type-aware ABI resolution — Phases 2-5**: Phase 1 done (collection + concurrency functions tagged via `RuntimeSig::param_abis`). Remaining: Phase 2 (string functions — gorget_str_*, gorget_string_*), Phase 3 (I/O, math, conversion), Phase 4 (printf/fprintf, spawn/await, closure dispatch, Box, traits), Phase 5 (delete all whitelist functions, assert Auto never appears for runtime calls). The Ptr(Str) auto-deref catch-all (emit_call_extern.rs ~line 2130) is bypassed for tagged functions but still fires for untagged ones. [updated: 2026-04-12]
 
 - **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 

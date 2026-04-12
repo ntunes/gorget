@@ -9,6 +9,7 @@ pub(super) fn emit_call_extern(
     dst: &Option<ValueId>,
     name: &str,
     args: &[ValueId],
+    arg_abis: &[crate::ir::abi::AbiKind],
     ctx: &super::EmitContext,
 ) {
     let func = ctx.func;
@@ -1897,8 +1898,14 @@ pub(super) fn emit_call_extern(
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                // ABI-driven marshalling: explicit tag or whitelist-derived.
+                // ABI-driven marshalling: instruction-level tags (from runtime_extern_sig)
+                // take priority, then extern declaration tags, then whitelist fallback.
                 {
+                    let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
+                    if inst_abi != crate::ir::abi::AbiKind::Auto {
+                        emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
+                        continue;
+                    }
                     let abi = resolve_param_abi(ext_decl, emit_name, i);
                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
                         continue;

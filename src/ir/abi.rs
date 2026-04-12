@@ -35,4 +35,10 @@ pub enum AbiKind {
     /// Opaque handle. Passed as-is with no transformation.
     /// Used for opaque types (Regex, Window, Database handles).
     Opaque,
+    /// Void pointer to element data (`void*` in C).
+    /// For concrete struct values, the backend wraps with `&(Type){val}`.
+    /// For Str/GorgetString structs, takes address directly (`&val`).
+    /// For values already a pointer, passes through unchanged.
+    /// Used for collection element params (gorget_array_push arg 1, gorget_map_put args 1/2, etc.).
+    VoidElem,
 }
