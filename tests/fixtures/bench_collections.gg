@@ -1,0 +1,86 @@
+bench "Vector[int] push x1000":
+    Vector[int] v = Vector[int]()
+    int i = 0
+    while i < 1000:
+        v.push(i)
+        i = i + 1
+
+bench "Vector[int] sum via for":
+    Vector[int] v = Vector[int]()
+    int i = 0
+    while i < 100:
+        v.push(i)
+        i = i + 1
+    int total = 0
+    for x in v:
+        total = total + x
+
+bench "Vector[int] index access x100":
+    Vector[int] v = Vector[int]()
+    int i = 0
+    while i < 100:
+        v.push(i * 2)
+        i = i + 1
+    int total = 0
+    int j = 0
+    while j < 100:
+        total = total + v[j]
+        j = j + 1
+
+bench "Vector[String] build+iter":
+    Vector[String] v = Vector[String]()
+    int i = 0
+    while i < 50:
+        v.push(f"item-{i}")
+        i = i + 1
+    int total = 0
+    for s in v:
+        total = total + s.len()
+
+bench "Dict[String,int] build+lookup x50":
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < 50:
+        d[f"key-{i}"] = i * 10
+        i = i + 1
+    int total = 0
+    int j = 0
+    while j < 50:
+        total = total + d[f"key-{j}"]
+        j = j + 1
+
+bench "Dict[String,int] iterate keys":
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < 50:
+        d[f"k{i}"] = i
+        i = i + 1
+    int total = 0
+    for (k, v) in d:
+        total = total + v
+
+bench "Set[int] add+contains x100":
+    Set[int] s = Set[int]()
+    int i = 0
+    while i < 100:
+        s.add(i)
+        i = i + 1
+    int found = 0
+    int j = 0
+    while j < 100:
+        if s.contains(j):
+            found = found + 1
+        j = j + 1
+
+bench "Set[String] add+contains x50":
+    Set[String] s = Set[String]()
+    int i = 0
+    while i < 50:
+        s.add(f"item-{i}")
+        i = i + 1
+    int found = 0
+    int j = 0
+    while j < 50:
+        if s.contains(f"item-{j}"):
+            found = found + 1
+        j = j + 1

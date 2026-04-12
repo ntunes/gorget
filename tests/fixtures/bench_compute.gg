@@ -1,0 +1,82 @@
+int fib(int n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+int sum_range(int n):
+    int total = 0
+    int i = 0
+    while i < n:
+        total = total + i
+        i = i + 1
+    return total
+
+struct Vec2:
+    float x
+    float y
+
+float dot(Vec2 a, Vec2 b):
+    return a.x * b.x + a.y * b.y
+
+bench "fib(20) recursive":
+    int r = fib(20)
+
+bench "sum range 1000":
+    int r = sum_range(1000)
+
+bench "for range 0..100":
+    int total = 0
+    for i in 0..100:
+        total = total + i
+
+bench "Vec2 dot product x100":
+    Vec2 a = Vec2(3.0, 4.0)
+    Vec2 b = Vec2(1.0, 2.0)
+    float total = 0.0
+    int i = 0
+    while i < 100:
+        total = total + dot(a, b)
+        i = i + 1
+
+bench "struct construct+access x100":
+    float total = 0.0
+    float f = 0.0
+    int i = 0
+    while i < 100:
+        Vec2 v = Vec2(f, f + 1.0)
+        total = total + v.x + v.y
+        f = f + 1.0
+        i = i + 1
+
+bench "match int x100":
+    int total = 0
+    int i = 0
+    while i < 100:
+        int v = i % 4
+        match v:
+            case 0:
+                total = total + 1
+            case 1:
+                total = total + 2
+            case 2:
+                total = total + 3
+            else:
+                total = total + 4
+        i = i + 1
+
+bench "while loop 10000":
+    int total = 0
+    int i = 0
+    while i < 10000:
+        total = total + i
+        i = i + 1
+
+bench "nested loop 100x100":
+    int total = 0
+    int i = 0
+    while i < 100:
+        int j = 0
+        while j < 100:
+            total = total + 1
+            j = j + 1
+        i = i + 1

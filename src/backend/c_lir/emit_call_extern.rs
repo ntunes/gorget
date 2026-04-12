@@ -142,6 +142,15 @@ pub(super) fn emit_call_extern(
                 return;
             }
 
+            // ── Builtin type cast: float(x) ─────────────────────────────
+            // `float` is a C keyword — can't emit as a function call. Emit inline cast.
+            if name == "float" && args.len() == 1 {
+                if let Some(d) = dst {
+                    write!(out, "{} = (double){};", v(*d), v(args[0])).unwrap();
+                }
+                return;
+            }
+
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
                 // gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) → int64_t

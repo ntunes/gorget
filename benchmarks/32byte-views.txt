@@ -1,0 +1,66 @@
+# Gorget benchmark snapshot: 32byte-views
+# Date: 2026-04-12T12:11:24Z
+# Commit: 3eb1d6ddffe88bf27d633bb3bc66537c6599c7d6
+
+Running 16 benchmarks...
+
+  bench: string literal assign ... 400000000 iters, 4 ns/iter
+  bench: string len access ... 64000000 iters, 17 ns/iter
+  bench: string len x32 loop ... 640000 iters, 2.30 us/iter
+  bench: string copy named-to-named ... 200000000 iters, 5 ns/iter
+  bench: string concat ... 16000000 iters, 71 ns/iter
+  bench: Point construct ... 128000000 iters, 11 ns/iter
+  bench: Point field len ... 64000000 iters, 18 ns/iter
+  bench: Vector[int] push x100 ... 2000000 iters, 507 ns/iter
+  bench: Vector[String] push literal x100 ... 640000 iters, 2.67 us/iter
+  bench: Vector[String] push fstring x100 ... 160000 iters, 10.00 us/iter
+  bench: Vector[String] iter+sum len ... 80000 iters, 43.54 us/iter
+  bench: Dict[Str,int] put literal key x50 ... 1280000 iters, 1.03 us/iter
+  bench: Dict[Str,int] put fstring key x50 ... 160000 iters, 9.91 us/iter
+  bench: Dict[Str,Str] put fstring pair x50 ... 80000 iters, 15.41 us/iter
+  bench: string slice hot loop ... 640000 iters, 2.93 us/iter
+  bench: Vector[Point] push x50 ... 320000 iters, 6.20 us/iter
+
+16 benchmarks complete.
+
+Running 10 benchmarks...
+
+  bench: trim whitespace ... 640000 iters, 2.74 us/iter
+  bench: split and rejoin ... 4000000 iters, 308 ns/iter
+  bench: replace substring ... 16000000 iters, 101 ns/iter
+  bench: to_upper + to_lower ... 4000000 iters, 469 ns/iter
+  bench: contains+starts_with+ends_with ... 64000000 iters, 23 ns/iter
+  bench: fstring interpolation x10 ... 1280000 iters, 1.45 us/iter
+  bench: string iteration codepoints ... 8000000 iters, 206 ns/iter
+  bench: string enumerate ... 8000000 iters, 242 ns/iter
+  bench: slice x32 ... 320000 iters, 3.37 us/iter
+  bench: char_at x32 ... 2000000 iters, 566 ns/iter
+
+10 benchmarks complete.
+
+Running 8 benchmarks...
+
+  bench: Vector[int] push x1000 ... 320000 iters, 4.24 us/iter
+  bench: Vector[int] sum via for ... 1280000 iters, 3.02 us/iter
+  bench: Vector[int] index access x100 ... 2000000 iters, 971 ns/iter
+  bench: Vector[String] build+iter ... 320000 iters, 6.00 us/iter
+  bench: Dict[String,int] build+lookup x50 ... 80000 iters, 17.36 us/iter
+  bench: Dict[String,int] iterate keys ... 160000 iters, 10.55 us/iter
+  bench: Set[int] add+contains x100 ... 160000 iters, 8.77 us/iter
+  bench: Set[String] add+contains x50 ... 80000 iters, 16.03 us/iter
+
+8 benchmarks complete.
+
+Running 8 benchmarks...
+
+  bench: fib(20) recursive ... 20000 iters, 58.00 us/iter
+  bench: sum range 1000 ... 640000 iters, 2.75 us/iter
+  bench: for range 0..100 ... 8000000 iters, 230 ns/iter
+  bench: Vec2 dot product x100 ... 1280000 iters, 1.03 us/iter
+  bench: struct construct+access x100 ... 2000000 iters, 780 ns/iter
+  bench: match int x100 ... 4000000 iters, 513 ns/iter
+  bench: while loop 10000 ... 80000 iters, 22.88 us/iter
+  bench: nested loop 100x100 ... 40000 iters, 31.60 us/iter
+
+8 benchmarks complete.
+

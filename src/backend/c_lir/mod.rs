@@ -440,12 +440,20 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     };
 
     // Extern declarations (skip functions already provided by included headers or runtime)
+    // Builtin type cast names that are C keywords — can't be used as function names.
+    // Handled as inline casts in emit_call_extern; skip forward declarations.
+    let builtin_cast_names: &[&str] = &["float"];
+
     for ext in &module.externs {
         if is_std_header_fn(&ext.name) || is_runtime_fn(&ext.name)
             || ext.name == "codepoint_to_str"
             || ext.name == "gorget_array_reversed"
             || ext.name == "gorget_array_unique"
             || ext.name == "gorget_array_zip" {
+            continue;
+        }
+        // Skip builtin type cast names — they're C keywords, handled as inline casts.
+        if builtin_cast_names.contains(&ext.name.as_str()) {
             continue;
         }
         // Skip thread-generated functions — they're emitted by emit_thread_helpers.
@@ -590,6 +598,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     // Function forward declarations
     for func in &module.functions {
         if thread_generated_names.contains(&func.name) {
+            continue;
+        }
+        if builtin_cast_names.contains(&func.name.as_str()) {
             continue;
         }
         // main() uses int main(int argc, char** argv) — must match the definition.

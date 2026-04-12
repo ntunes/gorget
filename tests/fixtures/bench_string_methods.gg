@@ -1,0 +1,62 @@
+bench "trim whitespace":
+    String s = "   hello world   "
+    int i = 0
+    while i < 32:
+        String t = s.trim()
+        i = i + 1
+
+bench "split and rejoin":
+    String s = "the quick brown fox jumps over"
+    Vector[String] parts = s.split(" ")
+    String joined = " ".join(parts)
+
+bench "replace substring":
+    String s = "hello world hello world hello"
+    String r = s.replace("hello", "goodbye")
+
+bench "to_upper + to_lower":
+    String s = "Hello World"
+    String u = s.to_upper()
+    String l = s.to_lower()
+
+bench "contains+starts_with+ends_with":
+    String s = "the quick brown fox"
+    bool a = s.contains("brown")
+    bool b = s.starts_with("the")
+    bool c = s.ends_with("fox")
+
+bench "fstring interpolation x10":
+    int x = 42
+    String name = "gorget"
+    int i = 0
+    while i < 10:
+        String s = f"value={x} name={name} iter={i}"
+        i = i + 1
+
+bench "string iteration codepoints":
+    String s = "hello, world!"
+    int total = 0
+    for ch in s:
+        total = total + ch.len()
+
+bench "string enumerate":
+    String s = "abcdefghij"
+    int total = 0
+    for (i, ch) in s.enumerate():
+        total = total + i
+
+bench "slice x32":
+    String s = "the quick brown fox jumps over the lazy dog"
+    int i = 0
+    while i < 32:
+        String sub = s.slice(4, 19)
+        i = i + 1
+
+bench "char_at x32":
+    String s = "hello world"
+    int i = 0
+    int total = 0
+    while i < 32:
+        String ch = s.char_at(i % 5)
+        total = total + ch.len()
+        i = i + 1
