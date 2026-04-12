@@ -1509,16 +1509,20 @@ pub(super) fn emit_coerced_arg(
     let param_name = param_ty.map(|t| c_type_named(t, sn));
     let arg_name = arg_ty.map(|t| c_type_named(t, sn));
 
-    // GorgetString → Str coercion — both are char* now, identity.
-    if param_name.as_deref() == Some("Str") && arg_name.as_deref() == Some("GorgetString") {
+    // GorgetString ↔ Str coercion — both are the same 32-byte struct, identity.
+    if (param_name.as_deref() == Some("Str") && arg_name.as_deref() == Some("GorgetString"))
+        || (param_name.as_deref() == Some("GorgetString") && arg_name.as_deref() == Some("Str"))
+    {
         write!(out, "{}", format!("__v{}", a.0)).unwrap();
         return;
     }
 
-    // Str struct → pointer: when the extern expects a pointer and we have a Str struct,
-    // take the address of the struct (not .data — that gives const char*, not const Str*).
-    if param_ty.map_or(false, |t| t.is_ptr()) && (arg_name.as_deref() == Some("Str") || arg_name.as_deref() == Some("GorgetString")) {
-        write!(out, "&__v{}", a.0).unwrap();
+    // Str struct → char* param: extract .data (for printf format strings, legacy C FFI).
+    // The Str's data pointer is valid and NUL-terminated for owned/literal strings.
+    if matches!(param_ty, Some(LirType::Ptr))
+        && (arg_name.as_deref() == Some("Str") || arg_name.as_deref() == Some("GorgetString"))
+    {
+        write!(out, "(const char*)__v{}.data", a.0).unwrap();
         return;
     }
     // PtrTo(Str) → void* param: pass the pointer directly (it's already void*).
@@ -2728,7 +2732,7 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
         writeln!(out, "static inline Str gorget_char_chr(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
     }
     if has(&|n| n == "gorget_str_ord") {
-        writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode(s, s ? STR_LEN(s) : 0, &pos); }}").unwrap();
+        writeln!(out, "static inline int64_t gorget_str_ord(Str s) {{ size_t pos = 0; return (int64_t)gorget_utf8_decode((const char*)s.data, s.len, &pos); }}").unwrap();
     }
     // Default value functions for primitive types
     writeln!(out, "static inline Str gorget_str_default(void) {{ return GORGET_EMPTY_STR; }}").unwrap();
@@ -2746,7 +2750,7 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     writeln!(out, "static inline bool bool__default(void) {{ return false; }}").unwrap();
     // Hash functions
     writeln!(out, "static inline int64_t __gorget_hash_int(int64_t v) {{ return (int64_t)__gorget_fnv1a(&v, sizeof(v)); }}").unwrap();
-    writeln!(out, "static inline int64_t gorget_str_hash(Str s) {{ return (int64_t)__gorget_hash_str_len(s, s ? STR_LEN(s) : 0); }}").unwrap();
+    writeln!(out, "static inline int64_t gorget_str_hash(Str s) {{ return (int64_t)__gorget_hash_str_len((const char*)s.data, s.len); }}").unwrap();
     // Signal functions — defined in the main runtime (c_runtime.rs).
     // Only emit minimal stubs when the runtime signal module is NOT included.
     writeln!(out, "#ifndef _WIN32").unwrap();
@@ -2756,7 +2760,7 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     writeln!(out, "static int gorget_generic_compare(const void* a, const void* b) {{ return memcmp(a, b, sizeof(int64_t)); }}").unwrap();
     writeln!(out, "static int gorget_int_compare(const void* a, const void* b) {{ int64_t va = *(const int64_t*)a, vb = *(const int64_t*)b; return (va > vb) - (va < vb); }}").unwrap();
     writeln!(out, "static int gorget_float_compare(const void* a, const void* b) {{ double da = *(const double*)a, db = *(const double*)b; return (da > db) - (da < db); }}").unwrap();
-    writeln!(out, "static int gorget_str_compare(const void* a, const void* b) {{ Str sa = *(const Str*)a, sb = *(const Str*)b; size_t la = sa ? STR_LEN(sa) : 0, lb = sb ? STR_LEN(sb) : 0; size_t ml = la < lb ? la : lb; int r = ml > 0 ? memcmp(sa, sb, ml) : 0; if (r) return r; return (la > lb) - (la < lb); }}").unwrap();
+    writeln!(out, "static int gorget_str_compare(const void* a, const void* b) {{ Str sa = *(const Str*)a, sb = *(const Str*)b; size_t la = sa.len, lb = sb.len; size_t ml = la < lb ? la : lb; int r = ml > 0 ? memcmp(sa.data, sb.data, ml) : 0; if (r) return r; return (la > lb) - (la < lb); }}").unwrap();
     writeln!(out, "static inline int64_t int64_t__one(void) {{ return 1; }}").unwrap();
     writeln!(out, "static inline int64_t int__one(void) {{ return 1; }}").unwrap();
     writeln!(out, "static inline double double__one(void) {{ return 1.0; }}").unwrap();
@@ -2765,17 +2769,15 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     // UTF-8 codepoint helpers (normally in emit_runtime_modules)
     if has(&|n| n == "gorget_utf8_codepoint_len_at") {
         writeln!(out, "static inline int64_t gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) {{ \
-            size_t slen = s ? STR_LEN(s) : 0; \
-            if (byte_pos < 0 || byte_pos >= (int64_t)slen) return 0; \
-            return (int64_t)gorget_utf8_codepoint_len((unsigned char)s[byte_pos]); }}").unwrap();
+            if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return 0; \
+            return (int64_t)gorget_utf8_codepoint_len(((const unsigned char*)s.data)[byte_pos]); }}").unwrap();
     }
     if has(&|n| n == "gorget_str_codepoint_at") {
         writeln!(out, "static inline Str gorget_str_codepoint_at(Str s, int64_t byte_pos) {{ \
-            size_t slen = s ? STR_LEN(s) : 0; \
-            if (byte_pos < 0 || byte_pos >= (int64_t)slen) return GORGET_EMPTY_STR; \
-            int cplen = gorget_utf8_codepoint_len((unsigned char)s[byte_pos]); \
-            if (byte_pos + cplen > (int64_t)slen) cplen = (int)(slen - (size_t)byte_pos); \
-            return gorget_str_own_region(s + byte_pos, (size_t)cplen); }}").unwrap();
+            if (byte_pos < 0 || byte_pos >= (int64_t)s.len) return GORGET_EMPTY_STR; \
+            int cplen = gorget_utf8_codepoint_len(((const unsigned char*)s.data)[byte_pos]); \
+            if (byte_pos + cplen > (int64_t)s.len) cplen = (int)(s.len - (size_t)byte_pos); \
+            return gorget_str_own_region((const char*)s.data + byte_pos, (size_t)cplen); }}").unwrap();
     }
     // gorget_signal_ignore is already in the C runtime — no duplicate emission needed.
 
@@ -2850,13 +2852,15 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
         writeln!(out, "static inline Str gorget_str_str(GorgetString* s) {{ return gorget_string_clone_to_owned(s); }}").unwrap();
     }
     if has_extern("gorget_str_clear") {
-        writeln!(out, "static inline void gorget_str_clear(GorgetString* s) {{ if (*s && *s != GORGET_EMPTY_STR) STR_HDR(*s)->len = 0; }}").unwrap();
+        // Reset the len to 0 but keep the owned buffer for reuse. For views, len=0 is fine —
+        // they'll re-materialize on next push/append.
+        writeln!(out, "static inline void gorget_str_clear(GorgetString* s) {{ s->len = 0; if (s->cap > 0 && s->data) ((char*)s->data)[0] = '\\0'; }}").unwrap();
     }
     if has_extern("gorget_str_push_line") {
         writeln!(out, "static inline void gorget_str_push_line(GorgetString* s, Str chunk) {{ gorget_string_push_char(s, chunk); gorget_string_push_byte(s, '\\n'); }}").unwrap();
     }
     if has_extern("gorget_str_capacity") {
-        writeln!(out, "static inline int64_t gorget_str_capacity(GorgetString* s) {{ return (*s && *s != GORGET_EMPTY_STR) ? (int64_t)STR_CAP(*s) : 0; }}").unwrap();
+        writeln!(out, "static inline int64_t gorget_str_capacity(GorgetString* s) {{ return (int64_t)s->cap; }}").unwrap();
     }
     if has_extern("gorget_str_push_char") {
         writeln!(out, "static inline void gorget_str_push_char(GorgetString* s, Str c) {{ gorget_string_push_char(s, c); }}").unwrap();

@@ -100,23 +100,19 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
         "int32_t" | "uint32_t" | "float" => 4,
         "int16_t" | "uint16_t" => 2,
         "int8_t" | "uint8_t" | "bool" => 1,
-        // GorgetString is a thin pointer (char*) — 8 bytes on 64-bit
-        "GorgetString" => 8,
+        // GorgetString is a 32-byte fat struct { data, cap, len, alloc }
+        "GorgetString" | "String" | "Str" => 32,
         _ => {
-            // Runtime collection structs: GorgetArray = {data, len, cap, elem_size, alloc} = 40 bytes
+            // Runtime collection structs.
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
                 return 64; // {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
             }
             if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap" {
-                return 128; // 16 fields × 8 (includes key_drop)
+                return 152;
             }
             // GorgetSet aliases GorgetMap (same struct)
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
-                return 128;
-            }
-            // GorgetString = thin pointer (char*) = 8 bytes
-            if type_name == "GorgetString" || type_name == "String" {
-                return 8;
+                return 152;
             }
             // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes
             if type_name == "GorgetClosure" || type_name.starts_with("Callable__") || type_name.starts_with("Callable_") {
@@ -224,12 +220,9 @@ pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
                     // GorgetArray: {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
                     "GorgetArray" => Some(64usize),
                     // GorgetMap / GorgetSet: 19 fields × 8 = 152
-                    // (adds val_materialize/key_materialize for symmetry with array's
-                    // elem_materialize — cap==0-only on put, separate from val_clone
-                    // which remains the full-clone hook for dict.clone()).
                     "GorgetMap" | "GorgetSet" => Some(152usize),
-                    // GorgetString: thin pointer (char*) = 8
-                    "GorgetString" => Some(8usize),
+                    // GorgetString: 32-byte fat struct { data, cap, len, alloc }
+                    "GorgetString" => Some(32usize),
                     _ if sd.name.starts_with("Task__") => Some(16usize),
                     _ => None,
                 };

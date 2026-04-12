@@ -46,16 +46,20 @@ impl Default for StructRegistry {
 /// Well-known struct layouts for Gorget runtime types.
 pub fn builtin_struct_defs() -> Vec<StructDef> {
     vec![
-        // GorgetString — 8-byte thin pointer (char*). Header { alloc, cap, len } at ptr - 24.
-        // C layout: typedef char* Str; — 1 × 8 = 8 bytes.
+        // GorgetString — 32-byte fat struct { data, cap, len, alloc }.
+        // Field order matches the generic view-discriminator prefix: cap at offset +8
+        // marks a view (cap == 0) vs owned (cap > 0). C layout: 4 × 8 = 32 bytes.
         StructDef {
             name: "GorgetString".into(),
             fields: vec![
-                ("ptr".into(), LirType::Ptr),
+                ("data".into(), LirType::Ptr),
+                ("cap".into(), LirType::I64),
+                ("len".into(), LirType::I64),
+                ("alloc".into(), LirType::Ptr),
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(8),
+            computed_c_size: Some(32),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
         // C layout: { data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.

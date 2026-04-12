@@ -44,10 +44,12 @@ pub fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
                 i += 4;
                 continue;
             }
-            // Check if this is %s that needs rewriting for Bool (expand to %.*s)
+            // Check if this is %s that needs rewriting for Bool or Str (expand to %.*s)
             if i + 2 <= bytes.len() && &bytes[i..i+2] == b"%s" {
                 let kind = arg_kinds.get(arg_idx).copied().unwrap_or(PrintfArgKind::Int);
-                if kind == PrintfArgKind::Bool {
+                if matches!(kind, PrintfArgKind::Bool | PrintfArgKind::Str) {
+                    // Bool: gorget_bool_to_str produces a (len, data) pair.
+                    // Str:  32-byte struct decomposed to (int)str.len, (const char*)str.data.
                     result.push_str("%.*s");
                 } else {
                     result.push_str("%s");

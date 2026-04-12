@@ -145,10 +145,10 @@ pub(super) fn emit_call_extern(
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
                 // gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) → int64_t
-                // Str is char* — deref pointer-to-Str to get the char*, index directly.
+                // Str is a 32-byte struct — read data/len through the Str* pointer.
                 if let Some(d) = dst {
-                    let s = format!("(*(Str*){})", v(args[0]));
-                    write!(out, "{} = gorget_utf8_codepoint_len((unsigned char)({s})[{}]);",
+                    let s = format!("((Str*){})", v(args[0]));
+                    write!(out, "{} = gorget_utf8_codepoint_len(((const unsigned char*){s}->data)[{}]);",
                         v(*d), v(args[1])).unwrap();
                 }
                 return;
@@ -156,9 +156,9 @@ pub(super) fn emit_call_extern(
             if name == "gorget_str_codepoint_at" && args.len() == 2 {
                 // gorget_str_codepoint_at(Str s, int64_t byte_pos) → Str (owned copy)
                 if let Some(d) = dst {
-                    let s = format!("(*(Str*){})", v(args[0]));
+                    let s = format!("((Str*){})", v(args[0]));
                     let pos = v(args[1]);
-                    write!(out, "{} = gorget_str_own_region(({s}) + {pos}, (size_t)gorget_utf8_codepoint_len((unsigned char)({s})[{pos}]));",
+                    write!(out, "{} = gorget_str_own_region((const char*){s}->data + {pos}, (size_t)gorget_utf8_codepoint_len(((const unsigned char*){s}->data)[{pos}]));",
                         v(*d)).unwrap();
                 }
                 return;
@@ -712,7 +712,7 @@ pub(super) fn emit_call_extern(
                         if is_result {
                             let result_c = c_type_named(&LirType::Struct(*sid), sn);
                             write!(out, "{d} = ({{ GorgetString __gs = gorget_file_read_all({a}); \
-                                {result_c} __wr; if (gorget_utf8_validate(__gs, __gs ? STR_LEN(__gs) : 0)) {{ \
+                                {result_c} __wr; if (gorget_utf8_validate((const char*)__gs.data, __gs.len)) {{ \
                                 __wr.tag = 0; __wr.Ok_0 = __gs; }} else {{ \
                                 gorget_string_free(&__gs); __wr.tag = 1; \
                                 __wr.Error_0 = gorget_str_from_literal(\"invalid UTF-8\", 13); }} __wr; }});",
@@ -987,9 +987,13 @@ pub(super) fn emit_call_extern(
                                 let is_str_lit2 = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                                 if opt_void_params.contains(&i) && arg_ty2.map_or(false, |t| !matches!(t, LirType::Ptr)) {
                                     let ty_name2 = c_type_named(arg_ty2.unwrap(), sn);
-                                    write!(out, "&({ty_name2}){{ {} }}", v(*a)).unwrap();
+                                    if ty_name2 == "Str" || ty_name2 == "GorgetString" {
+                                        write!(out, "&{v}", v = v(*a)).unwrap();
+                                    } else {
+                                        write!(out, "&({ty_name2}){{ {} }}", v(*a)).unwrap();
+                                    }
                                 } else if opt_void_params.contains(&i) && is_str_lit2 {
-                                    write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
+                                    write!(out, "&{v}", v = v(*a)).unwrap();
                                 } else {
                                     let ext_param = ext_params.and_then(|p| p.get(i));
                                     emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
@@ -1055,10 +1059,14 @@ pub(super) fn emit_call_extern(
                         write!(out, "{}", v(*a)).unwrap();
                     } else if collection_void_param_indices(emit_name).contains(&i) && arg_ty.map_or(false, |t| !matches!(t, LirType::Ptr)) {
                         let ty_name = c_type_named(arg_ty.unwrap(), sn);
-                        write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
+                        if ty_name == "Str" || ty_name == "GorgetString" {
+                            write!(out, "&{v}", v = v(*a)).unwrap();
+                        } else {
+                            write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
+                        }
                     } else if collection_void_param_indices(emit_name).contains(&i) && is_str_lit {
                         // String literal arg to void* collection param → wrap as &(Str){...}
-                        write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
+                        write!(out, "&{v}", v = v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
                         emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
@@ -1799,15 +1807,36 @@ pub(super) fn emit_call_extern(
                 || ptr_to_str
             });
 
-            // printf(var) with a single arg triggers -Wformat-security on macOS
-            // clang even if the arg is a string literal variable. Always rewrite
-            // single-arg printf to printf("%s", var).
+            // Special-case single-arg printf: `print("hello")` lowers to a
+            // `printf(str_arg)` with no format string. macOS clang rejects this
+            // under -Wformat-security, and under 32-byte Str the arg is a struct,
+            // not a char*, so we emit the decomposed form directly and return.
             let printf_needs_fmt_guard = is_printf && emit_args.len() == 1;
+            if printf_needs_fmt_guard {
+                let a = emit_args[0];
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let is_gs_struct = matches!(arg_ty, Some(LirType::Struct(sid))
+                    if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                if is_gs_struct {
+                    // `print(str)` → `__gorget_printf("%.*s", (int)str.len, (const char*)str.data);`
+                    writeln!(out, "{}(\"%.*s\", (int){vv}.len, (const char*){vv}.data);",
+                        emit_name, vv = v(a)).unwrap();
+                    return;
+                }
+                // Ptr(Str) fallback: deref the pointer and use struct fields.
+                let pointee_is_str = matches!(arg_ty, Some(LirType::Ptr))
+                    && ptr_pointee.get(a.0 as usize)
+                        .and_then(|p| p.as_ref())
+                        .map_or(false, |p| is_str_struct(p, module));
+                if pointee_is_str || is_str_ptr_opt(arg_ty, module) {
+                    writeln!(out, "{}(\"%.*s\", (int)((Str*){vv})->len, (const char*)((Str*){vv})->data);",
+                        emit_name, vv = v(a)).unwrap();
+                    return;
+                }
+                // Rare non-Str path (shouldn't normally happen) — fall through to raw call.
+            }
 
             write!(out, "{}(", emit_name).unwrap();
-            if printf_needs_fmt_guard {
-                write!(out, "\"%s\", (const char*)").unwrap();
-            }
             if is_stderr_print {
                 write!(out, "stderr").unwrap();
                 if !emit_args.is_empty() {
@@ -1940,19 +1969,20 @@ pub(super) fn emit_call_extern(
                     }
                     continue;
                 }
-                // Decompose GorgetString (thin pointer) args into (int)len, data for %.*s format.
+                // Decompose 32-byte Str / GorgetString args into (int)len, data for %.*s format.
+                // Struct is a value type; empty strings are {"", 0, 0, NULL} so len/data read safely.
                 if _need_fmt_fix && is_printf && i > 0
                     && matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
                 {
-                    write!(out, "(int)({v} ? STR_LEN({v}) : 0), (const char*)({v} ? {v} : \"\")", v = v(*a)).unwrap();
+                    write!(out, "(int){v}.len, (const char*){v}.data", v = v(*a)).unwrap();
                     continue;
                 }
-                // PtrTo(Str) in printf — deref then decompose.
+                // PtrTo(Str) in printf — deref the pointer, then read struct fields.
                 if _need_fmt_fix && is_printf && i > 0 && (is_str_ptr_opt(arg_ty, module)
                     || (matches!(arg_ty, Some(LirType::Ptr)) && ptr_pointee.get(a.0 as usize)
                         .and_then(|p| p.as_ref())
                         .map_or(false, |p| is_str_struct(p, module)))) {
-                    write!(out, "(int)(*(Str*){v} ? STR_LEN(*(Str*){v}) : 0), (const char*)(*(Str*){v} ? *(Str*){v} : \"\")", v = v(*a)).unwrap();
+                    write!(out, "(int)((Str*){v})->len, (const char*)((Str*){v})->data", v = v(*a)).unwrap();
                     continue;
                 }
                 if false {
@@ -1977,7 +2007,7 @@ pub(super) fn emit_call_extern(
                     // Ptr (void*) → &(Str){} address. Struct(Str) → gorget_str_from_literal value.
                     let wrapper_param_is_ptr = ext_params.and_then(|p| p.get(i)).map_or(false, |t| t.is_ptr());
                     if wrapper_param_is_ptr {
-                        write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
+                        write!(out, "&{v}", v = v(*a)).unwrap();
                     } else {
                         write!(out, "{}", v(*a)).unwrap();
                     }
@@ -2012,14 +2042,20 @@ pub(super) fn emit_call_extern(
                     write!(out, "*(Str*){}", v(*a)).unwrap();
                 }
                 // Collection void* element params — wrap concrete values with &(Type){val}.
+                // For Str/GorgetString (32-byte struct), the value is already the struct —
+                // take its address directly rather than constructing a single-field compound literal.
                 else if void_params.contains(&i) && arg_ty.map_or(false, |t| !matches!(t, LirType::Ptr)) {
                     let ty_name = c_type_named(arg_ty.unwrap(), sn);
-                    write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
+                    if ty_name == "Str" || ty_name == "GorgetString" {
+                        write!(out, "&{v}", v = v(*a)).unwrap();
+                    } else {
+                        write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
+                    }
                 }
                 // String literal arg to a void* collection param → wrap as &(Str){...}.
                 // This handles Dict/Set with Str keys: gorget_map_put(m, &(Str){..}, &val).
                 else if void_params.contains(&i) && is_str_lit {
-                    write!(out, "&(Str){{ {v} }}", v = v(*a)).unwrap();
+                    write!(out, "&{v}", v = v(*a)).unwrap();
                 }
                 // gorget_int_to_str / gorget_float_to_str: always cast arg to expected type.
                 // The LIR lowerer emits str() coercion for unknown source types, which can

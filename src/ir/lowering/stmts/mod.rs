@@ -1567,9 +1567,9 @@ fn assert_format_info_rich(
         }
     }
 
-    // String types: show the string value via %.*s (thin pointer: data=pointer, len=STR_LEN)
+    // String types: show the string value via %.*s (32-byte Str struct: {data, cap, len, alloc}).
     if ctx.type_mapper.is_string_type(type_id) {
-        return ("%.*s".to_string(), format!("(int)({c_expr} ? STR_LEN({c_expr}) : 0), (const char*)({c_expr} ? {c_expr} : \"\")"));
+        return ("%.*s".to_string(), format!("(int)({c_expr}).len, (const char*)({c_expr}).data"));
     }
 
     // Named types: call display method if available
@@ -1597,7 +1597,7 @@ fn assert_format_info_rich(
                 owned_string_type,
             );
             let result_c = format!("_{}", result.0);
-            return ("%.*s".to_string(), format!("(int)({result_c} ? STR_LEN({result_c}) : 0), (const char*)({result_c} ? {result_c} : \"\")"));
+            return ("%.*s".to_string(), format!("(int)({result_c}).len, (const char*)({result_c}).data"));
         }
         // Named type without display — show type name
         return ("%s".to_string(), format!("\"<{type_name}>\""));

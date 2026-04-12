@@ -1619,7 +1619,15 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
         Inst::NullPtr { .. } => Some(LirType::Ptr),
         Inst::FuncAddr { .. } => Some(LirType::Ptr),
         Inst::GlobalAddr { .. } => Some(LirType::Ptr),
-        Inst::StrLit { .. } => Some(LirType::Ptr), // simplified
+        Inst::StrLit { .. } => {
+            // Under 32-byte Str, StrLit produces a Str struct value (not a raw pointer).
+            // Find the GorgetString struct id so the value gets declared as `Str __vN`
+            // rather than `void* __vN`. Fall back to Ptr if the struct isn't registered.
+            module.structs.iter().enumerate()
+                .find(|(_, s)| s.name == "GorgetString")
+                .map(|(idx, _)| LirType::Struct(crate::lir::StructId(idx as u32)))
+                .or(Some(LirType::Ptr))
+        }
         Inst::ParamRef { ty, .. } => Some(ty.clone()),
 
         // Arithmetic — use the explicit type field.
