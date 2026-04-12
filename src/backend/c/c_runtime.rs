@@ -2798,26 +2798,26 @@ static void __gorget_snapshot_close(void) {
     }
 }
 
-static void __gorget_snapshot_write_int(const char* test, const char* point, long long v) {
-    __gorget_snapshot_begin(test, point);
+static void __gorget_snapshot_write_int(const char* point, long long v) {
+    __gorget_snapshot_begin(__gorget_current_test, point);
     if (__gorget_snapshot_file) fprintf(__gorget_snapshot_file, "%lld", v);
     __gorget_snapshot_end();
 }
 
-static void __gorget_snapshot_write_float(const char* test, const char* point, double v) {
-    __gorget_snapshot_begin(test, point);
+static void __gorget_snapshot_write_float(const char* point, double v) {
+    __gorget_snapshot_begin(__gorget_current_test, point);
     if (__gorget_snapshot_file) fprintf(__gorget_snapshot_file, "%.17g", v);
     __gorget_snapshot_end();
 }
 
-static void __gorget_snapshot_write_bool(const char* test, const char* point, int v) {
-    __gorget_snapshot_begin(test, point);
+static void __gorget_snapshot_write_bool(const char* point, int v) {
+    __gorget_snapshot_begin(__gorget_current_test, point);
     if (__gorget_snapshot_file) fprintf(__gorget_snapshot_file, "%s", v ? "true" : "false");
     __gorget_snapshot_end();
 }
 
-static void __gorget_snapshot_write_str(const char* test, const char* point, Str s) {
-    __gorget_snapshot_begin(test, point);
+static void __gorget_snapshot_write_str(const char* point, Str s) {
+    __gorget_snapshot_begin(__gorget_current_test, point);
     if (__gorget_snapshot_file) {
         const char* d = (const char*)s.data;
         fputc('"', __gorget_snapshot_file);
@@ -2834,8 +2834,8 @@ static void __gorget_snapshot_write_str(const char* test, const char* point, Str
     __gorget_snapshot_end();
 }
 
-static void __gorget_snapshot_write_null(const char* test, const char* point) {
-    __gorget_snapshot_begin(test, point);
+static void __gorget_snapshot_write_null(const char* point) {
+    __gorget_snapshot_begin(__gorget_current_test, point);
     if (__gorget_snapshot_file) fprintf(__gorget_snapshot_file, "null");
     __gorget_snapshot_end();
 }
@@ -6378,6 +6378,12 @@ static inline Str gorget_codepoint_to_utf8(int64_t cp) {
     return gorget_string_adopt(out);
 }
 
+
+// ── Assert failure with pre-formatted value strings ─────────
+static inline void gorget_assert_fail_values(const char* op, Str left, Str right) {
+    gorget_panic(gorget_format("assertion failed: left %s right\n  left:  %.*s\n  right: %.*s",
+            op, (int)left.len, (const char*)left.data, (int)right.len, (const char*)right.data));
+}
 
 "#;
 

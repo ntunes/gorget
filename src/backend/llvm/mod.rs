@@ -2744,58 +2744,13 @@ fn emit_inst(
             writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf({all_args})").unwrap();
         }
 
-        // ── InlineC (C-backend only — partial emulation) ────────────
+        // ── InlineC (legacy — all known sites now use proper CallExtern) ──
         Inst::InlineC { dst, code } => {
-            // InlineC blocks often contain assert/panic logic that does:
-            //   fprintf(stderr, "...message..."); exit(1);
-            // Without emulating the C code, blocks ending in 'unreachable'
-            // will segfault. Detect fatal InlineC blocks and emit exit(1).
             if code.contains("exit(") || code.contains("abort()") || code.contains("gorget_panic") {
                 writeln!(out, "  call void @exit(i32 1) ; InlineC fatal").unwrap();
                 writeln!(out, "  unreachable").unwrap();
-            }
-            // Dict iteration: _DST = ((TYPE*)_MAP.keys)[(size_t)_IDX];
-            // or: _DST = ((TYPE*)_MAP.values)[(size_t)_IDX];
-            else if let Some(d) = dst {
-                // Parse dict iteration pattern manually:
-                // _D = ((TYPE*)_M.keys)[(size_t)_I]; or _D = ((TYPE*)_M.values)[(size_t)_I];
-                let dict_iter = parse_dict_iter_inline(code);
-                if let Some((elem_c_type, map_slot, field, idx_slot)) = dict_iter {
-                    // GorgetMap field indices: 0=keys, 1=values
-                    let field_idx = if field == "keys" { 0 } else { 1 };
-                    // Determine element size for GEP
-                    let elem_llvm = match elem_c_type.as_str() {
-                        "int64_t" | "size_t" => "i64",
-                        "int32_t" => "i32",
-                        "int16_t" => "i16",
-                        "int8_t" | "uint8_t" => "i8",
-                        "double" => "double",
-                        "float" => "float",
-                        "bool" | "_Bool" => "i1",
-                        _ => "ptr", // Str, struct types → ptr-sized
-                    };
-                    let pfx = format!("dictit.{}.{}", d.0, field_idx);
-                    // Load array pointer from GorgetMap field
-                    writeln!(out, "  %{pfx}.fp = getelementptr %GorgetMap, ptr %s{map_slot}, i32 0, i32 {field_idx}").unwrap();
-                    writeln!(out, "  %{pfx}.arr = load ptr, ptr %{pfx}.fp").unwrap();
-                    // Load index from slot
-                    writeln!(out, "  %{pfx}.idx = load i64, ptr %s{idx_slot}").unwrap();
-                    if elem_llvm == "ptr" {
-                        // For Str/struct types, calculate byte offset and memcpy
-                        // Str = GorgetString = 32 bytes on this platform
-                        let elem_size = if elem_c_type == "Str" || elem_c_type == "GorgetString" { 32 }
-                            else { 8 }; // default to 8 for unknown types
-                        writeln!(out, "  %{pfx}.off = mul i64 %{pfx}.idx, {elem_size}").unwrap();
-                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.arr, i64 %{pfx}.off").unwrap();
-                        writeln!(out, "  %v{} = bitcast ptr %{pfx}.ep to ptr", d.0).unwrap();
-                    } else {
-                        // Scalar: GEP + load
-                        writeln!(out, "  %{pfx}.ep = getelementptr {elem_llvm}, ptr %{pfx}.arr, i64 %{pfx}.idx").unwrap();
-                        writeln!(out, "  %v{} = load {elem_llvm}, ptr %{pfx}.ep", d.0).unwrap();
-                    }
-                } else {
-                    writeln!(out, "  %v{} = add i64 0, 0 ; InlineC skipped: {}", d.0, code.chars().take(60).collect::<String>()).unwrap();
-                }
+            } else if let Some(d) = dst {
+                writeln!(out, "  %v{} = add i64 0, 0 ; InlineC skipped: {}", d.0, code.chars().take(60).collect::<String>()).unwrap();
             } else {
                 writeln!(out, "  ; InlineC skipped").unwrap();
             }
@@ -2806,33 +2761,6 @@ fn emit_inst(
             // nothing
         }
     }
-}
-
-/// Parse dict iteration InlineC: `_D = ((TYPE*)_M.keys)[(size_t)_I];`
-/// Returns (elem_c_type, map_slot, field_name, idx_slot) or None.
-fn parse_dict_iter_inline(code: &str) -> Option<(String, usize, String, usize)> {
-    // Pattern: _D = ((TYPE*)_M.FIELD)[(size_t)_I];
-    let code = code.trim();
-    let eq_pos = code.find('=')?;
-    let rhs = code[eq_pos + 1..].trim();
-    // Extract: ((TYPE*)_M.FIELD)[(size_t)_I]
-    if !rhs.starts_with("((") { return None; }
-    let star_pos = rhs.find("*)")?;
-    let elem_type = rhs[2..star_pos].trim().to_string();
-    let after_cast = &rhs[star_pos + 2..];
-    // _M.FIELD)[(size_t)_I]
-    let dot_pos = after_cast.find('.')?;
-    let map_slot_str = &after_cast[1..dot_pos]; // skip '_'
-    let map_slot: usize = map_slot_str.parse().ok()?;
-    let paren_pos = after_cast.find(')')?;
-    let field = after_cast[dot_pos + 1..paren_pos].to_string();
-    if field != "keys" && field != "values" { return None; }
-    // [(size_t)_I]
-    let bracket_start = after_cast.find("[(size_t)_")?;
-    let idx_start = bracket_start + "[(size_t)_".len();
-    let bracket_end = after_cast[idx_start..].find(']')?;
-    let idx_slot: usize = after_cast[idx_start..idx_start + bracket_end].parse().ok()?;
-    Some((elem_type, map_slot, field, idx_slot))
 }
 
 // ── Overflow Check Emission ────────────────────────────────────────────────

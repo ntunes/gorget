@@ -457,15 +457,11 @@ fn lower_for_dict(
     let dict_ptr = builder.add_local(dict_ptr_type, None);
     builder.emit_borrow(dict_ptr, Place::local(iter_local));
 
-    let dict_id = iter_local.0; // for InlineC key/value extraction
-
     // Determine key/value type names from the collection type
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
     let (key_gir_type, val_gir_type) = parse_dict_kv_types(&type_name);
-    let key_c_type = gir_to_c_type(&key_gir_type);
-    let val_c_type = gir_to_c_type(&val_gir_type);
     let key_type = ctx.lookup_type_by_name(&key_gir_type).unwrap_or(I64_TYPE);
     let val_type = ctx.lookup_type_by_name(&val_gir_type).unwrap_or(I64_TYPE);
 
@@ -521,28 +517,38 @@ fn lower_for_dict(
     builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
     builder.switch_to(elem_bb);
 
-    // Extract key/value bindings.
-    // Uses InlineC for typed pointer element access — the C backend dereferences
-    // MutPtr args, so output-parameter CallExtern doesn't work yet.
+    // Extract key/value bindings via runtime output-parameter functions.
     match &pattern.node {
         Pattern::Tuple(parts) if parts.len() == 2 => {
             let k_name = if let Pattern::Binding(n) = &parts[0].node { n.clone() } else { "__k".to_string() };
             let v_name = if let Pattern::Binding(n) = &parts[1].node { n.clone() } else { "__v".to_string() };
 
             let k_local = builder.add_local(key_type, Some(&k_name));
-            builder.inline_c(format!("_{k} = (({key_c_type}*)_{dict}.keys)[(size_t)_{idx}];",
-                k = k_local.0, dict = dict_id, idx = idx.0));
+            let k_ptr_type = ctx.register_ptr_type(key_type);
+            let k_ptr = builder.borrow_mut(Place::local(k_local), k_ptr_type);
+            builder.call_extern_void(
+                "gorget_map_iter_key",
+                vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
+            );
             ctx.register_local(&k_name, k_local, key_type);
 
             let v_local = builder.add_local(val_type, Some(&v_name));
-            builder.inline_c(format!("_{v} = (({val_c_type}*)_{dict}.values)[(size_t)_{idx}];",
-                v = v_local.0, dict = dict_id, idx = idx.0));
+            let v_ptr_type = ctx.register_ptr_type(val_type);
+            let v_ptr = builder.borrow_mut(Place::local(v_local), v_ptr_type);
+            builder.call_extern_void(
+                "gorget_map_iter_value",
+                vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(v_ptr)],
+            );
             ctx.register_local(&v_name, v_local, val_type);
         }
         Pattern::Binding(name) => {
             let k_local = builder.add_local(key_type, Some(name));
-            builder.inline_c(format!("_{k} = (({key_c_type}*)_{dict}.keys)[(size_t)_{idx}];",
-                k = k_local.0, dict = dict_id, idx = idx.0));
+            let k_ptr_type = ctx.register_ptr_type(key_type);
+            let k_ptr = builder.borrow_mut(Place::local(k_local), k_ptr_type);
+            builder.call_extern_void(
+                "gorget_map_iter_key",
+                vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
+            );
             ctx.register_local(name, k_local, key_type);
         }
         _ => {}
@@ -593,10 +599,8 @@ fn lower_for_set(
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let set_id = iter_local.0; // for InlineC element extraction
     let is_ordered = type_name.starts_with("Set__");
     let elem_gir_type = parse_set_elem_type(&type_name);
-    let elem_c_type = gir_to_c_type(&elem_gir_type);
     let elem_type = ctx.lookup_type_by_name(&elem_gir_type).unwrap_or(I64_TYPE);
 
     // i = 0  (for ordered: index into order array; for unordered: index into states)
@@ -663,8 +667,12 @@ fn lower_for_set(
 
         // Bind element using the real bucket index
         let elem_local = builder.add_local(elem_type, Some(var_name));
-        builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{ri}];",
-            e = elem_local.0, set = set_id, ri = real_i.0));
+        let elem_ptr_type = ctx.register_ptr_type(elem_type);
+        let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
+        builder.call_extern_void(
+            "gorget_map_iter_key",
+            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(real_i), FunctionBuilder::copy(elem_ptr)],
+        );
         ctx.register_local(var_name, elem_local, elem_type);
     } else {
         // state check
@@ -681,8 +689,12 @@ fn lower_for_set(
 
         // Bind element
         let elem_local = builder.add_local(elem_type, Some(var_name));
-        builder.inline_c(format!("_{e} = (({elem_c_type}*)_{set}.keys)[(size_t)_{i}];",
-            e = elem_local.0, set = set_id, i = i_local.0));
+        let elem_ptr_type = ctx.register_ptr_type(elem_type);
+        let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
+        builder.call_extern_void(
+            "gorget_map_iter_key",
+            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local), FunctionBuilder::copy(elem_ptr)],
+        );
         ctx.register_local(var_name, elem_local, elem_type);
     }
 
@@ -915,13 +927,6 @@ fn find_kv_split(s: &str) -> Option<usize> {
     None
 }
 
-/// Map a GIR/mangled type name to its C type name for InlineC key/value extraction.
-fn gir_to_c_type(gir_name: &str) -> String {
-    match gir_name {
-        "GorgetString" => "Str".to_string(),
-        _ => gir_name.to_string(),
-    }
-}
 
 /// Lower `for var in start..end: body` or `for var in start..=end: body`.
 fn lower_for_range(

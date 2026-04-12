@@ -1397,12 +1397,19 @@ fn lower_assert(
                 builder.branch(Operand::Copy(Place::local(cond_local)), pass_bb, fail_bb);
                 builder.switch_to(fail_bb);
 
-                // Format both values for the diagnostic message
-                let (lhs_fmt, lhs_arg) = assert_format_info_rich(ctx, builder, lhs_local, lhs_type);
-                let (rhs_fmt, rhs_arg) = assert_format_info_rich(ctx, builder, rhs_local, rhs_type);
-                builder.inline_c(format!(
-                    "gorget_panic(gorget_format(\"assertion failed: left {op_str} right\\n  left:  {lhs_fmt}\\n  right: {rhs_fmt}\", {lhs_arg}, {rhs_arg}));"
-                ));
+                // Convert both values to strings for the diagnostic
+                let lhs_str = assert_value_to_string(ctx, builder, lhs_local, lhs_type);
+                let rhs_str = assert_value_to_string(ctx, builder, rhs_local, rhs_type);
+
+                // Call gorget_assert_fail_values(op, left_str, right_str)
+                builder.call_extern_void(
+                    "gorget_assert_fail_values",
+                    vec![
+                        FunctionBuilder::const_str(op_str),
+                        FunctionBuilder::copy(lhs_str),
+                        FunctionBuilder::copy(rhs_str),
+                    ],
+                );
                 builder.unreachable();
                 builder.switch_to(pass_bb);
                 return;
@@ -1547,30 +1554,48 @@ fn emit_assert_comparison(
     builder.cmp(cmp_op, lhs_type, FunctionBuilder::copy(lhs_local), FunctionBuilder::copy(rhs_local))
 }
 
-/// Return (printf_format_spec, c_args_expression) for an assert diagnostic value.
-/// Handles all types: primitives, strings, and named types with display methods.
-fn assert_format_info_rich(
+/// Convert a local value to a GorgetString representation for assert diagnostics.
+/// Returns a LocalId holding a GorgetString/Str value.
+fn assert_value_to_string(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     local: LocalId,
     type_id: TypeId,
-) -> (String, String) {
-    let c_expr = format!("_{}", local.0);
+) -> LocalId {
+    let owned_string_type = ctx.type_mapper.owned_string_type;
 
-    // Primitive types: direct printf formatting
-    if is_primitive_type_for_assert(type_id) {
-        if type_id == F64_TYPE || type_id == F32_TYPE {
-            return ("%g".to_string(), format!("(double){c_expr}"));
-        } else if type_id == BOOL_TYPE {
-            return ("%s".to_string(), format!("({c_expr}) ? \"true\" : \"false\""));
-        } else {
-            return ("%lld".to_string(), format!("(long long)({c_expr})"));
-        }
+    // Integer types: call gorget_int_to_str
+    if type_id == I64_TYPE || type_id == I32_TYPE || type_id == I16_TYPE || type_id == I8_TYPE
+        || type_id == U64_TYPE || type_id == U32_TYPE || type_id == U16_TYPE || type_id == U8_TYPE
+    {
+        return builder.call_extern(
+            "gorget_int_to_str",
+            vec![FunctionBuilder::copy(local)],
+            owned_string_type,
+        );
     }
 
-    // String types: show the string value via %.*s (32-byte Str struct: {data, cap, len, alloc}).
+    // Float types: call gorget_float_to_str
+    if type_id == F64_TYPE || type_id == F32_TYPE {
+        return builder.call_extern(
+            "gorget_float_to_str",
+            vec![FunctionBuilder::copy(local)],
+            owned_string_type,
+        );
+    }
+
+    // Bool: call gorget_bool_to_str
+    if type_id == BOOL_TYPE {
+        return builder.call_extern(
+            "gorget_bool_to_str",
+            vec![FunctionBuilder::copy(local)],
+            owned_string_type,
+        );
+    }
+
+    // String types: use the value directly
     if ctx.type_mapper.is_string_type(type_id) {
-        return ("%.*s".to_string(), format!("(int)({c_expr}).len, (const char*)({c_expr}).data"));
+        return local;
     }
 
     // Named types: call display method if available
@@ -1587,25 +1612,25 @@ fn assert_format_info_rich(
                     .cloned()
                     .unwrap_or(display_method)
             };
-            // Call Type__display(&val) → Str, then format via %.*s
             let self_type = ctx.register_ptr_type(type_id);
             let self_ptr = builder.add_local(self_type, None);
             builder.emit_borrow(self_ptr, Place::local(local));
-            let owned_string_type = ctx.type_mapper.owned_string_type;
-            let result = builder.call(
+            return builder.call(
                 effective_method,
                 vec![FunctionBuilder::copy(self_ptr)],
                 owned_string_type,
             );
-            let result_c = format!("_{}", result.0);
-            return ("%.*s".to_string(), format!("(int)({result_c}).len, (const char*)({result_c}).data"));
         }
-        // Named type without display — show type name
-        return ("%s".to_string(), format!("\"<{type_name}>\""));
+        // Named type without display — static placeholder
+        let placeholder = builder.add_local(owned_string_type, None);
+        builder.assign(Place::local(placeholder), FunctionBuilder::const_str(format!("<{type_name}>")));
+        return placeholder;
     }
 
     // Opaque fallback
-    ("%s".to_string(), "\"<opaque>\"".to_string())
+    let placeholder = builder.add_local(owned_string_type, None);
+    builder.assign(Place::local(placeholder), FunctionBuilder::const_str("<opaque>"));
+    placeholder
 }
 
 /// Return `(op_str, CmpOp)` for a comparison BinaryOp, or None for non-comparison ops.
@@ -1619,16 +1644,6 @@ fn comparison_op_info(op: BinaryOp) -> Option<(&'static str, CmpOp)> {
         BinaryOp::GtEq  => Some((">=", CmpOp::Ge)),
         _ => None,
     }
-}
-
-/// Return true if type_id is a primitive numeric/bool type suitable for assert rich diagnostics.
-/// Strings and named types need special comparison logic and are excluded.
-fn is_primitive_type_for_assert(type_id: TypeId) -> bool {
-    matches!(type_id,
-        I64_TYPE | I32_TYPE | I16_TYPE | I8_TYPE |
-        U64_TYPE | U32_TYPE | U16_TYPE | U8_TYPE |
-        F64_TYPE | F32_TYPE | BOOL_TYPE
-    )
 }
 
 /// Generate a static assertion failure message for an assertion condition.
@@ -1677,27 +1692,32 @@ fn lower_snapshot(
     builder.assign(Place::local(val_local), val_op);
 
     let point_name = name.node.replace('\\', "\\\\").replace('"', "\\\"");
-    let c_expr = format!("_{}", val_local.0);
+    let point_arg = FunctionBuilder::const_str(&point_name);
 
-    // Emit the appropriate direct-write call based on the value's type
+    // Emit the appropriate snapshot write call based on the value's type.
+    // The runtime functions use __gorget_current_test internally.
     if val_type == I64_TYPE || val_type == I32_TYPE || val_type == I16_TYPE || val_type == I8_TYPE
         || val_type == U64_TYPE || val_type == U32_TYPE || val_type == U16_TYPE || val_type == U8_TYPE
     {
-        builder.inline_c(format!(
-            "__gorget_snapshot_write_int(__gorget_current_test, \"{point_name}\", (long long)({c_expr}));"
-        ));
+        builder.call_extern_void(
+            "__gorget_snapshot_write_int",
+            vec![point_arg, FunctionBuilder::copy(val_local)],
+        );
     } else if val_type == F64_TYPE || val_type == F32_TYPE {
-        builder.inline_c(format!(
-            "__gorget_snapshot_write_float(__gorget_current_test, \"{point_name}\", (double){c_expr});"
-        ));
+        builder.call_extern_void(
+            "__gorget_snapshot_write_float",
+            vec![point_arg, FunctionBuilder::copy(val_local)],
+        );
     } else if val_type == BOOL_TYPE {
-        builder.inline_c(format!(
-            "__gorget_snapshot_write_bool(__gorget_current_test, \"{point_name}\", {c_expr});"
-        ));
+        builder.call_extern_void(
+            "__gorget_snapshot_write_bool",
+            vec![point_arg, FunctionBuilder::copy(val_local)],
+        );
     } else if ctx.type_mapper.is_string_type(val_type) {
-        builder.inline_c(format!(
-            "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", {c_expr});"
-        ));
+        builder.call_extern_void(
+            "__gorget_snapshot_write_str",
+            vec![point_arg, FunctionBuilder::copy(val_local)],
+        );
     } else if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(val_type).cloned() {
         // Named types with display: call display, then write the result as a string
         let display_method = format!("{type_name}__display");
@@ -1721,21 +1741,23 @@ fn lower_snapshot(
                 vec![FunctionBuilder::copy(self_ptr)],
                 owned_string_type,
             );
-            builder.inline_c(format!(
-                "__gorget_snapshot_write_str(__gorget_current_test, \"{point_name}\", _{});",
-                result.0
-            ));
+            builder.call_extern_void(
+                "__gorget_snapshot_write_str",
+                vec![point_arg, FunctionBuilder::copy(result)],
+            );
         } else {
             // No display method — write null
-            builder.inline_c(format!(
-                "__gorget_snapshot_write_null(__gorget_current_test, \"{point_name}\");"
-            ));
+            builder.call_extern_void(
+                "__gorget_snapshot_write_null",
+                vec![point_arg],
+            );
         }
     } else {
         // Unknown type — write null
-        builder.inline_c(format!(
-            "__gorget_snapshot_write_null(__gorget_current_test, \"{point_name}\");"
-        ));
+        builder.call_extern_void(
+            "__gorget_snapshot_write_null",
+            vec![point_arg],
+        );
     }
 }
 

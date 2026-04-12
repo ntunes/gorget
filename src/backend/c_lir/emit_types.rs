@@ -2412,7 +2412,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         || n.starts_with("gorget_char_to_str") || n.starts_with("gorget_int_to_binary")
         || n.starts_with("gorget_int_to_hex") || n.starts_with("gorget_int_to_octal")
         || n.starts_with("gorget_int_to_float") || n.starts_with("gorget_float_to_int")
-        || n == "gorget_char_chr") {
+        || n == "gorget_char_chr" || n == "gorget_assert_fail_values") {
         out.push_str(crate::backend::c::c_runtime::RUNTIME_TOSTR);
     }
 

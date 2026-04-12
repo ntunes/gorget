@@ -721,6 +721,8 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
         "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" => &[1],
         "gorget_set_add" | "gorget_set_contains" | "gorget_set_remove" => &[1],
         "gorget_heap_push" => &[1],
+        // Dict/Set iteration output-parameter: arg 2 is void* out buffer
+        "gorget_map_iter_key" | "gorget_map_iter_value" => &[2],
         // Concurrency: mutex_new(size, void*), shared_new(size, void*)
         "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new" => &[1],
         // channel_send(ch, void*), guard_set(guard, void*, size)
@@ -1506,7 +1508,21 @@ pub(super) fn resolve_param_abi(
     if runtime_arg_by_ptr(fn_name, param_idx) {
         return AbiKind::Ptr;
     }
+    // Runtime functions that take Str by value (not const char*)
+    if runtime_param_is_gorget_string(fn_name, param_idx) {
+        return AbiKind::GorgetString;
+    }
     AbiKind::Auto
+}
+
+/// Returns true if the given param of a runtime function takes `Str` by value.
+/// Without this, the C backend's catch-all coerces Str structs to `const char*` via .data.
+fn runtime_param_is_gorget_string(name: &str, idx: usize) -> bool {
+    match name {
+        "gorget_assert_fail_values" => idx == 1 || idx == 2,
+        "__gorget_snapshot_write_str" => idx == 1,
+        _ => false,
+    }
 }
 /// Sanitize a field name for C.
 pub(super) fn c_field_name(name: &str) -> String {
