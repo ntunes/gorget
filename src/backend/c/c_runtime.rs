@@ -6612,7 +6612,7 @@ static void __gorget_trace_val_str(FILE* fp, const char* v) {
     }
     fputc('"', fp);
 }
-static void __gorget_trace_val_Str(FILE* fp, Str v) { __gorget_trace_val_str(fp, v ? v : ""); }
+static void __gorget_trace_val_Str(FILE* fp, Str v) { __gorget_trace_val_str(fp, v.data ? (const char*)v.data : ""); }
 static void __gorget_trace_val_char(FILE* fp, char v) { fprintf(fp, "'%c'", v); }
 static void __gorget_trace_val_void(FILE* fp) { (void)fp; }
 
