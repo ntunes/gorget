@@ -698,11 +698,16 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         let params: Vec<String> = ext.params.iter()
             .map(|p| {
                 // Void params are invalid in LLVM — replace with ptr (typically closure env)
-                // Aggregate params: use ptr to match C ABI (>16 bytes passed by indirect
-                // reference on aarch64). LLVM 14 and C compilers may disagree on register
-                // vs indirect passing for 32-byte structs, so always use ptr for externs.
-                if *p == LirType::Void || p.is_aggregate() { "ptr".to_string() }
-                else { llvm_type_full(p, snames) }
+                if *p == LirType::Void { return "ptr".to_string(); }
+                // Aggregate params: small structs (≤16 bytes) pass in registers (aarch64 ABI),
+                // large structs (>16 bytes) pass by indirect reference (ptr).
+                if p.is_aggregate() {
+                    if is_small_aggregate(p, &module.structs) {
+                        return llvm_type_full(p, snames);
+                    }
+                    return "ptr".to_string();
+                }
+                llvm_type_full(p, snames)
             })
             .collect();
         let variadic = if ext.is_variadic {
@@ -2550,9 +2555,17 @@ fn emit_inst(
                         _ => false,
                     };
 
-                    if expects_agg && is_ptr {
-                        // Aggregate params are declared as ptr in the extern (C ABI).
-                        // Just pass the pointer directly — no struct load needed.
+                    let expects_small_agg = expected_ty.map_or(false, |t| {
+                        t.is_aggregate() && is_small_aggregate(t, &module.structs)
+                    });
+                    if expects_small_agg && is_ptr {
+                        // Small aggregate (≤16 bytes): load from ptr and pass by value
+                        let agg_ty = llvm_type_full(expected_ty.unwrap(), snames);
+                        let load_name = format!("aggload.{block_id}.{ext_uid}.{i}");
+                        spill_lines.push(format!("  %{load_name} = load {agg_ty}, ptr %v{}", a.0));
+                        format!("{agg_ty} %{load_name}")
+                    } else if expects_agg && is_ptr {
+                        // Large aggregate (>16 bytes): pass pointer (indirect C ABI).
                         format!("ptr %v{}", a.0)
                     } else if is_str_to_cstr {
                         // GorgetString → const char*: load .data pointer from field 0
