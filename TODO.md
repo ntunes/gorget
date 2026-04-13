@@ -38,7 +38,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 781/913 (85.5%, 95.9% of processable), 99 process failures**. Parser fixes: extern equip skip, EFString, meta-for-in-match, null byte escape placeholder. Remaining: ~6 toml/yaml (1 garbled extra each from local-var leak), ~8 tensor (generic `Numeric T` bounds), ~7 spawn/generic/via edge cases, ~2 math3d (static factory methods filtered), ~4 bench (0/0). [updated: 2026-04-13]
+- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 782/913 (85.6%), adjusted 857/889 (96.4%)**. `lowerer_comparison` test added to integration.rs. Remaining real mismatches (32): 6 spawn wrappers, 8 tensor (generic Numeric bounds), 5 generic/trait monomorphization, 4 toml/yaml (+1 fn each), 2 math3d/stress, 7 other. 24 crashes (all httpserver — segfault in import chain). 75 error-only (rust=0). [updated: 2026-04-13]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
