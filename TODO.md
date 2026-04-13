@@ -2,7 +2,7 @@
 
 ## High
 
-- **Type-aware ABI resolution — remaining cleanup**: Phases 1-5 done. Major whitelists deleted (`runtime_arg_by_ptr`, `collection_self_by_ptr`, `GORGET_STRING_PTR_METHODS`). Minimal `legacy_self_by_ptr` fallback remains for unmapped GIR names (`gorget_str_push` etc.). Diagnostic confirmed zero `gorget_*` functions use whitelist fallback. Remaining: (a) printf/fprintf structural rewriting uses `is_printf` flag not names — fine. (b) spawn/await uses module.spawned_fns — structural, leave as-is. (c) `collection_void_param_indices` still exists for dynamically-generated higher-order collection helpers (Dict__K__V__filter etc.) — needs arg_abis on their LirExtern at generation time. (d) `str_fn_non_str_arg` only has gorget_str_join — can be removed once str_join gets a ByValue aggregate ABI kind. [demoted from High: 2026-04-12]
+- **Type-aware ABI resolution — remaining cleanup**: All runtime_extern_sig entries tagged, higher-order collection helpers tagged at ensure_extern time, ByValue ABI kind added. Remaining whitelists: `collection_void_param_indices` (dead for tagged functions, kept for edge cases), `legacy_self_by_ptr` (8 lines for unmapped GIR names), `str_fn_non_str_arg` (1 entry, dead for tagged gorget_str_join). Printf/spawn/await are structural codegen — leave as-is. [demoted from High: 2026-04-12]
 
 - **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 
