@@ -3557,7 +3557,18 @@ equip Parser:
 # ── Public API ───────────────────────────────────────────────
 
 Module parse_source(String source):
-    Vector[SpannedToken] tokens = lex_tokenize(source)
+    Vector[SpannedToken] all_tokens = lex_tokenize(source)
+    # Strip comment tokens from the stream — the Rust parser does this at init.
+    # Without stripping, comments between structural tokens (COLON NEWLINE INDENT)
+    # cause expect_tok failures that corrupt block parsing in equip/trait/etc.
+    Vector[SpannedToken] tokens = Vector[SpannedToken]()
+    int ti = 0
+    while ti < all_tokens.len():
+        SpannedToken tok = all_tokens.get(ti).unwrap()
+        int tag = token_tag(tok.lex_token)
+        if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
+            tokens.push(tok)
+        ti = ti + 1
     Parser p = Parser(tokens, 0, Vector[String](), 0)
     Module m = p.parse_module()
     return m
