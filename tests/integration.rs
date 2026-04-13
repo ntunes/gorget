@@ -10547,6 +10547,137 @@ fn type_comparison() {
     eprintln!("\n================================\n");
 }
 
+// GIR Lowerer Comparison Test
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn lowerer_comparison() {
+    // 1. Build the Gorget lowerer driver
+    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    // 2. Discover all top-level .gg fixture files
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    assert!(
+        !fixtures.is_empty(),
+        "No .gg fixtures found in {}",
+        fixtures_dir.display()
+    );
+
+    let mut matched = 0;
+    let mut mismatched_error = 0; // rust=0 (error fixtures the Rust compiler rejects)
+    let mut mismatched_real: Vec<(String, usize, usize)> = Vec::new(); // (name, rust, gorget)
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+
+    // 3. Rust-side GIR emitter binary path
+    let gg_exe = manifest_dir.join("target/debug/gg");
+
+    for fixture in &fixtures {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+
+        // Rust side: get fn count via --emit-gir
+        let rust_out = run_with_timeout(
+            Command::new(&gg_exe)
+                .arg("build")
+                .arg("--emit-gir")
+                .arg(fixture),
+            &fname,
+        );
+        let rust_fn_count = String::from_utf8_lossy(&rust_out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("fn "))
+            .count();
+
+        // Gorget side: run the lowerer driver
+        let gorget_out = run_with_timeout(
+            Command::new(&driver_exe)
+                .arg(fixture)
+                .arg(&lib_dir),
+            &fname,
+        );
+
+        if gorget_out.status.success() {
+            let gorget_fn_count = String::from_utf8_lossy(&gorget_out.stdout)
+                .lines()
+                .filter(|l| l.starts_with("fn "))
+                .count();
+
+            compared += 1;
+
+            if rust_fn_count == gorget_fn_count {
+                matched += 1;
+            } else if rust_fn_count == 0 {
+                // Error fixtures: Rust rejects at semantic analysis, self-host lowers anyway
+                mismatched_error += 1;
+            } else {
+                mismatched_real.push((fname, rust_fn_count, gorget_fn_count));
+            }
+        } else {
+            let stderr = String::from_utf8_lossy(&gorget_out.stderr);
+            let first_line = stderr.lines().next().unwrap_or("(no stderr)").to_string();
+            crashes.push((fname, first_line));
+        }
+    }
+
+    let total = compared + crashes.len();
+
+    // 4. Cleanup
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // 5. Report
+    eprintln!("\n================================");
+    eprintln!("GIR Lowerer Comparison");
+    eprintln!("================================");
+    eprintln!(
+        "Total: {total}, Matched: {matched}, Error-only: {mismatched_error}, Real mismatches: {}, Crashes: {}",
+        mismatched_real.len(),
+        crashes.len()
+    );
+    let adjusted = matched + mismatched_error;
+    let processable = total - crashes.len();
+    if processable > 0 {
+        eprintln!(
+            "Adjusted: {adjusted}/{processable} ({:.1}%)",
+            adjusted as f64 / processable as f64 * 100.0
+        );
+    }
+
+    if !crashes.is_empty() {
+        eprintln!("\nCRASHES ({}):", crashes.len());
+        for (name, msg) in crashes.iter().take(10) {
+            eprintln!("  {name}: {msg}");
+        }
+        if crashes.len() > 10 {
+            eprintln!("  ... and {} more", crashes.len() - 10);
+        }
+    }
+
+    if !mismatched_real.is_empty() {
+        eprintln!("\nREAL MISMATCHES ({}):", mismatched_real.len());
+        for (name, rust, gorget) in mismatched_real.iter().take(30) {
+            let arrow = if gorget > rust { "+" } else { "-" };
+            eprintln!("  {name}: rust={rust} gorget={gorget} ({arrow}{})", rust.abs_diff(*gorget));
+        }
+        if mismatched_real.len() > 30 {
+            eprintln!("  ... and {} more", mismatched_real.len() - 30);
+        }
+    }
+
+    // Diagnostic test — always passes. Mismatches guide development.
+    eprintln!("\n================================\n");
+}
+
 // Numeric trait integration tests
 
 #[test]

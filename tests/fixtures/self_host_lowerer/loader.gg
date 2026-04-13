@@ -13,8 +13,12 @@ from std.collections import Vector, Dict
 # ── Path resolution ──────────────────────────────────────
 
 String resolve_module_path(String base_dir, String module_path):
-    # Convert dotted module path to file path: "std.fs" → "base_dir/std/fs.gg"
-    String path_part = module_path.replace(".", "/")
+    # The Rust compiler maps std.net.{socket,tls,udp} to lib/std/{socket,tls,udp}.gg
+    # via builtin_module_source (there is no std/net/ directory on disk).
+    String resolved = module_path
+    if module_path.starts_with("std.net."):
+        resolved = "std." + module_path.slice(8, module_path.len())
+    String path_part = resolved.replace(".", "/")
     return base_dir + "/" + path_part + ".gg"
 
 String parent_dir(String path):
