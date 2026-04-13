@@ -1,0 +1,488 @@
+# SSA construction pass for LIR.
+#
+# Promotes scalar slots to SSA values using a simplified Braun et al. 2013
+# algorithm ("Simple and Efficient Construction of SSA Form").
+#
+# 1. Identify promotable slots (scalar type, no SlotAddr).
+# 2. Walk blocks, tracking current definition per slot.
+# 3. SlotStore to promoted slot → record new definition, remove instruction.
+# 4. SlotLoad from promoted slot → replace with reaching definition.
+# 5. At merge points → insert block parameters (phis), patch terminators.
+# 6. Apply value substitutions across all instructions/terminators.
+
+from lir import LirFunction, LirBlock, LirInst, LirTerm, LirSlot, BlockParam, SwitchCase
+from lir import lir_is_scalar, lir_fn_next_value
+from lir import LT_BOOL, LT_F32, LT_F64, LT_PTR
+from std.collections import Vector, Dict
+
+# ── Find promotable slots ───────────────────────────────────
+
+# A slot is promotable if it has scalar type and no SlotAddr references it.
+Dict[int, bool] find_promotable_slots(LirFunction &f):
+    Dict[int, bool] candidates = {}
+
+    # All scalar slots are candidates
+    int si = 0
+    while si < f.slots.len():
+        LirSlot slot = f.slots.get(si).unwrap()
+        if lir_is_scalar(slot.ty):
+            candidates.put(si, true)
+        si += 1
+
+    # Remove any slot referenced by SlotAddr
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            match inst:
+                case ISlotAddr(_, slot):
+                    if candidates.contains(slot):
+                        candidates.remove(slot)
+                else:
+                    pass
+            ii += 1
+        bi += 1
+
+    return candidates
+
+# ── Compute predecessor blocks ──────────────────────────────
+
+Vector[Vector[int]] compute_predecessors(LirFunction &f):
+    Vector[Vector[int]] preds = []
+    int pi = 0
+    while pi < f.blocks.len():
+        Vector[int] empty = []
+        preds.push(empty)
+        pi += 1
+
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        Vector[int] succs = term_successors(blk.term)
+        int si = 0
+        while si < succs.len():
+            int succ = succs.get(si).unwrap()
+            Vector[int] pred_list = preds.get(succ).unwrap()
+            pred_list.push(bi)
+            preds.set(succ, pred_list)
+            si += 1
+        bi += 1
+
+    return preds
+
+Vector[int] term_successors(LirTerm term):
+    Vector[int] result = []
+    match term:
+        case TRet(_):
+            pass
+        case TRetVoid():
+            pass
+        case TUnreachable():
+            pass
+        case TJump(target, _):
+            result.push(target)
+        case TBranch(_, then_bb, _, else_bb, _):
+            result.push(then_bb)
+            result.push(else_bb)
+        case TSwitch(_, cases, default_bb, _):
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                result.push(sc.target)
+                ci += 1
+            result.push(default_bb)
+    return result
+
+# ── SSA Builder ─────────────────────────────────────────────
+
+# Key-encode (block_id, slot_id) as a single int for Dict lookup.
+int ssa_key(int bb, int slot): bb * 100000 + slot
+
+# Process one block: eliminate promoted SlotStore/SlotLoad.
+void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds):
+    LirBlock blk = f.blocks.get(bb).unwrap()
+    Vector[LirInst] new_insts = []
+
+    int ii = 0
+    while ii < blk.insts.len():
+        LirInst inst = blk.insts.get(ii).unwrap()
+        match inst:
+            case ISlotStore(slot, value, _):
+                if promotable.contains(slot):
+                    int resolved = resolve_value(value, &value_subst)
+                    current_def.put(ssa_key(bb, slot), resolved)
+                else:
+                    new_insts.push(inst)
+            case ISlotLoad(dst, slot, _):
+                if promotable.contains(slot):
+                    int reaching = read_variable(slot, bb, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
+                    current_def.put(ssa_key(bb, slot), reaching)
+                    if reaching != dst:
+                        value_subst.put(dst, reaching)
+                else:
+                    new_insts.push(inst)
+            else:
+                new_insts.push(inst)
+        ii += 1
+
+    blk.insts = new_insts
+    f.blocks.set(bb, blk)
+
+# Chase substitution chain to find canonical value.
+int resolve_value(int val, Dict[int, int] &value_subst):
+    int current = val
+    int iters = 0
+    while value_subst.contains(current) and iters < 100:
+        current = value_subst.get(current).unwrap()
+        iters += 1
+    return current
+
+# Read the reaching definition of a slot at block entry.
+int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds):
+    int key = ssa_key(bb, slot)
+    if current_def.contains(key):
+        return current_def.get(key).unwrap()
+
+    Vector[int] bb_preds = preds.get(bb).unwrap()
+
+    if bb_preds.len() == 0:
+        # Entry block, no definition — create zero constant
+        int val = lir_fn_next_value(&f)
+        LirSlot s = f.slots.get(slot).unwrap()
+        LirBlock blk = f.blocks.get(bb).unwrap()
+        if s.ty == LT_BOOL:
+            Vector[LirInst] new_insts = [IBoolConst(val, false)]
+            int ni = 0
+            while ni < blk.insts.len():
+                new_insts.push(blk.insts.get(ni).unwrap())
+                ni += 1
+            blk.insts = new_insts
+        elif s.ty == LT_F32 or s.ty == LT_F64:
+            Vector[LirInst] new_insts = [IFConst(val, s.ty, 0)]
+            int ni = 0
+            while ni < blk.insts.len():
+                new_insts.push(blk.insts.get(ni).unwrap())
+                ni += 1
+            blk.insts = new_insts
+        elif s.ty == LT_PTR:
+            Vector[LirInst] new_insts = [INullPtr(val)]
+            int ni = 0
+            while ni < blk.insts.len():
+                new_insts.push(blk.insts.get(ni).unwrap())
+                ni += 1
+            blk.insts = new_insts
+        else:
+            Vector[LirInst] new_insts = [IIConst(val, s.ty, 0)]
+            int ni = 0
+            while ni < blk.insts.len():
+                new_insts.push(blk.insts.get(ni).unwrap())
+                ni += 1
+            blk.insts = new_insts
+        f.blocks.set(bb, blk)
+        current_def.put(key, val)
+        return val
+    elif bb_preds.len() == 1:
+        # Single predecessor — use its definition
+        int pred = bb_preds.get(0).unwrap()
+        int val = read_variable(slot, pred, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
+        current_def.put(key, val)
+        return val
+    else:
+        # Multiple predecessors — need block parameter (phi)
+        return add_block_param(slot, bb, &f, &block_params, &current_def, &incomplete_phis)
+
+# Add a block parameter for a slot at a merge point.
+int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_params, Dict[int, int] &current_def, Dict[int, int] &incomplete_phis):
+    int key = ssa_key(bb, slot)
+    if block_params.contains(key):
+        return block_params.get(key).unwrap()
+
+    LirSlot s = f.slots.get(slot).unwrap()
+    int param_val = lir_fn_next_value(&f)
+    LirBlock blk = f.blocks.get(bb).unwrap()
+    blk.params.push(BlockParam(param_val, s.ty))
+    f.blocks.set(bb, blk)
+
+    block_params.put(key, param_val)
+    current_def.put(key, param_val)
+    incomplete_phis.put(key, param_val)
+
+    return param_val
+
+# ── Value substitution ──────────────────────────────────────
+
+void apply_value_substitutions(LirFunction &f, Dict[int, int] &value_subst):
+    if value_subst.len() == 0:
+        return
+
+    int bi = 0
+    while bi < f.blocks.len():
+        LirBlock blk = f.blocks.get(bi).unwrap()
+        # Substitute in instructions
+        Vector[LirInst] new_insts = []
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = substitute_inst(blk.insts.get(ii).unwrap(), &value_subst)
+            new_insts.push(inst)
+            ii += 1
+        blk.insts = new_insts
+        # Substitute in terminator
+        blk.term = substitute_term(blk.term, &value_subst)
+        f.blocks.set(bi, blk)
+        bi += 1
+
+int sub_val(int v, Dict[int, int] &subst):
+    if subst.contains(v):
+        return subst.get(v).unwrap()
+    return v
+
+Vector[int] sub_vals(Vector[int] vals, Dict[int, int] &subst):
+    Vector[int] result = []
+    int i = 0
+    while i < vals.len():
+        result.push(sub_val(vals.get(i).unwrap(), &subst))
+        i += 1
+    return result
+
+LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
+    match inst:
+        case ISlotStore(slot, value, is_move):
+            return ISlotStore(slot, sub_val(value, &subst), is_move)
+        case IAdd(dst, ty, lhs, rhs, ovf):
+            return IAdd(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+        case ISub(dst, ty, lhs, rhs, ovf):
+            return ISub(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+        case IMul(dst, ty, lhs, rhs, ovf):
+            return IMul(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+        case IDiv(dst, ty, lhs, rhs):
+            return IDiv(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IRem(dst, ty, lhs, rhs):
+            return IRem(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IMod(dst, ty, lhs, rhs):
+            return IMod(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case INeg(dst, ty, op):
+            return INeg(dst, ty, sub_val(op, &subst))
+        case IBitAnd(dst, ty, lhs, rhs):
+            return IBitAnd(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IBitOr(dst, ty, lhs, rhs):
+            return IBitOr(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IBitXor(dst, ty, lhs, rhs):
+            return IBitXor(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IBitNot(dst, ty, op):
+            return IBitNot(dst, ty, sub_val(op, &subst))
+        case IShl(dst, ty, lhs, rhs):
+            return IShl(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case IShr(dst, ty, lhs, rhs):
+            return IShr(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case ICmp(dst, op, lhs, rhs):
+            return ICmp(dst, op, sub_val(lhs, &subst), sub_val(rhs, &subst))
+        case INot(dst, op):
+            return INot(dst, sub_val(op, &subst))
+        case IIntCast(dst, val, to):
+            return IIntCast(dst, sub_val(val, &subst), to)
+        case IFloatCast(dst, val, to):
+            return IFloatCast(dst, sub_val(val, &subst), to)
+        case IIntToFloat(dst, val, to):
+            return IIntToFloat(dst, sub_val(val, &subst), to)
+        case IFloatToInt(dst, val, to):
+            return IFloatToInt(dst, sub_val(val, &subst), to)
+        case IPtrCast(dst, val):
+            return IPtrCast(dst, sub_val(val, &subst))
+        case IBitcast(dst, val, to):
+            return IBitcast(dst, sub_val(val, &subst), to)
+        case ILoad(dst, ptr, ty):
+            return ILoad(dst, sub_val(ptr, &subst), ty)
+        case IStore(ptr, val):
+            return IStore(sub_val(ptr, &subst), sub_val(val, &subst))
+        case IFieldPtr(dst, base, sid, field):
+            return IFieldPtr(dst, sub_val(base, &subst), sid, field)
+        case IElemPtr(dst, base, idx, esz):
+            return IElemPtr(dst, sub_val(base, &subst), sub_val(idx, &subst), esz)
+        case IMemset(ptr, byte, sz):
+            return IMemset(sub_val(ptr, &subst), sub_val(byte, &subst), sub_val(sz, &subst))
+        case IMemcpy(dp, sp, sz):
+            return IMemcpy(sub_val(dp, &subst), sub_val(sp, &subst), sub_val(sz, &subst))
+        case ICall(dst, func, args):
+            return ICall(dst, func, sub_vals(args, &subst))
+        case ICallExtern(dst, name, args, orig, abis):
+            return ICallExtern(dst, name, sub_vals(args, &subst), orig, abis)
+        case ICallPtr(dst, callee, args):
+            return ICallPtr(dst, sub_val(callee, &subst), sub_vals(args, &subst))
+        case IBoundsCheck(idx, len):
+            return IBoundsCheck(sub_val(idx, &subst), sub_val(len, &subst))
+        case IDivCheck(divisor):
+            return IDivCheck(sub_val(divisor, &subst))
+        case IPrintf(fmt, args):
+            return IPrintf(fmt, sub_vals(args, &subst))
+        case IFprintf(fd, fmt, args):
+            return IFprintf(sub_val(fd, &subst), fmt, sub_vals(args, &subst))
+        else:
+            return inst
+    return inst
+
+LirTerm substitute_term(LirTerm term, Dict[int, int] &subst):
+    match term:
+        case TRet(v):
+            return TRet(sub_val(v, &subst))
+        case TJump(target, args):
+            return TJump(target, sub_vals(args, &subst))
+        case TBranch(cond, then_bb, then_args, else_bb, else_args):
+            return TBranch(sub_val(cond, &subst), then_bb, sub_vals(then_args, &subst), else_bb, sub_vals(else_args, &subst))
+        case TSwitch(val, cases, default_bb, default_args):
+            Vector[SwitchCase] new_cases = []
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                new_cases.push(SwitchCase(sc.value, sc.target, sub_vals(sc.args, &subst)))
+                ci += 1
+            return TSwitch(sub_val(val, &subst), new_cases, default_bb, sub_vals(default_args, &subst))
+        else:
+            return term
+    return term
+
+# ── Terminator patching ─────────────────────────────────────
+
+void patch_terminators(LirFunction &f, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &current_def, Vector[Vector[int]] &preds):
+    # Iteratively resolve reaching definitions for phis
+    bool changed = true
+    while changed:
+        changed = false
+        # For each incomplete phi, ensure all predecessors have definitions
+        Vector[int] phi_keys = incomplete_phis.keys()
+        int ki = 0
+        while ki < phi_keys.len():
+            int key = phi_keys.get(ki).unwrap()
+            int target_bb = key / 100000
+            int slot = key - target_bb * 100000
+            Vector[int] bb_preds = preds.get(target_bb).unwrap()
+            int pi = 0
+            while pi < bb_preds.len():
+                int pred_bb = bb_preds.get(pi).unwrap()
+                int pred_key = ssa_key(pred_bb, slot)
+                if not current_def.contains(pred_key):
+                    # Create zero definition for missing predecessor
+                    int val = lir_fn_next_value(&f)
+                    LirSlot s = f.slots.get(slot).unwrap()
+                    LirBlock blk = f.blocks.get(pred_bb).unwrap()
+                    blk.insts.push(IIConst(val, s.ty, 0))
+                    f.blocks.set(pred_bb, blk)
+                    current_def.put(pred_key, val)
+                    changed = true
+                pi += 1
+            ki += 1
+
+    # Build target_bb → [slots in param order]
+    Dict[int, Vector[int]] target_slots = {}
+    Vector[int] phi_keys2 = incomplete_phis.keys()
+    int k2 = 0
+    while k2 < phi_keys2.len():
+        int key = phi_keys2.get(k2).unwrap()
+        int target_bb = key / 100000
+        int slot = key - target_bb * 100000
+        if target_slots.contains(target_bb):
+            Vector[int] slots = target_slots.get(target_bb).unwrap()
+            slots.push(slot)
+            target_slots.put(target_bb, slots)
+        else:
+            Vector[int] slots = [slot]
+            target_slots.put(target_bb, slots)
+        k2 += 1
+
+    # For each predecessor→target edge, collect args in param order
+    Vector[int] tbb_keys = target_slots.keys()
+    int ti = 0
+    while ti < tbb_keys.len():
+        int target_bb = tbb_keys.get(ti).unwrap()
+        Vector[int] slots = target_slots.get(target_bb).unwrap()
+        Vector[int] bb_preds = preds.get(target_bb).unwrap()
+        int pi = 0
+        while pi < bb_preds.len():
+            int pred_bb = bb_preds.get(pi).unwrap()
+            Vector[int] args = []
+            int si = 0
+            while si < slots.len():
+                int slot = slots.get(si).unwrap()
+                int pred_key = ssa_key(pred_bb, slot)
+                if current_def.contains(pred_key):
+                    args.push(current_def.get(pred_key).unwrap())
+                else:
+                    args.push(0)
+                si += 1
+            # Patch the terminator
+            LirBlock pred_blk = f.blocks.get(pred_bb).unwrap()
+            pred_blk.term = add_args_to_term(pred_blk.term, target_bb, args)
+            f.blocks.set(pred_bb, pred_blk)
+            pi += 1
+        ti += 1
+
+LirTerm add_args_to_term(LirTerm term, int target, Vector[int] args):
+    match term:
+        case TJump(t, existing):
+            if t == target:
+                int ai = 0
+                while ai < args.len():
+                    existing.push(args.get(ai).unwrap())
+                    ai += 1
+                return TJump(t, existing)
+            return TJump(t, existing)
+        case TBranch(cond, then_bb, then_args, else_bb, else_args):
+            if then_bb == target:
+                int ai = 0
+                while ai < args.len():
+                    then_args.push(args.get(ai).unwrap())
+                    ai += 1
+            if else_bb == target:
+                int ai = 0
+                while ai < args.len():
+                    else_args.push(args.get(ai).unwrap())
+                    ai += 1
+            return TBranch(cond, then_bb, then_args, else_bb, else_args)
+        case TSwitch(val, cases, default_bb, default_args):
+            Vector[SwitchCase] new_cases = []
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                if sc.target == target:
+                    int ai = 0
+                    while ai < args.len():
+                        sc.args.push(args.get(ai).unwrap())
+                        ai += 1
+                new_cases.push(sc)
+                ci += 1
+            if default_bb == target:
+                int ai = 0
+                while ai < args.len():
+                    default_args.push(args.get(ai).unwrap())
+                    ai += 1
+            return TSwitch(val, new_cases, default_bb, default_args)
+        else:
+            return term
+    return term
+
+# ── Main entry point ────────────────────────────────────────
+
+void construct_ssa(LirFunction &f):
+    Dict[int, bool] promotable = find_promotable_slots(&f)
+    if promotable.len() == 0:
+        return
+
+    Vector[Vector[int]] preds = compute_predecessors(&f)
+
+    Dict[int, int] current_def = {}
+    Dict[int, int] block_params = {}
+    Dict[int, int] incomplete_phis = {}
+    Dict[int, int] value_subst = {}
+
+    # Phase 1: Process blocks, replacing SlotLoad with reaching definitions
+    int bi = 0
+    while bi < f.blocks.len():
+        process_block(bi, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
+        bi += 1
+
+    # Phase 2: Apply value substitutions
+    apply_value_substitutions(&f, &value_subst)
+
+    # Phase 3: Patch terminators with block arguments for phis
+    patch_terminators(&f, &block_params, &incomplete_phis, &current_def, &preds)
