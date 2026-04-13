@@ -3132,6 +3132,14 @@ equip Parser:
                 self.advance()
                 self.skip_newlines()
                 continue
+            # Skip extern method declarations — they map to C runtime
+            # functions and produce garbled AST if parsed as regular methods.
+            # e.g., extern "C" bool is_match(String s) = "gorget_regex_is_match"
+            if self.check_kw(KW_EXTERN):
+                while not self.check_tok(TOK_NEWLINE) and not self.check_tok(TOK_DEDENT) and not self.at_end():
+                    self.advance()
+                self.skip_newlines()
+                continue
             # Skip 'async' modifier before method def
             if self.check_kw(KW_ASYNC):
                 self.advance()
