@@ -1795,11 +1795,12 @@ fn emit_inst(
             let to_ty = llvm_type(to);
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
 
-            // IntCast to float type → bitcast (reinterpret bits) or sitofp (convert)
+            // IntCast to float type → use sitofp/uitofp to convert value (not bitcast)
             if to.is_float() {
                 if src_ty.map_or(false, |t| t.is_integer()) {
-                    // Integer → Float: bitcast for enum payload reinterpretation
-                    writeln!(out, "  %v{} = bitcast {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                    // Integer → Float: convert value
+                    let op = if src_ty.map_or(true, is_signed) { "sitofp" } else { "uitofp" };
+                    writeln!(out, "  %v{} = {op} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
                 } else {
                     writeln!(out, "  %v{} = fadd {to_ty} 0.0, %v{}", dst.0, value.0).unwrap();
                 }
@@ -1807,8 +1808,9 @@ fn emit_inst(
                 let src_bits = src_ty.map_or(64, int_bits);
                 let to_bits = int_bits(to);
                 if src_ty.map_or(false, |t| t.is_float()) {
-                    // Float → Integer: bitcast for enum payload
-                    writeln!(out, "  %v{} = bitcast {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+                    // Float → Integer: convert value
+                    let op = if is_signed(to) { "fptosi" } else { "fptoui" };
+                    writeln!(out, "  %v{} = {op} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
                 } else if src_bits == to_bits {
                     writeln!(out, "  %v{} = add {to_ty} 0, %v{}", dst.0, value.0).unwrap();
                 } else if to_bits > src_bits {
