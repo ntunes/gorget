@@ -25,7 +25,7 @@ FIXTURES=(
 for fixture in "${FIXTURES[@]}"; do
     name=$(basename "$fixture" .gg)
     echo "Running $name..."
-    cargo run --release --quiet -- test --bench "$fixture" 2>&1 >> "$OUT"
+    cargo run --release --quiet -- test --bench "$fixture" >> "$OUT" 2>&1
     echo "" >> "$OUT"
 done
 

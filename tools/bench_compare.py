@@ -36,13 +36,31 @@ def parse(path):
     return label or path, result
 
 def parse_allocs(path):
-    allocs = 0
+    """Parse alloc-report lines from a snapshot file.
+    Returns dict with keys: allocs, frees, live_bytes,
+    array_new, array_clone, array_free,
+    string_new, string_cat, string_free.
+    Sums across all bench runs in the file.
+    """
+    totals = defaultdict(int)
     with open(path) as f:
         for line in f:
-            m = re.search(r"\[alloc-report\] allocs=(\d+)", line)
+            m = re.search(r"\[alloc-report\] allocs=(\d+) frees=(\d+) live_bytes=(\d+)", line)
             if m:
-                allocs += int(m.group(1))
-    return allocs
+                totals["allocs"] += int(m.group(1))
+                totals["frees"]  += int(m.group(2))
+                # live_bytes: skip (should be 0 at exit)
+            m = re.search(r"\[alloc-report\] array: new=(\d+) clone=(\d+) free=(\d+)", line)
+            if m:
+                totals["array_new"]   += int(m.group(1))
+                totals["array_clone"] += int(m.group(2))
+                totals["array_free"]  += int(m.group(3))
+            m = re.search(r"\[alloc-report\] string: new=(\d+) cat=(\d+) free=(\d+)", line)
+            if m:
+                totals["string_new"] += int(m.group(1))
+                totals["string_cat"] += int(m.group(2))
+                totals["string_free"] += int(m.group(3))
+    return totals
 
 def fmt_ns(ns):
     if ns >= 1_000_000: return f"{ns/1_000_000:.2f}ms"
@@ -51,6 +69,11 @@ def fmt_ns(ns):
 
 def fmt_iters(n):
     if n >= 1_000_000: return f"{n/1_000_000:.0f}M"
+    if n >= 1_000:     return f"{n/1_000:.0f}K"
+    return str(n)
+
+def fmt_count(n):
+    if n >= 1_000_000: return f"{n/1_000_000:.1f}M"
     if n >= 1_000:     return f"{n/1_000:.0f}K"
     return str(n)
 
@@ -66,7 +89,7 @@ if len(files) < 2:
     sys.exit(1)
 
 snapshots = [parse(f) for f in files]
-allocs = [parse_allocs(f) for f in files]
+alloc_data = [parse_allocs(f) for f in files]
 labels = [s[0] for s in snapshots]
 data = [s[1] for s in snapshots]
 names = sorted(set().union(*[d.keys() for d in data]))
@@ -87,20 +110,7 @@ print(hdr)
 print("─" * len(hdr))
 
 # ── Rows ──
-prev_category = None
 for n in names:
-    # Category separator based on name patterns
-    cat = "String" if "string" in n.lower() or "trim" in n.lower() or "split" in n.lower() \
-        or "slice" in n.lower() or "char_at" in n.lower() or "fstring" in n.lower() \
-        or "replace" in n.lower() or "upper" in n.lower() or "contains" in n.lower() \
-        or "enumerate" in n.lower() or "codepoint" in n.lower() or "concat" in n.lower() \
-        or "literal" in n.lower() and "push" not in n.lower() \
-        else "Collection" if "vector" in n.lower() or "dict" in n.lower() or "set" in n.lower() \
-        else "Compute" if "fib" in n.lower() or "sum" in n.lower() or "range" in n.lower() \
-        or "vec2" in n.lower() or "match" in n.lower() or "option" in n.lower() \
-        or "closure" in n.lower() \
-        else "Other"
-
     row = f"{n:42}"
     vals = []
     for d in data:
@@ -116,25 +126,58 @@ for n in names:
         row += f" {pct(vals[0], vals[-1]):>10}"
     print(row)
 
-# ── Summary ──
+# ── Timing summary ──
 print("─" * len(hdr))
 row = f"{'Total iterations':42}"
 for ti in total_iters:
     row += f" {'':>8} {ti:>14,}"
 print(row)
 
-row = f"{'Total allocations':42}"
-for a in allocs:
-    row += f" {'':>8} {a:>14,}"
-if len(allocs) >= 2 and allocs[0] > 0:
-    row += f" {pct(allocs[0], allocs[-1]):>10}"
-print(row)
+# ── Alloc summary (only if data present) ──
+has_allocs = any(ad["allocs"] > 0 for ad in alloc_data)
+if has_allocs:
+    print()
+    alloc_hdr = f"{'alloc metric':42}"
+    for l in labels:
+        alloc_hdr += f" {l[:22]:>22}"
+    if ncols >= 2:
+        alloc_hdr += f"  {'Δ 1→{}'.format(ncols):>10}"
+    print(alloc_hdr)
+    print("─" * len(alloc_hdr))
 
-row = f"{'Allocs per iteration':42}"
-for ti, a in zip(total_iters, allocs):
-    row += f" {'':>8} {a/ti:>14.4f}"
-if len(allocs) >= 2 and total_iters[0] > 0:
-    base_api = allocs[0] / total_iters[0]
-    curr_api = allocs[-1] / total_iters[-1]
-    row += f" {pct(base_api, curr_api):>10}"
-print(row)
+    def alloc_row(label, key):
+        row = f"  {label:40}"
+        vals = []
+        for ad in alloc_data:
+            v = ad[key]
+            row += f" {fmt_count(v):>22}"
+            vals.append(v)
+        if len(vals) >= 2 and vals[0] > 0:
+            row += f"  {pct(vals[0], vals[-1]):>10}"
+        print(row)
+
+    alloc_row("total allocs",    "allocs")
+    alloc_row("total frees",     "frees")
+    alloc_row("array new",       "array_new")
+    alloc_row("array clone",     "array_clone")
+    alloc_row("string new",      "string_new")
+    alloc_row("string cat",      "string_cat")
+    alloc_row("string free",     "string_free")
+
+    print()
+    row = f"  {'allocs per iteration':40}"
+    for ti, ad in zip(total_iters, alloc_data):
+        api = ad["allocs"] / ti if ti else 0
+        row += f" {api:>22.4f}"
+    if len(total_iters) >= 2 and total_iters[0] > 0 and alloc_data[0]["allocs"] > 0:
+        base = alloc_data[0]["allocs"] / total_iters[0]
+        curr = alloc_data[-1]["allocs"] / total_iters[-1]
+        row += f"  {pct(base, curr):>10}"
+    print(row)
+else:
+    row = f"{'Total allocations':42}"
+    for _ in alloc_data:
+        row += f" {'':>8} {'(no data)':>14}"
+    row += f" {'':>10}"
+    print(row)
+    print("  → Run bench with alloc-report enabled to see allocation counts.")

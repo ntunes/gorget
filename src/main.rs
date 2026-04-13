@@ -2238,12 +2238,13 @@ fn main() {
                 println!("{line}");
             }
             if !stderr.is_empty() {
-                // Filter alloc-report and size-bucket lines from stderr.
                 for line in stderr.lines() {
                     let t = line.trim();
-                    if t.starts_with("[alloc-report]") || t.ends_with(" allocs") || t.is_empty() {
+                    if t.is_empty() {
                         continue;
                     }
+                    // In bench mode, pass alloc-report lines through so snapshot
+                    // scripts can capture allocation counts.
                     eprintln!("{line}");
                 }
             }

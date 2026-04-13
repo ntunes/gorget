@@ -1,0 +1,149 @@
+# Gorget benchmark snapshot: gorget-3-HEAD-allocs
+# Date: 2026-04-13T16:29:36Z
+# Commit: 114fa224c3d93778993529268560b79dc23125cb
+
+
+[alloc-report] allocs=333185517 frees=338716032 live_bytes=0
+[alloc-report] array: new=5530515 clone=0 free=5530515 (net=0)
+[alloc-report] string: new=0 cat=62020206 free=315621809 (net=18446744073455950013)
+[alloc-report] size buckets (alloc count by size range):
+  1-15 bytes: 315621809 allocs
+  16-31 bytes: 3010309 allocs
+  32-47 bytes: 460206 allocs
+  64-79 bytes: 460206 allocs
+  128-143 bytes: 6330721 allocs
+  240+ bytes: 7302266 allocs
+Running 16 benchmarks...
+
+  bench: string literal assign ... 400000000 iters, 4 ns/iter
+  bench: string len access ... 64000000 iters, 18 ns/iter
+  bench: string len x32 loop ... 640000 iters, 2.57 us/iter
+  bench: string copy named-to-named ... 200000000 iters, 6 ns/iter
+  bench: string concat ... 16000000 iters, 75 ns/iter
+  bench: Point construct ... 128000000 iters, 12 ns/iter
+  bench: Point field len ... 64000000 iters, 19 ns/iter
+  bench: Vector[int] push x100 ... 2000000 iters, 508 ns/iter
+  bench: Vector[String] push literal x100 ... 640000 iters, 2.69 us/iter
+  bench: Vector[String] push fstring x100 ... 160000 iters, 10.57 us/iter
+  bench: Vector[String] iter+sum len ... 160000 iters, 12.10 us/iter
+  bench: Dict[Str,int] put literal key x50 ... 1280000 iters, 1.07 us/iter
+  bench: Dict[Str,int] put fstring key x50 ... 160000 iters, 10.46 us/iter
+  bench: Dict[Str,Str] put fstring pair x50 ... 80000 iters, 15.95 us/iter
+  bench: string slice hot loop ... 640000 iters, 3.10 us/iter
+  bench: Vector[Point] push x50 ... 320000 iters, 5.90 us/iter
+
+16 benchmarks complete.
+
+
+[alloc-report] allocs=133622266 frees=140632369 live_bytes=0
+[alloc-report] array: new=7010103 clone=0 free=7010103 (net=0)
+[alloc-report] string: new=0 cat=0 free=119602060 (net=18446744073589949556)
+[alloc-report] size buckets (alloc count by size range):
+  1-15 bytes: 56080824 allocs
+  16-31 bytes: 46531339 allocs
+  32-47 bytes: 31010103 allocs
+Running 10 benchmarks...
+
+  bench: trim whitespace ... 640000 iters, 2.87 us/iter
+  bench: split and rejoin ... 4000000 iters, 323 ns/iter
+  bench: replace substring ... 16000000 iters, 104 ns/iter
+  bench: to_upper + to_lower ... 4000000 iters, 485 ns/iter
+  bench: contains+starts_with+ends_with ... 64000000 iters, 24 ns/iter
+  bench: fstring interpolation x10 ... 1280000 iters, 1.47 us/iter
+  bench: string iteration codepoints ... 8000000 iters, 214 ns/iter
+  bench: string enumerate ... 8000000 iters, 246 ns/iter
+  bench: slice x32 ... 320000 iters, 3.44 us/iter
+  bench: char_at x32 ... 2000000 iters, 586 ns/iter
+
+10 benchmarks complete.
+
+
+[alloc-report] allocs=74846977 frees=80887389 live_bytes=0
+[alloc-report] array: new=6040412 clone=0 free=6040412 (net=0)
+[alloc-report] string: new=0 cat=0 free=61030900 (net=18446744073648520716)
+[alloc-report] size buckets (alloc count by size range):
+  1-15 bytes: 61030900 allocs
+  16-31 bytes: 920412 allocs
+  32-47 bytes: 920412 allocs
+  64-79 bytes: 920412 allocs
+  128-143 bytes: 2611133 allocs
+  240+ bytes: 8443708 allocs
+Running 8 benchmarks...
+
+  bench: Vector[int] push x1000 ... 320000 iters, 4.41 us/iter
+  bench: Vector[int] sum via for ... 1280000 iters, 1.04 us/iter
+  bench: Vector[int] index access x100 ... 1280000 iters, 1.04 us/iter
+  bench: Vector[String] build+iter ... 160000 iters, 6.54 us/iter
+  bench: Dict[String,int] build+lookup x50 ... 80000 iters, 18.62 us/iter
+  bench: Dict[String,int] iterate keys ... 160000 iters, 11.73 us/iter
+  bench: Set[int] add+contains x100 ... 160000 iters, 9.65 us/iter
+  bench: Set[String] add+contains x50 ... 80000 iters, 17.33 us/iter
+
+8 benchmarks complete.
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:22:5
+   [0m[34m│[0m
+[0m[34m22[0m [0m[34m│[0m     [0m[33mint r = fib(20)[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:25:5
+   [0m[34m│[0m
+[0m[34m25[0m [0m[34m│[0m     [0m[33mint r = sum_range(1000)[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:28:5
+   [0m[34m│[0m
+[0m[34m28[0m [0m[34m│[0m     [0m[33mint total = 0[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:33:5
+   [0m[34m│[0m
+[0m[34m33[0m [0m[34m│[0m     [0m[33mVec2 a = Vec2(3.0, 4.0)[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:42:5
+   [0m[34m│[0m
+[0m[34m42[0m [0m[34m│[0m     [0m[33mfloat total = 0.0[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:52:5
+   [0m[34m│[0m
+[0m[34m52[0m [0m[34m│[0m     [0m[33mint total = 0[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:68:5
+   [0m[34m│[0m
+[0m[34m68[0m [0m[34m│[0m     [0m[33mint total = 0[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^[0m
+
+[0m[1m[38;5;11mwarning[0m[1m: unreachable code after diverging statement[0m
+   [0m[34m┌─[0m /workspace/gorget-3/tests/fixtures/bench_compute.gg:75:5
+   [0m[34m│[0m
+[0m[34m75[0m [0m[34m│[0m     [0m[33mint total = 0[0m
+   [0m[34m│[0m     [0m[33m^^^^^^^^^^^^^[0m
+
+
+[alloc-report] allocs=0 frees=0 live_bytes=0
+[alloc-report] array: new=0 clone=0 free=0 (net=0)
+[alloc-report] string: new=0 cat=0 free=0 (net=0)
+[alloc-report] size buckets (alloc count by size range):
+Running 8 benchmarks...
+
+  bench: fib(20) recursive ... 20000 iters, 61.88 us/iter
+  bench: sum range 1000 ... 320000 iters, 3.40 us/iter
+  bench: for range 0..100 ... 8000000 iters, 233 ns/iter
+  bench: Vec2 dot product x100 ... 1280000 iters, 1.10 us/iter
+  bench: struct construct+access x100 ... 2000000 iters, 841 ns/iter
+  bench: match int x100 ... 2000000 iters, 519 ns/iter
+  bench: while loop 10000 ... 80000 iters, 25.02 us/iter
+  bench: nested loop 100x100 ... 40000 iters, 33.83 us/iter
+
+8 benchmarks complete.
+
