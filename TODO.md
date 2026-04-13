@@ -13,7 +13,6 @@
 
 - **LIR value/slot split loses GIR MoveZero for consuming args**: Runtime safety net covers `gorget_array_set` and `gorget_array_insert`. `gorget_map_put` can't use it (called internally by put_cloned/grow/rehash — zeroing corrupts source). `gorget_set_add` delegates to map_put. The dict[key].push() CoW sever fix handles the dict double-free case at the GIR level. Proper LIR fix: value→slot ownership propagation. [updated: 2026-04-12]
 
-- **String.find() returns 0 instead of -1 when not found**: `gorget_str_find` returns -1 correctly, but the sentinel-to-Option wrapping converts it to `Option::None`. When assigned to `int` via auto-unwrap, the None payload reads as 0 (from zero-init), not -1. Affects `index_of()` too. Workaround: use `contains()` to guard, or compare with `Option[int]` directly. [added: 2026-04-12]
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 

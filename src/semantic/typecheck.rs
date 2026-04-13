@@ -3365,6 +3365,11 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "str" | "String" => match method {
+                "find" => {
+                    // String.find() removed — use index_of() instead.
+                    // (Vector.find() still exists for predicate search.)
+                    None
+                }
                 "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {

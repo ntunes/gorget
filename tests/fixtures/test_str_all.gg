@@ -67,8 +67,8 @@ void main():
     print(ch0)
     String ch4 = s.char_at(4)
     print(ch4)
-    print(f"{s.find("world").unwrap()}")
-    print(f"{s.find("xyz").is_none()}")
+    print(f"{s.index_of("world").unwrap()}")
+    print(f"{s.index_of("xyz").is_none()}")
 
     # --- Slicing ---
     String sub = s.substring(0, 5)

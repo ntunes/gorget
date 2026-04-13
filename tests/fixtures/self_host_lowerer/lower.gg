@@ -796,7 +796,7 @@ String mangle_trait_name(String raw):
     # due to sentinel-to-Option unwrap bug in the compiler.
     if not raw.contains("["):
         return raw
-    int bracket = raw.find("[")
+    int bracket = raw.index_of("[").unwrap()
     String base = raw.slice(0, bracket)
     String args_str = raw.slice(bracket + 1, raw.len() - 1)
     # Split args by ", " and mangle each

@@ -4,7 +4,7 @@ void main():
     String short = "hi"
     print(f"long needle: {short.contains("hello world")}")
     print(f"long index_of: {short.index_of("hello world").is_none()}")
-    print(f"long find: {short.find("hello world").is_none()}")
+    print(f"long find: {short.index_of("hello world").is_none()}")
 
     # --- Empty needle ---
     String s = "hello"
@@ -39,9 +39,9 @@ void main():
     # --- find vs index_of consistency ---
     String haystack = "the quick brown fox"
     Option[int] idx1 = haystack.index_of("brown")
-    Option[int] idx2 = haystack.find("brown")
+    Option[int] idx2 = haystack.index_of("brown")
     print(f"idx_of=find: {idx1.unwrap() == idx2.unwrap()}")
-    print(f"both none: {haystack.index_of("xyz").is_none() and haystack.find("xyz").is_none()}")
+    print(f"both none: {haystack.index_of("xyz").is_none() and haystack.index_of("xyz").is_none()}")
 
     # --- Count edge cases ---
     print(f"empty count: {"".count("x")}")

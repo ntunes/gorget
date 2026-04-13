@@ -30,8 +30,8 @@ void main():
     else:
         print("in: no")
 
-    # Test find with String arg
-    int idx = base.find(needle)
+    # Test index_of with String arg
+    int idx = base.index_of(needle).unwrap()
     print(idx)
 
     # Test replace with String args

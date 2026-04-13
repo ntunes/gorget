@@ -179,7 +179,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_str_contains" => sig(vec![s(), s()], LirType::Bool, _s2()),
         "gorget_str_starts_with" => sig(vec![s(), s()], LirType::Bool, _s2()),
         "gorget_str_ends_with" => sig(vec![s(), s()], LirType::Bool, _s2()),
-        "gorget_str_find" => sig(vec![s(), s()], LirType::I64, _s2()),
+        // gorget_str_find removed from public API — use index_of() instead.
+        // The C function still exists (called internally by gorget_str_index_of).
         "gorget_str_index_of" => sig(vec![s(), s()], LirType::I64, _s2()),
         "gorget_str_count" => sig(vec![s(), s()], LirType::I64, _s2()),
         "gorget_str_trim" | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" => sig(vec![s()], s(), _s1()),
