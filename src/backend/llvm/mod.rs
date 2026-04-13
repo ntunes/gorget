@@ -744,8 +744,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_push_line(ptr, ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
     // Parse helpers
-    writeln!(out, "declare i32 @gorget_try_parse_int(ptr, ptr)").unwrap();
-    writeln!(out, "declare i32 @gorget_try_parse_float(ptr, ptr)").unwrap();
+    // gorget_try_parse_int/float take (const char* s, i64 len) and return
+    // a 16-byte struct {value, ok}. C pads bool to 8 bytes for alignment,
+    // so use {i64, i64} / {double, i64} to match the C ABI on aarch64.
+    writeln!(out, "declare {{i64, i64}} @gorget_try_parse_int(ptr, i64)").unwrap();
+    writeln!(out, "declare {{double, i64}} @gorget_try_parse_float(ptr, i64)").unwrap();
     writeln!(out, "declare ptr @gorget_str_to_cstr(ptr)").unwrap();
     // CStr → GorgetString wrapping (for extern "C" return values)
     if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
@@ -3042,26 +3045,29 @@ fn emit_inst(
                     let uid = *trap_counter;
                     *trap_counter += 1;
                     let pfx = format!("parse.{block_id}.{uid}");
-                    // Coerce Str arg to const char* via gorget_str_to_cstr
-                    // The arg is either a Str (aggregate ptr) or already a ptr
-                    writeln!(out, "  %{pfx}.cstr = call ptr @gorget_str_to_cstr(ptr %v{})", args[0].0).unwrap();
-                    // Alloca for output value
-                    let (val_ty, try_fn) = if is_float_parse {
-                        ("double", "gorget_try_parse_float")
+                    // The Str arg has .data at field 0 and .len at field 2.
+                    // gorget_try_parse_int/float takes (const char* s, size_t len).
+                    writeln!(out, "  %{pfx}.datap = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[0].0).unwrap();
+                    writeln!(out, "  %{pfx}.data = load ptr, ptr %{pfx}.datap").unwrap();
+                    writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetString, ptr %v{}, i32 0, i32 2", args[0].0).unwrap();
+                    writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                    // Call → returns {value, ok} struct in registers.
+                    // C struct has bool padded to 8 bytes → use i64 for ok field.
+                    let (val_ty, ret_ty, try_fn) = if is_float_parse {
+                        ("double", "{double, i64}", "gorget_try_parse_float")
                     } else {
-                        ("i64", "gorget_try_parse_int")
+                        ("i64", "{i64, i64}", "gorget_try_parse_int")
                     };
-                    writeln!(out, "  %{pfx}.out = alloca {val_ty}").unwrap();
-                    // Call gorget_try_parse_int/float(cstr, &out) → i32 (1=ok, 0=fail)
-                    writeln!(out, "  %{pfx}.ok = call i32 @{try_fn}(ptr %{pfx}.cstr, ptr %{pfx}.out)").unwrap();
+                    writeln!(out, "  %{pfx}.result = call {ret_ty} @{try_fn}(ptr %{pfx}.data, i64 %{pfx}.len)").unwrap();
+                    writeln!(out, "  %{pfx}.val = extractvalue {ret_ty} %{pfx}.result, 0").unwrap();
+                    writeln!(out, "  %{pfx}.ok_raw = extractvalue {ret_ty} %{pfx}.result, 1").unwrap();
                     // Construct Option result (branchless)
                     writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
-                    writeln!(out, "  %{pfx}.is_ok = icmp ne i32 %{pfx}.ok, 0").unwrap();
+                    writeln!(out, "  %{pfx}.is_ok = icmp ne i64 %{pfx}.ok_raw, 0").unwrap();
                     writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.is_ok, i32 0, i32 1").unwrap();
                     writeln!(out, "  store i32 %{pfx}.tag, ptr %v{}", d.0).unwrap();
                     // Copy value to payload at offset 8
                     writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
-                    writeln!(out, "  %{pfx}.val = load {val_ty}, ptr %{pfx}.out").unwrap();
                     writeln!(out, "  store {val_ty} %{pfx}.val, ptr %{pfx}.pay").unwrap();
                 }
                 return;
