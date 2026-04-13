@@ -983,8 +983,9 @@ pub(super) fn emit_call_extern(
                                 {
                                     let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                                     if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                        emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                                        continue;
+                                        if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                                            continue;
+                                        }
                                     }
                                     let abi = resolve_param_abi(ext_decl, emit_name, i);
                                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
@@ -1100,8 +1101,9 @@ pub(super) fn emit_call_extern(
                     {
                         let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                         if inst_abi != crate::ir::abi::AbiKind::Auto {
-                            emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                            continue;
+                            if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                                continue;
+                            }
                         }
                         let abi = resolve_param_abi(ext_decl, emit_name, i);
                         if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
@@ -1613,8 +1615,9 @@ pub(super) fn emit_call_extern(
                             {
                                 let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                                 if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                                    continue;
+                                    if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                                        continue;
+                                    }
                                 }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
@@ -1679,8 +1682,9 @@ pub(super) fn emit_call_extern(
                             {
                                 let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                                 if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                                    continue;
+                                    if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                                        continue;
+                                    }
                                 }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
@@ -1722,8 +1726,9 @@ pub(super) fn emit_call_extern(
                             {
                                 let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                                 if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                    emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                                    continue;
+                                    if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                                        continue;
+                                    }
                                 }
                                 let abi = resolve_param_abi(ext_decl, emit_name, i);
                                 if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
@@ -1927,8 +1932,9 @@ pub(super) fn emit_call_extern(
                 {
                     let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
                     if inst_abi != crate::ir::abi::AbiKind::Auto {
-                        emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit);
-                        continue;
+                        if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
+                            continue;
+                        }
                     }
                     let abi = resolve_param_abi(ext_decl, emit_name, i);
                     if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {

@@ -1492,6 +1492,16 @@ pub(super) fn emit_abi_arg(
             }
             true
         }
+        AbiKind::ByValue => {
+            // Aggregate by value. If struct, pass through. If Ptr, fall back to
+            // emit_coerced_arg which can deref using ext_param type info.
+            if is_struct || is_str_lit {
+                write!(out, "{val}").unwrap();
+                return true;
+            }
+            // Ptr or scalar — fall back so the cascade can deref with correct type.
+            return false;
+        }
         AbiKind::Ptr => {
             // Ptr should receive: Struct (take address) or Ptr (pass through).
             // Scalars reaching Ptr means the ABI tag is wrong — scalars should use Scalar.

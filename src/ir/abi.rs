@@ -35,6 +35,12 @@ pub enum AbiKind {
     /// Opaque handle. Passed as-is with no transformation.
     /// Used for opaque types (Regex, Window, Database handles).
     Opaque,
+    /// Aggregate struct by value. If the arg is a pointer (from SlotAddr/borrow),
+    /// dereference it to get the struct. If already a struct, pass through.
+    /// Used for non-string aggregate params: GorgetArray, GorgetSet passed by value
+    /// to set union/intersection, gorget_str_join's array arg, etc.
+    /// C: `*(Type*)ptr` for Ptr args, `val` for struct args.
+    ByValue,
     /// Void pointer to element data (`void*` in C).
     /// For concrete struct values, the backend wraps with `&(Type){val}`.
     /// For Str/GorgetString structs, takes address directly (`&val`).

@@ -195,8 +195,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
             sig(vec![s()], LirType::Bool, _s1())
         }
         "gorget_str_split" => sig(vec![s(), s()], arr_ty(), _s2()),
-        // gorget_str_join(Str, GorgetArray) — array by value; Auto lets fallback deref correctly
-        "gorget_str_join" => sig(vec![s(), arr_ty()], g(), vec![GorgetString, Auto]),
+        "gorget_str_join" => sig(vec![s(), arr_ty()], g(), vec![GorgetString, ByValue]),
         "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_chars" => {
             sig(vec![s()], arr_ty(), _s1())
         }

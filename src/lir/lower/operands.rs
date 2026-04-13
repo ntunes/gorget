@@ -239,6 +239,47 @@ impl<'a> FuncLowering<'a> {
             return;
         }
 
+        // Higher-order collection helpers (Vector__T__filter, Dict__K__V__map, Set__T__any, etc.)
+        // All take self-by-ptr as arg 0, remaining args are closures/scalars (Opaque).
+        {
+            use crate::ir::abi::AbiKind;
+            let is_higher_order = (name.starts_with("Vector__") || name.starts_with("Deque__")
+                || name.starts_with("Dict__") || name.starts_with("HashMap__")
+                || name.starts_with("Set__") || name.starts_with("HashSet__"))
+                && name.rfind("__").map_or(false, |pos| {
+                    let method = &name[pos + 2..];
+                    matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce"
+                        | "any" | "all" | "each" | "find" | "find_index"
+                        | "sorted" | "sort" | "unique" | "count"
+                        | "update" | "union" | "intersection" | "difference"
+                        | "symmetric_difference")
+                });
+            if is_higher_order {
+                let method = name.rfind("__").map(|pos| &name[pos + 2..]).unwrap_or("");
+                let is_binary_collection_op = matches!(method,
+                    "union" | "intersection" | "difference" | "symmetric_difference" | "update");
+                let mut abis = vec![AbiKind::Ptr]; // self-by-ptr
+                for i in 1..arg_types.len() {
+                    if is_binary_collection_op && i == 1 {
+                        // Second set/dict arg: aggregate by value (may arrive as Ptr from SlotAddr)
+                        abis.push(AbiKind::ByValue);
+                    } else {
+                        abis.push(AbiKind::Opaque);
+                    }
+                }
+                let actual_ret = ret_ty.clone();
+                self.pending_externs.push(LirExtern {
+                    name: name.to_string(),
+                    params: arg_types.to_vec(),
+                    return_type: actual_ret,
+                    is_variadic: false,
+                    param_abis: abis,
+                    return_abi: crate::ir::abi::AbiKind::Auto,
+                });
+                return;
+            }
+        }
+
         // Detect newtype constructors: if the function name matches a struct name,
         // the return type should be that struct (not i64 or i32 from GIR's extern decl).
         let actual_ret = if let Some(sid) = self.struct_reg.lookup(name) {
