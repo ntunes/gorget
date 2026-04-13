@@ -2444,7 +2444,7 @@ equip Parser:
         if self.check_kw(KW_EXTERN):
             return SItem(self.parse_extern_block())
         if self.check_kw(KW_TEST):
-            return SItem(self.parse_test_item())
+            return SItem(self.parse_test_item(false))
         if self.check_kw(KW_BENCH):
             return SItem(self.parse_bench_item())
         if self.check_kw(KW_SUITE):
@@ -3322,27 +3322,20 @@ equip Parser:
                 self.advance()
         return IExternBlock(fns)
 
-    Item parse_test_item(&self):
+    Item parse_test_item(&self, bool is_skip):
         self.expect_kw(KW_TEST, "expected 'test'")
         SpannedToken name_tok = self.advance()
         String name = token_string_val(name_tok.lex_token)
         # Parse optional 'with Expr as name [, Expr as name]*' clause
-        # Token-level extraction: scan for `as <ident>` patterns and collect exprs/names
         Vector[SpannedExpr] with_exprs = Vector[SpannedExpr]()
         Vector[String] with_names = Vector[String]()
         if self.check_kw(KW_WITH):
             self.advance()
-            # Parse each 'expr as name' binding
             while not self.check_tok(TOK_COLON) and not self.at_end():
                 SpannedExpr wexpr = self.parse_expr()
-                # parse_expr consumes 'expr as name' as EAs
-                # Extract name by looking at what parse_expr produced
                 String binding_name = "_"
                 match wexpr.expr:
                     case EAs(_, _):
-                        # The 'as name' was consumed; extract name from the last token
-                        # before current position (the identifier after 'as')
-                        # Since parse_expr already consumed it, peek back
                         if self.pos > 0:
                             SpannedToken prev = self.tokens.get(self.pos - 1).unwrap()
                             if token_tag(prev.lex_token) == TOK_IDENT:
@@ -3355,6 +3348,9 @@ equip Parser:
                     break
         self.expect_tok(TOK_COLON, "expected ':' after test name")
         Vector[Stmt] body = self.parse_block()
+        # Pass @skip flag via with_names sentinel — the lowerer checks for "__skip__".
+        if is_skip:
+            with_names.push("__skip__")
         return ITest(name, with_exprs, with_names, body)
 
     Item parse_bench_item(&self):
@@ -3385,8 +3381,9 @@ equip Parser:
             if self.at_end():
                 break
 
-            # Parse @attributes — capture @derive(...) trait names
+            # Parse @attributes — capture @derive(...) trait names + @skip flag
             Vector[String] pending_derives = Vector[String]()
+            bool pending_skip = false
             while self.check_tok(TOK_AT):
                 self.advance()
                 String attr_name = ""
@@ -3404,6 +3401,10 @@ equip Parser:
                         if self.check_tok(TOK_COMMA):
                             self.advance()
                     self.match_tok(TOK_RPAREN)
+                elif attr_name == "skip":
+                    pending_skip = true
+                    if self.check_tok(TOK_LPAREN):
+                        self.skip_paren_contents()
                 elif self.check_tok(TOK_LPAREN):
                     self.skip_paren_contents()
                 self.skip_trivia()
@@ -3437,7 +3438,7 @@ equip Parser:
             elif self.check_kw(KW_EXTERN):
                 items.push(self.parse_extern_block())
             elif self.check_kw(KW_TEST):
-                items.push(self.parse_test_item())
+                items.push(self.parse_test_item(pending_skip))
             elif self.check_kw(KW_BENCH):
                 items.push(self.parse_bench_item())
             elif self.check_kw(KW_SUITE):

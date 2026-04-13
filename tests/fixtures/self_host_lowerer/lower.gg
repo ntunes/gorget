@@ -2046,24 +2046,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # Skip test blocks when main() exists (normal build mode).
                 # Emit __test_N for test-only files (no main).
                 if not has_main:
-                    # Check for @skip decorator — Rust skips these too
+                    # Check for @skip — parser sets "__skip__" sentinel in tags
                     bool is_skipped = false
                     int dci = 0
-                    while dci < decorators.len():
-                        SpannedExpr dec = decorators.get(dci).unwrap()
-                        match dec.expr:
-                            case ECall(callee_box, _, _):
-                                match (*callee_box).expr:
-                                    case EIdentifier(dname):
-                                        if dname == "skip":
-                                            is_skipped = true
-                                    else:
-                                        pass
-                            case EIdentifier(dname):
-                                if dname == "skip":
-                                    is_skipped = true
-                            else:
-                                pass
+                    while dci < tags.len():
+                        String tag_val = tags.get(dci).unwrap()
+                        if tag_val == "__skip__":
+                            is_skipped = true
                         dci += 1
                     if not is_skipped:
                         String test_fn_name = "__test_" + int_to_str(test_idx)
