@@ -3402,16 +3402,16 @@ fn emit_inst(
                     let expects_agg = expected_ty.map_or(false, |t| t.is_aggregate());
 
                     // Detect GorgetString value passed to const char* param:
-                    // Only for known runtime functions where a specific param is const char*
-                    // (NOT void*). Most runtime functions taking Ptr want a pointer to the
-                    // struct, not the inner .data pointer.
-                    let is_str_to_cstr = expects_ptr && match actual_ty {
+                    // Use param_abis (CStr annotation) or known function list.
+                    let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
+                    let is_str_to_cstr = (param_abi == crate::ir::abi::AbiKind::CStr
+                        || (expects_ptr && match (name.as_str(), i) {
+                            ("gorget_assert_fail_values", 0) | ("gorget_panic", 0) => true,
+                            _ => false,
+                        }))
+                        && match actual_ty {
                         Some(LirType::PtrTo(sid)) if snames.get(&sid.0).map_or(false, |n| n == "GorgetString") => {
-                            match (name.as_str(), i) {
-                                ("gorget_assert_fail_values", 0) => true,
-                                ("gorget_panic", 0) => true,
-                                _ => false,
-                            }
+                            true
                         }
                         _ => false,
                     };
