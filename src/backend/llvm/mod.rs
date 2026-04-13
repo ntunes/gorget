@@ -723,6 +723,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     if !module.externs.iter().any(|e| e.name == "gorget_str_cmp") {
         writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
     }
+    // Collection constructors — used by inline collection constructor handler
+    if !module.externs.iter().any(|e| e.name == "gorget_array_with_capacity") {
+        writeln!(out, "declare void @gorget_array_with_capacity(ptr sret(%GorgetArray), i64, i64)").unwrap();
+    }
     writeln!(out, "declare void @gorget_string_format(ptr sret(%GorgetString), ptr, ...)").unwrap();
     writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
     // gorget_bool_to_str returns GorgetString by value → sret
@@ -2075,6 +2079,78 @@ fn emit_inst(
                         writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
                     } else {
                         writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
+                    }
+                    return;
+                }
+            }
+
+            // ── Newtype constructors ──────────────────────────────
+            // If the extern name matches a struct name with exactly 1 field,
+            // inline the construction: alloca + store field 0.
+            if let Some(d) = dst {
+                let newtype_sid = module.structs.iter().enumerate().find_map(|(i, s)| {
+                    if (s.name == *name || snames.get(&(i as u32)).map_or(false, |n| n == name))
+                        && s.fields.len() == 1 && !s.name.starts_with("Option__") && !s.name.starts_with("Result__") {
+                        Some(StructId(i as u32))
+                    } else { None }
+                });
+                if let Some(sid) = newtype_sid {
+                    if args.len() == 1 {
+                        let struct_ty = format!("%{}", snames.get(&sid.0).unwrap_or(&name.to_string()));
+                        let field_ty = llvm_type_full(&module.structs[sid.0 as usize].fields[0].1, snames);
+                        let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
+                        writeln!(out, "  %v{} = alloca {struct_ty}", d.0).unwrap();
+                        let fptr = format!("nt.{block_id}.{}.fp", d.0);
+                        writeln!(out, "  %{fptr} = getelementptr {struct_ty}, ptr %v{}, i32 0, i32 0", d.0).unwrap();
+                        if arg_ty.map_or(false, |t| t.is_ptr()) && !module.structs[sid.0 as usize].fields[0].1.is_ptr() {
+                            // Arg is ptr (from alloca), field is scalar — load then store
+                            let loaded = format!("nt.{block_id}.{}.ld", d.0);
+                            writeln!(out, "  %{loaded} = load {field_ty}, ptr %v{}", args[0].0).unwrap();
+                            writeln!(out, "  store {field_ty} %{loaded}, ptr %{fptr}").unwrap();
+                        } else {
+                            writeln!(out, "  store {field_ty} %v{}, ptr %{fptr}", args[0].0).unwrap();
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // ── Collection constructors (Vector__T, Set__T, Dict__K__V) ──
+            // Vector__int64_t() → gorget_array_new(sizeof(int64_t))
+            // Vector__int64_t(cap) → gorget_array_with_capacity(sizeof(int64_t), cap)
+            if let Some(d) = dst {
+                let is_collection_ctor = (name.starts_with("Vector__") || name.starts_with("Set__")
+                    || name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("HashSet__"))
+                    && !name.contains("__map") && !name.contains("__filter") && !name.contains("__get")
+                    && !name.contains("__put") && !name.contains("__push") && !name.contains("__len")
+                    && !name.contains("__pop") && !name.contains("__remove") && !name.contains("__contains")
+                    && !name.contains("__clone") && !name.contains("__free") && !name.contains("__drop")
+                    && !name.contains("__keys") && !name.contains("__values") && !name.contains("__items")
+                    && !name.contains("__clear") && !name.contains("__is_empty") && !name.contains("__new")
+                    && !name.contains("__each") && !name.contains("__any") && !name.contains("__all")
+                    && !name.contains("__fold") && !name.contains("__reduce") && !name.contains("__find")
+                    && !name.contains("__count") && !name.contains("__sort") && !name.contains("__reverse")
+                    && !name.contains("__set") && !name.contains("__insert") && !name.contains("__add")
+                    && !name.contains("__extend") && !name.contains("__slice") && !name.contains("__concat")
+                    && !name.contains("__to_array") && !name.contains("__dedup") && !name.contains("__reserve")
+                    && !name.contains("__capacity") && !name.contains("__index_of") && !name.contains("__binary_search")
+                    && !name.contains("__unique") && !name.contains("__flat_map") && !name.contains("__sorted");
+                if is_collection_ctor {
+                    // Determine element size from type name
+                    let elem_size: i64 = if name.contains("int64_t") || name.contains("double") || name.contains("GorgetString") { 8 }
+                        else if name.contains("int32_t") { 4 }
+                        else if name.contains("bool") { 1 }
+                        else { 8 }; // default
+                    // For GorgetString elements, use 32 (Str struct size)
+                    let elem_size: i64 = if name.contains("GorgetString") { 32 } else { elem_size };
+                    let ret_ty = if name.starts_with("Vector__") { "%GorgetArray" }
+                        else if name.starts_with("Set__") || name.starts_with("HashSet__") { "%GorgetSet" }
+                        else { "%GorgetMap" };
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    if args.is_empty() {
+                        writeln!(out, "  call void @gorget_array_new(ptr sret({ret_ty}) %v{}, i64 {elem_size})", d.0).unwrap();
+                    } else {
+                        writeln!(out, "  call void @gorget_array_with_capacity(ptr sret({ret_ty}) %v{}, i64 {elem_size}, i64 %v{})", d.0, args[0].0).unwrap();
                     }
                     return;
                 }
