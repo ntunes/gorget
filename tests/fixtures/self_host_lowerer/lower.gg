@@ -827,6 +827,11 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
     int mi = 0
     while mi < eqblk.methods.len():
         FunctionDef mdef = eqblk.methods.get(mi).unwrap()
+        # Skip garbled entries from parser corruption (empty name or
+        # name matching a known local variable pattern from leaks)
+        if mdef.name.len() == 0:
+            mi += 1
+            continue
         # Mangled name: Type__method or Trait_for_Type__method
         String mangled = target_name + "__" + mdef.name
         match eqblk.trait_name:
