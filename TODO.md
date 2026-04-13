@@ -34,7 +34,7 @@
 
 - **Collection Resource semantics: remaining call-site ownership gaps**: Borrow checker doesn't cover field assignment or method-call ownership transfer. [updated: 2026-03-22]
 
-- **Remove redundant safety nets after Operand::Move fix**: Once generic post-call zeroing via Operand::Move is validated: (1) remove C runtime safety net memsets from gorget_array_set/gorget_array_insert, (2) remove GIR MoveZero emissions for call args (keep for assignments/returns/closures), (3) remove unused arg_owners field from GIR Call. [added: 2026-04-13]
+- **Remove GIR MoveZero emissions for borrow-wrapped call args**: C runtime safety nets and `arg_owners` removed. GIR MoveZero retained for args behind borrow ptrs (field loads, MutPtr params) — the LIR `emit_post_call_zeros` only reaches direct `Operand::Move` args. Removing these requires either flattening the borrow indirection or a drop elaboration pass. [updated: 2026-04-13]
 
 - **Drop elaboration pass — replace zeroing with static analysis**: Rust-inspired dataflow-based drop elaboration on LIR. Compute MaybeInitialized/MaybeUninitialized at each program point. Definitely-moved drops deleted, conditionally-moved get stack-local bool drop flags. Eliminates all post-move zeroing and DropIfAlive runtime guards. Major project (~3000 lines in Rust). [added: 2026-04-13]
 

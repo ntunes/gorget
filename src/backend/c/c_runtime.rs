@@ -4807,15 +4807,6 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
         arr->elem_drop(slot);
     }
     memcpy(slot, elem, arr->elem_size);
-    // Safety net: zero source for resource elements to prevent double-free.
-    // The GIR MoveZero targets the clone temp's value register, but the data
-    // lives in a persistent LIR slot that the scope-exit drop targets. Zeroing
-    // here ensures gorget_array_free on the slot is a no-op (data=NULL, cap=0).
-    // Zero cost for primitives (elem_drop is NULL). See TODO.md for the
-    // proper LIR fix (value→slot ownership propagation).
-    if (arr->elem_drop) {
-        memset((void*)elem, 0, arr->elem_size);
-    }
 }
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
@@ -5018,10 +5009,6 @@ static inline void gorget_array_insert(GorgetArray* arr, size_t index, const voi
     }
     memcpy((char*)arr->data + index * arr->elem_size, elem, arr->elem_size);
     arr->len++;
-    // Safety net: zero source for resource elements (same as gorget_array_set).
-    if (arr->elem_drop) {
-        memset((void*)elem, 0, arr->elem_size);
-    }
 }
 
 static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src) {

@@ -90,17 +90,6 @@ pub enum AssignMode {
     Borrow,
 }
 
-/// How a function argument transfers ownership.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ArgOwnership {
-    /// Caller retains ownership — callee borrows via pointer.
-    Borrow,
-    /// Caller relinquishes ownership — move-zero source after call.
-    Move,
-    /// Trivial copy — no ownership tracking needed.
-    Copy,
-}
-
 /// Instructions that don't transfer control flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
@@ -238,8 +227,6 @@ pub enum Instruction {
         dst: Option<LocalId>,
         func: String,
         args: Vec<Operand>,
-        /// Per-arg ownership mode. Empty means all Borrow (backward compatible).
-        arg_owners: Vec<ArgOwnership>,
     },
     /// Reserved for future dynamic dispatch (function pointers, closures).
     /// Currently not emitted by the lowering layer.
@@ -410,7 +397,6 @@ mod tests {
             dst: Some(LocalId(3)),
             func: "foo".into(),
             args: vec![Operand::Copy(Place::local(LocalId(1)))],
-            arg_owners: vec![],
         };
         let _drop = Instruction::Drop {
             place: Place::local(LocalId(1)),

@@ -1374,7 +1374,6 @@ mod tests {
                     dst: Some(LocalId(1)),
                     func: "callee".into(),
                     args: vec![Operand::Constant(Constant::I64(5))],
-                    arg_owners: vec![],
                 }],
                 terminator: Some(Terminator::Return(Operand::Copy(Place::local(LocalId(1))))),
                 span_map: vec![None],

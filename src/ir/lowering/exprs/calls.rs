@@ -935,15 +935,16 @@ pub(super) fn lower_call(
             FunctionBuilder::copy(dst)
         };
 
-        // MoveZero Move-ownership args to transfer ownership (prevent double-free)
+        // MoveZero Move-ownership args.  The LIR's emit_post_call_zeros handles
+        // args directly in lowered_args as Operand::Move; the GIR MoveZero
+        // covers args wrapped in borrow ptrs.
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
             ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
         }
 
-        // MoveZero collection temps passed as args — callee received a
-        // shallow copy, so the caller relinquishes the original.
+        // MoveZero collection temps passed as args.
         for local in &collection_arg_locals {
             ctx.move_zero_and_mark(builder, *local);
         }

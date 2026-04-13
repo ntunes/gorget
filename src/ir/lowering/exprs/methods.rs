@@ -1767,7 +1767,11 @@ pub(super) fn lower_method_call(
             FunctionBuilder::copy(dst)
         };
 
-        // MoveZero Move-ownership args to transfer ownership (prevent double-free)
+        // MoveZero Move-ownership args to transfer ownership (prevent double-free).
+        // The LIR's emit_post_call_zeros handles args that are directly in
+        // call_args as Operand::Move.  The GIR MoveZero is still needed for
+        // args wrapped in borrow ptrs (field loads, MutPtr params) whose
+        // source local is not the call arg's local.
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
             ctx.emit_field_origin_zero(builder, place.local);
@@ -1814,10 +1818,9 @@ pub(super) fn lower_method_call(
         for local in &consuming_clone_temps {
             ctx.move_zero_and_mark(builder, *local);
         }
-        // Same for the earlier CoW pre-call clone section — those cloned temps
-        // (Ptr borrow materialized, or by-value resource cloned for non-last-use /
-        // untracked borrow) have their owned data memcpy'd into the collection.
-        // Zero them so the scope-exit drop pass doesn't double-free.
+        // MoveZero pre-call clone temps.  Some are in call_args as
+        // Operand::Move (LIR handles zeroing); others are behind borrow
+        // ptrs and need GIR MoveZero.
         for local in &pre_call_clone_temps {
             ctx.move_zero_and_mark(builder, *local);
         }
