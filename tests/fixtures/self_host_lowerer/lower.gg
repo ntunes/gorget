@@ -2041,7 +2041,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IFunction(fdef):
                 # Skip generic templates — they'll be monomorphized below
                 if fdef.type_params.len() == 0:
-                    gmod.functions.push(lower_function(fdef, &gmod))
+                    # Skip extern/forward declarations: the parser loses
+                    # the `extern` keyword and `= "symbol"` binding, producing
+                    # a function with 0 body statements. The Rust compiler
+                    # emits these as `declare extern`, not as `fn @`.
+                    if fdef.body.len() > 0:
+                        gmod.functions.push(lower_function(fdef, &gmod))
             case ITest(tname, decorators, tags, test_body):
                 # Skip test blocks when main() exists (normal build mode).
                 # Emit __test_N for test-only files (no main).
