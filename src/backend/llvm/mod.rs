@@ -1887,14 +1887,56 @@ fn emit_inst(
             let sname = &snames[&struct_id.0];
             let sdef = &module.structs[struct_id.0 as usize];
             if sdef.is_union_layout && *field > 0 {
-                // For enum, field 0 is tag (i32), field 1+ goes into the union payload byte array.
-                // Access via GEP into the [N x i8] payload at byte offset.
-                // First get pointer to the payload array (field index 1)
+                // For union-layout enums: { i32 tag, [N x i8] payload }.
+                // All variant fields share the payload as a union. The field name
+                // encodes the variant (e.g., Triangle_0, Triangle_1). The suffix
+                // number is the field's position within that variant.
                 let payload_ptr = format!("fptr.{}.payload", dst.0);
                 writeln!(out, "  %{payload_ptr} = getelementptr %{sname}, ptr %v{}, i32 0, i32 1", base.0).unwrap();
-                // The payload pointer is already the right base — the caller will
-                // cast/load from it at the right offset. For now, return the payload ptr.
-                writeln!(out, "  %v{} = bitcast ptr %{payload_ptr} to ptr", dst.0).unwrap();
+                // Determine the byte offset within the payload from the variant field suffix.
+                // E.g., Triangle_0 → offset 0, Triangle_1 → offset 8.
+                let field_name = &sdef.fields[*field as usize].0;
+                let variant_field_idx = field_name.rsplit('_').next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(0);
+                if variant_field_idx == 0 {
+                    writeln!(out, "  %v{} = bitcast ptr %{payload_ptr} to ptr", dst.0).unwrap();
+                } else {
+                    // Compute byte offset: accumulate sizes of preceding variant fields.
+                    // Find the variant prefix (e.g., "Triangle") and sum sizes of fields 0..idx.
+                    let prefix = field_name.rsplitn(2, '_').nth(1).unwrap_or(field_name);
+                    let mut byte_offset = 0usize;
+                    for f in &sdef.fields[1..] {
+                        if f.0.starts_with(prefix) {
+                            let f_idx = f.0.rsplit('_').next()
+                                .and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+                            if f_idx < variant_field_idx {
+                                let fsz = match &f.1 {
+                                    LirType::I8 | LirType::U8 | LirType::Bool => 1,
+                                    LirType::I16 | LirType::U16 => 2,
+                                    LirType::I32 | LirType::U32 | LirType::F32 => 4,
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+                                    LirType::Struct(sid) => module.structs[sid.0 as usize].computed_c_size.unwrap_or(8),
+                                    _ => 8,
+                                };
+                                // Align to field's natural alignment
+                                let align = fsz.min(8).max(1);
+                                byte_offset = (byte_offset + align - 1) & !(align - 1);
+                                byte_offset += fsz;
+                            }
+                        }
+                    }
+                    // Align the final offset
+                    let target_field_ty = &sdef.fields[*field as usize].1;
+                    let target_align = match target_field_ty {
+                        LirType::I8 | LirType::U8 | LirType::Bool => 1,
+                        LirType::I16 | LirType::U16 => 2,
+                        LirType::I32 | LirType::U32 | LirType::F32 => 4,
+                        _ => 8,
+                    };
+                    byte_offset = (byte_offset + target_align - 1) & !(target_align - 1);
+                    writeln!(out, "  %v{} = getelementptr i8, ptr %{payload_ptr}, i64 {byte_offset}", dst.0).unwrap();
+                }
             } else {
                 writeln!(out, "  %v{} = getelementptr %{sname}, ptr %v{}, i32 0, i32 {field}", dst.0, base.0).unwrap();
             }
