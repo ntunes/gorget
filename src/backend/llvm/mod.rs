@@ -747,6 +747,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare i32 @gorget_try_parse_int(ptr, ptr)").unwrap();
     writeln!(out, "declare i32 @gorget_try_parse_float(ptr, ptr)").unwrap();
     writeln!(out, "declare ptr @gorget_str_to_cstr(ptr)").unwrap();
+    // CStr → GorgetString wrapping (for extern "C" return values)
+    if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
+        writeln!(out, "declare void @gorget_str_from_cstr(ptr sret(%GorgetString), ptr)").unwrap();
+    }
     writeln!(out, "@stderr = external global ptr").unwrap();
     writeln!(out).unwrap();
 
@@ -800,6 +804,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         } else {
             String::new()
         };
+        // CStr return ABI: function returns const char*, not a struct.
+        // Declare as returning ptr, NOT sret.
+        if ext.return_abi == crate::ir::abi::AbiKind::CStr {
+            writeln!(out, "declare ptr @{}({}{})", ext.name, params.join(", "), variadic).unwrap();
+            continue;
+        }
         if needs_sret(&ext.return_type, &module.structs) {
             let ret_ty = llvm_type_full(&ext.return_type, snames);
             let sret_params = if params.is_empty() {
@@ -3303,6 +3313,46 @@ fn emit_inst(
             // Look up the extern declaration
             let ext = module.externs.iter().find(|e| e.name == *name);
             if let Some(ext) = ext {
+                // CStr return ABI: function returns const char*, wrap to GorgetString
+                if ext.return_abi == crate::ir::abi::AbiKind::CStr {
+                    if let Some(d) = dst {
+                        let uid = *trap_counter;
+                        *trap_counter += 1;
+                        let pfx = format!("cstr_ret.{block_id}.{uid}");
+                        // Build args — CStr params need .data extraction from GorgetString
+                        let mut spill_lines2 = Vec::new();
+                        let arg_strs2: Vec<String> = args.iter().enumerate().map(|(i, a)| {
+                            let expected = ext.params.get(i);
+                            let actual = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                            let is_ptr_val = actual.map_or(false, |t| t.is_ptr());
+                            let is_str_val = match actual {
+                                Some(LirType::PtrTo(sid)) => snames.get(&sid.0).map_or(false, |n| n == "GorgetString"),
+                                _ => false,
+                            };
+                            let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
+                            // If param ABI is CStr or if extern expects Ptr and value is GorgetString
+                            if param_abi == crate::ir::abi::AbiKind::CStr || (expected.map_or(false, |t| t.is_ptr()) && is_str_val) {
+                                // Extract .data from GorgetString
+                                let sn = format!("{pfx}.cstr.{i}");
+                                spill_lines2.push(format!("  %{sn} = load ptr, ptr %v{}", a.0));
+                                format!("ptr %{sn}")
+                            } else if is_ptr_val {
+                                format!("ptr %v{}", a.0)
+                            } else {
+                                let pty = actual.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "i64".to_string());
+                                format!("{pty} %v{}", a.0)
+                            }
+                        }).collect();
+                        for s in &spill_lines2 { writeln!(out, "{s}").unwrap(); }
+                        // Call → returns const char*
+                        writeln!(out, "  %{pfx}.raw = call ptr @{}({})", name, arg_strs2.join(", ")).unwrap();
+                        // Wrap const char* into GorgetString via gorget_str_from_cstr (sret)
+                        writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                        writeln!(out, "  call void @gorget_str_from_cstr(ptr sret(%GorgetString) %v{}, ptr %{pfx}.raw)", d.0).unwrap();
+                    }
+                    return;
+                }
+
                 let actual_ret = ext.return_type.clone();
                 let ret_ty = llvm_type_full(&actual_ret, snames);
                 // For each arg, handle type mismatches:
