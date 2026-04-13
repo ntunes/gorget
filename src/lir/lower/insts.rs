@@ -160,6 +160,14 @@ impl<'a> FuncLowering<'a> {
                     let is_ptr = src_gir_ty.map_or(false, |t| {
                         self.gir_types.get(t).map_or(false, |gt| matches!(gt, GirType::Ptr(_) | GirType::MutPtr(_)))
                     });
+                    // String-to-String cast: source is already a GorgetString struct.
+                    // This happens when e.g. `char_at(i) as String` — char_at returns String.
+                    // val is a Ptr (SlotAddr of aggregate). Clone via gorget_string_clone.
+                    let str_sid = self.struct_reg.lookup("GorgetString")
+                        .or_else(|| self.struct_reg.lookup("Str"));
+                    let is_str_source = src_gir_ty.map_or(false, |t| {
+                        matches!(self.map_type(&t), LirType::Struct(sid) if Some(sid) == str_sid)
+                    });
 
                     if is_ptr {
                         // Ptr source (const char*) → GorgetString: wrap directly with gorget_str_from_cstr.
@@ -174,6 +182,19 @@ impl<'a> FuncLowering<'a> {
                         });
                         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
                         self.store_to_local(*dst, cstr_result, bb);
+                    } else if is_str_source {
+                        // String → String: no-op cast. Clone the source to produce an owned copy.
+                        // val is a Ptr (SlotAddr) since GorgetString is an aggregate.
+                        let str_ty = str_sid.map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        let clone_result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(clone_result),
+                            name: "gorget_string_clone".to_string(),
+                            args: vec![val],
+                            original_name: None, arg_abis: vec![],
+                        });
+                        self.ensure_extern("gorget_string_clone", &[LirType::Ptr], &str_ty);
+                        self.store_to_local(*dst, clone_result, bb);
                     } else {
                     let conv_fn = if is_int {
                         "gorget_int_to_str"
@@ -182,7 +203,7 @@ impl<'a> FuncLowering<'a> {
                     } else if is_bool {
                         "gorget_bool_to_str"
                     } else {
-                        // Unknown source → use int_to_str as fallback (most casts are int→str).
+                        // Unknown source — use int_to_str as best-effort fallback.
                         "gorget_int_to_str"
                     };
                     // Emit CallExtern to the conversion function (returns const char*).
@@ -197,7 +218,7 @@ impl<'a> FuncLowering<'a> {
                     self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &str_ty);
                     // The result is a Str struct (returned by gorget_string_adopt in the C runtime).
                     self.store_to_local(*dst, cstr_result, bb);
-                    } // close else (non-ptr) branch
+                    } // close else (non-ptr/non-str) branch
                 } else if matches!(to, LirType::Void) {
                     // Cast to void — just evaluate for side effects, don't generate (void)(val).
                     // No store needed.
