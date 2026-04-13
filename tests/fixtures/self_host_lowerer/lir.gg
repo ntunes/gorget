@@ -1,0 +1,433 @@
+# LIR — Low-Level Intermediate Representation.
+#
+# SSA-form IR between GIR and backends. All implicit operations (drop glue,
+# vtable dispatch, closures, coercions) are explicit here.
+#
+# Identity types use int (not newtypes) for simplicity in the self-host.
+# ValueId, SlotId, BlockId, StructId, FuncId, GlobalId are all plain ints.
+
+from std.collections import Vector, Dict
+
+# ── Types ───────────────────────────────────────────────────────
+
+# Concrete machine type — no generics, no ownership qualifiers.
+# Encoded as int constants for fast comparison.
+const int LT_I8 = 0
+const int LT_I16 = 1
+const int LT_I32 = 2
+const int LT_I64 = 3
+const int LT_U8 = 4
+const int LT_U16 = 5
+const int LT_U32 = 6
+const int LT_U64 = 7
+const int LT_F32 = 8
+const int LT_F64 = 9
+const int LT_BOOL = 10
+const int LT_PTR = 11
+const int LT_VOID = 12
+# LT_PTR_TO and LT_STRUCT encode the StructId in high bits:
+#   LT_PTR_TO_BASE + struct_id  (ptr to a known struct)
+#   LT_STRUCT_BASE + struct_id  (aggregate struct value)
+const int LT_PTR_TO_BASE = 1000
+const int LT_STRUCT_BASE = 100000
+
+int lir_ptr_to(int struct_id): LT_PTR_TO_BASE + struct_id
+int lir_struct(int struct_id): LT_STRUCT_BASE + struct_id
+
+bool lir_is_scalar(int ty):
+    if ty < LT_PTR_TO_BASE:
+        return ty != LT_VOID
+    if ty >= LT_STRUCT_BASE:
+        return false
+    return true
+
+bool lir_is_aggregate(int ty): ty >= LT_STRUCT_BASE
+
+bool lir_is_integer(int ty):
+    return ty >= LT_I8 and ty <= LT_U64
+
+bool lir_is_float(int ty):
+    return ty == LT_F32 or ty == LT_F64
+
+bool lir_is_ptr(int ty):
+    return ty == LT_PTR or (ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE)
+
+int lir_pointee_struct(int ty):
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return ty - LT_PTR_TO_BASE
+    return -1
+
+int lir_struct_id(int ty):
+    if ty >= LT_STRUCT_BASE:
+        return ty - LT_STRUCT_BASE
+    return -1
+
+String lir_type_name(int ty):
+    if ty == LT_I8:
+        return "i8"
+    elif ty == LT_I16:
+        return "i16"
+    elif ty == LT_I32:
+        return "i32"
+    elif ty == LT_I64:
+        return "i64"
+    elif ty == LT_U8:
+        return "u8"
+    elif ty == LT_U16:
+        return "u16"
+    elif ty == LT_U32:
+        return "u32"
+    elif ty == LT_U64:
+        return "u64"
+    elif ty == LT_F32:
+        return "f32"
+    elif ty == LT_F64:
+        return "f64"
+    elif ty == LT_BOOL:
+        return "bool"
+    elif ty == LT_PTR:
+        return "ptr"
+    elif ty == LT_VOID:
+        return "void"
+    elif ty >= LT_STRUCT_BASE:
+        return "struct." + int_to_str(ty - LT_STRUCT_BASE)
+    elif ty >= LT_PTR_TO_BASE:
+        return "ptr." + int_to_str(ty - LT_PTR_TO_BASE)
+    return "?"
+
+from std.conv import int_to_str
+
+# ── Overflow semantics ──────────────────────────────────────────
+
+const int OVF_TRAP = 0
+const int OVF_WRAP = 1
+
+# ── Comparison operators ────────────────────────────────────────
+
+const int CMP_EQ = 0
+const int CMP_NE = 1
+const int CMP_LT = 2
+const int CMP_LE = 3
+const int CMP_GT = 4
+const int CMP_GE = 5
+
+# ── ABI kinds ───────────────────────────────────────────────────
+
+const int ABI_AUTO = 0
+const int ABI_CSTR = 1
+const int ABI_BYTE_PTR = 2
+const int ABI_GORGET_STRING = 3
+const int ABI_SCALAR = 4
+const int ABI_PTR = 5
+const int ABI_OPAQUE = 6
+const int ABI_BY_VALUE = 7
+const int ABI_VOID_ELEM = 8
+
+# ── Scheduler modes ─────────────────────────────────────────────
+
+const int SCHED_POOL = 0
+const int SCHED_THREAD = 1
+const int SCHED_INLINE = 2
+const int SCHED_SINGLE = 3
+
+# ── Instructions ────────────────────────────────────────────────
+
+# Instructions are represented as a tagged enum. Each variant carries
+# its operands as struct fields. dst=-1 means no destination.
+
+enum LirInst:
+    # Slot access (pre-SSA, lowered by SSA construction)
+    ISlotStore(int, int, bool)        # slot, value, is_move
+    ISlotLoad(int, int, int)          # dst, slot, ty
+    ISlotAddr(int, int)               # dst, slot
+
+    # Constants
+    IIConst(int, int, int)            # dst, ty, value (i64)
+    IFConst(int, int, int)            # dst, ty, bits (u64 as int)
+    IBoolConst(int, bool)             # dst, value
+    INullPtr(int)                     # dst
+    IFuncAddr(int, int)               # dst, func_id
+    IGlobalAddr(int, int)             # dst, global_id
+    IStrLit(int, String)              # dst, value
+    IParamRef(int, int, int)          # dst, index, ty
+
+    # Arithmetic
+    IAdd(int, int, int, int, int)     # dst, ty, lhs, rhs, overflow
+    ISub(int, int, int, int, int)     # dst, ty, lhs, rhs, overflow
+    IMul(int, int, int, int, int)     # dst, ty, lhs, rhs, overflow
+    IDiv(int, int, int, int)          # dst, ty, lhs, rhs
+    IRem(int, int, int, int)          # dst, ty, lhs, rhs
+    IMod(int, int, int, int)          # dst, ty, lhs, rhs
+    INeg(int, int, int)               # dst, ty, operand
+
+    # Bitwise
+    IBitAnd(int, int, int, int)       # dst, ty, lhs, rhs
+    IBitOr(int, int, int, int)        # dst, ty, lhs, rhs
+    IBitXor(int, int, int, int)       # dst, ty, lhs, rhs
+    IBitNot(int, int, int)            # dst, ty, operand
+    IShl(int, int, int, int)          # dst, ty, lhs, rhs
+    IShr(int, int, int, int)          # dst, ty, lhs, rhs
+
+    # Comparison & Logic
+    ICmp(int, int, int, int)          # dst, cmp_op, lhs, rhs
+    INot(int, int)                    # dst, operand
+
+    # Type conversions
+    IIntCast(int, int, int)           # dst, value, to_ty
+    IFloatCast(int, int, int)         # dst, value, to_ty
+    IIntToFloat(int, int, int)        # dst, value, to_ty
+    IFloatToInt(int, int, int)        # dst, value, to_ty
+    IPtrCast(int, int)                # dst, value
+    IBitcast(int, int, int)           # dst, value, to_ty
+
+    # Memory
+    ILoad(int, int, int)              # dst, ptr, ty
+    IStore(int, int)                  # ptr, value
+    IFieldPtr(int, int, int, int)     # dst, base, struct_id, field
+    IElemPtr(int, int, int, int)      # dst, base, index, elem_size
+    IMemset(int, int, int)            # ptr, byte, size
+    IMemcpy(int, int, int)            # dst_ptr, src_ptr, size
+
+    # Calls
+    ICall(int, int, Vector[int])                       # dst (-1=void), func_id, args
+    ICallExtern(int, String, Vector[int], String, Vector[int])  # dst, name, args, original_name, arg_abis
+    ICallPtr(int, int, Vector[int])                    # dst (-1=void), callee, args
+
+    # Runtime checks
+    IBoundsCheck(int, int)            # index, len
+    IDivCheck(int)                    # divisor
+    ITrap(String)                     # message
+
+    # Printf
+    IPrintf(String, Vector[int])      # fmt, args
+    IFprintf(int, String, Vector[int]) # fd, fmt, args
+
+    # Inline C
+    IInlineC(int, String)             # dst (-1=none), code
+
+    # No-op
+    INop
+
+# ── Terminators ─────────────────────────────────────────────────
+
+struct SwitchCase:
+    int value
+    int target
+    Vector[int] args
+
+enum LirTerm:
+    TRet(int)                         # value
+    TRetVoid
+    TJump(int, Vector[int])           # target, args
+    TBranch(int, int, Vector[int], int, Vector[int])  # cond, then_block, then_args, else_block, else_args
+    TSwitch(int, Vector[SwitchCase], int, Vector[int]) # value, cases, default, default_args
+    TUnreachable
+
+# ── Blocks ──────────────────────────────────────────────────────
+
+struct BlockParam:
+    int value_id
+    int ty
+
+struct LirBlock:
+    int id
+    Vector[BlockParam] params
+    Vector[LirInst] insts
+    LirTerm term
+
+# ── Slots ───────────────────────────────────────────────────────
+
+struct LirSlot:
+    int ty
+    String name    # "" if unnamed
+
+# ── Functions ───────────────────────────────────────────────────
+
+struct LirFunction:
+    String name
+    Vector[int] params          # LirType for each param
+    int return_type             # LirType
+    Vector[LirSlot] slots
+    Vector[LirBlock] blocks
+    int next_value
+    bool is_test_fn
+    String display_name         # "" if none
+    Vector[String] param_names  # "" entries for unnamed
+    Vector[bool] const_params
+
+# ── Struct Definitions ──────────────────────────────────────────
+
+# Enum kind for clone/drop code generation.
+const int EK_NOT_ENUM = 0
+const int EK_OPTION = 1
+const int EK_RESULT = 2
+const int EK_GENERAL = 3
+
+struct StructField:
+    String name
+    int ty                      # LirType
+
+struct LirStructDef:
+    String name
+    Vector[StructField] fields
+    int enum_kind               # EK_* constant
+    bool is_union_layout
+    int computed_c_size         # -1 if not yet computed
+
+# ── Globals ─────────────────────────────────────────────────────
+
+# Global initializer kinds.
+const int GINIT_ZEROED = 0
+const int GINIT_FUNC_ADDR = 1
+const int GINIT_RUNTIME_CALL = 2
+
+struct LirGlobal:
+    String name
+    int ty                      # LirType
+    int init_kind               # GINIT_* constant
+    int init_func_id            # for GINIT_FUNC_ADDR
+    String init_expr            # for GINIT_RUNTIME_CALL
+    bool is_const
+
+# ── Externs ─────────────────────────────────────────────────────
+
+struct LirExtern:
+    String name
+    Vector[int] params          # LirType per param
+    int return_type             # LirType
+    bool is_variadic
+    Vector[int] param_abis      # ABI_* per param
+    int return_abi              # ABI_* constant
+
+# ── Spawn Metadata ──────────────────────────────────────────────
+
+struct SpawnParam:
+    String name
+    String c_type_name
+
+struct CloneParam:
+    int param_index
+    String gir_type_name
+
+struct LirSpawnedFn:
+    String fn_name
+    Vector[SpawnParam] params
+    String ret_c_type
+    Vector[int] ref_param_indices
+    Vector[CloneParam] clone_params
+
+struct LirThreadSpawnedFn:
+    String fn_name
+    String ret_c_type
+
+# ── Test/Bench Metadata ────────────────────────────────────────
+
+struct LirTestFn:
+    String fn_name
+    String display_name
+    bool should_panic
+    String expected_panic_msg   # "" if none
+    bool skipped
+    String skip_reason          # "" if none
+    int timeout_ms              # -1 if none
+
+struct LirBenchFn:
+    String fn_name
+    String display_name
+
+# ── Drop Metadata ───────────────────────────────────────────────
+
+struct FieldDrop:
+    String field_name
+    String drop_fn_name
+    String field_type_name
+
+struct EnumVariantDrop:
+    int variant_index
+    String variant_name
+    String field_name
+    String drop_fn_name
+    String field_type_name
+
+struct TypeDropInfo:
+    String drop_fn_name
+    Vector[FieldDrop] field_drops
+    String user_drop_fn         # "" if none
+    Vector[EnumVariantDrop] enum_variants  # empty if not enum
+
+# ── Module ──────────────────────────────────────────────────────
+
+struct LirModule:
+    Vector[LirStructDef] structs
+    Vector[LirGlobal] globals
+    Vector[LirFunction] functions
+    Vector[LirExtern] externs
+    String source_filename       # "" if none
+    Vector[LirSpawnedFn] spawned_fns
+    Vector[LirThreadSpawnedFn] thread_spawned_fns
+    Vector[LirTestFn] test_fns
+    Vector[LirBenchFn] bench_fns
+    bool has_suite_setup
+    bool has_suite_teardown
+    int scheduler_mode           # SCHED_* constant
+    String trace_filename        # "" if none
+    bool is_test_module
+    bool hot_reload
+    String hot_reload_state_type # "" if none
+    int hot_reload_state_hash
+    bool hot_reload_has_reload_fn
+    Dict[String, Vector[FieldDrop]] recursive_drop_structs
+    Dict[String, Vector[EnumVariantDrop]] recursive_drop_enums
+    Dict[String, bool] drop_collision_types
+    Dict[String, TypeDropInfo] type_drop_fns
+
+# ── LirFunction helpers ─────────────────────────────────────────
+
+int lir_fn_next_value(LirFunction &f):
+    int id = f.next_value
+    f.next_value = f.next_value + 1
+    return id
+
+int lir_fn_add_slot(LirFunction &f, int ty, String name):
+    int id = f.slots.len()
+    f.slots.push(LirSlot(ty, name))
+    return id
+
+int lir_fn_add_block(LirFunction &f):
+    int id = f.blocks.len()
+    Vector[BlockParam] empty_params = []
+    Vector[LirInst] empty_insts = []
+    f.blocks.push(LirBlock(id, empty_params, empty_insts, TUnreachable()))
+    return id
+
+# ── LirModule helpers ───────────────────────────────────────────
+
+int lir_mod_add_struct(LirModule &m, LirStructDef sdef):
+    int id = m.structs.len()
+    m.structs.push(sdef)
+    return id
+
+int lir_mod_add_global(LirModule &m, LirGlobal g):
+    int id = m.globals.len()
+    m.globals.push(g)
+    return id
+
+int lir_mod_add_function(LirModule &m, LirFunction f):
+    int id = m.functions.len()
+    m.functions.push(f)
+    return id
+
+LirModule new_lir_module():
+    Vector[LirStructDef] structs = []
+    Vector[LirGlobal] globals = []
+    Vector[LirFunction] functions = []
+    Vector[LirExtern] externs = []
+    Vector[LirSpawnedFn] spawned = []
+    Vector[LirThreadSpawnedFn] thread_spawned = []
+    Vector[LirTestFn] tests = []
+    Vector[LirBenchFn] benches = []
+    Dict[String, Vector[FieldDrop]] rec_drop_s = {}
+    Dict[String, Vector[EnumVariantDrop]] rec_drop_e = {}
+    Dict[String, bool] drop_coll = {}
+    Dict[String, TypeDropInfo] type_drops = {}
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops)
