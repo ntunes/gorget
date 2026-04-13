@@ -383,7 +383,10 @@ equip Lexer:
             return Some("\\")
         elif c == b'0':
             self.lex_advance()
-            return Some("\0")
+            # Use space placeholder instead of actual null byte — a \0 in a
+            # C-compiled String truncates at the null, corrupting the token
+            # stream and all subsequent parsing.
+            return Some(" ")
         elif c == b'"':
             self.lex_advance()
             return Some("\"")
