@@ -1640,6 +1640,23 @@ pub(super) fn lower_method_call(
             }
         }
 
+        // Upgrade consuming call args from Copy to Move (Rust-style ownership on
+        // operand).  This enables the LIR lowering to emit generic post-call
+        // zeroing without hardcoded function-name matching.  The move_zero_locals
+        // and pre_call_clone_temps identify which locals are consumed; we match
+        // them to call_args by local id.
+        for arg in call_args.iter_mut() {
+            if let Operand::Copy(place) = arg {
+                if place.projections.is_empty() {
+                    let dominated = move_zero_locals.iter().any(|mz| mz.local == place.local)
+                        || pre_call_clone_temps.contains(&place.local);
+                    if dominated {
+                        *arg = Operand::Move(place.clone());
+                    }
+                }
+            }
+        }
+
         // Option-returning Vector methods where the C runtime returns void*.
         // Generate null-check + Option.Some/None construction at GIR level so both
         // C and LLVM backends see truthful IR (extern returns Ptr, Option is explicit).

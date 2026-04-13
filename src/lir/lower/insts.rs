@@ -252,6 +252,8 @@ impl<'a> FuncLowering<'a> {
                     if let (Some(d), Some(r)) = (*dst, result) {
                         self.store_to_local(d, r, bb);
                     }
+                    // Post-call zeroing for Move operands (Rust-style ownership).
+                    self.emit_post_call_zeros(args, bb);
                 } else {
                     // Unknown function — treat as extern.
                     // Map monomorphized collection/method names to runtime function names.
@@ -433,6 +435,8 @@ impl<'a> FuncLowering<'a> {
                 if let (Some(d), Some(r)) = (*dst, result) {
                     self.store_to_local(d, r, bb);
                 }
+                // Post-call zeroing for Move operands (Rust-style ownership).
+                self.emit_post_call_zeros(args, bb);
             }
 
             // -- Struct/aggregate init --
@@ -1442,6 +1446,60 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    // ── Post-call zeroing for Move operands ────────────────────────────────
+
+    /// Check whether a GIR local's type needs zeroing after ownership transfer.
+    /// Returns true for types with Custom, Recursive, or Trivial drop strategy
+    /// (any type that would be dropped at scope exit).
+    fn local_needs_move_zero(&self, local_idx: usize) -> bool {
+        if local_idx >= self.gir_func.locals.len() { return false; }
+        let type_id = self.gir_func.locals[local_idx].type_id;
+        if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
+            self.gir_types.get_type_def(name).map_or(false, |td| {
+                matches!(td.metadata.drop_strategy,
+                    crate::ir::types::DropStrategy::Custom(_) |
+                    crate::ir::types::DropStrategy::Recursive |
+                    crate::ir::types::DropStrategy::Trivial(_))
+            })
+        } else { false }
+    }
+
+    /// Zero a GIR local's LIR slot after ownership transfer (move).
+    /// Emits SlotAddr + Memset to prevent double-free at scope-exit drop.
+    fn emit_move_zero_for_local(&mut self, local_idx: usize, bb: BlockId) {
+        let slot = self.local_to_slot[local_idx];
+        let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
+        let byte_size = match &slot_ty {
+            LirType::Struct(_) => c_sizeof_lir_type(&slot_ty, &self.module_structs) as i64,
+            _ => crate::lir::types::scalar_size(&slot_ty).unwrap_or(8) as i64,
+        };
+        let addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: addr, slot });
+        let zero_val = self.emit_i32_const(bb, 0);
+        let size_val = self.emit_i64_const(bb, byte_size);
+        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+            ptr: addr, byte: zero_val, size: size_val,
+        });
+    }
+
+    /// Emit post-call zeroing for all Move operands in a call's argument list.
+    /// This is the generic, data-driven replacement for the hardcoded
+    /// function-name matching that previously covered gorget_array_push,
+    /// gorget_map_put, etc.  Follows Rust MIR convention: Operand::Move
+    /// signals ownership transfer; the caller zeros its source slot.
+    fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
+        for arg in args {
+            if let Operand::Move(place) = arg {
+                if place.projections.is_empty() {
+                    let local_idx = place.local.0 as usize;
+                    if self.local_needs_move_zero(local_idx) {
+                        self.emit_move_zero_for_local(local_idx, bb);
+                    }
+                }
+            }
+        }
+    }
+
     // ── Operand lowering ────────────────────────────────────────────────────
 
     /// Lower a GIR operand, emitting load instructions into block `bb`.
@@ -1768,56 +1826,12 @@ impl<'a> FuncLowering<'a> {
             self.store_to_local(d, r, bb);
         }
 
-        // Post-call zeroing: after push/set/send that consumes a value by move,
-        // zero the source local to prevent double-free at scope-end Drop.
-        // The GIR backend does this inline; we do it here in the LIR lowering
-        // because the GIR's MoveZero doesn't cover all push cases.
-        let consuming_arg_gir_idx: Option<usize> = match emit_name {
-            "gorget_array_push" | "gorget_set_add" | "gorget_heap_push"
-            | "gorget_array_extend" => Some(1),
-            "gorget_array_insert" | "gorget_array_set" | "gorget_map_put" => Some(2),
-            "gorget_channel_send" => Some(1),
-            _ => None,
-        };
-        if let Some(arg_idx) = consuming_arg_gir_idx {
-            if let Some(arg) = args.get(arg_idx) {
-                if let Operand::Copy(place) | Operand::Move(place) = arg {
-                    if place.projections.is_empty() {
-                        let local_idx = place.local.0 as usize;
-                        if local_idx < self.gir_func.locals.len() {
-                            let type_id = self.gir_func.locals[local_idx].type_id;
-                            if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
-                                // Only zero types that need dropping AND are user/struct types
-                                // (not primitive scalars). Direct resource types (GorgetArray etc.)
-                                // are already handled by the c_lir backend's post-push zero.
-                                let needs_zero = self.gir_types.get_type_def(name).map_or(false, |td| {
-                                    matches!(td.metadata.drop_strategy,
-                                        crate::ir::types::DropStrategy::Custom(_) |
-                                        crate::ir::types::DropStrategy::Recursive)
-                                });
-                                if needs_zero {
-                                    let slot = self.local_to_slot[local_idx];
-                                    let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
-                                    let byte_size = match &slot_ty {
-                                        LirType::Struct(_) => c_sizeof_lir_type(&slot_ty, &self.module_structs) as i64,
-                                        _ => crate::lir::types::scalar_size(&slot_ty).unwrap_or(8) as i64,
-                                    };
-                                    let addr = self.lir_func.next_value();
-                                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                                        dst: addr, slot,
-                                    });
-                                    let zero_val = self.emit_i32_const(bb, 0);
-                                    let size_val = self.emit_i64_const(bb, byte_size);
-                                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                                        ptr: addr, byte: zero_val, size: size_val,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Generic post-call zeroing for Move operands.  Consuming args
+        // are marked Operand::Move during GIR lowering; we zero their
+        // source slots here.  Non-last-use args are cloned before the call
+        // by ensure_owned_at_consuming_arg (the compiler contract), so only
+        // Move operands (last-use / explicit !) need post-call zeroing.
+        self.emit_post_call_zeros(args, bb);
     }
 
     /// Lower printf/fprintf args, expanding Str-typed operands to (int)len, data.

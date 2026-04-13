@@ -843,7 +843,7 @@ pub(super) fn lower_call(
         // Save pending_move_zeros baseline so we only drain entries added
         // by THIS call's argument lowering (not from nested/prior calls).
         let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
-        let lowered_args: Vec<Operand> = resolved_args
+        let mut lowered_args: Vec<Operand> = resolved_args
             .iter()
             .enumerate()
             .map(|(i, arg)| {
@@ -912,6 +912,20 @@ pub(super) fn lower_call(
                 None
             })
             .collect();
+
+        // Upgrade consuming call args from Copy to Move (Rust-style ownership
+        // on operand).  Enables generic LIR post-call zeroing.
+        for arg in lowered_args.iter_mut() {
+            if let Operand::Copy(place) = arg {
+                if place.projections.is_empty() {
+                    let dominated = move_zero_locals.iter().any(|mz| mz.local == place.local)
+                        || collection_arg_locals.contains(&place.local);
+                    if dominated {
+                        *arg = Operand::Move(place.clone());
+                    }
+                }
+            }
+        }
 
         let result = if ret_type == UNIT_TYPE {
             builder.call_void(&call_name, lowered_args);

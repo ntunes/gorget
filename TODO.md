@@ -11,7 +11,7 @@
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 6 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks, struct+enum init). All work correctly — this is cleanup, not a bug. [demoted from High: 2026-04-12]
 
-- **LIR value/slot split loses GIR MoveZero for consuming args**: Runtime safety net covers `gorget_array_set` and `gorget_array_insert`. `gorget_map_put` can't use it (called internally by put_cloned/grow/rehash — zeroing corrupts source). `gorget_set_add` delegates to map_put. The dict[key].push() CoW sever fix handles the dict double-free case at the GIR level. Proper LIR fix: value→slot ownership propagation. [updated: 2026-04-12]
+- **LIR value/slot split loses GIR MoveZero for consuming args**: Fixed. GIR lowering marks consuming call args as `Operand::Move` (Rust-style); LIR emits generic post-call zeroing. Hardcoded function-name fallback removed — `ensure_owned_at_consuming_arg` now correctly clones non-last-use args (including Ptr-typed named locals from `.get().unwrap()` chains). [updated: 2026-04-13]
 
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
@@ -33,6 +33,10 @@
 - **Replace auto-borrow with explicit reference semantics**: Phase 1 done (const_params). Phase 2 (const propagation) not started. [updated: 2026-03-20]
 
 - **Collection Resource semantics: remaining call-site ownership gaps**: Borrow checker doesn't cover field assignment or method-call ownership transfer. [updated: 2026-03-22]
+
+- **Remove redundant safety nets after Operand::Move fix**: Once generic post-call zeroing via Operand::Move is validated: (1) remove C runtime safety net memsets from gorget_array_set/gorget_array_insert, (2) remove GIR MoveZero emissions for call args (keep for assignments/returns/closures), (3) remove unused arg_owners field from GIR Call. [added: 2026-04-13]
+
+- **Drop elaboration pass — replace zeroing with static analysis**: Rust-inspired dataflow-based drop elaboration on LIR. Compute MaybeInitialized/MaybeUninitialized at each program point. Definitely-moved drops deleted, conditionally-moved get stack-local bool drop flags. Eliminates all post-move zeroing and DropIfAlive runtime guards. Major project (~3000 lines in Rust). [added: 2026-04-13]
 
 ## Low
 

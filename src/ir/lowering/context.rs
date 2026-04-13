@@ -1396,14 +1396,41 @@ impl<'a> LoweringContext<'a> {
         if !self.type_registry.is_resource_type(arg_type) {
             return operand;
         }
-        // Non-identifier args are expression temps — always last-use.
-        let Expr::Identifier(ref name) = arg_expr.node else { return operand; };
-        if !self.is_named_local(local) { return operand; }
-        let is_borrow = !self.drops.is_registered(local)
-            || self.is_bare_param(local)
-            || self.is_ref_local(local)
-            || self.is_cow_borrow(local);
-        let needs_clone = is_borrow || !self.is_last_use_at(name, arg_expr.span);
+        // Determine if a clone is needed.  Two sub-cases:
+        //   (a) Named identifier arg — check last-use + borrow state.
+        //   (b) Non-identifier / non-named-local — expression temp, always
+        //       last-use by construction (the temp was just created).
+        let needs_clone = if let Expr::Identifier(ref name) = arg_expr.node {
+            if self.is_named_local(local) {
+                let is_borrow = !self.drops.is_registered(local)
+                    || self.is_bare_param(local)
+                    || self.is_ref_local(local)
+                    || self.is_cow_borrow(local);
+                is_borrow || !self.is_last_use_at(name, arg_expr.span)
+            } else {
+                // Identifier AST but local isn't "named" (e.g., intermediate
+                // local from method-chain lowering).  Resolve from AST name
+                // to check last-use on the original variable.
+                let result = if let Some((src_local, _)) = self.lookup_local(name) {
+                    let src_type = builder.local_type(src_local);
+                    // Resolve through Ptr: the named variable may be Ptr(T)
+                    // from .get().unwrap() while the lowered operand is the
+                    // cloned T value.
+                    let inner = self.pointee_type(src_type).unwrap_or(src_type);
+                    if self.type_registry.is_resource_type(inner) {
+                        let is_borrow = !self.drops.is_registered(src_local)
+                            || self.is_bare_param(src_local)
+                            || self.is_ref_local(src_local)
+                            || self.is_cow_borrow(src_local);
+                        is_borrow || !self.is_last_use_at(name, arg_expr.span)
+                    } else { false }
+                } else { false };
+                result
+            }
+        } else {
+            // Expression temp — always last-use, no clone needed.
+            false
+        };
         if !needs_clone { return operand; }
         if let Some(clone_fn) = self.clone_fn_for_ptr(arg_type) {
             self.warn_implicit_clone(arg_expr.span, arg_type, reason);

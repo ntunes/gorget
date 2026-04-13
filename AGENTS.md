@@ -62,6 +62,26 @@ cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-$R
 
 **Always use type-first Gorget syntax** in code, plans, and examples: `int x = 5`, `String greet(String name)`. The only string type is `String` — `str` is not a keyword.
 
+## Ownership at Consuming Positions (push/put/set/insert/send)
+
+Collections always own their items. The compiler decides per-arg at each
+consuming position (`push`, `put`, `set`, `insert`, `send`, `v[i] = x`):
+
+| Argument shape        | Action              | Rationale                          |
+|-----------------------|---------------------|------------------------------------|
+| `!arg` (explicit)     | move_zero after call| Caller opted in — source is dead   |
+| expression temp       | move_zero after call| Always last-use by construction    |
+| named local, last use | move_zero after call| Zero-cost transfer                 |
+| bare param            | clone before call   | Caller still owns it               |
+| borrow (Ptr/Ref/CoW)  | clone before call   | Source stays live                   |
+| non-last-use local    | clone before call   | Caller needs its value             |
+| static literal        | runtime materialize | cap==0 clone                       |
+
+**This is the compiler contract — not a suggestion.** If an arg is non-last-use,
+it MUST be cloned before the call, not zeroed after it. Post-call zeroing is only
+correct for the three move cases (explicit `!`, expression temp, named last-use).
+See `docs/internals/copy-on-write.md` Phase 3 for the full specification.
+
 ## Solution Quality
 
 - Prefer robust, architecturally sound solutions over quick fixes. When the trade-off is unclear, discuss both approaches and ask before proceeding.
