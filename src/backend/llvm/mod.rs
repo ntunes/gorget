@@ -3153,14 +3153,22 @@ fn emit_inst(
                     (0, 1)
                 };
 
-                // Check if any extra arg is float but format uses %lld (GIR dispatches
-                // abs→fabs after format string is set). If so, fix the format string
-                // by finding the StrLit and interning a corrected version.
+                // Check if any extra arg is float or string but format uses %lld.
+                // GIR may generate %lld for f-string interpolation when the actual type
+                // is float (→ %f) or String (→ %.*s). Fix the format string.
                 let has_float_arg = args[extra_start..].iter().any(|a| {
                     val_types.get(a.0 as usize).and_then(|t| t.as_ref())
                         .map_or(false, |t| matches!(t, LirType::F32 | LirType::F64))
                 });
-                let fmt_strlit = if has_float_arg {
+                let has_str_arg = args[extra_start..].iter().any(|a| {
+                    match val_types.get(a.0 as usize).and_then(|t| t.as_ref()) {
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                            snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str")
+                        }
+                        _ => false,
+                    }
+                });
+                let fmt_strlit = if has_float_arg || has_str_arg {
                     func.blocks.iter().flat_map(|b| b.insts.iter()).find_map(|inst| {
                         if let Inst::StrLit { dst, value } = inst {
                             if dst.0 == args[fmt_arg_idx].0 && value.contains("%lld") {
@@ -3175,9 +3183,52 @@ fn emit_inst(
                 let str_data = format!("printf.{block_id}.{uid}.data");
                 let str_val = format!("printf.{block_id}.{uid}.val");
                 if let Some(orig_fmt) = fmt_strlit {
-                    // Need to fix %lld → %f. Check if the fixed format is already
-                    // in str_globals, otherwise use a local constant.
-                    let fixed_fmt = orig_fmt.replace("%lld", "%f");
+                    // Fix %lld → %f (float) or %lld → %.*s (string) based on arg types.
+                    // Process each %lld occurrence, replacing with the correct format
+                    // for the corresponding argument's type.
+                    let mut fixed_fmt = orig_fmt.clone();
+                    let mut arg_idx = 0;
+                    let mut result = String::new();
+                    let mut chars = fixed_fmt.chars().peekable();
+                    while let Some(c) = chars.next() {
+                        if c == '%' {
+                            let mut spec = String::from('%');
+                            // Collect format specifier
+                            for nc in chars.by_ref() {
+                                spec.push(nc);
+                                if nc.is_alphabetic() || nc == '%' || nc == '*' { break; }
+                            }
+                            if spec == "%lld" {
+                                let arg = args.get(extra_start + arg_idx);
+                                let is_str = arg.map_or(false, |a| {
+                                    match val_types.get(a.0 as usize).and_then(|t| t.as_ref()) {
+                                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                                            snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str")
+                                        }
+                                        _ => false,
+                                    }
+                                });
+                                let is_float = arg.map_or(false, |a| {
+                                    val_types.get(a.0 as usize).and_then(|t| t.as_ref())
+                                        .map_or(false, |t| matches!(t, LirType::F32 | LirType::F64))
+                                });
+                                if is_str {
+                                    result.push_str("%.*s");
+                                } else if is_float {
+                                    result.push_str("%f");
+                                } else {
+                                    result.push_str(&spec);
+                                }
+                                arg_idx += 1;
+                            } else {
+                                if spec != "%%" && spec != "%*" { arg_idx += 1; }
+                                result.push_str(&spec);
+                            }
+                        } else {
+                            result.push(c);
+                        }
+                    }
+                    fixed_fmt = result;
                     let fixed_idx = str_globals.get_index(&fixed_fmt);
                     let fixed_len = fixed_fmt.len();
                     let pfx = format!("fmtfix.{block_id}.{uid}");
@@ -3197,14 +3248,35 @@ fn emit_inst(
                     writeln!(out, "  %{str_data} = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", args[fmt_arg_idx].0).unwrap();
                 }
                 writeln!(out, "  %{str_val} = load ptr, ptr %{str_data}").unwrap();
-                // Build remaining args with their types
-                let extra_args: Vec<String> = args[extra_start..].iter().map(|a| {
-                    let pty = val_types.get(a.0 as usize)
-                        .and_then(|t| t.as_ref())
-                        .map(|t| llvm_arg_type(t, snames))
-                        .unwrap_or_else(|| "i64".to_string());
-                    format!("{pty} %v{}", a.0)
-                }).collect();
+                // Build remaining args with their types.
+                // GorgetString args need expansion to (i32 len, ptr data) for %.*s.
+                let mut extra_args: Vec<String> = Vec::new();
+                let mut printf_spills = Vec::new();
+                for (ai, a) in args[extra_start..].iter().enumerate() {
+                    let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                    let is_str = match aty {
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                            snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str")
+                        }
+                        _ => false,
+                    };
+                    if is_str {
+                        // Expand GorgetString → (i32 len, ptr data) for %.*s
+                        let sn = format!("printf.{block_id}.{uid}.s{ai}");
+                        printf_spills.push(format!("  %{sn}.lenp = getelementptr %GorgetString, ptr %v{}, i32 0, i32 2", a.0));
+                        printf_spills.push(format!("  %{sn}.len = load i64, ptr %{sn}.lenp"));
+                        printf_spills.push(format!("  %{sn}.leni = trunc i64 %{sn}.len to i32"));
+                        printf_spills.push(format!("  %{sn}.datap = getelementptr %GorgetString, ptr %v{}, i32 0, i32 0", a.0));
+                        printf_spills.push(format!("  %{sn}.data = load ptr, ptr %{sn}.datap"));
+                        extra_args.push(format!("i32 %{sn}.leni"));
+                        extra_args.push(format!("ptr %{sn}.data"));
+                    } else {
+                        let pty = aty.map(|t| llvm_arg_type(t, snames))
+                            .unwrap_or_else(|| "i64".to_string());
+                        extra_args.push(format!("{pty} %v{}", a.0));
+                    }
+                }
+                for s in &printf_spills { writeln!(out, "{s}").unwrap(); }
                 let all_args = if extra_args.is_empty() {
                     format!("ptr %{str_val}")
                 } else {
