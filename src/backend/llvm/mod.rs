@@ -392,16 +392,22 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
 // ── Enum Layout ────────────────────────────────────────────────────────────
 
 /// For enum structs, compute the union payload size in bytes.
-/// Field 0 is the tag (i32). Fields 1+ are variant payloads.
+/// Field 0 is the tag (i32). Fields 1+ are variant payloads grouped by prefix.
+/// E.g., Rectangle_0, Rectangle_1 belong to the Rectangle variant — their
+/// sizes must be summed. The max across all variants gives the union size.
 fn enum_payload_size(def: &StructDef, structs: &[StructDef], snames: &HashMap<u32, String>) -> usize {
-    let mut max_size = 0usize;
-    for (_, fty) in def.fields.iter().skip(1) {
-        let sz = sizeof_lir_type(fty, structs, snames);
-        if sz > max_size {
-            max_size = sz;
-        }
+    // Group fields by variant prefix (everything before the last _N suffix).
+    let mut variant_sizes: HashMap<&str, usize> = HashMap::new();
+    for (fname, fty) in def.fields.iter().skip(1) {
+        let prefix = fname.rsplitn(2, '_').nth(1).unwrap_or(fname);
+        let fsz = sizeof_lir_type(fty, structs, snames);
+        let entry = variant_sizes.entry(prefix).or_insert(0);
+        // Align field within variant
+        let align = fsz.min(8).max(1);
+        *entry = (*entry + align - 1) & !(align - 1);
+        *entry += fsz;
     }
-    max_size
+    variant_sizes.values().copied().max().unwrap_or(0)
 }
 
 /// Compute the size of a LirType in bytes (for memcpy/memset sizes, enum payloads).
