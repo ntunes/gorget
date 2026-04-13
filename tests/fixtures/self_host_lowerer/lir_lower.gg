@@ -1,0 +1,786 @@
+# GIR → LIR lowering.
+#
+# Transforms the high-level GIR (Gorget IR) into low-level LIR (SSA-form IR).
+# All implicit operations (drop glue, coercions, vtable dispatch) become
+# explicit LIR instructions.
+
+from gir import GirModule, GirFunction, GirLocal, GirType, GirExtern, BasicBlock, Instruction, Terminator, Operand
+from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
+from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
+from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
+from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal
+from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo
+from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
+from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
+from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
+from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate
+from lir import OVF_TRAP, OVF_WRAP
+from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from lir import ABI_AUTO
+from lir import SCHED_POOL
+from lir import lir_fn_next_value, lir_fn_add_slot, lir_fn_add_block
+from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+
+# ── Struct Registry ─────────────────────────────────────────
+
+struct StructRegistry:
+    Dict[String, int] name_to_id
+
+int sr_lookup(StructRegistry &sr, String name):
+    if sr.name_to_id.contains(name):
+        return sr.name_to_id.get(name).unwrap()
+    return -1
+
+int sr_register(StructRegistry &sr, String name, int id):
+    sr.name_to_id.put(name, id)
+    return id
+
+# ── Builtin struct definitions ──────────────────────────────
+
+void register_builtin_structs(LirModule &m, StructRegistry &sr):
+    # GorgetString: {data: Ptr, cap: I64, len: I64, alloc: Ptr}
+    Vector[StructField] str_fields = []
+    str_fields.push(StructField("data", LT_PTR))
+    str_fields.push(StructField("cap", LT_I64))
+    str_fields.push(StructField("len", LT_I64))
+    str_fields.push(StructField("alloc", LT_PTR))
+    int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32))
+    sr_register(&sr, "GorgetString", str_id)
+    sr_register(&sr, "Str", str_id)
+
+    # GorgetArray: {data: Ptr, cap: I64, len: I64, elem_size: I64}
+    Vector[StructField] arr_fields = []
+    arr_fields.push(StructField("data", LT_PTR))
+    arr_fields.push(StructField("cap", LT_I64))
+    arr_fields.push(StructField("len", LT_I64))
+    arr_fields.push(StructField("elem_size", LT_I64))
+    int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64))
+    sr_register(&sr, "GorgetArray", arr_id)
+
+    # GorgetClosure: {fn_ptr: Ptr, env: Ptr}
+    Vector[StructField] cls_fields = []
+    cls_fields.push(StructField("fn_ptr", LT_PTR))
+    cls_fields.push(StructField("env", LT_PTR))
+    int cls_id = lir_mod_add_struct(&m, LirStructDef("GorgetClosure", cls_fields, 0, false, 16))
+    sr_register(&sr, "GorgetClosure", cls_id)
+
+    # TraitObj: {data: Ptr, vtable: Ptr}
+    Vector[StructField] trait_fields = []
+    trait_fields.push(StructField("data", LT_PTR))
+    trait_fields.push(StructField("vtable", LT_PTR))
+    int trait_id = lir_mod_add_struct(&m, LirStructDef("TraitObj", trait_fields, 0, false, 16))
+    sr_register(&sr, "TraitObj", trait_id)
+
+    # TaskHandle: {task_ptr: Ptr, drop_fn: Ptr}
+    Vector[StructField] task_fields = []
+    task_fields.push(StructField("task_ptr", LT_PTR))
+    task_fields.push(StructField("drop_fn", LT_PTR))
+    int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16))
+    sr_register(&sr, "TaskHandle", task_id)
+
+    # GorgetMap: 13 fields, 152 bytes
+    Vector[StructField] map_fields = []
+    map_fields.push(StructField("keys", LT_PTR))
+    map_fields.push(StructField("cap", LT_I64))
+    map_fields.push(StructField("values", LT_PTR))
+    map_fields.push(StructField("states", LT_PTR))
+    map_fields.push(StructField("count", LT_I64))
+    map_fields.push(StructField("key_size", LT_I64))
+    map_fields.push(StructField("val_size", LT_I64))
+    map_fields.push(StructField("alloc", LT_PTR))
+    map_fields.push(StructField("order", LT_PTR))
+    map_fields.push(StructField("order_len", LT_I64))
+    map_fields.push(StructField("tombstones", LT_I64))
+    map_fields.push(StructField("hash_fn", LT_PTR))
+    map_fields.push(StructField("eq_fn", LT_PTR))
+    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 152))
+    sr_register(&sr, "GorgetMap", map_id)
+
+    # GorgetSet: same layout as GorgetMap
+    Vector[StructField] set_fields = []
+    set_fields.push(StructField("keys", LT_PTR))
+    set_fields.push(StructField("cap", LT_I64))
+    set_fields.push(StructField("values", LT_PTR))
+    set_fields.push(StructField("states", LT_PTR))
+    set_fields.push(StructField("count", LT_I64))
+    set_fields.push(StructField("key_size", LT_I64))
+    set_fields.push(StructField("val_size", LT_I64))
+    set_fields.push(StructField("alloc", LT_PTR))
+    set_fields.push(StructField("order", LT_PTR))
+    set_fields.push(StructField("order_len", LT_I64))
+    set_fields.push(StructField("tombstones", LT_I64))
+    set_fields.push(StructField("hash_fn", LT_PTR))
+    set_fields.push(StructField("eq_fn", LT_PTR))
+    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 152))
+    sr_register(&sr, "GorgetSet", set_id)
+
+    # GorgetRange: {start: I64, end: I64, step: I64}
+    Vector[StructField] range_fields = []
+    range_fields.push(StructField("start", LT_I64))
+    range_fields.push(StructField("end", LT_I64))
+    range_fields.push(StructField("step", LT_I64))
+    int range_id = lir_mod_add_struct(&m, LirStructDef("GorgetRange", range_fields, 0, false, 24))
+    sr_register(&sr, "GorgetRange", range_id)
+
+# ── Type mapping: GIR type ID → LIR type ───────────────────
+
+# Map a collection name pattern to its runtime struct name.
+String collection_runtime_type(String name):
+    if name.starts_with("Vector__"):
+        return "GorgetArray"
+    elif name.starts_with("Dict__") or name.starts_with("GorgetDict__"):
+        return "GorgetMap"
+    elif name.starts_with("HashMap__") or name.starts_with("GorgetMap__"):
+        return "GorgetMap"
+    elif name.starts_with("Set__") or name.starts_with("GorgetSet__"):
+        return "GorgetSet"
+    elif name.starts_with("HashSet__"):
+        return "GorgetSet"
+    elif name.starts_with("Heap__"):
+        return "GorgetArray"
+    elif name.starts_with("Deque__"):
+        return "GorgetArray"
+    return ""
+
+bool is_opaque_pointer_type(String name):
+    if name.starts_with("Mutex__") or name.starts_with("Shared__"):
+        return true
+    if name.starts_with("Weak__") or name.starts_with("Channel__"):
+        return true
+    if name.starts_with("RWLock__") or name.starts_with("Thread__"):
+        return true
+    if name == "Barrier" or name == "CondVar" or name == "AtomicInt":
+        return true
+    if name == "AtomicBool" or name == "Process" or name == "Thread":
+        return true
+    if name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
+        return true
+    return false
+
+bool is_guard_struct_type(String name):
+    return name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__")
+
+int map_gir_type(int type_id, GirModule &gmod, StructRegistry &sr):
+    if type_id == BOOL_TYPE:
+        return LT_BOOL
+    elif type_id == I8_TYPE:
+        return LT_I8
+    elif type_id == I16_TYPE:
+        return LT_I16
+    elif type_id == I32_TYPE:
+        return LT_I32
+    elif type_id == I64_TYPE:
+        return LT_I64
+    elif type_id == U8_TYPE:
+        return LT_U8
+    elif type_id == U16_TYPE:
+        return LT_U16
+    elif type_id == U32_TYPE:
+        return LT_U32
+    elif type_id == U64_TYPE:
+        return LT_U64
+    elif type_id == F32_TYPE:
+        return LT_F32
+    elif type_id == F64_TYPE:
+        return LT_F64
+    elif type_id == UNIT_TYPE:
+        return LT_VOID
+
+    if type_id < 0 or type_id >= gmod.type_table.len():
+        return LT_I64
+
+    GirType gt = gmod.type_table.get(type_id).unwrap()
+    match gt:
+        case GtPtr(inner):
+            int inner_ty = map_gir_type(inner, &gmod, &sr)
+            int sid = lir_struct_id(inner_ty)
+            if sid >= 0:
+                return lir_ptr_to(sid)
+            return LT_PTR
+        case GtMutPtr(inner):
+            int inner_ty = map_gir_type(inner, &gmod, &sr)
+            int sid = lir_struct_id(inner_ty)
+            if sid >= 0:
+                return lir_ptr_to(sid)
+            return LT_PTR
+        case GtNamed(name):
+            int sid = sr_lookup(&sr, name)
+            if sid >= 0:
+                return lir_struct(sid)
+            # Check collection runtime types
+            String rt = collection_runtime_type(name)
+            if rt != "":
+                int rt_sid = sr_lookup(&sr, rt)
+                if rt_sid >= 0:
+                    return lir_struct(rt_sid)
+            # Opaque types → Ptr
+            if is_opaque_pointer_type(name):
+                return LT_PTR
+            return LT_PTR
+        case GtFnPtr(_, _):
+            int cls_sid = sr_lookup(&sr, "GorgetClosure")
+            if cls_sid >= 0:
+                return lir_struct(cls_sid)
+            return LT_PTR
+        else:
+            return LT_I64
+    return LT_I64
+
+# ── Type definition lowering ────────────────────────────────
+
+# Register user-defined structs and enums from the GIR type table.
+void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
+    # Two-pass registration: Pass 1 creates placeholder entries,
+    # Pass 2 fills in fields.
+
+    # Pass 1: Pre-register all named types
+    int ti = PRIM_COUNT
+    while ti < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(ti).unwrap()
+        match gt:
+            case GtNamed(name):
+                if sr_lookup(&sr, name) < 0:
+                    String rt = collection_runtime_type(name)
+                    if rt != "":
+                        # Map to existing runtime struct
+                        int rt_sid = sr_lookup(&sr, rt)
+                        if rt_sid >= 0:
+                            sr_register(&sr, name, rt_sid)
+                    elif is_opaque_pointer_type(name):
+                        pass
+                    elif name.starts_with("Box__"):
+                        # Box types: {_0: Ptr}
+                        Vector[StructField] box_fields = []
+                        box_fields.push(StructField("_0", LT_PTR))
+                        String box_name = name.clone()
+                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8))
+                        sr_register(&sr, name, box_id)
+                    elif is_guard_struct_type(name):
+                        # Guard types: {owner: Ptr, ptr: Ptr}
+                        Vector[StructField] guard_fields = []
+                        guard_fields.push(StructField("owner", LT_PTR))
+                        guard_fields.push(StructField("ptr", LT_PTR))
+                        String guard_name = name.clone()
+                        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16))
+                        sr_register(&sr, name, guard_id)
+                    else:
+                        # Create placeholder (will be filled in Pass 2)
+                        Vector[StructField] empty_fields = []
+                        String ph_name = name.clone()
+                        int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1))
+                        sr_register(&sr, name, sid)
+            else:
+                pass
+        ti += 1
+
+    # Pass 2: Fill in fields from GIR function metadata
+    # (The GIR module doesn't carry struct field info directly — it's
+    #  embedded in StructInit instructions and type annotations.
+    #  For now, fields are populated during instruction lowering.)
+
+# ── Runtime function name mapping ───────────────────────────
+
+String map_runtime_name(String name):
+    # Vector methods
+    if name.starts_with("Vector__") and name.contains("__"):
+        # Extract method name after the last "__"
+        String method = extract_method_name(name)
+        if method == "new":
+            return "gorget_array_new"
+        elif method == "push":
+            return "gorget_array_push"
+        elif method == "pop":
+            return "gorget_array_safe_pop"
+        elif method == "get":
+            return "gorget_array_safe_get"
+        elif method == "set":
+            return "gorget_array_set"
+        elif method == "len":
+            return "gorget_array_len"
+        elif method == "remove":
+            return "gorget_array_remove_opt"
+        elif method == "insert":
+            return "gorget_array_insert"
+        elif method == "clone":
+            return "gorget_array_clone"
+        elif method == "clear":
+            return "gorget_array_clear"
+        elif method == "extend":
+            return "gorget_array_extend"
+        elif method == "contains":
+            return "gorget_array_contains"
+        elif method == "reverse":
+            return "gorget_array_reverse"
+        elif method == "slice":
+            return "gorget_array_slice"
+        elif method == "last":
+            return "gorget_array_safe_last"
+        elif method == "first":
+            return "gorget_array_safe_first"
+        elif method == "is_empty":
+            return "gorget_array_is_empty"
+        elif method == "capacity":
+            return "gorget_array_capacity"
+        elif method == "swap":
+            return "gorget_array_swap"
+
+    # Dict/HashMap methods
+    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        String method = extract_method_name(name)
+        if method == "new":
+            return "gorget_dict_new"
+        elif method == "put" or method == "set":
+            return "gorget_map_put"
+        elif method == "get":
+            return "gorget_map_get"
+        elif method == "contains" or method == "has":
+            return "gorget_map_contains"
+        elif method == "remove":
+            return "gorget_map_remove"
+        elif method == "len":
+            return "gorget_map_len"
+        elif method == "keys":
+            return "gorget_map_keys"
+        elif method == "values":
+            return "gorget_map_values"
+        elif method == "clone":
+            return "gorget_map_clone"
+        elif method == "clear":
+            return "gorget_map_clear"
+
+    # Set methods
+    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+        String method = extract_method_name(name)
+        if method == "new":
+            return "gorget_ordered_set_new"
+        elif method == "add" or method == "insert":
+            return "gorget_set_add"
+        elif method == "contains" or method == "has":
+            return "gorget_set_contains"
+        elif method == "remove":
+            return "gorget_set_remove"
+        elif method == "len":
+            return "gorget_set_len"
+        elif method == "clone":
+            return "gorget_set_clone"
+
+    # String methods
+    if name.starts_with("GorgetString__"):
+        String method = extract_method_name(name)
+        return "gorget_str_" + method
+
+    # Heap methods
+    if name.starts_with("Heap__"):
+        String method = extract_method_name(name)
+        return "gorget_heap_" + method
+
+    # Guard methods
+    if name.starts_with("Guard__"):
+        String method = extract_method_name(name)
+        if method == "drop":
+            return "gorget_guard_release"
+        return "gorget_guard_" + method
+
+    # Mutex methods
+    if name.starts_with("Mutex__"):
+        String method = extract_method_name(name)
+        return "gorget_mutex_" + method
+
+    # No mapping
+    return ""
+
+String extract_method_name(String name):
+    # Find the last "__" and return everything after it
+    int last_pos = -1
+    int i = 0
+    while i < name.len() - 1:
+        String c1 = name.slice(i, i + 1)
+        String c2 = name.slice(i + 1, i + 2)
+        if c1 == "_" and c2 == "_":
+            last_pos = i
+        i += 1
+    if last_pos >= 0 and last_pos + 2 < name.len():
+        return name.slice(last_pos + 2, name.len())
+    return ""
+
+# ── Operand lowering ────────────────────────────────────────
+
+int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot):
+    match op:
+        case OpConstBool(v):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(IBoolConst(dst, v))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstI32(v):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(IIConst(dst, LT_I32, v))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstI64(v):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(IIConst(dst, LT_I64, v))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstF64(v):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            # Store float bits as int (reinterpret)
+            blk.insts.push(IFConst(dst, LT_F64, v as int))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstStr(s):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(IStrLit(dst, s))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstNull():
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(INullPtr(dst))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpConstUnit():
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(IIConst(dst, LT_I32, 0))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpSizeOf(tid):
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            # TODO: compute actual size from type
+            blk.insts.push(IIConst(dst, LT_I64, 8))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpCopy(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotLoad(dst, slot, LT_I64))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpMove(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotLoad(dst, slot, LT_I64))
+            f.blocks.set(bb, blk)
+            return dst
+    return -1
+
+# ── Instruction lowering ────────────────────────────────────
+
+void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, StructRegistry &sr):
+    match inst:
+        case IAssign(local_id, operand):
+            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            int slot = local_to_slot.get(local_id).unwrap()
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotStore(slot, val, false))
+            f.blocks.set(bb, blk)
+
+        case IBinOp(dst_local, op, ty, lhs_op, rhs_op):
+            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
+            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
+            int dst = lir_fn_next_value(&f)
+            int lir_ty = map_gir_type(ty, &gmod, &sr)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            if op == OP_ADD:
+                blk.insts.push(IAdd(dst, lir_ty, lhs, rhs, OVF_TRAP))
+            elif op == OP_SUB:
+                blk.insts.push(ISub(dst, lir_ty, lhs, rhs, OVF_TRAP))
+            elif op == OP_MUL:
+                blk.insts.push(IMul(dst, lir_ty, lhs, rhs, OVF_TRAP))
+            elif op == OP_DIV:
+                blk.insts.push(IDiv(dst, lir_ty, lhs, rhs))
+            elif op == OP_REM:
+                blk.insts.push(IRem(dst, lir_ty, lhs, rhs))
+            elif op == OP_MOD:
+                blk.insts.push(IMod(dst, lir_ty, lhs, rhs))
+            f.blocks.set(bb, blk)
+            # Store result
+            int dst_slot = local_to_slot.get(dst_local).unwrap()
+            LirBlock blk2 = f.blocks.get(bb).unwrap()
+            blk2.insts.push(ISlotStore(dst_slot, dst, false))
+            f.blocks.set(bb, blk2)
+
+        case IUnOp(dst_local, op, ty, operand):
+            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            int dst = lir_fn_next_value(&f)
+            int lir_ty = map_gir_type(ty, &gmod, &sr)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            if op == UNOP_NEG:
+                blk.insts.push(INeg(dst, lir_ty, val))
+            elif op == UNOP_NOT:
+                blk.insts.push(INot(dst, val))
+            elif op == UNOP_BITNOT:
+                blk.insts.push(IBitNot(dst, lir_ty, val))
+            f.blocks.set(bb, blk)
+            int dst_slot = local_to_slot.get(dst_local).unwrap()
+            LirBlock blk2 = f.blocks.get(bb).unwrap()
+            blk2.insts.push(ISlotStore(dst_slot, dst, false))
+            f.blocks.set(bb, blk2)
+
+        case ICmp(dst_local, op, ty, lhs_op, rhs_op):
+            int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
+            int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ICmp(dst, op, lhs, rhs))
+            f.blocks.set(bb, blk)
+            int dst_slot = local_to_slot.get(dst_local).unwrap()
+            LirBlock blk2 = f.blocks.get(bb).unwrap()
+            blk2.insts.push(ISlotStore(dst_slot, dst, false))
+            f.blocks.set(bb, blk2)
+
+        case ICall(dst_local, func_name, args):
+            # Lower call arguments
+            Vector[int] lir_args = []
+            int ai = 0
+            while ai < args.len():
+                Operand arg = args.get(ai).unwrap()
+                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                lir_args.push(arg_val)
+                ai += 1
+
+            # Check if it's a known function
+            if func_index.contains(func_name):
+                int func_id = func_index.get(func_name).unwrap()
+                int dst = -1
+                if dst_local >= 0:
+                    dst = lir_fn_next_value(&f)
+                LirBlock blk = f.blocks.get(bb).unwrap()
+                blk.insts.push(ICall(dst, func_id, lir_args))
+                f.blocks.set(bb, blk)
+                if dst >= 0 and dst_local >= 0:
+                    int dst_slot = local_to_slot.get(dst_local).unwrap()
+                    LirBlock blk2 = f.blocks.get(bb).unwrap()
+                    blk2.insts.push(ISlotStore(dst_slot, dst, false))
+                    f.blocks.set(bb, blk2)
+            else:
+                # Extern or runtime call
+                String mapped = map_runtime_name(func_name)
+                String call_name = func_name
+                if mapped != "":
+                    call_name = mapped
+                int dst = -1
+                if dst_local >= 0:
+                    dst = lir_fn_next_value(&f)
+                Vector[int] empty_abis = []
+                LirBlock blk = f.blocks.get(bb).unwrap()
+                blk.insts.push(ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
+                f.blocks.set(bb, blk)
+                if dst >= 0 and dst_local >= 0:
+                    int dst_slot = local_to_slot.get(dst_local).unwrap()
+                    LirBlock blk2 = f.blocks.get(bb).unwrap()
+                    blk2.insts.push(ISlotStore(dst_slot, dst, false))
+                    f.blocks.set(bb, blk2)
+
+        case ICallExtern(dst_local, func_name, args):
+            Vector[int] lir_args = []
+            int ai = 0
+            while ai < args.len():
+                Operand arg = args.get(ai).unwrap()
+                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                lir_args.push(arg_val)
+                ai += 1
+            String mapped = map_runtime_name(func_name)
+            String call_name = func_name
+            if mapped != "":
+                call_name = mapped
+            int dst = -1
+            if dst_local >= 0:
+                dst = lir_fn_next_value(&f)
+            Vector[int] empty_abis = []
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
+            f.blocks.set(bb, blk)
+            if dst >= 0 and dst_local >= 0:
+                int dst_slot = local_to_slot.get(dst_local).unwrap()
+                LirBlock blk2 = f.blocks.get(bb).unwrap()
+                blk2.insts.push(ISlotStore(dst_slot, dst, false))
+                f.blocks.set(bb, blk2)
+
+        case IDrop(local_id):
+            # Emit drop as extern call: Type__drop(&place)
+            int slot = local_to_slot.get(local_id).unwrap()
+            int addr = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotAddr(addr, slot))
+            f.blocks.set(bb, blk)
+            # For now, emit as nop — drop elaboration will handle this
+            # TODO: resolve drop function name from type info
+
+        case IDropIfAlive(local_id):
+            # Similar to IDrop but with runtime liveness check
+            pass
+
+        case IMoveZero(local_id):
+            # Zero-out the slot after move — will be replaced by drop elaboration
+            int slot = local_to_slot.get(local_id).unwrap()
+            int addr = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotAddr(addr, slot))
+            # Emit memset(addr, 0, sizeof(type))
+            int zero = lir_fn_next_value(&f)
+            int size = lir_fn_next_value(&f)
+            blk.insts.push(IIConst(zero, LT_I32, 0))
+            blk.insts.push(IIConst(size, LT_I64, 8))
+            blk.insts.push(IMemset(addr, zero, size))
+            f.blocks.set(bb, blk)
+
+        case INop():
+            pass
+
+# ── Terminator lowering ─────────────────────────────────────
+
+LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[int] &block_map):
+    match term:
+        case TReturn(operand):
+            int val = lower_operand(operand, &f, bb, &local_to_slot)
+            return TRet(val)
+        case TJump(target):
+            int lir_target = block_map.get(target).unwrap()
+            Vector[int] empty_args = []
+            return TJump(lir_target, empty_args)
+        case TBranch(cond_op, then_bb, else_bb):
+            int cond = lower_operand(cond_op, &f, bb, &local_to_slot)
+            int lir_then = block_map.get(then_bb).unwrap()
+            int lir_else = block_map.get(else_bb).unwrap()
+            Vector[int] empty_then = []
+            Vector[int] empty_else = []
+            return TBranch(cond, lir_then, empty_then, lir_else, empty_else)
+        case TNone():
+            return TRetVoid()
+    return TUnreachable()
+
+# ── Function lowering ───────────────────────────────────────
+
+LirFunction lower_function(GirFunction gfn, GirModule &gmod, StructRegistry &sr, Dict[String, int] &func_index):
+    # Map parameter types
+    Vector[int] param_types = []
+    int pi = 0
+    while pi < gfn.param_types.len():
+        int pt = gfn.param_types.get(pi).unwrap()
+        param_types.push(map_gir_type(pt, &gmod, &sr))
+        pi += 1
+
+    # Map return type
+    int ret_type = map_gir_type(gfn.return_type, &gmod, &sr)
+
+    Vector[int] saved_param_types = []
+    int spi = 0
+    while spi < param_types.len():
+        saved_param_types.push(param_types.get(spi).unwrap())
+        spi += 1
+
+    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [])
+
+    # Create slots for all GIR locals
+    Vector[int] local_to_slot = []
+    int li = 0
+    while li < gfn.locals.len():
+        GirLocal local = gfn.locals.get(li).unwrap()
+        int lir_ty = map_gir_type(local.type_id, &gmod, &sr)
+        String slot_name = ""
+        match local.name_hint:
+            case Some(n):
+                slot_name = n
+            case None:
+                pass
+        int slot_id = lir_fn_add_slot(&f, lir_ty, slot_name)
+        local_to_slot.push(slot_id)
+        li += 1
+
+    # Create blocks
+    Vector[int] block_map = []
+    int bi = 0
+    while bi < gfn.blocks.len():
+        int blk_id = lir_fn_add_block(&f)
+        block_map.push(blk_id)
+        bi += 1
+
+    # Copy function parameters to their slots (params map to locals 1..N, local 0 is return place)
+    if gfn.blocks.len() > 0:
+        int param_count = gfn.param_types.len()
+        int pci = 0
+        while pci < param_count:
+            int param_val = lir_fn_next_value(&f)
+            int param_lir_ty = saved_param_types.get(pci).unwrap()
+            int param_slot = local_to_slot.get(pci + 1).unwrap()
+            LirBlock entry = f.blocks.get(0).unwrap()
+            entry.insts.push(IParamRef(param_val, pci, param_lir_ty))
+            entry.insts.push(ISlotStore(param_slot, param_val, false))
+            f.blocks.set(0, entry)
+            pci += 1
+
+    # Lower instructions and terminators for each block
+    int bii = 0
+    while bii < gfn.blocks.len():
+        BasicBlock gir_blk = gfn.blocks.get(bii).unwrap()
+        int lir_bb = block_map.get(bii).unwrap()
+
+        # Lower instructions
+        int ii = 0
+        while ii < gir_blk.insts.len():
+            Instruction gir_inst = gir_blk.insts.get(ii).unwrap()
+            lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr)
+            ii += 1
+
+        # Lower terminator
+        LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, &local_to_slot, &block_map)
+        LirBlock final_blk = f.blocks.get(lir_bb).unwrap()
+        final_blk.term = lir_term
+        f.blocks.set(lir_bb, final_blk)
+
+        bii += 1
+
+    return f
+
+# ── Module lowering (main entry point) ──────────────────────
+
+LirModule lower_gir_to_lir(GirModule &gmod):
+    LirModule m = new_lir_module()
+    StructRegistry sr = StructRegistry({})
+
+    # Register builtin structs
+    register_builtin_structs(&m, &sr)
+
+    # Lower user-defined type definitions
+    lower_type_defs(&gmod, &m, &sr)
+
+    # Build function index: name → FuncId
+    Dict[String, int] func_index = {}
+    int fi = 0
+    while fi < gmod.functions.len():
+        GirFunction gfn = gmod.functions.get(fi).unwrap()
+        func_index.put(gfn.name.clone(), fi)
+        fi += 1
+
+    # Lower extern declarations
+    int ei = 0
+    while ei < gmod.externs.len():
+        GirExtern gext = gmod.externs.get(ei).unwrap()
+        int ext_ret = map_gir_type(gext.return_type, &gmod, &sr)
+        Vector[int] ext_params = []
+        Vector[int] ext_abis = []
+        m.externs.push(LirExtern(gext.name, ext_params, ext_ret, gext.is_variadic, ext_abis, ABI_AUTO))
+        ei += 1
+
+    # Lower each function
+    int fli = 0
+    while fli < gmod.functions.len():
+        GirFunction gfn = gmod.functions.get(fli).unwrap()
+        LirFunction lf = lower_function(gfn, &gmod, &sr, &func_index)
+        lir_mod_add_function(&m, lf)
+        fli += 1
+
+    return m
