@@ -349,6 +349,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dst = add_local(&ctx, gs_tid, NO_NAME)
             emit(&ctx, IAssign(dst, OpConstStr(s)))
             return dst
+        case EFString(s, _):
+            int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            int dst = add_local(&ctx, gs_tid, NO_NAME)
+            emit(&ctx, IAssign(dst, OpConstStr(s)))
+            return dst
         case EIdentifier(name):
             if ctx.named_locals.contains(name):
                 return ctx.named_locals.get(name).unwrap()
@@ -940,6 +945,8 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
             return BOOL_TYPE
         case EStringLiteral(_, _):
             return STRING_MARKER
+        case EFString(_, _):
+            return STRING_MARKER
         case EBinaryOp(lhs_box, op, rhs_box):
             match op:
                 case "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or":
@@ -1084,6 +1091,13 @@ bool expr_has_it(SpannedExpr sexpr):
             return false
         case EIf(cond, _, _):
             return expr_has_it(*cond)
+        case EFString(_, fexprs):
+            int fi = 0
+            while fi < fexprs.len():
+                if expr_has_it(fexprs.get(fi).unwrap()):
+                    return true
+                fi += 1
+            return false
         else:
             return false
 
@@ -1223,6 +1237,12 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
         case EIndex(obj, idx):
             next_id = scan_expr_for_closures(*obj, next_id, &gmod)
             next_id = scan_expr_for_closures(*idx, next_id, &gmod)
+        case EFString(_, interp_exprs):
+            int fi = 0
+            while fi < interp_exprs.len():
+                SpannedExpr fexpr = interp_exprs.get(fi).unwrap()
+                next_id = scan_expr_for_closures(fexpr, next_id, &gmod)
+                fi += 1
         else:
             pass
     return next_id

@@ -90,6 +90,7 @@ enum Expr:
     ESpawnBlocking(Box[SpannedExpr])
     ERethrow(Box[SpannedExpr], Option[String], Option[Box[SpannedType]], Box[SpannedExpr])
     ECatch(Box[SpannedExpr], String, Box[SpannedExpr])
+    EFString(String, Vector[SpannedExpr])
 
 # ── Statements ───────────────────────────────────────────────
 

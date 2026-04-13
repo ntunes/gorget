@@ -1872,7 +1872,30 @@ equip Parser:
         # String literal
         if ptag == TOK_STRING:
             SpannedToken t = self.advance()
-            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
+            if token_has_interpolation(t.lex_token):
+                # F-string: parse interpolation segments as expressions
+                String ftemplate = ""
+                Vector[SpannedExpr] fexprs = Vector[SpannedExpr]()
+                match t.lex_token:
+                    case TkString(slit):
+                        int fsi = 0
+                        while fsi < slit.lex_segments.len():
+                            StringSegment fseg = slit.lex_segments.get(fsi).unwrap()
+                            match fseg:
+                                case SegLiteral(s):
+                                    ftemplate = ftemplate + s
+                                case SegInterpolation(expr_text):
+                                    ftemplate = ftemplate + "{}"
+                                    # Parse the interpolation expression text
+                                    Vector[SpannedToken] sub_tokens = lex_tokenize(expr_text)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0)
+                                    SpannedExpr parsed_expr = sub.parse_expr()
+                                    fexprs.push(parsed_expr)
+                            fsi = fsi + 1
+                    else:
+                        pass
+                return SpannedExpr(EFString(ftemplate, !fexprs), Span(t.lex_start, t.lex_end))
+            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), false), Span(t.lex_start, t.lex_end))
 
         # Bool literal
         if ptag == TOK_BOOL:
