@@ -2679,9 +2679,16 @@ equip Parser:
                 Vector[Stmt] arm_body = self.parse_block()
                 arms.push(MatchArm(pat, guard, arm_body))
             elif self.check_kw(KW_META):
-                # meta for/if inside match — skip entirely
+                # meta for/if inside match — parse body for generic discovery
                 self.advance()
-                self.skip_meta_rest()
+                if self.check_kw(KW_FOR) or self.check_kw(KW_IF):
+                    self.skip_meta_header()
+                    Vector[Stmt] meta_body = self.parse_block()
+                    # Store as a virtual wildcard arm with SMetaFor body
+                    SpannedPattern meta_wild = SpannedPattern(PWildcard(), Span(start, start))
+                    arms.push(MatchArm(meta_wild, None, [SMetaFor(meta_body)]))
+                else:
+                    self.skip_meta_rest()
             elif self.check_kw(KW_ELSE):
                 self.advance()
                 self.expect_tok(TOK_COLON, "expected ':' after else")
