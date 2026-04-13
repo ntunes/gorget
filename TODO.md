@@ -2,7 +2,6 @@
 
 ## High
 
-- **Type-aware ABI resolution — remaining cleanup**: All runtime_extern_sig entries tagged, higher-order collection helpers tagged at ensure_extern time, ByValue ABI kind added. Remaining whitelists: `collection_void_param_indices` (dead for tagged functions, kept for edge cases), `legacy_self_by_ptr` (8 lines for unmapped GIR names), `str_fn_non_str_arg` (1 entry, dead for tagged gorget_str_join). Printf/spawn/await are structural codegen — leave as-is. [demoted from High: 2026-04-12]
 
 - **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 
