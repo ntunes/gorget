@@ -1243,6 +1243,28 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 SpannedExpr fexpr = interp_exprs.get(fi).unwrap()
                 next_id = scan_expr_for_closures(fexpr, next_id, &gmod)
                 fi += 1
+        case ESpawn(inner_box):
+            # Check if this is spawn (inline_closure)(args) — emit wrapper before recursing
+            bool is_inline_closure = false
+            match (*inner_box).expr:
+                case ECall(callee_box, _, _):
+                    match (*callee_box).expr:
+                        case EClosure(_, _):
+                            is_inline_closure = true
+                        else:
+                            pass
+                else:
+                    pass
+            if is_inline_closure:
+                String cl_name = "__Closure_" + int_to_str(next_id)
+                String wrap_name = "__spawn_wrap_" + cl_name
+                Vector[int] sw_wp = []
+                Vector[GirLocal] sw_wl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                Vector[BasicBlock] sw_wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                gmod.functions.push(GirFunction(wrap_name, !sw_wp, UNIT_TYPE, !sw_wl, !sw_wb))
+            next_id = scan_expr_for_closures(*inner_box, next_id, &gmod)
+        case ESpawnBlocking(inner_box):
+            next_id = scan_expr_for_closures(*inner_box, next_id, &gmod)
         else:
             pass
     return next_id
@@ -1295,6 +1317,84 @@ int scan_stmts_for_closures(Vector[Stmt] stmts, int next_id, GirModule &gmod):
         si += 1
     return next_id
 
+# ── Closure variable name collection ────────────────────
+# Tracks which variables hold closures (for spawn wrapper generation).
+# Must visit closures in the SAME ORDER as scan_stmts_for_closures.
+
+int collect_closure_vars_expr(SpannedExpr sexpr, int next_id, Dict[String, String] &cmap):
+    match sexpr.expr:
+        case EClosure(params, body):
+            next_id = next_id + 1
+            next_id = collect_closure_vars_stmts(body, next_id, &cmap)
+        case EImplicitClosure(_):
+            next_id = next_id + 1
+        case ECall(callee, args, _):
+            next_id = collect_closure_vars_expr(*callee, next_id, &cmap)
+            int cai = 0
+            while cai < args.len():
+                SpannedExpr carg = args.get(cai).unwrap()
+                if expr_has_it(carg):
+                    next_id = next_id + 1
+                else:
+                    next_id = collect_closure_vars_expr(carg, next_id, &cmap)
+                cai += 1
+        case ESpawn(inner_box):
+            next_id = collect_closure_vars_expr(*inner_box, next_id, &cmap)
+        case ESpawnBlocking(inner_box):
+            next_id = collect_closure_vars_expr(*inner_box, next_id, &cmap)
+        case EMethodCall(obj, _, margs, _):
+            next_id = collect_closure_vars_expr(*obj, next_id, &cmap)
+            int mai = 0
+            while mai < margs.len():
+                next_id = collect_closure_vars_expr(margs.get(mai).unwrap(), next_id, &cmap)
+                mai += 1
+        else:
+            pass
+    return next_id
+
+int collect_closure_vars_stmt(Stmt s, int next_id, Dict[String, String] &cmap):
+    match s:
+        case SVarDecl(_, name, init, _, _, _):
+            match init.expr:
+                case EClosure(params, body):
+                    String cname = "__Closure_" + int_to_str(next_id)
+                    cmap.put(name, cname)
+                    next_id = next_id + 1
+                    next_id = collect_closure_vars_stmts(body, next_id, &cmap)
+                case EImplicitClosure(_):
+                    next_id = next_id + 1
+                else:
+                    next_id = collect_closure_vars_expr(init, next_id, &cmap)
+        case SExpr(expr):
+            next_id = collect_closure_vars_expr(expr, next_id, &cmap)
+        case SReturn(opt):
+            match opt:
+                case Some(re):
+                    next_id = collect_closure_vars_expr(re, next_id, &cmap)
+                case None:
+                    pass
+        case SIf(_, then_body, branches):
+            next_id = collect_closure_vars_stmts(then_body, next_id, &cmap)
+            int bi = 0
+            while bi < branches.len():
+                ElseBranch eb = branches.get(bi).unwrap()
+                next_id = collect_closure_vars_stmts(eb.body, next_id, &cmap)
+                bi += 1
+        case SWhile(_, body):
+            next_id = collect_closure_vars_stmts(body, next_id, &cmap)
+        case SFor(_, _, body, _, _):
+            next_id = collect_closure_vars_stmts(body, next_id, &cmap)
+        else:
+            pass
+    return next_id
+
+int collect_closure_vars_stmts(Vector[Stmt] stmts, int next_id, Dict[String, String] &cmap):
+    int csi = 0
+    while csi < stmts.len():
+        next_id = collect_closure_vars_stmt(stmts.get(csi).unwrap(), next_id, &cmap)
+        csi += 1
+    return next_id
+
 # ── Generic monomorphization ─────────────────────────────
 
 struct GenericInstance:
@@ -1305,12 +1405,14 @@ struct GenericInstance:
 # Expand generic calls inside meta for bodies to the 4 standard types.
 # meta for T in type_variants(...): generates code for int, float, String, bool.
 void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
-    # Standard column types that type_variants typically expands to
+    # Standard column types that type_variants typically expands to.
+    # Deliberately excludes 'bool' — variant_payloads() expands to enum payload
+    # types (typically int/float/String), not bool.  Adding bool causes spurious
+    # monomorphizations for fixtures like meta_variant_payloads.
     Vector[SpannedType] std_types = []
     std_types.push(SpannedType(TPrimitive("int"), -1))
     std_types.push(SpannedType(TPrimitive("float"), -1))
     std_types.push(SpannedType(TPrimitive("String"), -1))
-    std_types.push(SpannedType(TPrimitive("bool"), -1))
     # Scan for generic calls with type variable args
     int si = 0
     while si < stmts.len():
@@ -1344,6 +1446,16 @@ void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericIns
                     expand_meta_for_stmt(eb.body.get(ebi).unwrap(), &seen, &instances, std_types)
                     ebi += 1
                 ei += 1
+        case SMatch(scrutinee, arms):
+            expand_meta_for_expr(scrutinee, &seen, &instances, std_types)
+            int mai = 0
+            while mai < arms.len():
+                MatchArm arm = arms.get(mai).unwrap()
+                int mabi = 0
+                while mabi < arm.body.len():
+                    expand_meta_for_stmt(arm.body.get(mabi).unwrap(), &seen, &instances, std_types)
+                    mabi += 1
+                mai += 1
         else:
             pass
 
@@ -1438,6 +1550,11 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             discover_generic_calls_expr(*idx, &seen, &instances)
         case EClosure(_, body):
             discover_generic_calls_stmts(body, &seen, &instances)
+        case EFString(_, fexprs):
+            int fsi = 0
+            while fsi < fexprs.len():
+                discover_generic_calls_expr(fexprs.get(fsi).unwrap(), &seen, &instances)
+                fsi += 1
         else:
             pass
 
@@ -1690,10 +1807,24 @@ Vector[String] extract_equip_type_params(EquipBlock eqblk):
 void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirModule &gmod):
     Vector[String] type_params = extract_equip_type_params(eqblk)
     setup_type_subs(&gmod, type_params, type_args)
-    lower_equip_block(eqblk, &gmod)
+    # For generic equip, Rust uses Type__method naming (no trait prefix) and concrete self types.
+    # Strip the trait_name so lower_equip_block uses plain Type__method naming.
+    Option[String] no_trait = None
+    EquipBlock plain_eqblk = EquipBlock(eqblk.target, eqblk.type_params, no_trait, eqblk.methods, eqblk.via_field)
+    lower_equip_block(plain_eqblk, &gmod)
     clear_type_subs(&gmod)
 
 # ── Spawn wrapper scanning ───────────────────────────────
+
+# Extract the base type name from a SpannedType (e.g. TNamed("Worker",[]) → "Worker").
+String spawn_type_base_name(SpannedType ty):
+    match ty.ty:
+        case TNamed(n, _):
+            return n
+        case TPrimitive(n):
+            return n
+        else:
+            return ""
 
 # Collect shared variable names from a list of statements
 void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
@@ -1711,67 +1842,72 @@ void collect_shared_vars(Vector[Stmt] stmts, Dict[String, bool] &shared_vars):
         i += 1
 
 # Scan for ESpawn expressions and emit wrapper function stubs
-void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod):
+# borrow_params: names of &-qualified params of the enclosing function;
+# passing them to a spawn implies shared-derived ownership (inner shared spawn).
+void scan_spawn_wrappers(Vector[Stmt] stmts, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
     int i = 0
     while i < stmts.len():
         Stmt s = stmts.get(i).unwrap()
         match s:
-            case SVarDecl(_, name, init, _, sk, _):
+            case SVarDecl(ty, name, init, _, sk, _):
                 if sk == 1:
                     shared_vars.put(name, true)
-                scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod)
+                # Track variable types for method-spawn wrapper generation
+                String tname = spawn_type_base_name(ty)
+                if tname != "":
+                    var_types.put(name, tname)
+                scan_expr_for_spawn(init, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SExpr(expr):
-                scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SAssign(_, val):
-                scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(val, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SWhile(cond, body):
-                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod)
-                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SIf(cond, then_body, branches):
-                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod)
-                scan_spawn_wrappers(then_body, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(cond, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(then_body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 int bi = 0
                 while bi < branches.len():
                     ElseBranch eb = branches.get(bi).unwrap()
-                    scan_spawn_wrappers(eb.body, &shared_vars, &async_fns, &emitted, &gmod)
+                    scan_spawn_wrappers(eb.body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                     bi += 1
             case SFor(_, iter_expr, body, _, _):
-                scan_expr_for_spawn(iter_expr, &shared_vars, &async_fns, &emitted, &gmod)
-                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(iter_expr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_spawn_wrappers(body, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             case SReturn(opt):
                 match opt:
                     case Some(rexpr):
-                        scan_expr_for_spawn(rexpr, &shared_vars, &async_fns, &emitted, &gmod)
+                        scan_expr_for_spawn(rexpr, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                     case None:
                         pass
             else:
                 pass
         i += 1
 
-void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod):
+void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dict[String, bool] &async_fns, Dict[String, bool] &emitted, GirModule &gmod, Dict[String, String] &var_types, Dict[String, bool] &borrow_params):
     match sexpr.expr:
         case ESpawn(inner_box):
-            # Check if inner is a call with shared args
             match (*inner_box).expr:
                 case ECall(callee_box, args, _):
                     match (*callee_box).expr:
                         case EIdentifier(callee_name):
-                            # Check if any arg is a shared variable
+                            # Check if any arg is:
+                            # (a) a directly shared variable (shared_vars), or
+                            # (b) a &-param of the enclosing function (borrow_params) —
+                            #     skip_ownership_markers strips '&' in call args so
+                            #     &counter arrives as EIdentifier("counter"), not EMutableBorrow.
                             bool has_shared = false
                             int ai = 0
                             while ai < args.len():
                                 SpannedExpr arg = args.get(ai).unwrap()
                                 match arg.expr:
                                     case EIdentifier(aname):
-                                        if shared_vars.contains(aname):
+                                        if shared_vars.contains(aname) or borrow_params.contains(aname):
                                             has_shared = true
                                     case EMutableBorrow(inner):
-                                        match (*inner).expr:
-                                            case EIdentifier(aname):
-                                                if shared_vars.contains(aname):
-                                                    has_shared = true
-                                            else:
-                                                pass
+                                        # Safety net: if &-prefix somehow survives into arg
+                                        has_shared = true
                                     else:
                                         pass
                                 ai += 1
@@ -1789,24 +1925,280 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 emitted.put(callee_name, true)
                         else:
                             pass
+                case EMethodCall(obj_box, method_name, _, _):
+                    # spawn obj.method() → emit __spawn_method_wrap_TypeName__method_name
+                    match (*obj_box).expr:
+                        case EIdentifier(var_name):
+                            Option[String] opt_type = var_types.get(var_name)
+                            match opt_type:
+                                case Some(type_name):
+                                    String wrapper_name = "__spawn_method_wrap_" + type_name + "__" + method_name
+                                    if not emitted.contains(wrapper_name):
+                                        emitted.put(wrapper_name.clone(), true)
+                                        Vector[int] wp = [I64_TYPE]
+                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
+                                        Vector[BasicBlock] wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                        gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
+                                case None:
+                                    pass
+                        else:
+                            pass
                 else:
                     pass
         case EAwait(inner):
-            scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod)
+            scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
         case EMethodCall(obj, _, margs, _):
-            scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod)
+            scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             int mi = 0
             while mi < margs.len():
-                scan_expr_for_spawn(margs.get(mi).unwrap(), &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(margs.get(mi).unwrap(), &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 mi += 1
         case ECall(callee, cargs, _):
-            scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod)
+            scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             int ci = 0
             while ci < cargs.len():
-                scan_expr_for_spawn(cargs.get(ci).unwrap(), &shared_vars, &async_fns, &emitted, &gmod)
+                scan_expr_for_spawn(cargs.get(ci).unwrap(), &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
                 ci += 1
         else:
             pass
+
+# ── Named-closure spawn wrapper emission ─────────────────
+# Emits __spawn_wrap___Closure_N stubs for `spawn var()` where var holds a closure.
+
+void emit_named_closure_spawn_expr(SpannedExpr sexpr, Dict[String, String] &closure_vars, Dict[String, bool] &emitted, GirModule &gmod):
+    match sexpr.expr:
+        case ESpawn(inner_box):
+            match (*inner_box).expr:
+                case ECall(callee_box, _, _):
+                    match (*callee_box).expr:
+                        case EIdentifier(callee_name):
+                            if closure_vars.contains(callee_name):
+                                String ctype = closure_vars.get(callee_name).unwrap()
+                                String wrap = "__spawn_wrap_" + ctype
+                                if not emitted.contains(wrap):
+                                    emitted.put(wrap.clone(), true)
+                                    Vector[int] ncwp = []
+                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                                    Vector[BasicBlock] ncwb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                    gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
+                        else:
+                            pass
+                else:
+                    pass
+            emit_named_closure_spawn_expr(*inner_box, &closure_vars, &emitted, &gmod)
+        case ECall(callee, args, _):
+            emit_named_closure_spawn_expr(*callee, &closure_vars, &emitted, &gmod)
+            int ncai = 0
+            while ncai < args.len():
+                emit_named_closure_spawn_expr(args.get(ncai).unwrap(), &closure_vars, &emitted, &gmod)
+                ncai += 1
+        case EMethodCall(obj, _, margs, _):
+            emit_named_closure_spawn_expr(*obj, &closure_vars, &emitted, &gmod)
+            int ncmi = 0
+            while ncmi < margs.len():
+                emit_named_closure_spawn_expr(margs.get(ncmi).unwrap(), &closure_vars, &emitted, &gmod)
+                ncmi += 1
+        else:
+            pass
+
+void emit_named_closure_spawn_stmts(Vector[Stmt] stmts, Dict[String, String] &closure_vars, Dict[String, bool] &emitted, GirModule &gmod):
+    int ncsi = 0
+    while ncsi < stmts.len():
+        Stmt ncs = stmts.get(ncsi).unwrap()
+        match ncs:
+            case SVarDecl(_, _, init, _, _, _):
+                emit_named_closure_spawn_expr(init, &closure_vars, &emitted, &gmod)
+            case SExpr(expr):
+                emit_named_closure_spawn_expr(expr, &closure_vars, &emitted, &gmod)
+            case SReturn(opt):
+                match opt:
+                    case Some(re):
+                        emit_named_closure_spawn_expr(re, &closure_vars, &emitted, &gmod)
+                    case None:
+                        pass
+            case SIf(cond, then_body, branches):
+                emit_named_closure_spawn_expr(cond, &closure_vars, &emitted, &gmod)
+                emit_named_closure_spawn_stmts(then_body, &closure_vars, &emitted, &gmod)
+                int ncibi = 0
+                while ncibi < branches.len():
+                    ElseBranch nceb = branches.get(ncibi).unwrap()
+                    emit_named_closure_spawn_stmts(nceb.body, &closure_vars, &emitted, &gmod)
+                    ncibi += 1
+            case SWhile(_, body):
+                emit_named_closure_spawn_stmts(body, &closure_vars, &emitted, &gmod)
+            case SFor(_, iter_expr, body, _, _):
+                emit_named_closure_spawn_expr(iter_expr, &closure_vars, &emitted, &gmod)
+                emit_named_closure_spawn_stmts(body, &closure_vars, &emitted, &gmod)
+            else:
+                pass
+        ncsi += 1
+
+# ── Transitive generic discovery ─────────────────────────
+# Substitute type variables in a SpannedType using a name→type map.
+
+SpannedType substitute_type(SpannedType stype, Dict[String, SpannedType] &type_sub_map):
+    match stype.ty:
+        case TNamed(name, inner_targs):
+            if inner_targs.len() == 0:
+                if type_sub_map.contains(name):
+                    return type_sub_map.get(name).unwrap()
+            if inner_targs.len() > 0:
+                Vector[SpannedType] new_inner = []
+                int i = 0
+                while i < inner_targs.len():
+                    SpannedType sub = substitute_type(inner_targs.get(i).unwrap(), &type_sub_map)
+                    new_inner.push(sub)
+                    i += 1
+                return SpannedType(TNamed(name, new_inner), stype.span)
+            return stype
+        else:
+            return stype
+
+# Extract meta-op suffix from a call argument list.
+# Looks for EIdentifier("__metaop__<op>") produced by the parser's meta-op handling.
+String extract_meta_op_suffix(Vector[SpannedExpr] args):
+    int ai = 0
+    while ai < args.len():
+        SpannedExpr arg = args.get(ai).unwrap()
+        match arg.expr:
+            case EIdentifier(aname):
+                if aname == "__metaop__add":
+                    return "__add"
+                elif aname == "__metaop__sub":
+                    return "__sub"
+                elif aname == "__metaop__mul":
+                    return "__mul"
+                elif aname == "__metaop__div":
+                    return "__div"
+                elif aname == "__metaop__mod":
+                    return "__mod"
+                elif aname == "__metaop__eq":
+                    return "__eq"
+                elif aname == "__metaop__ne":
+                    return "__ne"
+                elif aname == "__metaop__lt":
+                    return "__lt"
+                elif aname == "__metaop__gt":
+                    return "__gt"
+                elif aname == "__metaop__le":
+                    return "__le"
+                elif aname == "__metaop__ge":
+                    return "__ge"
+                else:
+                    pass
+            else:
+                pass
+        ai += 1
+    return ""
+
+int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and has_type_variable(targs):
+                Vector[SpannedType] resolved = []
+                int ti = 0
+                while ti < targs.len():
+                    resolved.push(substitute_type(targs.get(ti).unwrap(), &type_sub_map))
+                    ti += 1
+                if not has_type_variable(resolved):
+                    String meta_suffix = extract_meta_op_suffix(args)
+                    match (*callee_box).expr:
+                        case EIdentifier(fname):
+                            String mangled = compute_mangled_name(resolved, fname) + meta_suffix
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
+                                instances.push(GenericInstance(fname, resolved, mangled))
+                                added += 1
+                        else:
+                            pass
+            int ai = 0
+            while ai < args.len():
+                added += discover_transitive_expr(args.get(ai).unwrap(), &type_sub_map, &seen, &instances)
+                ai += 1
+            added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)
+        case EMethodCall(obj, _, margs, _):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+            int mi = 0
+            while mi < margs.len():
+                added += discover_transitive_expr(margs.get(mi).unwrap(), &type_sub_map, &seen, &instances)
+                mi += 1
+        case EBinaryOp(lhs, _, rhs):
+            added += discover_transitive_expr(*lhs, &type_sub_map, &seen, &instances)
+            added += discover_transitive_expr(*rhs, &type_sub_map, &seen, &instances)
+        case EUnaryOp(_, inner):
+            added += discover_transitive_expr(*inner, &type_sub_map, &seen, &instances)
+        case EIf(cond, then_body, branches):
+            added += discover_transitive_expr(*cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
+            int bi = 0
+            while bi < branches.len():
+                ElseBranch eb = branches.get(bi).unwrap()
+                added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
+                bi += 1
+        case EFieldAccess(obj, _):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+        case EIndex(obj, idx):
+            added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
+            added += discover_transitive_expr(*idx, &type_sub_map, &seen, &instances)
+        case EClosure(_, body):
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case EFString(_, fexprs):
+            int fsi = 0
+            while fsi < fexprs.len():
+                added += discover_transitive_expr(fexprs.get(fsi).unwrap(), &type_sub_map, &seen, &instances)
+                fsi += 1
+        else:
+            pass
+    return added
+
+int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            added += discover_transitive_expr(init, &type_sub_map, &seen, &instances)
+        case SAssign(_, value):
+            added += discover_transitive_expr(value, &type_sub_map, &seen, &instances)
+        case SExpr(expr):
+            added += discover_transitive_expr(expr, &type_sub_map, &seen, &instances)
+        case SReturn(opt_expr):
+            match opt_expr:
+                case Some(expr):
+                    added += discover_transitive_expr(expr, &type_sub_map, &seen, &instances)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(then_body, &type_sub_map, &seen, &instances)
+            int bi = 0
+            while bi < branches.len():
+                ElseBranch eb = branches.get(bi).unwrap()
+                added += discover_transitive_stmts(eb.body, &type_sub_map, &seen, &instances)
+                bi += 1
+        case SWhile(cond, body):
+            added += discover_transitive_expr(cond, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case SFor(_, iter_expr, body, _, _):
+            added += discover_transitive_expr(iter_expr, &type_sub_map, &seen, &instances)
+            added += discover_transitive_stmts(body, &type_sub_map, &seen, &instances)
+        case SMatch(scrutinee, arms):
+            added += discover_transitive_expr(scrutinee, &type_sub_map, &seen, &instances)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = arms.get(ai).unwrap()
+                added += discover_transitive_stmts(arm.body, &type_sub_map, &seen, &instances)
+                ai += 1
+        else:
+            pass
+    return added
+
+int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    int added = 0
+    int si = 0
+    while si < stmts.len():
+        added += discover_transitive_stmt(stmts.get(si).unwrap(), &type_sub_map, &seen, &instances)
+        si += 1
+    return added
 
 # ── Module lowering ──────────────────────────────────────
 
@@ -1974,6 +2366,35 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         di += 1
 
+    # Transitive generic discovery: fixpoint loop to find instances needed
+    # inside already-discovered generic function bodies (e.g. tensor_zeros[T]
+    # inside tensor_sum_axis[float], meta-op calls like tensor_scalar_op[T](t, val, meta /)).
+    bool transitive_changed = true
+    while transitive_changed:
+        transitive_changed = false
+        int tfix_i = 0
+        int tfix_end = generic_instances.len()
+        while tfix_i < tfix_end:
+            GenericInstance tinst = generic_instances.get(tfix_i).unwrap()
+            String tfix_key = tinst.base_name.clone()
+            if not fn_templates.contains(tfix_key) and gmod.call_redirects.contains(tinst.base_name):
+                tfix_key = gmod.call_redirects.get(tinst.base_name).unwrap()
+            if fn_templates.contains(tfix_key):
+                FunctionDef tfix_tmpl = fn_templates.get(tfix_key).unwrap()
+                if tfix_tmpl.type_params.len() > 0:
+                    Dict[String, SpannedType] type_sub_map = {}
+                    int tpi = 0
+                    while tpi < tfix_tmpl.type_params.len() and tpi < tinst.type_args.len():
+                        String tpname = tfix_tmpl.type_params.get(tpi).unwrap()
+                        SpannedType tpta = tinst.type_args.get(tpi).unwrap()
+                        type_sub_map.put(tpname, tpta)
+                        tpi += 1
+                    int prev_count = generic_instances.len()
+                    discover_transitive_stmts(tfix_tmpl.body, &type_sub_map, &seen_instances, &generic_instances)
+                    if generic_instances.len() > prev_count:
+                        transitive_changed = true
+            tfix_i += 1
+
     # Register monomorphized struct types as resource types if any substituted
     # field is a resource type (e.g., Pair[int, String] has a String field)
     int mri = 0
@@ -2102,9 +2523,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 # (Rust emits Heap__T__push for imported Heap but not local Stack).
                 bool is_generic_equip = false
                 String eq_type_name = ""
+                int eq_targs_count = 0
                 match eqblk.target.ty:
                     case TNamed(tname, eq_targs):
                         eq_type_name = tname
+                        eq_targs_count = eq_targs.len()
                         if eq_targs.len() > 0 or eqblk.type_params.len() > 0:
                             is_generic_equip = true
                     else:
@@ -2112,36 +2535,204 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 if is_generic_equip and eq_type_name.len() > 0 and not local_struct_names.contains(eq_type_name):
                     # Imported generic type: emit template (e.g., Heap__T__push)
                     lower_equip_block(eqblk, &gmod)
+                if is_generic_equip and eq_type_name.len() > 0 and local_struct_names.contains(eq_type_name):
+                    # Local generic equip: Rust emits templates ONLY when:
+                    #   (a) single type param, no explicit (non-derive) trait, AND
+                    #   (b) the type is used in a generic function's params (e.g. unwrap_box[T](Box2[T] b))
+                    #       OR has an instantiation with a non-primitive/non-String type arg
+                    #       (e.g. Container[Container[int]])
+                    # This avoids spurious templates for Stack[T] / Pair[T] which are
+                    # only ever used with primitive args and never in generic functions.
+                    bool has_explicit_trait = false
+                    match eqblk.trait_name:
+                        case Some(tn):
+                            bool is_derive2 = tn == "Equatable" or tn == "Displayable" or tn == "Cloneable" or tn == "Hashable" or tn == "Serializable" or tn == "Deserializable" or tn == "Ordinal" or tn == "Drop" or tn == "Add" or tn == "Sub" or tn == "Mul" or tn == "Div" or tn.starts_with("Iterator") or tn.starts_with("Iterable")
+                            if not is_derive2:
+                                has_explicit_trait = true
+                        case None:
+                            pass
+                    # Check total type param count: target type args + explicit type_params
+                    int total_type_params = eq_targs_count + eqblk.type_params.len()
+                    if total_type_params == 1 and not has_explicit_trait:
+                        # Check if template is needed:
+                        # (1) type appears in any generic function's param types
+                        bool needs_template = false
+                        int gfi = 0
+                        while gfi < m.items.len():
+                            Item gf_item = m.items.get(gfi).unwrap()
+                            match gf_item:
+                                case IFunction(fdef):
+                                    if fdef.type_params.len() > 0 and not needs_template:
+                                        int gfpi = 0
+                                        while gfpi < fdef.params.len():
+                                            Param gfp = fdef.params.get(gfpi).unwrap()
+                                            match gfp.param_type.ty:
+                                                case TNamed(n, _):
+                                                    if n == eq_type_name:
+                                                        needs_template = true
+                                                else:
+                                                    pass
+                                            gfpi += 1
+                                else:
+                                    pass
+                            gfi += 1
+                        # (2) any discovered instance has a non-primitive/non-String type arg
+                        if not needs_template:
+                            int gci = 0
+                            while gci < generic_instances.len():
+                                GenericInstance ginst = generic_instances.get(gci).unwrap()
+                                if ginst.base_name == eq_type_name:
+                                    int gai = 0
+                                    while gai < ginst.type_args.len():
+                                        SpannedType gta = ginst.type_args.get(gai).unwrap()
+                                        bool is_simple_arg = false
+                                        match gta.ty:
+                                            case TPrimitive(_):
+                                                is_simple_arg = true
+                                            case TNamed(gn, _):
+                                                if gn == "String" or gn == "GorgetString" or gn == "bool":
+                                                    is_simple_arg = true
+                                            else:
+                                                pass
+                                        if not is_simple_arg:
+                                            needs_template = true
+                                        gai += 1
+                                gci += 1
+                        if needs_template:
+                            lower_equip_block(eqblk, &gmod)
                 if not is_generic_equip:
-                    lower_equip_block(eqblk, &gmod)
-                    # Generate default trait methods not overridden by the equip
+                    # For explicit non-derive trait equip: split methods by whether
+                    # they're in the trait's OWN vtable vs inherited from a parent.
+                    # Inherited overrides use Type__method naming; own use Trait_for_Type__method.
+                    bool did_split = false
                     match eqblk.trait_name:
                         case Some(tname):
-                            if trait_defs.contains(tname):
+                            bool is_derive_sp = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
+                            if not is_derive_sp and trait_defs.contains(tname):
+                                did_split = true
                                 TraitDef tdef = trait_defs.get(tname).unwrap()
-                                # Collect overridden method names
+                                # Build set of method names in the trait's OWN vtable
+                                Dict[String, bool] own_vtable = {}
+                                int tvi = 0
+                                while tvi < tdef.methods.len():
+                                    FunctionDef tvmeth = tdef.methods.get(tvi).unwrap()
+                                    own_vtable.put(tvmeth.name.clone(), true)
+                                    tvi += 1
+                                # Split equip methods: own vtable vs inherited overrides
+                                Vector[FunctionDef] own_methods = []
+                                Vector[FunctionDef] inherited_methods = []
+                                int smi = 0
+                                while smi < eqblk.methods.len():
+                                    FunctionDef sm = eqblk.methods.get(smi).unwrap()
+                                    if own_vtable.contains(sm.name):
+                                        own_methods.push(sm)
+                                    else:
+                                        inherited_methods.push(sm)
+                                    smi += 1
+                                # Emit own-vtable methods with Trait_for_Type naming
+                                if own_methods.len() > 0:
+                                    EquipBlock own_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, own_methods, eqblk.via_field)
+                                    lower_equip_block(own_eqblk, &gmod)
+                                # Emit inherited overrides with Type__ naming (no trait prefix)
+                                if inherited_methods.len() > 0:
+                                    Option[String] inh_no_trait = None
+                                    EquipBlock inh_eqblk = EquipBlock(eqblk.target, eqblk.type_params, inh_no_trait, inherited_methods, eqblk.via_field)
+                                    lower_equip_block(inh_eqblk, &gmod)
+                                # Collect all overridden method names
                                 Dict[String, bool] overridden = {}
-                                int oi = 0
-                                while oi < eqblk.methods.len():
-                                    FunctionDef om = eqblk.methods.get(oi).unwrap()
+                                int oi2 = 0
+                                while oi2 < eqblk.methods.len():
+                                    FunctionDef om = eqblk.methods.get(oi2).unwrap()
                                     overridden.put(om.name.clone(), true)
-                                    oi += 1
-                                # Emit defaults for trait methods with bodies not in equip
-                                int dti = 0
-                                while dti < tdef.methods.len():
-                                    FunctionDef tmeth = tdef.methods.get(dti).unwrap()
-                                    if tmeth.body.len() > 0 and not overridden.contains(tmeth.name):
-                                        # Lower this default method inline — construct the mangled
-                                        # name and call lower_function directly.
-                                        String eq_target = type_to_c_name(eqblk.target, &gmod)
-                                        String dm_trait = mangle_trait_name(tname)
-                                        String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
-                                        gmod.functions.push(lower_function(tmeth, &gmod))
-                                        # Fix up the function name to the equip-mangled form
-                                        int last_idx = gmod.functions.len() - 1
-                                        GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
-                                        gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
-                                    dti += 1
+                                    oi2 += 1
+                                String eq_target_sp = type_to_c_name(eqblk.target, &gmod)
+                                # Emit own-trait default methods (Trait_for_Type naming)
+                                int dti2 = 0
+                                while dti2 < tdef.methods.len():
+                                    FunctionDef tmeth2 = tdef.methods.get(dti2).unwrap()
+                                    if tmeth2.body.len() > 0 and not overridden.contains(tmeth2.name):
+                                        String dm_trait2 = mangle_trait_name(tname)
+                                        String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
+                                        gmod.functions.push(lower_function(tmeth2, &gmod))
+                                        int last_idx2 = gmod.functions.len() - 1
+                                        GirFunction last_fn2 = gmod.functions.get(last_idx2).unwrap()
+                                        gmod.functions.set(last_idx2, GirFunction(dm_mangled2, last_fn2.param_types, last_fn2.return_type, last_fn2.locals, last_fn2.blocks))
+                                    dti2 += 1
+                                # Emit parent trait default methods (Type__ naming, no prefix)
+                                int pti = 0
+                                while pti < tdef.parent_traits.len():
+                                    String pt_name = tdef.parent_traits.get(pti).unwrap()
+                                    if trait_defs.contains(pt_name):
+                                        TraitDef pt_def = trait_defs.get(pt_name).unwrap()
+                                        int pdti = 0
+                                        while pdti < pt_def.methods.len():
+                                            FunctionDef pt_meth = pt_def.methods.get(pdti).unwrap()
+                                            if pt_meth.body.len() > 0 and not overridden.contains(pt_meth.name):
+                                                String pt_mangled = eq_target_sp + "__" + pt_meth.name
+                                                gmod.functions.push(lower_function(pt_meth, &gmod))
+                                                int pt_last = gmod.functions.len() - 1
+                                                GirFunction pt_last_fn = gmod.functions.get(pt_last).unwrap()
+                                                gmod.functions.set(pt_last, GirFunction(pt_mangled, pt_last_fn.param_types, pt_last_fn.return_type, pt_last_fn.locals, pt_last_fn.blocks))
+                                                overridden.put(pt_meth.name.clone(), true)
+                                            pdti += 1
+                                    pti += 1
+                        case None:
+                            pass
+                    if not did_split:
+                        lower_equip_block(eqblk, &gmod)
+                        # Generate default trait methods not overridden by the equip
+                        match eqblk.trait_name:
+                            case Some(tname):
+                                if trait_defs.contains(tname):
+                                    TraitDef tdef = trait_defs.get(tname).unwrap()
+                                    # Collect overridden method names
+                                    Dict[String, bool] overridden = {}
+                                    int oi = 0
+                                    while oi < eqblk.methods.len():
+                                        FunctionDef om = eqblk.methods.get(oi).unwrap()
+                                        overridden.put(om.name.clone(), true)
+                                        oi += 1
+                                    # Emit defaults for trait methods with bodies not in equip
+                                    int dti = 0
+                                    while dti < tdef.methods.len():
+                                        FunctionDef tmeth = tdef.methods.get(dti).unwrap()
+                                        if tmeth.body.len() > 0 and not overridden.contains(tmeth.name):
+                                            String eq_target = type_to_c_name(eqblk.target, &gmod)
+                                            String dm_trait = mangle_trait_name(tname)
+                                            String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
+                                            gmod.functions.push(lower_function(tmeth, &gmod))
+                                            int last_idx = gmod.functions.len() - 1
+                                            GirFunction last_fn = gmod.functions.get(last_idx).unwrap()
+                                            gmod.functions.set(last_idx, GirFunction(dm_mangled, last_fn.param_types, last_fn.return_type, last_fn.locals, last_fn.blocks))
+                                        dti += 1
+                            case None:
+                                pass
+                    # Via delegation: emit stubs for trait methods not explicitly overridden
+                    match eqblk.via_field:
+                        case Some(_):
+                            match eqblk.trait_name:
+                                case Some(via_tname):
+                                    if trait_defs.contains(via_tname):
+                                        TraitDef via_tdef = trait_defs.get(via_tname).unwrap()
+                                        Dict[String, bool] via_done = {}
+                                        int vioi = 0
+                                        while vioi < eqblk.methods.len():
+                                            FunctionDef vom = eqblk.methods.get(vioi).unwrap()
+                                            via_done.put(vom.name.clone(), true)
+                                            vioi += 1
+                                        int vimi = 0
+                                        while vimi < via_tdef.methods.len():
+                                            FunctionDef via_meth = via_tdef.methods.get(vimi).unwrap()
+                                            if not via_done.contains(via_meth.name):
+                                                Vector[FunctionDef] stub_meths = []
+                                                stub_meths.push(via_meth)
+                                                Option[String] stub_via = None
+                                                EquipBlock stub_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, stub_meths, stub_via)
+                                                lower_equip_block(stub_eqblk, &gmod)
+                                                via_done.put(via_meth.name.clone(), true)
+                                            vimi += 1
+                                case None:
+                                    pass
                         case None:
                             pass
             else:
@@ -2179,6 +2770,36 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         pass
                 if eq_target_name == einst.base_name:
                     lower_generic_equip(equip_tmpl, einst.type_args, &gmod)
+                    # For generic equip with explicit traits, also emit default trait methods.
+                    # These use Type__method naming (no trait prefix).
+                    match equip_tmpl.trait_name:
+                        case Some(tname):
+                            bool is_derive_g = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable")
+                            if not is_derive_g and trait_defs.contains(tname):
+                                TraitDef gtdef = trait_defs.get(tname).unwrap()
+                                # Build set of explicitly implemented methods
+                                Dict[String, bool] g_overridden = {}
+                                int goi = 0
+                                while goi < equip_tmpl.methods.len():
+                                    FunctionDef gom = equip_tmpl.methods.get(goi).unwrap()
+                                    g_overridden.put(gom.name.clone(), true)
+                                    goi += 1
+                                # Compute the monomorphized type name for this instance
+                                # e.g. Container + [int] -> Container__int64_t
+                                String g_mono_name = compute_mangled_name(einst.type_args, einst.base_name)
+                                # Emit each unoverridden default method
+                                int gdti = 0
+                                while gdti < gtdef.methods.len():
+                                    FunctionDef gtmeth = gtdef.methods.get(gdti).unwrap()
+                                    if gtmeth.body.len() > 0 and not g_overridden.contains(gtmeth.name):
+                                        String g_dm_mangled = g_mono_name + "__" + gtmeth.name
+                                        gmod.functions.push(lower_function(gtmeth, &gmod))
+                                        int g_last = gmod.functions.len() - 1
+                                        GirFunction g_last_fn = gmod.functions.get(g_last).unwrap()
+                                        gmod.functions.set(g_last, GirFunction(g_dm_mangled, g_last_fn.param_types, g_last_fn.return_type, g_last_fn.locals, g_last_fn.blocks))
+                                    gdti += 1
+                        case None:
+                            pass
                 eti += 1
         ei += 1
 
@@ -2201,29 +2822,60 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         ci += 1
 
     # Scan for spawn wrappers: shared-token and closure/method spawn
-    # Collect shared variable names, async function names, then scan for ESpawn
+    # Two-pass approach:
+    # Pass 1: collect ALL shared variable names from ALL functions (so inner
+    #         spawns inside nested_driver can see shared vars from main).
+    # Pass 2: scan every function body for ESpawn calls.
     Dict[String, bool] shared_vars = {}
     Dict[String, bool] async_fns = {}
     Dict[String, bool] emitted_wrappers = {}
+    int swi1 = 0
+    while swi1 < m.items.len():
+        Item sw_item1 = m.items.get(swi1).unwrap()
+        match sw_item1:
+            case IFunction(fdef):
+                collect_shared_vars(fdef.body, &shared_vars)
+            else:
+                pass
+        swi1 += 1
     int swi = 0
     while swi < m.items.len():
         Item sw_item = m.items.get(swi).unwrap()
         match sw_item:
             case IFunction(fdef):
-                # Detect async functions
-                match fdef.return_type.ty:
-                    case TPrimitive(rn):
-                        if rn == "void":
-                            # Check if params include &self or &mut patterns typical of async
-                            pass
-                    else:
-                        pass
-                # Collect shared vars from this function's body
-                collect_shared_vars(fdef.body, &shared_vars)
-                # Scan for spawn calls
-                scan_spawn_wrappers(fdef.body, &shared_vars, &async_fns, &emitted_wrappers, &gmod)
+                # Per-function var_types map: variable name → declared type name
+                # Used to resolve receiver type for method spawn wrappers.
+                Dict[String, String] var_types = {}
+                # Collect &-qualified params (OWN_MUTABLE == 1) of this function.
+                # These are shared-derived refs; if passed to a spawn, the callee
+                # needs a shared-token wrapper (inner shared spawn pattern).
+                Dict[String, bool] borrow_params = {}
+                int bpi = 0
+                while bpi < fdef.params.len():
+                    Param bp = fdef.params.get(bpi).unwrap()
+                    if bp.ownership == 1:
+                        borrow_params.put(bp.param_name, true)
+                    bpi += 1
+                scan_spawn_wrappers(fdef.body, &shared_vars, &async_fns, &emitted_wrappers, &gmod, &var_types, &borrow_params)
             else:
                 pass
         swi += 1
+
+    # Emit __spawn_wrap___Closure_N stubs for named closure variable spawns.
+    # Collect closure variable names per function (using same closure ID ordering),
+    # then scan for spawn calls to those variables.
+    int ncv_id = 0
+    int ncvi = 0
+    while ncvi < m.items.len():
+        Item ncv_item = m.items.get(ncvi).unwrap()
+        match ncv_item:
+            case IFunction(fdef):
+                Dict[String, String] fn_closure_vars = {}
+                ncv_id = collect_closure_vars_stmts(fdef.body, ncv_id, &fn_closure_vars)
+                if fn_closure_vars.len() > 0:
+                    emit_named_closure_spawn_stmts(fdef.body, &fn_closure_vars, &emitted_wrappers, &gmod)
+            else:
+                pass
+        ncvi += 1
 
     return gmod

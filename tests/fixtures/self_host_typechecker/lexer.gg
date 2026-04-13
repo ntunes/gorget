@@ -690,6 +690,42 @@ equip Lexer:
         auto slit = StringLiteral(SkNormal(), segs)
         self.lex_emit(TkString(slit), start, self.lex_pos)
 
+    # ── Byte literal scanning: b'x' → TkInt(byte_value) ──────
+    # b'0' = 48, b'\n' = 10, b'A' = 65, etc.
+
+    void lex_scan_byte_lit(&self):
+        int start = self.lex_pos
+        self.lex_pos = self.lex_pos + 2  # skip 'b' and opening '\''
+
+        if self.lex_at_end() or self.lex_peek() == b'\n':
+            self.lex_error = "unterminated byte literal"
+            self.lex_emit(TkError("unterminated byte literal"), start, self.lex_pos)
+            return
+
+        int byte_val = 0
+        if self.lex_peek() == b'\\':
+            self.lex_advance()
+            Option[String] esc = self.lex_parse_escape()
+            match esc:
+                case Some(s):
+                    if s.byte_len() > 0:
+                        byte_val = s.byte_at(0) as int
+                else:
+                    self.lex_error = "invalid escape in byte literal"
+                    self.lex_emit(TkError("invalid byte escape"), start, self.lex_pos)
+                    return
+        else:
+            byte_val = self.lex_peek() as int
+            self.lex_advance()
+
+        if self.lex_at_end() or self.lex_peek() != b'\'':
+            self.lex_error = "expected closing ' in byte literal"
+            self.lex_emit(TkError("unterminated byte literal"), start, self.lex_pos)
+            return
+
+        self.lex_advance()  # skip closing '\''
+        self.lex_emit(TkInt(byte_val), start, self.lex_pos)
+
     # ── Operator scanning ─────────────────────────────────────
 
     void lex_scan_operator(&self):
@@ -931,6 +967,9 @@ equip Lexer:
                 continue
             if c == b'b' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'"':
                 self.lex_scan_string()
+                continue
+            if c == b'b' and self.lex_pos + 1 < self.lex_source.byte_len() and self.lex_peek_at(1) == b'\'':
+                self.lex_scan_byte_lit()
                 continue
 
             # f-string: f"..." or f'...'

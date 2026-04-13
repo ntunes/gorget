@@ -198,6 +198,7 @@ struct EquipBlock:
     Vector[String] type_params
     Option[String] trait_name
     Vector[FunctionDef] methods
+    Option[String] via_field
 
 struct MatchArm:
     SpannedPattern pattern

@@ -141,34 +141,53 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
                             m.items.push(IFunction(renamed))
                     case IEquip(eqblk):
-                        # Filter: real methods have >=2 body stmts, OR 1 stmt
-                        # with a "self" param (instance method) or name "new".
-                        # Extern stubs produce garbled AST with no self param.
+                        # Filter: real methods have >=2 body stmts, OR expression body,
+                        # OR 1 stmt that isn't a string-literal extern stub marker.
+                        # Extern stubs look like: method_name(): "abi_symbol"
                         Vector[FunctionDef] real_methods = []
                         int emi = 0
                         while emi < eqblk.methods.len():
                             FunctionDef emdef = eqblk.methods.get(emi).unwrap()
-                            bool is_real = emdef.body.len() >= 2
+                            bool is_real = emdef.body.len() >= 2 or emdef.is_expr_body
                             if not is_real and emdef.body.len() == 1:
-                                # Check for self param or static constructor
-                                bool has_self = false
-                                int epi = 0
-                                while epi < emdef.params.len():
-                                    Param ep = emdef.params.get(epi).unwrap()
-                                    if ep.param_name == "self":
-                                        has_self = true
-                                    epi += 1
-                                # Accept: instance methods (self), constructors (new/with_*),
-                                # or any method with real params (garbled stubs have 0 or
-                                # wrong params like just "unit" or a type name)
-                                bool is_constructor = emdef.name == "new" or emdef.name.starts_with("with_")
-                                if has_self or is_constructor:
-                                    is_real = true
+                                Stmt first_s = emdef.body.get(0).unwrap()
+                                match first_s:
+                                    case SIf(_, _, _):
+                                        is_real = true
+                                    case SWhile(_, _):
+                                        is_real = true
+                                    case SFor(_, _, _, _, _):
+                                        is_real = true
+                                    case SMatch(_, _):
+                                        is_real = true
+                                    case SReturn(opt_ret):
+                                        match opt_ret:
+                                            case Some(_):
+                                                is_real = true
+                                            case None:
+                                                pass
+                                    case SVarDecl(_, _, _, _, _, _):
+                                        is_real = true
+                                    case SAssign(_, _):
+                                        is_real = true
+                                    case SMetaFor(_):
+                                        is_real = true
+                                    case SMetaIf(_, _):
+                                        is_real = true
+                                    case SExpr(sexpr):
+                                        # Reject string-literal stubs ("extern_abi_name")
+                                        match sexpr.expr:
+                                            case EStringLiteral(_, _):
+                                                pass
+                                            else:
+                                                is_real = true
+                                    else:
+                                        pass
                             if is_real:
                                 real_methods.push(emdef)
                             emi += 1
                         if real_methods.len() > 0:
-                            EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods)
+                            EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field)
                             m.items.push(IEquip(filtered))
                     else:
                         # Skip extern blocks, structs, enums, traits, etc.

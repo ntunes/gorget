@@ -1724,6 +1724,49 @@ equip Parser:
             self.advance()
 
     SpannedExpr parse_call_arg(&self):
+        # Handle 'meta op' arguments: meta +/-/*/etc. → EIdentifier("__metaop__<op>")
+        # This encodes the operator for transitive generic discovery (e.g. tensor_scalar_op).
+        if self.check_kw(KW_META):
+            int meta_start = self.peek().lex_start
+            self.advance()
+            int op_tok = self.peek_tag()
+            String op_suffix = ""
+            if op_tok == TOK_PLUS:
+                op_suffix = "__add"
+                self.advance()
+            elif op_tok == TOK_MINUS:
+                op_suffix = "__sub"
+                self.advance()
+            elif op_tok == TOK_STAR:
+                op_suffix = "__mul"
+                self.advance()
+            elif op_tok == TOK_SLASH:
+                op_suffix = "__div"
+                self.advance()
+            elif op_tok == TOK_PERCENT:
+                op_suffix = "__mod"
+                self.advance()
+            elif op_tok == TOK_EQEQ:
+                op_suffix = "__eq"
+                self.advance()
+            elif op_tok == TOK_BANGEQ:
+                op_suffix = "__ne"
+                self.advance()
+            elif op_tok == TOK_LT:
+                op_suffix = "__lt"
+                self.advance()
+            elif op_tok == TOK_GT:
+                op_suffix = "__gt"
+                self.advance()
+            elif op_tok == TOK_LTEQ:
+                op_suffix = "__le"
+                self.advance()
+            elif op_tok == TOK_GTEQ:
+                op_suffix = "__ge"
+                self.advance()
+            if op_suffix != "":
+                return SpannedExpr(EIdentifier("__metaop" + op_suffix), Span(meta_start, self.peek().lex_start))
+            return SpannedExpr(EIntLiteral(0), Span(meta_start, self.peek().lex_start))
         # Handle named args: name = value — just parse the value, discard the name
         if self.check_tok(TOK_IDENT) and self.pos + 1 < self.tokens.len():
             SpannedToken next_arg = self.tokens.get(self.pos + 1).unwrap()
@@ -3134,6 +3177,7 @@ equip Parser:
             type_params = self.parse_type_params()
         SpannedType target = self.parse_type()
         Option[String] trait_name = None
+        Option[String] via_field = None
         if self.check_kw(KW_WITH):
             self.advance()
             # Parse trait name as a type, then convert to string
@@ -3141,15 +3185,18 @@ equip Parser:
             String tn = type_to_name(trait_type)
             Option[String] some_tn = Some(tn)
             trait_name = !some_tn
-            # Skip optional 'via field_name' delegation
+            # Capture optional 'via field_name' delegation
             if self.check_kw(KW_VIA):
                 self.advance()
+                String via_name = self.peek_ident()
                 self.advance()
+                Option[String] some_via = Some(via_name)
+                via_field = !some_via
         Vector[FunctionDef] methods = Vector[FunctionDef]()
         # Bodyless equip: `equip T with Trait` (no colon) — default implementations
         if not self.check_tok(TOK_COLON):
             self.skip_newlines()
-            return IEquip(EquipBlock(target, type_params, trait_name, methods))
+            return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field))
         self.expect_tok(TOK_COLON, "expected ':' after equip target")
         self.expect_tok(TOK_NEWLINE, "expected newline after equip ':'")
         self.expect_tok(TOK_INDENT, "expected indent in equip body")
@@ -3177,7 +3224,7 @@ equip Parser:
             methods.push(m)
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
-        return IEquip(EquipBlock(target, type_params, trait_name, methods))
+        return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field))
 
     Item parse_import_item(&self):
         int start = self.peek().lex_start
