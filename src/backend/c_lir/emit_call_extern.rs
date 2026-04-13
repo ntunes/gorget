@@ -801,7 +801,12 @@ pub(super) fn emit_call_extern(
                         else { "gorget_bool_to_str" };
                     if let Some(d) = dst {
                         // Conversion functions return Str (owned via gorget_string_adopt).
-                        write!(out, "{} = {}({});", v(*d), conv_fn, v(args[1])).unwrap();
+                        // Cast to the expected type — the LIR value may be an untyped slot
+                        // pointer on some paths; clang treats the mismatch as a hard error.
+                        let cast = if is_arg1_int { "(int64_t)" }
+                            else if is_arg1_float { "(double)" }
+                            else { "(int32_t)" };
+                        write!(out, "{} = {}({}{});", v(*d), conv_fn, cast, v(args[1])).unwrap();
                     }
                     return;
                 }
