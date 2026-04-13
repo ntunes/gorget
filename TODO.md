@@ -39,7 +39,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 761/913 (83.4%, 93.4% of processable), 99 process failures**. Parser fixes: extern equip methods skipped (no more garbled AST), f-string interpolation parsed as EFString with sub-expressions. Meta for type_variants expanded to 4 standard types. Remaining: ~15 dataframe/tensor (meta expansion naming), ~4 spawn closure/method wrappers, ~2 generic equip templates, ~2 via delegation, misc edge cases. [updated: 2026-04-13]
+- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: ~760/913 (83%, 93% of processable), 99 process failures**. Parser fixes: extern equip methods skipped, EFString for f-string interpolation, meta for type_variants expansion (partial — self-host parser generates a non-SMetaFor stmt type for imported functions' meta for blocks). Remaining: ~17 dataframe (meta for not detected in imports), ~7 spawn/generic/via edge cases, ~30 large-gap (toml/yaml/xml/tensor need deeper import support). [updated: 2026-04-13]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
