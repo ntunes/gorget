@@ -42,7 +42,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 814/913 (89.2%), adjusted 889/889 (100.0%)**. `lowerer_comparison` test in integration.rs. Zero real mismatches! Remaining: 24 crashes (all httpserver — segfault processing large imported module), 75 error-only (rust=0). Next: fix httpserver crashes (large equip block parser corruption). [updated: 2026-04-13]
+- **Self-host comparison**: GIR lowerer at 889/889 (100.0%) adjusted. 24 crashes (httpserver), 75 error-only. **LIR backend: Phases 1-3 done** (data structures, GIR→LIR lowering, SSA construction — 1,707 lines in lir.gg/lir_lower.gg/lir_ssa.gg). Phase 4 (C codegen) remaining (~4,000 lines). Phase 5 (C runtime + driver integration) remaining. [updated: 2026-04-13]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
