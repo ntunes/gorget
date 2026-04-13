@@ -38,7 +38,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 782/913 (85.6%), adjusted 857/889 (96.4%)**. `lowerer_comparison` test added to integration.rs. Remaining real mismatches (32): 6 spawn wrappers, 8 tensor (generic Numeric bounds), 5 generic/trait monomorphization, 4 toml/yaml (+1 fn each), 2 math3d/stress, 7 other. 24 crashes (all httpserver — segfault in import chain). 75 error-only (rust=0). [updated: 2026-04-13]
+- **Self-host comparison**: At 913 fixtures (2026-04-13). **GIR Lowerer: 783/913 (85.8%), adjusted 858/889 (96.5%)**. `lowerer_comparison` test in integration.rs. Remaining real mismatches (31): 6 spawn wrappers (`__spawn_wrap_*`, `__spawn_method_wrap_*`), 8 tensor (generic `Numeric T` bounds), 5 generic/trait (monomorphization + naming), 4 toml/yaml (equip block split from imported modules — methods leak as standalone functions), 8 other (naming conventions for trait equip, via delegation, sqlite, meta_variant, math3d, stress_alloc). 24 crashes (all httpserver — segfault processing large imported module). 75 error-only (rust=0). [updated: 2026-04-13]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
