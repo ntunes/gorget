@@ -1155,13 +1155,29 @@ fn emit_function(
     }
     for (i, slot) in func.slots.iter().enumerate() {
         if slot.ty == LirType::Void {
-            // Void slots don't need allocation — use i8 as placeholder
             // Void slots hold closure env pointers — allocate space for a ptr.
             writeln!(out, "  %s{i} = alloca ptr ; void slot").unwrap();
         } else {
             let ty = llvm_type_full(&slot.ty, snames);
             let name = slot.name.as_deref().unwrap_or("slot");
             writeln!(out, "  %s{i} = alloca {ty} ; {name}").unwrap();
+            // Zero-initialize resource-type slots. gorget_string_free / gorget_array_free
+            // check cap/len before deallocating — uninitialized memory has garbage cap
+            // values that cause crashes. C backends get away with this because debug
+            // builds zero stack memory, but LLVM alloca contents are undefined.
+            let needs_zero = match &slot.ty {
+                LirType::Struct(sid) => {
+                    let sname = snames.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+                    sname == "GorgetString" || sname == "GorgetArray" || sname == "GorgetMap"
+                        || sname == "GorgetSet" || sname.starts_with("Result__")
+                        || sname.starts_with("Option__")
+                }
+                _ => false,
+            };
+            if needs_zero {
+                let sz = sizeof_lir_type(&slot.ty, &module.structs, snames);
+                writeln!(out, "  call ptr @memset(ptr %s{i}, i32 0, i64 {sz})").unwrap();
+            }
         }
     }
 
