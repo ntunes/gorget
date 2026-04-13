@@ -113,6 +113,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     has_real_body = true
                                 case SAssign(_, _):
                                     has_real_body = true
+                                case SMetaFor(_):
+                                    has_real_body = true
+                                case SMetaIf(_, _):
+                                    has_real_body = true
                                 case SExpr(sexpr):
                                     # Accept SExpr if it's a call (not a string literal
                                     # which is an extern stub marker)

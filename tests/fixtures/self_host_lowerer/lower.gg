@@ -1302,6 +1302,98 @@ struct GenericInstance:
     Vector[SpannedType] type_args
     String mangled_name
 
+# Expand generic calls inside meta for bodies to the 4 standard types.
+# meta for T in type_variants(...): generates code for int, float, String, bool.
+void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+    # Standard column types that type_variants typically expands to
+    Vector[SpannedType] std_types = []
+    std_types.push(SpannedType(TPrimitive("int"), -1))
+    std_types.push(SpannedType(TPrimitive("float"), -1))
+    std_types.push(SpannedType(TPrimitive("String"), -1))
+    std_types.push(SpannedType(TPrimitive("bool"), -1))
+    # Scan for generic calls with type variable args
+    int si = 0
+    while si < stmts.len():
+        Stmt stmt = stmts.get(si).unwrap()
+        expand_meta_for_stmt(stmt, &seen, &instances, std_types)
+        si += 1
+
+void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+    match stmt:
+        case SVarDecl(_, _, init, _, _, _):
+            expand_meta_for_expr(init, &seen, &instances, std_types)
+        case SExpr(expr):
+            expand_meta_for_expr(expr, &seen, &instances, std_types)
+        case SReturn(opt):
+            match opt:
+                case Some(expr):
+                    expand_meta_for_expr(expr, &seen, &instances, std_types)
+                case None:
+                    pass
+        case SIf(cond, then_body, branches):
+            expand_meta_for_expr(cond, &seen, &instances, std_types)
+            int bi = 0
+            while bi < then_body.len():
+                expand_meta_for_stmt(then_body.get(bi).unwrap(), &seen, &instances, std_types)
+                bi += 1
+            int ei = 0
+            while ei < branches.len():
+                ElseBranch eb = branches.get(ei).unwrap()
+                int ebi = 0
+                while ebi < eb.body.len():
+                    expand_meta_for_stmt(eb.body.get(ebi).unwrap(), &seen, &instances, std_types)
+                    ebi += 1
+                ei += 1
+        else:
+            pass
+
+void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+    match sexpr.expr:
+        case ECall(callee_box, args, targs):
+            if targs.len() > 0 and has_type_variable(targs):
+                SpannedExpr callee = *callee_box
+                match callee.expr:
+                    case EIdentifier(fname):
+                        # Expand each type variable to the 4 standard types
+                        int ti = 0
+                        while ti < std_types.len():
+                            SpannedType concrete = std_types.get(ti).unwrap()
+                            Vector[SpannedType] expanded = []
+                            int tai = 0
+                            while tai < targs.len():
+                                SpannedType ta = targs.get(tai).unwrap()
+                                bool is_var = false
+                                match ta.ty:
+                                    case TNamed(n, inner):
+                                        if inner.len() == 0 and n.len() <= 2:
+                                            is_var = true
+                                    else:
+                                        pass
+                                if is_var:
+                                    expanded.push(concrete.clone())
+                                else:
+                                    expanded.push(ta)
+                                tai += 1
+                            String mangled = compute_mangled_name(expanded, fname)
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
+                                instances.push(GenericInstance(fname.clone(), !expanded, mangled))
+                            ti += 1
+                    else:
+                        pass
+            int ai = 0
+            while ai < args.len():
+                expand_meta_for_expr(args.get(ai).unwrap(), &seen, &instances, std_types)
+                ai += 1
+        case EMethodCall(obj, _, margs, _):
+            expand_meta_for_expr(*obj, &seen, &instances, std_types)
+            int mi = 0
+            while mi < margs.len():
+                expand_meta_for_expr(margs.get(mi).unwrap(), &seen, &instances, std_types)
+                mi += 1
+        else:
+            pass
+
 # Discover generic call sites in an expression
 void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
@@ -1401,6 +1493,12 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
                 MatchArm arm = arms.get(ai).unwrap()
                 discover_generic_calls_stmts(arm.body, &seen, &instances)
                 ai += 1
+        case SMetaFor(meta_body):
+            # Meta for type_variants: expand type-variable generic calls
+            # to the 4 standard column types (int, float, String, bool).
+            # The meta for header is lost, so we heuristically expand
+            # any generic call with a type variable arg.
+            expand_meta_for_generics(meta_body, &seen, &instances)
         else:
             pass
 
@@ -1903,12 +2001,17 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     int si = 0
     while si < generic_instances.len():
         GenericInstance inst = generic_instances.get(si).unwrap()
-        if fn_templates.contains(inst.base_name):
-            FunctionDef tmpl = fn_templates.get(inst.base_name).unwrap()
+        # Look up template by base name, or by call-redirected (mangled) name
+        String tmpl_key = inst.base_name.clone()
+        if not fn_templates.contains(tmpl_key) and gmod.call_redirects.contains(inst.base_name):
+            tmpl_key = gmod.call_redirects.get(inst.base_name).unwrap()
+        if fn_templates.contains(tmpl_key):
+            FunctionDef tmpl = fn_templates.get(tmpl_key).unwrap()
             # Compute return type with substitutions active
             setup_type_subs(&gmod, tmpl.type_params, inst.type_args)
             int rt = map_ast_type(tmpl.return_type, &gmod)
             clear_type_subs(&gmod)
+            # Monomorphized generics use bare names (no module prefix)
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
         si += 1
 
@@ -2055,8 +2158,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     int mi = 0
     while mi < generic_instances.len():
         GenericInstance inst = generic_instances.get(mi).unwrap()
-        if fn_templates.contains(inst.base_name):
-            FunctionDef tmpl = fn_templates.get(inst.base_name).unwrap()
+        # Look up template by base name, or by call-redirected (mangled) name
+        String fn_key = inst.base_name.clone()
+        if not fn_templates.contains(fn_key) and gmod.call_redirects.contains(inst.base_name):
+            fn_key = gmod.call_redirects.get(inst.base_name).unwrap()
+        if fn_templates.contains(fn_key):
+            FunctionDef tmpl = fn_templates.get(fn_key).unwrap()
+            # Monomorphized generics use bare names (no module prefix)
             lower_generic_function(tmpl, inst.mangled_name, tmpl.type_params, inst.type_args, &gmod)
         mi += 1
 
