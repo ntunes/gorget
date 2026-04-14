@@ -837,9 +837,24 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let src_type = builder.local_type(place.local);
-                        // Ptr(T) → clone the inner T (same as non-throws return path)
+                        // Ptr(T) → move or clone the inner T depending on liveness
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
-                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                            let param_name = builder.local_name(place.local).map(|s| s.to_string());
+                            let is_last = param_name.as_ref()
+                                .map_or(false, |n| ctx.is_last_use_at(n, expr.span));
+                            if is_last {
+                                // Last use — move through pointer: load the
+                                // owned value and zero the caller's slot.
+                                let deref_place = crate::ir::instructions::Place {
+                                    local: place.local,
+                                    projections: vec![crate::ir::instructions::Projection::Deref],
+                                };
+                                let tmp = builder.add_local(inner, None);
+                                builder.assign(crate::ir::instructions::Place::local(tmp), Operand::Copy(deref_place.clone()));
+                                builder.move_zero(deref_place);
+                                operand = FunctionBuilder::copy(tmp);
+                                returned_local = Some(tmp);
+                            } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                 let cloned = builder.call(
                                     &clone_fn,
