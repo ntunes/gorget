@@ -1,0 +1,28 @@
+# Result enum consuming resource-type error values — tests V7 mark_moved
+# for throw/rethrow paths that wrap strings in Result.Error.
+
+String parse_int(String s) throws String:
+    if s == "bad":
+        throw "not a number: " + s
+    return s
+
+String transform(String input) throws String:
+    String result = parse_int(input) rethrow (String e): f"parse failed: {e}"
+    return f"ok:{result}"
+
+void main():
+    auto r1 = transform("hello")
+    match r1:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    auto r2 = transform("bad")
+    match r2:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    print("done")

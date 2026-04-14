@@ -1,0 +1,38 @@
+# Dict get/set pattern in a loop — the dataframe GroupBy pattern that
+# exposed the V6 liveness bug. Tests dict.get().unwrap() + dict.set()
+# with resource-type keys and values across multiple iterations.
+
+from std.collections import Dict, Vector
+
+void main():
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
+    Vector[String] keys = Vector[String]()
+    keys.push("a")
+    keys.push("b")
+    keys.push("a")
+    keys.push("c")
+    keys.push("b")
+    keys.push("a")
+
+    # Build groups: accumulate indices per key
+    int i = 0
+    while i < keys.len():
+        String key = keys[i]
+        if groups.has(key):
+            Vector[int] existing = groups.get(key).unwrap()
+            existing.push(i)
+            groups.set(key, existing)
+        else:
+            Vector[int] new_group = Vector[int]()
+            new_group.push(i)
+            groups.set(key, new_group)
+        i = i + 1
+
+    # Verify
+    print(groups.len())
+    Vector[int] a_group = groups.get("a").unwrap()
+    print(a_group.len())
+    Vector[int] b_group = groups.get("b").unwrap()
+    print(b_group.len())
+    Vector[int] c_group = groups.get("c").unwrap()
+    print(c_group.len())

@@ -1186,6 +1186,73 @@ done",
 }
 
 #[test]
+fn drop_match_in_loop() {
+    run_gg(
+        "drop_match_in_loop.gg",
+        "120",
+    );
+}
+
+#[test]
+fn drop_reassign_after_move() {
+    run_gg(
+        "drop_reassign_after_move.gg",
+        "\
+hello
+world
+foo
+bar",
+    );
+}
+
+#[test]
+fn drop_conditional_branches() {
+    run_gg(
+        "drop_conditional_branches.gg",
+        "\
+sent: original (pri=5)
+done
+redirect: redirected
+done
+skip: original
+done",
+    );
+}
+
+#[test]
+fn drop_enum_consume() {
+    run_gg(
+        "drop_enum_consume.gg",
+        "\
+ok:hello
+parse failed: not a number: bad
+done",
+    );
+}
+
+#[test]
+fn drop_dict_loop() {
+    run_gg(
+        "drop_dict_loop.gg",
+        "\
+3
+3
+2
+1",
+    );
+}
+
+#[test]
+fn drop_nested_struct_move() {
+    run_gg(
+        "drop_nested_struct_move.gg",
+        "\
+42: alpha (2), beta (3)
+done",
+    );
+}
+
+#[test]
 fn ownership_showcase() {
     run_gg(
         "ownership_showcase.gg",
