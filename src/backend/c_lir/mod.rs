@@ -662,7 +662,11 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     // When a named function is passed where a closure (void*) is expected, the call site
     // wraps it as (void*[2]){__adapt_fn, NULL}. The adapter ignores the env pointer and
     // forwards to the real function.
-    {
+    // NOTE: In LLVM wrapper-only mode, adapters are generated inline in the LLVM IR
+    // (using the raw function name, not the C-mangled __gg_ name). Skip them here to
+    // avoid undefined-reference errors from C-mangled names like __gg_double that have
+    // no corresponding LLVM IR symbol.
+    if !wrappers_only {
         let mut adapter_fids: HashSet<u32> = HashSet::new();
         for func in &module.functions {
             for block in &func.blocks {
@@ -698,7 +702,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         if !adapter_fids.is_empty() {
             writeln!(out).unwrap();
         }
-    }
+    } // end if !wrappers_only (adapter generation)
 
     // Hot-reload: emit a typedef so the guest wrappers can use the original state type name.
     if module.hot_reload {

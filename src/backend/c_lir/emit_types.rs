@@ -2862,6 +2862,21 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
         writeln!(out, "}} while(0)").unwrap();
     }
 
+    // gorget_file_create(GorgetString* path) is a synthetic not in the C runtime.
+    // LLVM IR calls it directly; provide a real C function that calls gorget_file_open(path, "w").
+    if has(&|n| n == "gorget_file_create") {
+        writeln!(out, "GorgetFile gorget_file_create(GorgetString* path) {{").unwrap();
+        writeln!(out, "    return gorget_file_open((const char*)path->data, \"w\");").unwrap();
+        writeln!(out, "}}").unwrap();
+    }
+    // gorget_file_open(const char* path) — 1-arg LIR version means "open for reading".
+    // The real C function takes 2 args (path, mode). Provide __gorget_file_open_r wrapper
+    // that adds the "r" mode, called by the LLVM backend in place of gorget_file_open.
+    if has(&|n| n == "gorget_file_open") {
+        writeln!(out, "GorgetFile __gorget_file_open_r(const char* path) {{").unwrap();
+        writeln!(out, "    return gorget_file_open(path, \"r\");").unwrap();
+        writeln!(out, "}}").unwrap();
+    }
     writeln!(out).unwrap();
 }
 
@@ -2973,6 +2988,32 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // codepoint_to_str: used by encoding/toml fixtures
     if has_extern("codepoint_to_str") {
         writeln!(out, "static inline Str codepoint_to_str(int64_t code) {{ return gorget_codepoint_to_utf8(code); }}").unwrap();
+    }
+    // __gorget_file_read_all_r: LLVM backend wrapper for gorget_file_read_all.
+    // The C runtime returns GorgetString directly, but LIR expects Result<GorgetString,GorgetString>.
+    // This wrapper calls gorget_file_read_all and wraps the result in the proper Result struct.
+    // Must come AFTER struct definitions so __gg_Result__GorgetString__GorgetString is available.
+    if has_extern("gorget_file_read_all") {
+        let result_c_name = module.externs.iter()
+            .find(|e| e.name == "gorget_file_read_all")
+            .and_then(|e| if let crate::lir::LirType::Struct(sid) = &e.return_type {
+                struct_names.get(&sid.0).cloned()
+            } else { None });
+        if let Some(result_ty) = result_c_name {
+            writeln!(out, "{result_ty} __gorget_file_read_all_r(GorgetFile* f) {{").unwrap();
+            writeln!(out, "    GorgetString gs = gorget_file_read_all(f);").unwrap();
+            writeln!(out, "    {result_ty} r;").unwrap();
+            writeln!(out, "    memset(&r, 0, sizeof(r));").unwrap();
+            writeln!(out, "    if (gorget_utf8_validate((const char*)gs.data, gs.len)) {{").unwrap();
+            writeln!(out, "        r.tag = 0; r.Ok_0 = gs;").unwrap();
+            writeln!(out, "    }} else {{").unwrap();
+            writeln!(out, "        gorget_string_free(&gs);").unwrap();
+            writeln!(out, "        r.tag = 1;").unwrap();
+            writeln!(out, "        r.Error_0 = gorget_str_from_literal(\"invalid UTF-8\", 13);").unwrap();
+            writeln!(out, "    }}").unwrap();
+            writeln!(out, "    return r;").unwrap();
+            writeln!(out, "}}").unwrap();
+        }
     }
     // NOTE: int64_t__parse, double__parse etc. are monomorphized parse methods.
     // They're too complex to emit as inline C here due to GorgetParseIntResult types

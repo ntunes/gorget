@@ -38,6 +38,17 @@
 
 - **Drop elaboration — remaining 24 Memsets**: V7 reduced to 24 across 17 fixtures (from 872). These are genuinely necessary: IndexLoad element zeroing (zeroing inside collection data arrays after move-out) and projected Deref/Field MoveZero (field-level ownership transfer through pointers). Could be eliminated with: (1) element drop flags on collections, (2) `MoveField { slot, field }` instruction. Low priority — these are rare hot-path operations. [updated: 2026-04-14]
 
+- **LLVM backend test results (2026-04-13, 831 tested / 913 total)**:
+  - PASS: 669 (80.5% of tested); file_io fixed 2026-04-14 (gorget_file_read_all ABI mismatch)
+  - FAIL: 40 (output mismatch — see categories below)
+  - CRASH: 73 (segfault/abort — mostly dataframe, p2p, toml, yaml, xml, httpserver, threads)
+  - BUILD_FAIL: 47 (LLVM IR/linker errors — see categories below)
+  - SKIP: 82 (C backend also fails — error programs, benches, etc.)
+  - Build fail categories: 17x gorget_task_group_submit undefined, 10x LLC type mismatch (ptr/struct type confusion), 9x LLC forward-ref / undefined-value, 9x other undefined refs (__adapt_double, gorget_reactor_sleep_seconds, etc.), 2x TLS runtime missing
+  - Fail categories: 8x tensor (float stored as i64?), 6x leak/alloc tracking, 4x CoW/Shared issues, 3x result/coroutine combinators, 3x process/socket (networking), 5x drop/destructor ordering, 5x test framework divergence, others
+  - Key bug patterns: float fields in structs read as 0.0 (shared_float, tensor_*), memory not being freed (stress_alloc_*, leak_*), drop order wrong (drop_collections, drop_struct_collection_fields), Shared[T] write not visible (shared_struct/weak), __adapt_double / gorget_task_group_submit missing from LLVM wrapper generation [updated: 2026-04-14]
+  - Root cause pattern: C runtime fns returning GorgetString directly but LLVM IR expects Result — gorget_file_read_all fixed; may affect other fns [added: 2026-04-14]
+
 ## Low
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]

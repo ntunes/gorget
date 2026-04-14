@@ -519,7 +519,16 @@ pub(super) fn lower_method_call(
                     // Shared[Vector[T]] element access — at/set_at/slen
                     "at" if elem_suffix.starts_with("Vector__") => {
                         let inner_elem = elem_suffix.strip_prefix("Vector__").unwrap_or("int64_t");
-                        let elem_type = ctx.type_mapper.lookup_named(inner_elem).unwrap_or(I64_TYPE);
+                        // Must use correct primitive types — lookup_named misses "double"/"float"
+                        let elem_type = match inner_elem {
+                            "double" => F64_TYPE,
+                            "float"  => F32_TYPE,
+                            "bool"   => BOOL_TYPE,
+                            "int32_t" | "uint32_t" => I32_TYPE,
+                            "int16_t" | "uint16_t" => I16_TYPE,
+                            "int8_t"  | "uint8_t"  => I8_TYPE,
+                            _ => ctx.type_mapper.lookup_named(inner_elem).unwrap_or(I64_TYPE),
+                        };
                         let idx = lower_expr(ctx, builder, &args[0].node.value);
                         let at_fn = format!("{stn}__at");
                         let dst = builder.call(&at_fn, vec![recv, idx], elem_type);

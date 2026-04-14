@@ -21,6 +21,10 @@ fn needs_sret(ty: &LirType, structs: &[StructDef]) -> bool {
 fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
     if let LirType::Struct(sid) = ty {
         let sdef = &structs[sid.0 as usize];
+        // Known opaque types with fixed C layout sizes.
+        if sdef.name == "TaskGroup" { return true; }       // ptr = 8 bytes
+        if sdef.name.starts_with("Task__") { return true; } // {ptr,ptr} = 16 bytes
+        if sdef.name == "File" || sdef.name == "GorgetFile" { return true; } // {ptr,i64} = 16 bytes
         // Use computed_c_size if available, otherwise estimate from fields.
         let size = if let Some(cs) = sdef.computed_c_size {
             cs
@@ -179,6 +183,45 @@ fn resolve_closure_call_fn(
     None
 }
 
+/// Trace a Ptr-typed value back to the FuncAddr instruction that produced it,
+/// following through SlotStore → SlotLoad chains. Returns the referenced FuncId if found.
+fn trace_funcaddr(func: &crate::lir::LirFunction, val_id: u32) -> Option<crate::lir::FuncId> {
+    use crate::lir::Inst;
+    // Direct FuncAddr
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::FuncAddr { dst, func: fid } = inst {
+                if dst.0 == val_id { return Some(*fid); }
+            }
+        }
+    }
+    // Through slot: find SlotLoad that produces val_id → get slot → find SlotStore
+    let mut slot_id = None;
+    'find_load: for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::SlotLoad { dst, slot, .. } = inst {
+                if dst.0 == val_id { slot_id = Some(slot.0); break 'find_load; }
+            }
+        }
+    }
+    if let Some(sid) = slot_id {
+        // Find the LAST SlotStore into that slot (dominating the load)
+        let mut stored_val = None;
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::SlotStore { slot, value, .. } = inst {
+                    if slot.0 == sid { stored_val = Some(value.0); }
+                }
+            }
+        }
+        if let Some(sv) = stored_val {
+            // Recurse (limited depth — avoid infinite loops)
+            return trace_funcaddr(func, sv);
+        }
+    }
+    None
+}
+
 /// Check if a LirType is PtrTo(GorgetString).
 /// Infer the payload type of an Option/Result struct from its struct definition.
 /// The first field is always the tag (i32), the second is the payload.
@@ -202,6 +245,28 @@ fn infer_option_payload_type(
     // Fallback: try to find the struct from any SlotAddr/SlotLoad that produced this value
     // Default to i64
     "i64".to_string()
+}
+
+/// Compute the byte offset of the payload field in `{ i32 tag, PayloadType payload }`.
+/// LLVM inserts padding between tag (4 bytes) and payload to satisfy payload's alignment:
+///   - ≤4-byte-aligned types (bool, i8, i16, i32, float): offset = 4
+///   - ≥8-byte-aligned types (i64, double, ptr, structs): offset = 8
+fn option_payload_offset(payload_ty_str: &str) -> u64 {
+    match payload_ty_str {
+        "i1" | "i8" | "i16" | "i32" | "float" => 4,
+        _ => 8, // i64, double, ptr, %StructName, etc. — all 8-byte aligned
+    }
+}
+
+/// Compute the payload offset in an Option struct from a LirType.
+fn lir_payload_offset(fty: &LirType) -> u64 {
+    match fty {
+        LirType::Bool | LirType::I8 | LirType::U8
+        | LirType::I16 | LirType::U16
+        | LirType::I32 | LirType::U32
+        | LirType::F32 => 4,
+        _ => 8,
+    }
 }
 
 fn is_ptr_to_gorget_string(ty: &LirType, snames: &HashMap<u32, String>) -> bool {
@@ -343,6 +408,12 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
                 }
             }
 
+            // Inline-handled default() methods and string-returning stubs: return PtrTo(GorgetString)
+            if name == "gorget_str_default" || name == "gorget_str_str" {
+                let gs_sid = module.structs.iter().position(|s| s.name == "GorgetString").map(|i| StructId(i as u32));
+                return Some(gs_sid.map_or(LirType::Ptr, LirType::PtrTo));
+            }
+
             // Parse methods: return PtrTo(Option__*) (alloca in our inline handler)
             let is_parse = name.ends_with("__parse") && (name.starts_with("int") || name.starts_with("uint")
                 || name == "double__parse" || name == "float__parse" || name == "bool__parse");
@@ -375,9 +446,41 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
                 return Some(LirType::I64); // fallback
             }
 
-            module.externs.iter()
+            // Check module.externs first
+            let from_externs = module.externs.iter()
                 .find(|e| e.name == *name)
-                .map(|e| e.return_type.clone())
+                .map(|e| e.return_type.clone());
+            if from_externs.is_some() {
+                return from_externs;
+            }
+            // Infer return type from name patterns for externs not registered in module.externs
+            // (e.g., gorget_array_clone/extend added directly in insts.rs)
+            let arr_sid = module.structs.iter().position(|s| s.name == "GorgetArray").map(|i| StructId(i as u32));
+            let str_sid = module.structs.iter().position(|s| s.name == "GorgetString").map(|i| StructId(i as u32));
+            let map_sid = module.structs.iter().position(|s| s.name == "GorgetMap").map(|i| StructId(i as u32));
+            let set_sid = module.structs.iter().position(|s| s.name == "GorgetSet").map(|i| StructId(i as u32));
+            if name.contains("gorget_array_clone") || name.contains("gorget_array_slice") || name.contains("gorget_array_concat") {
+                return arr_sid.map(LirType::Struct);
+            }
+            if name.contains("gorget_str_slice") || name.contains("gorget_str_substr")
+                || name.contains("gorget_str_trim") || name.contains("gorget_str_to_lower")
+                || name.contains("gorget_str_to_upper") || name.contains("gorget_string_clone")
+                || name.contains("gorget_int_to_str") || name.contains("gorget_float_to_str")
+                || name.contains("gorget_char_to_str") || name.contains("gorget_str_replace")
+                || name.contains("gorget_str_repeat") || name.contains("gorget_str_join")
+                || name.contains("gorget_str_reverse") || name.contains("gorget_str_pad")
+                || name.contains("gorget_str_lstrip") || name.contains("gorget_str_rstrip")
+                || name.contains("gorget_str_strip") || name.contains("gorget_str_cat")
+                || name == "gorget_str_index" {
+                return str_sid.map(LirType::Struct);
+            }
+            if name.contains("gorget_map_clone") {
+                return map_sid.map(LirType::Struct);
+            }
+            if name.contains("gorget_set_clone") {
+                return set_sid.map(LirType::Struct);
+            }
+            None
         }
         Inst::CallPtr { dst, .. } => {
             // CallPtr return type is hard to infer without more context.
@@ -424,6 +527,10 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 if def.name.starts_with("Box__") {
                     return 8;
                 }
+                // Known opaque types with fixed C sizes
+                if def.name == "TaskGroup" { return 8; }
+                if def.name.starts_with("Task__") { return 16; }
+                if def.name == "File" || def.name == "GorgetFile" { return 16; }
                 if let Some(sz) = def.computed_c_size {
                     return sz;
                 }
@@ -511,6 +618,8 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
             }
         }
     }
+    // Track how many strings are pre-interned so we can detect late additions.
+    let pre_intern_count = str_globals.strings.len();
     emit_string_globals(&mut out, &str_globals);
 
     // Global variables
@@ -524,9 +633,22 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
 
     // No forward declarations needed — LLVM handles out-of-order function references.
 
-    // Function definitions
+    // Function definitions (may intern new strings via format fix)
     for func in &module.functions {
-        emit_function(&mut out, func, module, &snames, &str_globals);
+        emit_function(&mut out, func, module, &snames, &mut str_globals);
+    }
+
+    // Emit any strings that were intern'd during function emission (e.g., fixed printf formats).
+    // In LLVM IR text format, constant definitions may appear after their first use.
+    if str_globals.strings.len() > pre_intern_count {
+        writeln!(out, "; Late-added string globals (format fix)").unwrap();
+        for i in pre_intern_count..str_globals.strings.len() {
+            let s = &str_globals.strings[i];
+            let escaped = llvm_escape_string(s);
+            let byte_len = s.len() + 1;
+            writeln!(out, "@.str.{i} = private unnamed_addr constant [{byte_len} x i8] c\"{escaped}\\00\"").unwrap();
+        }
+        writeln!(out).unwrap();
     }
 
     out
@@ -587,8 +709,21 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 writeln!(out, "%{name} = type {{ i32 }}").unwrap();
             }
         } else if def.fields.is_empty() {
-            // Empty struct — use single byte padding
-            writeln!(out, "%{name} = type {{ i8 }}").unwrap();
+            // Known opaque types whose C layout is fixed:
+            // - TaskGroup: typedef gorget_task_group_t* → ptr (8 bytes)
+            // - Task__T:   { void* __task, void(*__drop)(void*) } = 16 bytes
+            // - File:      GorgetFile { FILE*, bool } padded to 16 bytes
+            if name == "TaskGroup" {
+                writeln!(out, "%{name} = type {{ ptr }}").unwrap();
+            } else if name.starts_with("Task__") {
+                writeln!(out, "%{name} = type {{ ptr, ptr }}").unwrap();
+            } else if name == "File" || name == "GorgetFile" {
+                // { FILE* handle, bool owned } — bool padded to i64 for C ABI (16 bytes total)
+                writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
+            } else {
+                // Other empty structs — use single byte padding
+                writeln!(out, "%{name} = type {{ i8 }}").unwrap();
+            }
         } else {
             let mut fields: Vec<String> = def.fields.iter()
                 .map(|(_, fty)| {
@@ -709,6 +844,10 @@ const LIBC_BUILTINS: &[&str] = &[
     "gorget_bool_to_str",
     // Other builtins we declare explicitly
     "free",
+    // String comparison — declared with correct ABI (gorget_str_cmp returns int, not int64_t)
+    "gorget_str_eq", "gorget_str_cmp",
+    // Always declared in preamble (inline expansion support)
+    "gorget_string_clone_to_owned",
 ];
 
 fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
@@ -721,17 +860,26 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
     writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
-    // String comparison — used by Cmp handler for string equality/ordering.
-    // Only declare if not already in module externs (to avoid redefinition).
-    if !module.externs.iter().any(|e| e.name == "gorget_str_eq") {
-        writeln!(out, "declare i1 @gorget_str_eq(ptr, ptr)").unwrap();
-    }
-    if !module.externs.iter().any(|e| e.name == "gorget_str_cmp") {
-        writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
-    }
-    // Collection constructors — used by inline collection constructor handler
-    if !module.externs.iter().any(|e| e.name == "gorget_array_with_capacity") {
-        writeln!(out, "declare void @gorget_array_with_capacity(ptr sret(%GorgetArray), i64, i64)").unwrap();
+    // String comparison — declared with precise C ABI return types.
+    // gorget_str_eq returns bool (i1), gorget_str_cmp returns int (i32, NOT i64!).
+    // On aarch64, 'mov w0, -1' zero-extends to x0=0xFFFFFFFF; must call as i32 + sext.
+    // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
+    writeln!(out, "declare i1 @gorget_str_eq(ptr, ptr)").unwrap();
+    writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
+    // Collection constructors and HOF helpers — always declare so inline HOF expansion works
+    // even when the function is not in module.externs (e.g. flat_map inlining needs extend).
+    let hof_decls: &[(&str, &str)] = &[
+        ("gorget_array_with_capacity", "declare void @gorget_array_with_capacity(ptr sret(%GorgetArray), i64, i64)"),
+        ("gorget_array_new",   "declare void @gorget_array_new(ptr sret(%GorgetArray), i64)"),
+        ("gorget_array_push",  "declare void @gorget_array_push(ptr, ptr)"),
+        ("gorget_array_extend","declare void @gorget_array_extend(ptr, ptr)"),
+        ("gorget_set_new",     "declare void @gorget_set_new(ptr sret(%GorgetSet), i64)"),
+        ("gorget_set_new_str", "declare void @gorget_set_new_str(ptr sret(%GorgetSet))"),
+    ];
+    for (fn_name, decl) in hof_decls {
+        if !module.externs.iter().any(|e| e.name == *fn_name) {
+            writeln!(out, "{decl}").unwrap();
+        }
     }
     writeln!(out, "declare void @gorget_string_format(ptr sret(%GorgetString), ptr, ...)").unwrap();
     writeln!(out, "declare void @gorget_string_format_alloc(ptr sret(%GorgetString), ptr, ...)").unwrap();
@@ -749,6 +897,9 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line(ptr, ptr)").unwrap();
     writeln!(out, "declare void @exit(i32) noreturn").unwrap();
+    // gorget_task_group_submit_raw: the real function behind the gorget_task_group_submit macro.
+    // gorget_task_group_submit is a C macro — replaced inline with calls to _raw.
+    writeln!(out, "declare void @gorget_task_group_submit_raw(ptr, ptr, ptr)").unwrap();
     // Parse helpers
     // gorget_try_parse_int/float take (const char* s, i64 len) and return
     // a 16-byte struct {value, ok}. C pads bool to 8 bytes for alignment,
@@ -759,6 +910,28 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // CStr → GorgetString wrapping (for extern "C" return values)
     if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
         writeln!(out, "declare void @gorget_str_from_cstr(ptr sret(%GorgetString), ptr)").unwrap();
+    }
+    // gorget_string_clone_to_owned: used by gorget_str_str inline expansion
+    writeln!(out, "declare void @gorget_string_clone_to_owned(ptr sret(%GorgetString), ptr)").unwrap();
+    // Runtime collection constructors — used for static global initialization
+    // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs.
+    let has_runtime_init = module.globals.iter().any(|g| matches!(&g.init, crate::lir::LirGlobalInit::RuntimeCall(_)));
+    if has_runtime_init {
+        let existing_externs: std::collections::HashSet<&str> = module.externs.iter().map(|e| e.name.as_str()).collect();
+        let runtime_init_fns: &[(&str, &str)] = &[
+            ("gorget_array_new",      "declare void @gorget_array_new(ptr sret(%GorgetArray), i64)"),
+            ("gorget_map_new",        "declare void @gorget_map_new(ptr sret(%GorgetMap), i64, i64)"),
+            ("gorget_map_new_str",    "declare void @gorget_map_new_str(ptr sret(%GorgetMap), i64)"),
+            ("gorget_dict_new",       "declare void @gorget_dict_new(ptr sret(%GorgetMap), i64, i64)"),
+            ("gorget_dict_new_str",   "declare void @gorget_dict_new_str(ptr sret(%GorgetMap), i64)"),
+            ("gorget_set_new",        "declare void @gorget_set_new(ptr sret(%GorgetSet), i64)"),
+            ("gorget_set_new_str",    "declare void @gorget_set_new_str(ptr sret(%GorgetSet))"),
+        ];
+        for (fn_name, decl) in runtime_init_fns {
+            if !existing_externs.contains(*fn_name) {
+                writeln!(out, "{decl}").unwrap();
+            }
+        }
     }
     writeln!(out, "@stderr = external global ptr").unwrap();
     writeln!(out).unwrap();
@@ -792,6 +965,31 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         if ext.name.ends_with("__parse") && (ext.name.starts_with("int") || ext.name.starts_with("uint")
             || ext.name == "double__parse" || ext.name == "float__parse" || ext.name == "bool__parse") {
             continue;
+        }
+        // Skip default() methods and wrong-arity stubs handled inline in LLVM backend
+        if ext.name == "gorget_str_default" || ext.name == "gorget_str_str" || ext.name == "gorget_str_clear" {
+            continue;
+        }
+        // gorget_task_group_submit is a C macro — expanded inline via gorget_task_group_submit_raw.
+        if ext.name == "gorget_task_group_submit" {
+            continue;
+        }
+        // gorget_file_open with 1 arg means "open for reading".
+        // The real gorget_file_open takes 2 args — redirect to __gorget_file_open_r wrapper.
+        // Skip the default declaration; emit the wrapper declaration instead.
+        if ext.name == "gorget_file_open" && ext.params.len() == 1 {
+            let ret_ty = llvm_type_full(&ext.return_type, snames);
+            let param_ty = llvm_type_full(&ext.params[0], snames);
+            writeln!(out, "declare {ret_ty} @__gorget_file_open_r({param_ty})").unwrap();
+            continue; // Do NOT emit the 1-arg gorget_file_open declaration
+        }
+        // gorget_file_read_all: C function returns GorgetString but LIR expects Result<Str,Str>.
+        // Redirect to __gorget_file_read_all_r which wraps the return in a proper Result struct.
+        if ext.name == "gorget_file_read_all" {
+            let ret_ty = llvm_type_full(&ext.return_type, snames);
+            let param_ty = ext.params.first().map(|p| llvm_type_full(p, snames)).unwrap_or_else(|| "ptr".to_string());
+            writeln!(out, "declare void @__gorget_file_read_all_r(ptr sret({ret_ty}), {param_ty})").unwrap();
+            continue; // Do NOT emit the direct gorget_file_read_all declaration
         }
         let params: Vec<String> = ext.params.iter()
             .map(|p| {
@@ -843,6 +1041,19 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         for block in &func.blocks {
             for inst in &block.insts {
                 if let Inst::CallExtern { name, args, dst, .. } = inst {
+                    // Redirect no-arg strip variants to their whitespace-only counterparts.
+                    // LIR emits gorget_str_strip(s) for strip() with no args, but the C runtime
+                    // only has gorget_str_strip(s, chars). The 0-arg version is gorget_str_trim.
+                    // This redirect must happen BEFORE the seen.contains check so we use the
+                    // effective name for deduplication (1-arg and 2-arg versions are separate fns).
+                    let name: String = if args.len() == 1 {
+                        match name.as_str() {
+                            "gorget_str_strip" => "gorget_str_trim".to_string(),
+                            "gorget_str_lstrip" => "gorget_str_lstrip_ws".to_string(),
+                            "gorget_str_rstrip" => "gorget_str_rstrip_ws".to_string(),
+                            _ => name.clone(),
+                        }
+                    } else { name.clone() };
                     if seen.contains(name.as_str()) || LIBC_BUILTINS.contains(&name.as_str())
                         || defined_fns.contains(name.as_str()) {
                         continue;
@@ -855,6 +1066,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     // Skip monomorphized parse methods
                     if name.ends_with("__parse") && (name.starts_with("int") || name.starts_with("uint")
                         || name == "double__parse" || name == "float__parse" || name == "bool__parse") {
+                        continue;
+                    }
+                    // Skip inline-handled default() methods and wrong-arity stubs
+                    if name == "gorget_str_default" || name == "gorget_str_str" || name == "gorget_str_clear" {
                         continue;
                     }
                     seen.insert(name.clone());
@@ -946,6 +1161,93 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out).unwrap();
 }
 
+// ── Global Runtime Init ───────────────────────────────────────────────────
+
+/// Emit LLVM IR to initialize a RuntimeCall global at the start of main().
+/// The C expression (e.g. "gorget_array_new(sizeof(int64_t))") is parsed to
+/// extract the function name and i64 sizeof arguments.
+fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &HashMap<u32, String>, module: &LirModule) {
+    // Parse: "func_name(arg1, arg2, ...)" where args are sizeof(TYPE) or numbers.
+    let (fn_name, args_str) = if let Some(paren) = expr.find('(') {
+        let name = &expr[..paren];
+        // Strip outer parentheses: "func(a, b)" → "a, b"
+        let rest = &expr[paren+1..];
+        let args = rest.strip_suffix(')').unwrap_or(rest);
+        (name, args)
+    } else {
+        return; // Can't parse, skip
+    };
+
+    // Parse sizeof(TYPE) arguments → i64 constants.
+    let args: Vec<u64> = args_str.split(',')
+        .map(|a| {
+            let a = a.trim();
+            if let Some(inner) = a.strip_prefix("sizeof(").and_then(|s| s.strip_suffix(')')) {
+                c_sizeof_name(inner) as u64
+            } else if let Ok(n) = a.parse::<u64>() {
+                n
+            } else {
+                8 // fallback
+            }
+        })
+        .collect();
+
+    // Determine return type from function name
+    let (ret_struct_name, ret_llvm) = if fn_name.contains("map") || fn_name.contains("dict") || fn_name.contains("set") {
+        ("GorgetMap", "%GorgetMap")
+    } else if fn_name.contains("array") {
+        ("GorgetArray", "%GorgetArray")
+    } else if fn_name.contains("string") {
+        ("GorgetString", "%GorgetString")
+    } else {
+        // Unknown — just call it with raw i64 return
+        let arg_strs: Vec<String> = args.iter().map(|a| format!("i64 {a}")).collect();
+        writeln!(out, "  %__ginit_{gid}_raw = call i64 @{fn_name}({})", arg_strs.join(", ")).unwrap();
+        writeln!(out, "  store i64 %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
+        return;
+    };
+
+    // Emit sret call → memcpy to global
+    let sz = sizeof_struct_by_name(ret_struct_name, module, snames);
+    let arg_strs: Vec<String> = args.iter().map(|a| format!("i64 {a}")).collect();
+    writeln!(out, "  %__ginit_{gid} = alloca {ret_llvm}").unwrap();
+    let sret_arg = format!("ptr sret({ret_llvm}) %__ginit_{gid}");
+    let all_args = if arg_strs.is_empty() {
+        sret_arg
+    } else {
+        format!("{sret_arg}, {}", arg_strs.join(", "))
+    };
+    writeln!(out, "  call void @{fn_name}({all_args})").unwrap();
+    writeln!(out, "  call ptr @memcpy(ptr @__lir_g{gid}, ptr %__ginit_{gid}, i64 {sz})").unwrap();
+}
+
+/// Return the C sizeof for a type name string.
+fn c_sizeof_name(name: &str) -> usize {
+    match name {
+        "int64_t" | "uint64_t" | "double" | "int64" => 8,
+        "int32_t" | "uint32_t" | "float" => 4,
+        "int16_t" | "uint16_t" => 2,
+        "int8_t" | "uint8_t" | "bool" | "char" => 1,
+        "Str" | "GorgetString" => 32,
+        _ => 8, // default
+    }
+}
+
+/// Return sizeof for a struct by name (from module structs or known constants).
+fn sizeof_struct_by_name(name: &str, module: &LirModule, snames: &HashMap<u32, String>) -> usize {
+    if let Some(pos) = module.structs.iter().position(|s| s.name == name) {
+        let sid = crate::lir::StructId(pos as u32);
+        return sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+    }
+    // Fallback known sizes
+    match name {
+        "GorgetString" => 32,
+        "GorgetArray" => 64,
+        "GorgetMap" | "GorgetSet" => 160,
+        _ => 64,
+    }
+}
+
 // ── Intrinsic Declarations ────────────────────────────────────────────────
 
 fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
@@ -985,8 +1287,10 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     if need_ssub_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.ssub.with.overflow.i32(i32, i32)").unwrap(); }
     if need_smul_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.smul.with.overflow.i32(i32, i32)").unwrap(); }
 
-    // Adapter function declarations for FuncAddr → callable wrapping.
-    // These are defined in the C wrapper glue; LLVM IR just needs extern declarations.
+    // Adapter function definitions for FuncAddr → callable wrapping.
+    // Each adapter ignores the closure env pointer and forwards to the real function.
+    // ABI: non-sret: ret_ty @__adapt_fn(ptr env, params...)
+    //      sret:     void   @__adapt_fn(ptr sret(T) out, ptr env, params...)
     let mut adapter_fids = std::collections::HashSet::new();
     for func in &module.functions {
         for block in &func.blocks {
@@ -1000,14 +1304,45 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     for fid_raw in &adapter_fids {
         let target = &module.functions[*fid_raw as usize];
         let adapt_name = format!("__adapt_{}", target.name);
-        // Adapter signature: ret(void* env, params...) — env is ignored, forwards to real fn.
-        let ret = if target.return_type == LirType::Void { "void" }
-            else { "i64" }; // simplified — adapters return i64 for scalar, void for void
-        let mut param_tys = vec!["ptr".to_string()]; // env
-        for p in &target.params {
-            param_tys.push(llvm_arg_type(p, snames));
+        let target_uses_sret = needs_sret(&target.return_type, &module.structs);
+        let ret_llvm = llvm_type_full(&target.return_type, snames);
+
+        // Build parameter list (excluding sret, which we handle separately)
+        let mut param_names: Vec<String> = Vec::new();
+        let mut param_decls: Vec<String> = Vec::new();
+        if target_uses_sret {
+            param_decls.push(format!("ptr sret({ret_llvm}) %a.out"));
         }
-        writeln!(out, "declare {ret} @{adapt_name}({})", param_tys.join(", ")).unwrap();
+        param_decls.push("ptr %a.env".to_string()); // env (ignored)
+        for (i, p) in target.params.iter().enumerate() {
+            let ty = llvm_arg_type(p, snames);
+            param_decls.push(format!("{ty} %a.p{i}"));
+            param_names.push(format!("{ty} %a.p{i}"));
+        }
+
+        // Forward call to target
+        let fwd_args = if target_uses_sret {
+            let mut a = vec![format!("ptr sret({ret_llvm}) %a.out")];
+            a.extend(param_names.iter().cloned());
+            a.join(", ")
+        } else {
+            param_names.join(", ")
+        };
+
+        if target_uses_sret {
+            writeln!(out, "define void @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
+            writeln!(out, "  call void @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  ret void").unwrap();
+        } else if target.return_type == LirType::Void {
+            writeln!(out, "define void @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
+            writeln!(out, "  call void @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  ret void").unwrap();
+        } else {
+            writeln!(out, "define {ret_llvm} @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
+            writeln!(out, "  %a.r = call {ret_llvm} @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  ret {ret_llvm} %a.r").unwrap();
+        }
+        writeln!(out, "}}").unwrap();
     }
     writeln!(out).unwrap();
 }
@@ -1019,7 +1354,7 @@ fn emit_function(
     func: &LirFunction,
     module: &LirModule,
     snames: &HashMap<u32, String>,
-    str_globals: &StrGlobals,
+    str_globals: &mut StrGlobals,
 ) {
     let ret = llvm_type_full(&func.return_type, snames);
     let params: Vec<String> = func.params.iter().enumerate()
@@ -1161,6 +1496,13 @@ fn emit_function(
     // For main(), call gorget_init_args to set up argc/argv
     if is_main {
         writeln!(out, "  call void @gorget_init_args(i32 %argc, ptr %argv)").unwrap();
+        // Emit runtime initializers for static globals that require constructor calls.
+        // The C LIR backend emits these at the start of main(); LLVM does the same.
+        for (gid, global) in module.globals.iter().enumerate() {
+            if let crate::lir::LirGlobalInit::RuntimeCall(expr) = &global.init {
+                emit_global_runtime_init(out, gid, expr, snames, module);
+            }
+        }
     }
     for (i, slot) in func.slots.iter().enumerate() {
         if slot.ty == LirType::Void {
@@ -1267,6 +1609,8 @@ fn emit_function(
                         let is_unwrap_or = name == "__option_unwrap_or" || name == "__result_unwrap_or"
                             || name.ends_with("__unwrap_or");
                         let is_str_push = name == "gorget_str_push" || name == "gorget_str_push_line";
+                        let is_str_clear = name == "gorget_str_clear";
+                        let is_str_push_line_direct = name == "gorget_string_push_line";
 
                         // Detect Vector HOF calls that create inline loops (labels)
                         let is_vector_hof = parse_vector_hof(name).is_some();
@@ -1286,9 +1630,24 @@ fn emit_function(
                             label = format!("hof.{bid}.{counter}.done");
                             counter += 1;
                         }
+                        else if is_str_clear {
+                            // gorget_str_clear emits a conditional branch → changes exit label
+                            label = format!("scl.done.{counter}");
+                            counter += 1;
+                        }
                         else if is_map_get && dst.is_some() { counter += 1; }
                         else if is_void_ret && dst.is_some() { counter += 1; }
-                        else if is_str_push && args.len() == 2 { /* no counter for type dispatch */ }
+                        else if is_str_push && args.len() == 2 {
+                            // gorget_str_push_line with Str arg: emission increments counter
+                            // to generate the %psl.data.{uid} temporary. Other cases: no counter.
+                            let is_push_line = name == "gorget_str_push_line";
+                            if is_push_line {
+                                let arg2_ty = val_types.get(args[1].0 as usize).and_then(|t| t.as_ref());
+                                let arg2_is_str = arg2_ty.map_or(false, |t| t.is_ptr() || matches!(t, LirType::Struct(_) | LirType::PtrTo(_)));
+                                if arg2_is_str { counter += 1; }
+                            }
+                        }
+                        else if is_str_push_line_direct && !args.is_empty() { counter += 1; }
                         else if is_bool_to_str { counter += 1; }
                         else if is_printf_like && !args.is_empty() { counter += 1; }
                         else if is_tag && !args.is_empty() { counter += 1; }
@@ -1342,6 +1701,7 @@ fn emit_function(
         let mut current_label = format!("bb{bid}");
         for inst in &block.insts {
             emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label);
+
         }
 
         // Terminator
@@ -1400,7 +1760,7 @@ fn emit_inst(
     func: &LirFunction,
     module: &LirModule,
     snames: &HashMap<u32, String>,
-    str_globals: &StrGlobals,
+    str_globals: &mut StrGlobals,
     val_types: &[Option<LirType>],
     block_id: u32,
     trap_counter: &mut u32,
@@ -1459,10 +1819,18 @@ fn emit_inst(
                 // aggregate by value (Call return). Check val_types.
                 // Assume ptr if type is unknown (None) — aggregate values are always ptrs in our model
                 let is_ptr_val = val_ty.map_or(true, |t| t.is_ptr());
+                // Check if the source is a NullPtr — use memset(0) instead of memcpy from null.
+                let value_is_null = func.blocks.iter().any(|b| {
+                    b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == value.0))
+                });
                 if is_ptr_val {
-                    // Value is a pointer — memcpy from it
+                    // Value is a pointer — memcpy from it (or memset if null)
                     let sz = sizeof_lir_type(slot_ty, &module.structs, snames);
-                    writeln!(out, "  call ptr @memcpy(ptr %s{}, ptr %v{}, i64 {sz})", slot.0, value.0).unwrap();
+                    if value_is_null {
+                        writeln!(out, "  call ptr @memset(ptr %s{}, i32 0, i64 {sz})", slot.0).unwrap();
+                    } else {
+                        writeln!(out, "  call ptr @memcpy(ptr %s{}, ptr %v{}, i64 {sz})", slot.0, value.0).unwrap();
+                    }
                 } else if val_ty.map_or(false, |t| t.is_integer() || t.is_float() || matches!(t, LirType::Bool)) {
                     // Scalar value stored into aggregate slot — type mismatch from extern
                     // that returns aggregate but was declared as scalar. Store the scalar
@@ -1477,7 +1845,20 @@ fn emit_inst(
                 } // else (not closure escape)
             } else {
                 let sty = llvm_type_full(slot_ty, snames);
-                writeln!(out, "  store {sty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
+                let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+                // If slot is integer but value is ptr (e.g. Option alloca stored via auto type
+                // inference choosing payload type), use memcpy to treat the slot as raw storage
+                // for the Option struct that the ptr points to.
+                let slot_is_int = matches!(slot_ty, LirType::I64 | LirType::U64 | LirType::I32 | LirType::U32 | LirType::I16 | LirType::U16 | LirType::I8 | LirType::U8);
+                let val_is_ptr = val_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                if slot_is_int && val_is_ptr {
+                    // LIR typed this slot as a scalar but a ptr was stored — common when
+                    // `auto` inference picks the payload type instead of the Option struct.
+                    // Store the ptr value directly (LLVM accepts store ptr, ptr for opaque ptrs).
+                    writeln!(out, "  store ptr %v{}, ptr %s{}", value.0, slot.0).unwrap();
+                } else {
+                    writeln!(out, "  store {sty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
+                }
             }
         }
         Inst::SlotLoad { dst, slot, ty } => {
@@ -1589,7 +1970,7 @@ fn emit_inst(
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
+                emit_overflow_check(out, "add", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fadd {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1599,7 +1980,7 @@ fn emit_inst(
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
+                emit_overflow_check(out, "sub", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fsub {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1609,7 +1990,7 @@ fn emit_inst(
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             let lty = llvm_type(ty);
             if *overflow == Overflow::Trap && ty.is_integer() {
-                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals);
+                emit_overflow_check(out, "mul", dst, lhs, rhs, ty, snames, block_id, trap_counter, current_label, str_globals, val_types);
             } else if ty.is_float() {
                 writeln!(out, "  %v{} = fmul {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -1738,8 +2119,11 @@ fn emit_inst(
             };
             let lhs_str = is_str_val(lhs);
             let rhs_str = is_str_val(rhs);
-            // Use gorget_str_eq for string content comparison (not pointer equality)
-            if (lhs_str || rhs_str) && !matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge) {
+            // Use gorget_str_eq for string content comparison (not pointer equality).
+            // Require BOTH operands to be strings — if only one is a string, this is a
+            // null-pointer check (e.g. gorget_array_safe_pop result vs null constant).
+            // Calling gorget_str_eq with a null arg would dereference address 0 → crash.
+            if (lhs_str && rhs_str) && !matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge) {
                 // Call gorget_str_eq(Str a, Str b) → bool
                 // Both args are ptrs to GorgetString — pass as-is (Str is >16 bytes → indirect)
                 let result = format!("strcmpres.{}.{}", dst.0, lhs.0);
@@ -1750,8 +2134,9 @@ fn emit_inst(
                     // Ne
                     writeln!(out, "  %v{} = xor i1 %{result}, 1", dst.0).unwrap();
                 }
-            } else if lhs_str || rhs_str {
+            } else if lhs_str && rhs_str {
                 // Ordering comparison: gorget_str_cmp returns i32 (-1, 0, 1)
+                // Only when BOTH operands are strings — see note above about null checks.
                 let cmp_result = format!("strcmpord.{}.{}", dst.0, lhs.0);
                 let cmp_ext = format!("strcmpext.{}.{}", dst.0, lhs.0);
                 writeln!(out, "  %{cmp_result} = call i32 @gorget_str_cmp(ptr %v{}, ptr %v{})", lhs.0, rhs.0).unwrap();
@@ -1908,10 +2293,52 @@ fn emit_inst(
         Inst::Store { ptr, value } => {
             // Infer the type of the value being stored
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
+            // Check if the source value is a NullPtr — if so, intent is zero-fill, not memcpy from null.
+            let value_is_null = func.blocks.iter().any(|b| {
+                b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == value.0))
+            });
             if let Some(LirType::PtrTo(sid)) = val_ty {
-                // Source is a pointer to an aggregate — memcpy the struct contents
+                // Source is a typed pointer to an aggregate — memcpy the struct contents
                 let sz = sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames);
                 writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
+            } else if matches!(val_ty, Some(LirType::Ptr)) {
+                // Source is an opaque ptr (e.g. void* from gorget_array_safe_pop/safe_get).
+                // If the destination is a FieldPtr to an aggregate field, the ptr is actually
+                // a pointer to that struct's data → emit memcpy instead of store ptr.
+                let dest_field_ty = func.blocks.iter().find_map(|b| {
+                    b.insts.iter().find_map(|i| {
+                        if let Inst::FieldPtr { dst: d, struct_id, field, .. } = i {
+                            if d.0 == ptr.0 {
+                                let sdef = &module.structs[struct_id.0 as usize];
+                                return sdef.fields.get(*field as usize).map(|(_, t)| t.clone());
+                            }
+                        }
+                        None
+                    })
+                });
+                match dest_field_ty {
+                    Some(LirType::Struct(sid)) => {
+                        // void* points to an inline struct — memcpy/memset the whole struct.
+                        // If the source is a NullPtr, zero the destination instead of reading from null.
+                        let sz = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+                        if value_is_null {
+                            writeln!(out, "  call ptr @memset(ptr %v{}, i32 0, i64 {sz})", ptr.0).unwrap();
+                        } else {
+                            writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
+                        }
+                    }
+                    Some(scalar_ty) if !scalar_ty.is_ptr() => {
+                        // void* points to a scalar (bool, int, float) — load then store
+                        let ty_str = llvm_type_full(&scalar_ty, snames);
+                        let tmp = format!("voidderef.{}.{}", ptr.0, value.0);
+                        writeln!(out, "  %{tmp} = load {ty_str}, ptr %v{}", value.0).unwrap();
+                        writeln!(out, "  store {ty_str} %{tmp}, ptr %v{}", ptr.0).unwrap();
+                    }
+                    _ => {
+                        // Unknown or ptr field type — plain ptr store
+                        writeln!(out, "  store ptr %v{}, ptr %v{}", value.0, ptr.0).unwrap();
+                    }
+                }
             } else {
                 let ty_str = val_ty.map(|t| llvm_type_full(t, snames))
                     .unwrap_or_else(|| "i64".to_string());
@@ -2090,12 +2517,6 @@ fn emit_inst(
                     *trap_counter += 1;
                     let closure_val = args[0];
                     let actual_args = &args[1..];
-                    let ret_type = dst.map(|d| {
-                        val_types.get(d.0 as usize)
-                            .and_then(|t| t.as_ref())
-                            .map(|t| llvm_arg_type(t, snames))
-                            .unwrap_or_else(|| "i64".to_string())
-                    }).unwrap_or_else(|| "void".to_string());
                     let pfx = format!("callable.{block_id}.{uid}");
                     // Load fn_ptr from callable[0]
                     writeln!(out, "  %{pfx}.fnp = load ptr, ptr %v{}", closure_val.0).unwrap();
@@ -2112,10 +2533,41 @@ fn emit_inst(
                         call_arg_strs.push(format!("{pty} %v{}", a.0));
                     }
                     let joined_args = call_arg_strs.join(", ");
+                    // Detect sret/small-agg return convention from dst LirType.
+                    // val_types stores large aggregates as PtrTo(sid); map back to Struct(sid).
+                    let dst_lir_ty = dst.and_then(|d| {
+                        val_types.get(d.0 as usize).and_then(|t| t.as_ref()).cloned()
+                    });
+                    let (call_is_sret, call_is_small_agg, call_struct_sid) = match &dst_lir_ty {
+                        Some(LirType::PtrTo(sid)) => {
+                            let as_struct = LirType::Struct(*sid);
+                            (needs_sret(&as_struct, &module.structs),
+                             is_small_aggregate(&as_struct, &module.structs),
+                             Some(*sid))
+                        }
+                        _ => (false, false, None),
+                    };
                     if let Some(d) = dst {
-                        writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                        if call_is_sret {
+                            let sid = call_struct_sid.unwrap();
+                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
+                            // Use %v{d.0} as the sret slot directly — allocate it, then pass as sret arg.
+                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
+                            writeln!(out, "  call void %{pfx}.fnp(ptr sret({struct_llvm}) %v{}, {joined_args})", d.0).unwrap();
+                        } else if call_is_small_agg {
+                            let sid = call_struct_sid.unwrap();
+                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
+                            writeln!(out, "  %{pfx}.ret = call {struct_llvm} %{pfx}.fnp({joined_args})").unwrap();
+                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
+                            writeln!(out, "  store {struct_llvm} %{pfx}.ret, ptr %v{}", d.0).unwrap();
+                        } else {
+                            let ret_type = dst_lir_ty.as_ref()
+                                .map(|t| llvm_arg_type(t, snames))
+                                .unwrap_or_else(|| "i64".to_string());
+                            writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                        }
                     } else {
-                        writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
+                        writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
                     }
                     return;
                 }
@@ -2131,12 +2583,6 @@ fn emit_inst(
                     *trap_counter += 1;
                     let closure_val = args[0];
                     let actual_args = &args[1..];
-                    let ret_type = dst.map(|d| {
-                        val_types.get(d.0 as usize)
-                            .and_then(|t| t.as_ref())
-                            .map(|t| llvm_arg_type(t, snames))
-                            .unwrap_or_else(|| "i64".to_string())
-                    }).unwrap_or_else(|| "void".to_string());
                     let pfx = format!("closurecall.{block_id}.{uid}");
                     // GorgetClosure.fn_ptr is field 0, GorgetClosure.env is field 1
                     writeln!(out, "  %{pfx}.fpgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 0", closure_val.0).unwrap();
@@ -2152,10 +2598,39 @@ fn emit_inst(
                         call_arg_strs.push(format!("{pty} %v{}", a.0));
                     }
                     let joined_args = call_arg_strs.join(", ");
+                    // Detect sret/small-agg return convention from dst LirType.
+                    let dst_lir_ty = dst.and_then(|d| {
+                        val_types.get(d.0 as usize).and_then(|t| t.as_ref()).cloned()
+                    });
+                    let (call_is_sret, call_is_small_agg, call_struct_sid) = match &dst_lir_ty {
+                        Some(LirType::PtrTo(sid)) => {
+                            let as_struct = LirType::Struct(*sid);
+                            (needs_sret(&as_struct, &module.structs),
+                             is_small_aggregate(&as_struct, &module.structs),
+                             Some(*sid))
+                        }
+                        _ => (false, false, None),
+                    };
                     if let Some(d) = dst {
-                        writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                        if call_is_sret {
+                            let sid = call_struct_sid.unwrap();
+                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
+                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
+                            writeln!(out, "  call void %{pfx}.fnp(ptr sret({struct_llvm}) %v{}, {joined_args})", d.0).unwrap();
+                        } else if call_is_small_agg {
+                            let sid = call_struct_sid.unwrap();
+                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
+                            writeln!(out, "  %{pfx}.ret = call {struct_llvm} %{pfx}.fnp({joined_args})").unwrap();
+                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
+                            writeln!(out, "  store {struct_llvm} %{pfx}.ret, ptr %v{}", d.0).unwrap();
+                        } else {
+                            let ret_type = dst_lir_ty.as_ref()
+                                .map(|t| llvm_arg_type(t, snames))
+                                .unwrap_or_else(|| "i64".to_string());
+                            writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                        }
                     } else {
-                        writeln!(out, "  call {ret_type} %{pfx}.fnp({joined_args})").unwrap();
+                        writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
                     }
                     return;
                 }
@@ -2211,7 +2686,13 @@ fn emit_inst(
                     && !name.contains("__extend") && !name.contains("__slice") && !name.contains("__concat")
                     && !name.contains("__to_array") && !name.contains("__dedup") && !name.contains("__reserve")
                     && !name.contains("__capacity") && !name.contains("__index_of") && !name.contains("__binary_search")
-                    && !name.contains("__unique") && !name.contains("__flat_map") && !name.contains("__sorted");
+                    && !name.contains("__unique") && !name.contains("__flat_map") && !name.contains("__sorted")
+                    && !name.contains("__union") && !name.contains("__intersection") && !name.contains("__difference")
+                    && !name.contains("__symmetric_difference") && !name.contains("__update") && !name.contains("__from")
+                    && !name.contains("__is_subset") && !name.contains("__is_superset")
+                    && !name.contains("__is_disjoint") && !name.contains("__equal")
+                    // Constructors have 0 or 1 arg (optional capacity). Methods have ≥2 args.
+                    && args.len() <= 1;
                 if is_collection_ctor {
                     // Determine element size from type name
                     let elem_size: i64 = if name.contains("int64_t") || name.contains("double") || name.contains("GorgetString") { 8 }
@@ -2279,6 +2760,10 @@ fn emit_inst(
                         let closure_val = closure_arg.unwrap();
                         // Check if the closure param takes the element by pointer
                         let elem_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
+                        // aarch64 ABI: aggregates ≤16 bytes pass in registers (by value);
+                        // larger ones pass by pointer. When elem_is_aggregate, only pass ptr
+                        // for large structs — small structs must be loaded and passed by value.
+                        let elem_pass_by_ptr = elem_by_ptr || (elem_is_aggregate && elem_size > 16);
 
                         match method {
                             "map" => {
@@ -2325,8 +2810,8 @@ fn emit_inst(
                                         writeln!(out, "  store {ret_ll} %{pfx}.out, ptr %{pfx}.tmp").unwrap();
                                         writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
                                     }
-                                } else if elem_is_aggregate {
-                                    // Aggregate element — pass pointer to it
+                                } else if elem_pass_by_ptr {
+                                    // Large aggregate — pass pointer to it
                                     if map_ret_sret {
                                         writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
                                         writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm}) %{pfx}.tmp, ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
@@ -2344,7 +2829,7 @@ fn emit_inst(
                                         writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
                                     }
                                 } else {
-                                    // Scalar element — load and pass by value
+                                    // Scalar or small aggregate — load and pass by value
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
                                     if map_ret_sret {
                                         writeln!(out, "  %{pfx}.tmp = alloca {ret_llvm}").unwrap();
@@ -2389,7 +2874,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
                                 // Call closure with element → bool
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.keep = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2421,7 +2906,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  call void @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2447,7 +2932,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2480,7 +2965,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2535,21 +3020,25 @@ fn emit_inst(
                                 } else {
                                     format!("{acc_llvm} %{pfx}.acc")
                                 };
-                                let elem_param = if elem_by_ptr || elem_is_aggregate || elem_ref {
+                                let elem_param = if elem_pass_by_ptr || elem_ref {
                                     format!("ptr %{pfx}.ep")
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
                                     format!("{elem_llvm_ty} %{pfx}.elem")
                                 };
-                                let fold_ret_sret = acc_is_agg && !is_small_aggregate(&acc_ty, &module.structs);
-                                let fold_ret_small = acc_is_agg && is_small_aggregate(&acc_ty, &module.structs);
+                                // Use the closure's actual return type to determine sret convention.
+                                // acc_ty may be LirType::Ptr (e.g. for String), but the closure
+                                // function may still use sret for its struct return — use ret_ty.
+                                let fold_ret_llvm = llvm_type_full(&ret_ty, snames);
+                                let fold_ret_sret = needs_sret(&ret_ty, &module.structs);
+                                let fold_ret_small = ret_ty.is_aggregate() && is_small_aggregate(&ret_ty, &module.structs);
                                 if fold_ret_sret {
-                                    writeln!(out, "  %{pfx}.accnew = alloca {acc_llvm}").unwrap();
-                                    writeln!(out, "  call void @{call_fn}(ptr sret({acc_llvm}) %{pfx}.accnew, ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
+                                    writeln!(out, "  call void @{call_fn}(ptr sret({fold_ret_llvm}) %{pfx}.accnew, ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
                                 } else if fold_ret_small {
-                                    writeln!(out, "  %{pfx}.accret = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
-                                    writeln!(out, "  %{pfx}.accnew = alloca {acc_llvm}").unwrap();
-                                    writeln!(out, "  store {acc_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
+                                    writeln!(out, "  %{pfx}.accret = call {fold_ret_llvm} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
+                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
+                                    writeln!(out, "  store {fold_ret_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.accnew = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
                                 }
@@ -2557,7 +3046,7 @@ fn emit_inst(
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
                                 writeln!(out, "{pfx}.done:").unwrap();
                                 // Result is the final accumulator (comes from check block only)
-                                if acc_is_agg {
+                                if acc_is_agg || fold_ret_sret || fold_ret_small {
                                     writeln!(out, "  %v{} = phi ptr [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
                                 } else {
                                     writeln!(out, "  %v{} = phi {acc_llvm} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
@@ -2573,8 +3062,8 @@ fn emit_inst(
                                 // reduce: like fold but init with first element
                                 // Load first element as initial accumulator
                                 writeln!(out, "  %{pfx}.datap0 = load ptr, ptr %v{}", arr_arg.0).unwrap();
-                                if elem_is_aggregate || acc_ref {
-                                    // Aggregate: acc is a pointer
+                                if elem_pass_by_ptr || acc_ref {
+                                    // Large aggregate or ptr-typed acc: acc is a pointer
                                     writeln!(out, "  %{pfx}.acc0 = getelementptr i8, ptr %{pfx}.datap0, i64 0").unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.acc0 = load {elem_llvm_ty}, ptr %{pfx}.datap0").unwrap();
@@ -2582,7 +3071,7 @@ fn emit_inst(
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
                                 writeln!(out, "{pfx}.check:").unwrap();
                                 writeln!(out, "  %{pfx}.i = phi i64 [1, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
-                                if elem_is_aggregate || acc_ref {
+                                if elem_pass_by_ptr || acc_ref {
                                     writeln!(out, "  %{pfx}.acc = phi ptr [%{pfx}.acc0, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.acc = phi {elem_llvm_ty} [%{pfx}.acc0, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
@@ -2595,19 +3084,20 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                let acc_param = if elem_is_aggregate || acc_ref {
+                                let acc_param = if elem_pass_by_ptr || acc_ref {
                                     format!("ptr %{pfx}.acc")
                                 } else {
                                     format!("{elem_llvm_ty} %{pfx}.acc")
                                 };
-                                let elem_param = if elem_by_ptr || elem_is_aggregate || elem_ref {
+                                let elem_param = if elem_pass_by_ptr || elem_ref {
                                     format!("ptr %{pfx}.ep")
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
                                     format!("{elem_llvm_ty} %{pfx}.elem")
                                 };
-                                if elem_is_aggregate {
-                                    let ret_sret = !is_small_aggregate(&LirType::Struct(StructId(0)), &module.structs);
+                                if elem_pass_by_ptr {
+                                    // Large aggregate acc/elem: use sret or ptr return
+                                    let ret_sret = elem_size > 16;
                                     if ret_sret {
                                         writeln!(out, "  %{pfx}.accnew = alloca {elem_llvm_ty}").unwrap();
                                         writeln!(out, "  call void @{call_fn}(ptr sret({elem_llvm_ty}) %{pfx}.accnew, ptr %v{}, {acc_param}, {elem_param})", closure_val.0).unwrap();
@@ -2620,7 +3110,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
                                 writeln!(out, "{pfx}.done:").unwrap();
-                                if elem_is_aggregate || acc_ref {
+                                if elem_pass_by_ptr || acc_ref {
                                     writeln!(out, "  %v{} = phi ptr [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
                                 } else {
                                     writeln!(out, "  %v{} = phi {elem_llvm_ty} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
@@ -2631,7 +3121,8 @@ fn emit_inst(
                             "find" => {
                                 let d = dst.unwrap();
                                 // find: return Option — alloca, set tag=1 (None), loop and set tag=0+payload on match
-                                writeln!(out, "  %v{} = alloca i8, i64 {}", d.0, 8 + elem_size.max(8)).unwrap();
+                                let find_pay_off = option_payload_offset(&elem_llvm_ty) as usize;
+                                writeln!(out, "  %v{} = alloca i8, i64 {}", d.0, find_pay_off + elem_size.max(1)).unwrap();
                                 // Init to None (tag=1)
                                 writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", d.0).unwrap();
                                 writeln!(out, "  store i32 1, ptr %{pfx}.tagp").unwrap();
@@ -2646,7 +3137,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2654,9 +3145,9 @@ fn emit_inst(
                                 }
                                 writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
                                 writeln!(out, "{pfx}.found:").unwrap();
-                                // Set tag=0 (Some) and copy element to payload at offset 8
+                                // Set tag=0 (Some) and copy element to payload at the correct offset
                                 writeln!(out, "  store i32 0, ptr %{pfx}.tagp").unwrap();
-                                writeln!(out, "  %{pfx}.payp = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                                writeln!(out, "  %{pfx}.payp = getelementptr i8, ptr %v{}, i64 {find_pay_off}", d.0).unwrap();
                                 writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payp, ptr %{pfx}.ep, i64 {elem_size})").unwrap();
                                 writeln!(out, "  br label %{pfx}.done").unwrap();
                                 writeln!(out, "{pfx}.cont:").unwrap();
@@ -2680,7 +3171,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2711,7 +3202,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2744,7 +3235,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
                                 // Call closure → returns GorgetArray
                                 writeln!(out, "  %{pfx}.sub = alloca %GorgetArray").unwrap();
-                                if elem_by_ptr || elem_is_aggregate {
+                                if elem_pass_by_ptr {
                                     writeln!(out, "  call void @{call_fn}(ptr sret(%GorgetArray) %{pfx}.sub, ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -2758,6 +3249,323 @@ fn emit_inst(
                                 return;
                             }
                             _ => {} // Fall through for unsupported methods
+                        }
+                    }
+
+                    // ── Generic callable dispatch for named-function callables ──
+                    // When resolve_closure_call_fn returns None but the closure arg is Ptr,
+                    // the callable is a [fn_ptr, env_ptr] pair created by FuncAddr.
+                    // Trace back to the adapter function to get the return type and params.
+                    if closure_info.is_none() {
+                        if let Some(ca) = closure_arg {
+                            let ca_ty = val_types.get(ca.0 as usize).and_then(|t| t.as_ref());
+                            if matches!(ca_ty, Some(LirType::Ptr)) {
+                                // Resolve adapter function via FuncAddr trace
+                                let adapt_fid = trace_funcaddr(func, ca.0);
+                                let adapt_fn = adapt_fid.and_then(|fid| module.functions.get(fid.0 as usize));
+                                // Determine return type: use adapter if available, else method default
+                                let (gen_ret_ty, gen_ret_sret, gen_ret_small_agg) = match adapt_fn {
+                                    Some(f) if f.return_type != LirType::Void => {
+                                        let sret = needs_sret(&f.return_type, &module.structs);
+                                        let small_agg = f.return_type.is_aggregate() && is_small_aggregate(&f.return_type, &module.structs);
+                                        (f.return_type.clone(), sret, small_agg)
+                                    }
+                                    _ => {
+                                        // Default based on method
+                                        let ret = match method {
+                                            "each" => LirType::Void,
+                                            "any" | "all" | "filter" | "find" => LirType::Bool,
+                                            "count" | "find_index" => LirType::I64,
+                                            "flat_map" | "map" => {
+                                                // These need GorgetArray return (sret)
+                                                // Find GorgetArray struct id
+                                                if let Some(i) = module.structs.iter().position(|s| s.name == "GorgetArray") {
+                                                    LirType::Struct(StructId(i as u32))
+                                                } else { LirType::Ptr }
+                                            }
+                                            "fold" | "reduce" => LirType::I64, // best guess
+                                            _ => LirType::I64,
+                                        };
+                                        let sret = needs_sret(&ret, &module.structs);
+                                        let small_agg = ret.is_aggregate() && is_small_aggregate(&ret, &module.structs);
+                                        (ret, sret, small_agg)
+                                    }
+                                };
+                                let gen_ret_llvm = llvm_type_full(&gen_ret_ty, snames);
+                                // Determine element passing convention
+                                let elem_pass_by_ptr_gen = elem_is_aggregate && elem_size > 16;
+                                // Load fn_ptr and env_ptr from the callable [fn_ptr, env_ptr]
+                                writeln!(out, "  %{pfx}.gfnp = load ptr, ptr %v{}", ca.0).unwrap();
+                                writeln!(out, "  %{pfx}.genvgep = getelementptr ptr, ptr %v{}, i32 1", ca.0).unwrap();
+                                writeln!(out, "  %{pfx}.genv = load ptr, ptr %{pfx}.genvgep").unwrap();
+
+                                match method {
+                                    "each" => {
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        if elem_pass_by_ptr_gen {
+                                            writeln!(out, "  call void %{pfx}.gfnp(ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                            writeln!(out, "  call void %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                        }
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    "any" | "all" => {
+                                        let d = dst.unwrap();
+                                        let (init_val, early_val, final_val, pred_cmp) = if method == "any" {
+                                            ("false", "true", "false", "eq")
+                                        } else {
+                                            ("true", "false", "true", "ne")
+                                        };
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.acc = phi i1 [{init_val}, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        if elem_pass_by_ptr_gen {
+                                            writeln!(out, "  %{pfx}.pred = call i1 %{pfx}.gfnp(ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                            writeln!(out, "  %{pfx}.pred = call i1 %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                        }
+                                        writeln!(out, "  %{pfx}.short = icmp {pred_cmp} i1 %{pfx}.pred, {early_val}").unwrap();
+                                        writeln!(out, "  %{pfx}.accnew = select i1 %{pfx}.short, i1 {early_val}, i1 %{pfx}.acc").unwrap();
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        // Extend to i64 to match C ABI bool convention (same as typed any/all)
+                                        writeln!(out, "  %{pfx}.b = phi i1 [%{pfx}.acc, %{pfx}.check]").unwrap();
+                                        writeln!(out, "  %v{} = zext i1 %{pfx}.b to i64", d.0).unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    "filter" => {
+                                        let d = dst.unwrap();
+                                        writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {elem_size})", d.0).unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        // phi backedge: %pfx.skip is the actual loop back-edge predecessor
+                                        writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip]").unwrap();
+                                        writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        if elem_pass_by_ptr_gen {
+                                            writeln!(out, "  %{pfx}.pred = call i1 %{pfx}.gfnp(ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                            writeln!(out, "  %{pfx}.pred = call i1 %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                        };
+                                        writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.push, label %{pfx}.skip").unwrap();
+                                        writeln!(out, "{pfx}.push:").unwrap();
+                                        writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.ep)", d.0).unwrap();
+                                        writeln!(out, "  br label %{pfx}.skip").unwrap();
+                                        writeln!(out, "{pfx}.skip:").unwrap();
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    "map" => {
+                                        let d = dst.unwrap();
+                                        // For map with generic callable, use adapter return type
+                                        let (map_ret_llvm, map_elem_size, map_sret, map_small_agg) = if gen_ret_sret {
+                                            (gen_ret_llvm.clone(), sizeof_lir_type(&gen_ret_ty, &module.structs, snames), true, false)
+                                        } else if gen_ret_small_agg {
+                                            (gen_ret_llvm.clone(), sizeof_lir_type(&gen_ret_ty, &module.structs, snames), false, true)
+                                        } else {
+                                            let sz = sizeof_lir_type(&gen_ret_ty, &module.structs, snames);
+                                            (gen_ret_llvm.clone(), sz, false, false)
+                                        };
+                                        writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {map_elem_size})", d.0).unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        if map_sret {
+                                            writeln!(out, "  %{pfx}.tmp = alloca {map_ret_llvm}").unwrap();
+                                            if elem_pass_by_ptr_gen {
+                                                writeln!(out, "  call void %{pfx}.gfnp(ptr sret({map_ret_llvm}) %{pfx}.tmp, ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                            } else {
+                                                writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                                writeln!(out, "  call void %{pfx}.gfnp(ptr sret({map_ret_llvm}) %{pfx}.tmp, ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                            }
+                                            writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                        } else if map_small_agg {
+                                            if elem_pass_by_ptr_gen {
+                                                writeln!(out, "  %{pfx}.out.v = call {map_ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                            } else {
+                                                writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                                writeln!(out, "  %{pfx}.out.v = call {map_ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                            }
+                                            writeln!(out, "  %{pfx}.tmp = alloca {map_ret_llvm}").unwrap();
+                                            writeln!(out, "  store {map_ret_llvm} %{pfx}.out.v, ptr %{pfx}.tmp").unwrap();
+                                            writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                        } else {
+                                            if elem_pass_by_ptr_gen {
+                                                writeln!(out, "  %{pfx}.out = call {map_ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                            } else {
+                                                writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                                writeln!(out, "  %{pfx}.out = call {map_ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                            }
+                                            writeln!(out, "  %{pfx}.tmp = alloca {map_ret_llvm}").unwrap();
+                                            writeln!(out, "  store {map_ret_llvm} %{pfx}.out, ptr %{pfx}.tmp").unwrap();
+                                            writeln!(out, "  call void @gorget_array_push(ptr %v{}, ptr %{pfx}.tmp)", d.0).unwrap();
+                                        }
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    "flat_map" => {
+                                        let d = dst.unwrap();
+                                        writeln!(out, "  %v{} = alloca %GorgetArray", d.0).unwrap();
+                                        writeln!(out, "  call void @gorget_array_new(ptr sret(%GorgetArray) %v{}, i64 {elem_size})", d.0).unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        writeln!(out, "  %{pfx}.sub = alloca %GorgetArray").unwrap();
+                                        if elem_pass_by_ptr_gen {
+                                            writeln!(out, "  call void %{pfx}.gfnp(ptr sret(%GorgetArray) %{pfx}.sub, ptr %{pfx}.genv, ptr %{pfx}.ep)").unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                            writeln!(out, "  call void %{pfx}.gfnp(ptr sret(%GorgetArray) %{pfx}.sub, ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                        }
+                                        writeln!(out, "  call void @gorget_array_extend(ptr %v{}, ptr %{pfx}.sub)", d.0).unwrap();
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    "fold" => {
+                                        if args.len() >= 3 {
+                                            let d = dst.unwrap();
+                                            let acc_arg = args[1];
+                                            let acc_ty = val_types.get(acc_arg.0 as usize).and_then(|t| t.as_ref())
+                                                .cloned().unwrap_or(LirType::I64);
+                                            let acc_llvm = llvm_arg_type(&acc_ty, snames);
+                                            let acc_is_agg = acc_llvm.starts_with('%');
+                                            let fold_ret_sret = needs_sret(&gen_ret_ty, &module.structs);
+                                            let fold_ret_small = gen_ret_ty.is_aggregate() && is_small_aggregate(&gen_ret_ty, &module.structs);
+                                            writeln!(out, "  br label %{pfx}.check").unwrap();
+                                            writeln!(out, "{pfx}.check:").unwrap();
+                                            writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                            // phi value operands must NOT include type — type is the phi's own declared type
+                                            if acc_is_agg {
+                                                writeln!(out, "  %{pfx}.acc = phi ptr [%v{}, %{current_label}], [%{pfx}.accnew, %{pfx}.body]", acc_arg.0).unwrap();
+                                            } else {
+                                                writeln!(out, "  %{pfx}.acc = phi {acc_llvm} [%v{}, %{current_label}], [%{pfx}.accnew, %{pfx}.body]", acc_arg.0).unwrap();
+                                            }
+                                            writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                            writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
+                                            writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
+                                            writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                            writeln!(out, "{pfx}.body:").unwrap();
+                                            writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                            writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                            writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                            let acc_param = if acc_is_agg { format!("ptr %{pfx}.acc") } else { format!("{acc_llvm} %{pfx}.acc") };
+                                            let elem_param = if elem_pass_by_ptr_gen { format!("ptr %{pfx}.ep") } else {
+                                                writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                                format!("{elem_llvm_ty} %{pfx}.elem")
+                                            };
+                                            if fold_ret_sret {
+                                                writeln!(out, "  %{pfx}.accnew = alloca {gen_ret_llvm}").unwrap();
+                                                writeln!(out, "  call void %{pfx}.gfnp(ptr sret({gen_ret_llvm}) %{pfx}.accnew, ptr %{pfx}.genv, {acc_param}, {elem_param})").unwrap();
+                                            } else if fold_ret_small {
+                                                writeln!(out, "  %{pfx}.accret = call {gen_ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, {acc_param}, {elem_param})").unwrap();
+                                                writeln!(out, "  %{pfx}.accnew = alloca {gen_ret_llvm}").unwrap();
+                                                writeln!(out, "  store {gen_ret_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
+                                            } else {
+                                                writeln!(out, "  %{pfx}.accnew = call {acc_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, {acc_param}, {elem_param})").unwrap();
+                                            }
+                                            writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                            writeln!(out, "  br label %{pfx}.check").unwrap();
+                                            writeln!(out, "{pfx}.done:").unwrap();
+                                            if acc_is_agg || fold_ret_sret || fold_ret_small {
+                                                writeln!(out, "  %v{} = phi ptr [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                            } else {
+                                                writeln!(out, "  %v{} = phi {acc_llvm} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                            }
+                                            *current_label = format!("{pfx}.done");
+                                            return;
+                                        }
+                                    }
+                                    "reduce" => {
+                                        let d = dst.unwrap();
+                                        let ret_llvm = gen_ret_llvm.clone();
+                                        writeln!(out, "  %{pfx}.datap0 = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.lenp0 = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.len0 = load i64, ptr %{pfx}.lenp0").unwrap();
+                                        writeln!(out, "  %{pfx}.ep0 = getelementptr i8, ptr %{pfx}.datap0, i64 0").unwrap();
+                                        writeln!(out, "  %{pfx}.init = load {elem_llvm_ty}, ptr %{pfx}.ep0").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.check:").unwrap();
+                                        writeln!(out, "  %{pfx}.i = phi i64 [1, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.acc = phi {elem_llvm_ty} [%{pfx}.init, %{current_label}], [%{pfx}.accnew, %{pfx}.body]").unwrap();
+                                        writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len0").unwrap();
+                                        writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
+                                        writeln!(out, "{pfx}.body:").unwrap();
+                                        writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
+                                        writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
+                                        writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
+                                        writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
+                                        writeln!(out, "  %{pfx}.accnew = call {ret_llvm} %{pfx}.gfnp(ptr %{pfx}.genv, {elem_llvm_ty} %{pfx}.acc, {elem_llvm_ty} %{pfx}.elem)").unwrap();
+                                        writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
+                                        writeln!(out, "  br label %{pfx}.check").unwrap();
+                                        writeln!(out, "{pfx}.done:").unwrap();
+                                        writeln!(out, "  %v{} = phi {ret_llvm} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
+                                        *current_label = format!("{pfx}.done");
+                                        return;
+                                    }
+                                    _ => {} // Fall through for unsupported methods
+                                }
+                            }
                         }
                     }
                     // If closure resolution failed or method not handled, fall through
@@ -2789,17 +3597,147 @@ fn emit_inst(
                     writeln!(out, "  call void @{typed_fn}(ptr %v{}, {arg1_ty} %v{})", args[0].0, args[1].0).unwrap();
                     return;
                 }
-                // Str arg: call gorget_string_push_char (Str→Str push)
+                // Str arg: call gorget_string_push_char / gorget_string_push_line
                 let arg2_is_str = arg2_ty.map_or(false, |t| t.is_ptr() || matches!(t, LirType::Struct(_) | LirType::PtrTo(_)));
                 if arg2_is_str {
-                    let push_fn = if is_push_line { "gorget_string_push_line" } else { "gorget_string_push_char" };
-                    writeln!(out, "  call void @{push_fn}(ptr %v{}, ptr %v{})", args[0].0, args[1].0).unwrap();
+                    if is_push_line {
+                        // gorget_string_push_line takes (GorgetString*, const char*).
+                        // The 2nd arg is a GorgetString* — extract the .data pointer (field 0).
+                        let uid = *trap_counter; *trap_counter += 1;
+                        writeln!(out, "  %psl.data.{uid} = load ptr, ptr %v{}", args[1].0).unwrap();
+                        writeln!(out, "  call void @gorget_string_push_line(ptr %v{}, ptr %psl.data.{uid})", args[0].0).unwrap();
+                    } else {
+                        // gorget_string_push_char takes (GorgetString*, Str c) — Str is 32 bytes,
+                        // so on aarch64 it's passed by hidden pointer. Pass GorgetString* directly.
+                        writeln!(out, "  call void @gorget_string_push_char(ptr %v{}, ptr %v{})", args[0].0, args[1].0).unwrap();
+                    }
                     return;
                 }
             }
 
+            // ── gorget_file_open (1-arg) → __gorget_file_open_r ─────────────────
+            // LIR uses 1-arg gorget_file_open for "open for reading".
+            // The real C function takes 2 args; __gorget_file_open_r is a wrapper adding "r".
+            if name == "gorget_file_open" && args.len() == 1 {
+                *trap_counter += 1; // must match pre-pass 'else { counter += 1; }'
+                // args[0] is a GorgetString pointer (PtrTo GorgetString from StrLit/SlotAddr).
+                // __gorget_file_open_r expects const char* — extract the data field.
+                // The CStr ABI tag in the LIR extern marks this arg as needing cstr extraction.
+                // We emit a load of the .data ptr (offset 0) from the GorgetString, then call
+                // gorget_str_to_cstr for null-termination safety.
+                let arg0 = args[0].0;
+                let cstr_name = format!("fopenr.{block_id}.{}", *trap_counter - 1);
+                // Use gorget_str_to_cstr: ensures null termination even for views.
+                writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{arg0})").unwrap();
+                if let Some(d) = dst {
+                    // Use the extern's declared return type (not val_types — val_types[d]
+                    // may be PtrTo(File) from an earlier SlotAddr instruction that was
+                    // computed before the call, preventing the correct Struct(File) type).
+                    let ext_ret = module.externs.iter()
+                        .find(|e| e.name == "gorget_file_open")
+                        .map(|e| &e.return_type);
+                    if let Some(ret_ty) = ext_ret {
+                        if is_small_aggregate(ret_ty, &module.structs) {
+                            let agg_ty = llvm_type_full(ret_ty, snames);
+                            writeln!(out, "  %v{}.ret = call {agg_ty} @__gorget_file_open_r(ptr %{cstr_name})", d.0).unwrap();
+                            writeln!(out, "  %v{} = alloca {agg_ty}", d.0).unwrap();
+                            writeln!(out, "  store {agg_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
+                            return;
+                        }
+                    }
+                    writeln!(out, "  %v{}.ret = call ptr @__gorget_file_open_r(ptr %{cstr_name})", d.0).unwrap();
+                    writeln!(out, "  %v{} = alloca ptr", d.0).unwrap();
+                    writeln!(out, "  store ptr %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
+                } else {
+                    writeln!(out, "  call void @__gorget_file_open_r(ptr %{cstr_name})").unwrap();
+                }
+                return;
+            }
+
+            // ── gorget_task_group_submit ──────────────────────────────────────────
+            // gorget_task_group_submit is a C macro, not a real function.
+            // Expand inline: extract __task (offset 0) and __drop (offset 8) from Task struct,
+            // load the actual TaskGroup pointer, then call gorget_task_group_submit_raw.
+            // Finally zero __task to prevent double-free (matches macro: task.__task = NULL).
+            if name == "gorget_task_group_submit" && args.len() >= 2 {
+                let uid = *trap_counter; *trap_counter += 1;
+                let pfx = format!("tgs.{block_id}.{uid}");
+                // args[0] = ptr to TaskGroup storage (TaskGroup is a ptr typedef, load it)
+                // args[1] = ptr to Task struct storage ({void*__task, void(*__drop)(void*)})
+                let tg = args[0].0;
+                let task = args[1].0;
+                writeln!(out, "  %{pfx}.tg = load ptr, ptr %v{tg}").unwrap();
+                writeln!(out, "  %{pfx}.ctx = load ptr, ptr %v{task}").unwrap();
+                writeln!(out, "  %{pfx}.dropgep = getelementptr i8, ptr %v{task}, i64 8").unwrap();
+                writeln!(out, "  %{pfx}.drop = load ptr, ptr %{pfx}.dropgep").unwrap();
+                writeln!(out, "  call void @gorget_task_group_submit_raw(ptr %{pfx}.tg, ptr %{pfx}.ctx, ptr %{pfx}.drop)").unwrap();
+                writeln!(out, "  store ptr null, ptr %v{task}").unwrap();
+                return;
+            }
+
+            // gorget_str_default / String.default() — returns empty GorgetString (all zeros).
+            // The C runtime inline version is not exported; generate inline instead.
+            if name == "gorget_str_default" {
+                *trap_counter += 1; // must match pre-pass 'else { counter += 1; }'
+                if let Some(d) = dst {
+                    writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                    writeln!(out, "  call ptr @memset(ptr %v{}, i32 0, i64 32)", d.0).unwrap();
+                }
+                return;
+            }
+
+            // gorget_str_str(GorgetString*) → clone string builder contents.
+            // LIR extern arity is wrong (says 2 Str args, only 1 is passed).
+            // Redirect to gorget_string_clone_to_owned which has the correct signature.
+            if name == "gorget_str_str" && !args.is_empty() {
+                *trap_counter += 1; // must match pre-pass 'else { counter += 1; }'
+                if let Some(d) = dst {
+                    writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                    writeln!(out, "  call void @gorget_string_clone_to_owned(ptr sret(%GorgetString) %v{}, ptr %v{})", d.0, args[0].0).unwrap();
+                }
+                return;
+            }
+
+            // gorget_string_push_line(GorgetString* s, const char* rhs) — rhs is const char*,
+            // but LIR passes a GorgetString* (ptr to struct). Extract .data (field 0) first.
+            if name == "gorget_string_push_line" && args.len() >= 2 {
+                let uid = *trap_counter; *trap_counter += 1;
+                let sb = args[0].0;
+                let str_arg = args[1].0;
+                writeln!(out, "  %psl.data.{uid} = load ptr, ptr %v{str_arg}").unwrap();
+                writeln!(out, "  call void @gorget_string_push_line(ptr %v{sb}, ptr %psl.data.{uid})").unwrap();
+                return;
+            }
+
+            // gorget_str_clear(GorgetString*) — static inline in C backend only, not in runtime.
+            // Equivalent: s->len = 0; if (s->cap > 0 && s->data) ((char*)s->data)[0] = '\0';
+            // GorgetString layout: { ptr data @0, i64 cap @8, i64 len @16, ptr alloc @24 }
+            if name == "gorget_str_clear" && !args.is_empty() {
+                let uid = *trap_counter; *trap_counter += 1;
+                let sb = args[0].0;
+                // Zero the len field (offset 16)
+                writeln!(out, "  %scl.len.{uid} = getelementptr %GorgetString, ptr %v{sb}, i32 0, i32 2").unwrap();
+                writeln!(out, "  store i64 0, ptr %scl.len.{uid}").unwrap();
+                // Load cap (offset 8) and data (offset 0) to conditionally zero first byte
+                writeln!(out, "  %scl.cap.{uid} = getelementptr %GorgetString, ptr %v{sb}, i32 0, i32 1").unwrap();
+                writeln!(out, "  %scl.capv.{uid} = load i64, ptr %scl.cap.{uid}").unwrap();
+                writeln!(out, "  %scl.hascap.{uid} = icmp sgt i64 %scl.capv.{uid}, 0").unwrap();
+                writeln!(out, "  %scl.dp.{uid} = getelementptr %GorgetString, ptr %v{sb}, i32 0, i32 0").unwrap();
+                writeln!(out, "  %scl.datav.{uid} = load ptr, ptr %scl.dp.{uid}").unwrap();
+                writeln!(out, "  %scl.notnull.{uid} = icmp ne ptr %scl.datav.{uid}, null").unwrap();
+                writeln!(out, "  %scl.cond.{uid} = and i1 %scl.hascap.{uid}, %scl.notnull.{uid}").unwrap();
+                writeln!(out, "  br i1 %scl.cond.{uid}, label %scl.zero.{uid}, label %scl.done.{uid}").unwrap();
+                writeln!(out, "scl.zero.{uid}:").unwrap();
+                writeln!(out, "  store i8 0, ptr %scl.datav.{uid}").unwrap();
+                writeln!(out, "  br label %scl.done.{uid}").unwrap();
+                writeln!(out, "scl.done.{uid}:").unwrap();
+                return;
+            }
+
             // gorget_bool_to_str returns GorgetString via sret
             if name == "gorget_bool_to_str" && !args.is_empty() {
+                // Always increment trap_counter (must match pre-pass which always increments)
+                let uid = *trap_counter; *trap_counter += 1;
                 if let Some(d) = dst {
                     let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
                     let is_bool = matches!(arg_ty, Some(LirType::Bool));
@@ -2808,7 +3746,6 @@ fn emit_inst(
                         writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %v{})", d.0, args[0].0).unwrap();
                     } else {
                         // Truncate i64/i32 → i1 for bool arg
-                        let uid = *trap_counter; *trap_counter += 1;
                         writeln!(out, "  %bts.{uid} = trunc i64 %v{} to i1", args[0].0).unwrap();
                         writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %bts.{uid})", d.0).unwrap();
                     }
@@ -2859,22 +3796,24 @@ fn emit_inst(
                     let dst_ty: Option<&LirType> = opt_struct_id.map(|sid| &func.slots.iter()
                         .find(|s| matches!(&s.ty, LirType::Struct(s2) if *s2 == sid))
                         .unwrap().ty);
-                    // Determine payload size from the destination Option struct
-                    let payload_size = match dst_ty {
+                    // Determine payload size and offset from the destination Option struct
+                    let (payload_size, payload_off) = match dst_ty {
                         Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
                             let sdef = &module.structs[sid.0 as usize];
                             sdef.fields.get(1).map(|(_, fty)| {
-                                match fty {
+                                let sz = match fty {
                                     LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8usize,
                                     LirType::I32 | LirType::U32 | LirType::F32 => 4,
                                     LirType::I16 | LirType::U16 => 2,
                                     LirType::I8 | LirType::U8 | LirType::Bool => 1,
                                     LirType::Struct(inner) => module.structs[inner.0 as usize].computed_c_size.unwrap_or(64),
                                     _ => 8,
-                                }
-                            }).unwrap_or(8)
+                                };
+                                let off = lir_payload_offset(fty) as usize;
+                                (sz, off)
+                            }).unwrap_or((8, 8))
                         }
-                        _ => 8,
+                        _ => (8, 8),
                     };
                     // Build args — spill scalars to alloca (gorget_map_get takes ptr to key)
                     let mut spills = Vec::new();
@@ -2899,13 +3838,15 @@ fn emit_inst(
                     writeln!(out, "  %{pfx}.isnull = icmp eq ptr %{pfx}.raw, null").unwrap();
                     // Branchless Option construction (avoids splitting basic blocks,
                     // which would break phi node predecessor lists).
-                    writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
+                    // Alloca must hold tag (4) + padding + payload at the correct alignment offset.
+                    let alloca_size = payload_off + payload_size;
+                    writeln!(out, "  %v{} = alloca i8, i64 {alloca_size}", d.0).unwrap();
                     // tag: 0 for Some, 1 for None
                     writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.isnull, i32 1, i32 0").unwrap();
                     writeln!(out, "  store i32 %{pfx}.tag, ptr %v{}", d.0).unwrap();
                     // payload: copy from raw ptr if non-null, else copy from Option alloca
                     // itself (harmless self-read since tag=1/None means payload is ignored).
-                    writeln!(out, "  %{pfx}.payptr = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                    writeln!(out, "  %{pfx}.payptr = getelementptr i8, ptr %v{}, i64 {payload_off}", d.0).unwrap();
                     writeln!(out, "  %{pfx}.src = select i1 %{pfx}.isnull, ptr %{pfx}.payptr, ptr %{pfx}.raw").unwrap();
                     writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payptr, ptr %{pfx}.src, i64 {payload_size})").unwrap();
                     return;
@@ -3007,6 +3948,7 @@ fn emit_inst(
                                 let ty_str = llvm_type_full(err_field_ty, snames);
                                 // Error offset: after tag(4) + padding(4) + ok_payload
                                 // For Result__int64_t__GorgetString: tag(4)+pad(4)+ok(8) = 16
+                                // For Result__GorgetString__GorgetString: tag(4)+pad(4)+ok(32) = 40
                                 // For Result__void__int64_t: tag(4)+pad(4)+void(0?)+err = 8
                                 let ok_size: usize = sdef.fields.get(1).map(|(_, fty)| match fty {
                                     LirType::I8 | LirType::U8 | LirType::Bool => 1,
@@ -3015,11 +3957,13 @@ fn emit_inst(
                                     LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
                                     LirType::F32 => 4,
                                     LirType::Void => 0,
-                                    _ => 8,
+                                    // Aggregate payload: compute actual size (must match LLVM struct layout)
+                                    LirType::Struct(sid) => sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames),
                                 }).unwrap_or(8);
                                 let offset = 8 + ok_size; // tag(4) + pad to 8 + ok payload
-                                // Align to 8
-                                let offset = (offset + 7) & !7;
+                                // Align error field to its own alignment (typically 8)
+                                let err_align = 8usize;
+                                let offset = (offset + err_align - 1) & !(err_align - 1);
                                 (offset, ty_str)
                             } else {
                                 (8, "i64".to_string())
@@ -3067,14 +4011,56 @@ fn emit_inst(
                     writeln!(out, "  %{pfx}.result = call {ret_ty} @{try_fn}(ptr %{pfx}.data, i64 %{pfx}.len)").unwrap();
                     writeln!(out, "  %{pfx}.val = extractvalue {ret_ty} %{pfx}.result, 0").unwrap();
                     writeln!(out, "  %{pfx}.ok_raw = extractvalue {ret_ty} %{pfx}.result, 1").unwrap();
-                    // Construct Option result (branchless)
+                    writeln!(out, "  %{pfx}.parse_ok = icmp ne i64 %{pfx}.ok_raw, 0").unwrap();
+                    // Narrow int types: determine target LLVM type, range, and payload offset.
+                    // payload offset: 4 for ≤4-byte payloads, 8 for ≥8-byte (i64/f64).
+                    // Narrow types also need range checking before accepting the parse.
+                    struct NarrowInfo { llvm_ty: &'static str, pay_off: u64, min: i64, max: i64 }
+                    let narrow: Option<NarrowInfo> = if !is_float_parse {
+                        if name.starts_with("int8") {
+                            Some(NarrowInfo { llvm_ty: "i8",  pay_off: 4, min: -128,       max: 127        })
+                        } else if name.starts_with("uint8") {
+                            Some(NarrowInfo { llvm_ty: "i8",  pay_off: 4, min: 0,           max: 255        })
+                        } else if name.starts_with("int16") {
+                            Some(NarrowInfo { llvm_ty: "i16", pay_off: 4, min: -32768,      max: 32767      })
+                        } else if name.starts_with("uint16") {
+                            Some(NarrowInfo { llvm_ty: "i16", pay_off: 4, min: 0,           max: 65535      })
+                        } else if name.starts_with("int32") {
+                            Some(NarrowInfo { llvm_ty: "i32", pay_off: 4, min: -2147483648, max: 2147483647 })
+                        } else if name.starts_with("uint32") {
+                            Some(NarrowInfo { llvm_ty: "i32", pay_off: 4, min: 0,           max: 4294967295 })
+                        } else {
+                            None // int64, uint64 — full range, offset 8
+                        }
+                    } else { None };
+                    // Combine parse success with range check
+                    if let Some(ref n) = narrow {
+                        writeln!(out, "  %{pfx}.lo = icmp sge i64 %{pfx}.val, {}", n.min).unwrap();
+                        writeln!(out, "  %{pfx}.hi = icmp sle i64 %{pfx}.val, {}", n.max).unwrap();
+                        writeln!(out, "  %{pfx}.in_range = and i1 %{pfx}.lo, %{pfx}.hi").unwrap();
+                        writeln!(out, "  %{pfx}.is_ok = and i1 %{pfx}.parse_ok, %{pfx}.in_range").unwrap();
+                    } else {
+                        writeln!(out, "  %{pfx}.is_ok = add i1 %{pfx}.parse_ok, 0").unwrap();
+                    }
+                    // Construct Option result
                     writeln!(out, "  %v{} = alloca i8, i64 16", d.0).unwrap();
-                    writeln!(out, "  %{pfx}.is_ok = icmp ne i64 %{pfx}.ok_raw, 0").unwrap();
                     writeln!(out, "  %{pfx}.tag = select i1 %{pfx}.is_ok, i32 0, i32 1").unwrap();
                     writeln!(out, "  store i32 %{pfx}.tag, ptr %v{}", d.0).unwrap();
-                    // Copy value to payload at offset 8
-                    writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
-                    writeln!(out, "  store {val_ty} %{pfx}.val, ptr %{pfx}.pay").unwrap();
+                    // Store payload at correct offset with correct type
+                    if let Some(ref n) = narrow {
+                        // Truncate i64 to narrow type and store at offset 4
+                        writeln!(out, "  %{pfx}.trunc = trunc i64 %{pfx}.val to {}", n.llvm_ty).unwrap();
+                        writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 {}", d.0, n.pay_off).unwrap();
+                        writeln!(out, "  store {} %{pfx}.trunc, ptr %{pfx}.pay", n.llvm_ty).unwrap();
+                    } else if is_float_parse {
+                        // float/double: payload at offset 8
+                        writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                        writeln!(out, "  store {val_ty} %{pfx}.val, ptr %{pfx}.pay").unwrap();
+                    } else {
+                        // int64/uint64: payload at offset 8
+                        writeln!(out, "  %{pfx}.pay = getelementptr i8, ptr %v{}, i64 8", d.0).unwrap();
+                        writeln!(out, "  store {val_ty} %{pfx}.val, ptr %{pfx}.pay").unwrap();
+                    }
                 }
                 return;
             }
@@ -3091,11 +4077,12 @@ fn emit_inst(
                         &args[0], val_types, module, snames
                     );
                     let payload_ptr = format!("unwrap.{block_id}.{uid}.ptr");
-                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
+                    let payload_off = option_payload_offset(&payload_ty);
+                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
                     if payload_ty.starts_with('%') {
-                        // Aggregate payload — the struct is inline at offset 8,
+                        // Aggregate payload — the struct is inline at payload offset,
                         // return a pointer to it (no load needed)
-                        writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 8", d.0, args[0].0).unwrap();
+                        writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 {payload_off}", d.0, args[0].0).unwrap();
                     } else if payload_ty == "ptr" {
                         writeln!(out, "  %v{} = load ptr, ptr %{payload_ptr}", d.0).unwrap();
                     } else {
@@ -3123,7 +4110,8 @@ fn emit_inst(
                     writeln!(out, "  %{tag_ptr} = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
                     writeln!(out, "  %{tag_val} = load i32, ptr %{tag_ptr}").unwrap();
                     writeln!(out, "  %{cmp} = icmp eq i32 %{tag_val}, 0").unwrap();
-                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 8", args[0].0).unwrap();
+                    let payload_off = option_payload_offset(&payload_ty);
+                    writeln!(out, "  %{payload_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
                     if payload_ty.starts_with('%') {
                         // Aggregate payload: select between pointer to inline payload vs default
                         writeln!(out, "  %v{} = select i1 %{cmp}, ptr %{payload_ptr}, ptr %v{}", d.0, args[1].0).unwrap();
@@ -3193,10 +4181,21 @@ fn emit_inst(
                     while let Some(c) = chars.next() {
                         if c == '%' {
                             let mut spec = String::from('%');
-                            // Collect format specifier
+                            // Collect format specifier.
+                            // Length modifiers (l, ll, h, hh, j, z, t, L) are NOT conversion
+                            // characters — don't stop on them. Only stop on conversion chars
+                            // (d, i, u, o, x, X, f, F, e, E, g, G, c, s, p, n, %) or '*'.
                             for nc in chars.by_ref() {
                                 spec.push(nc);
-                                if nc.is_alphabetic() || nc == '%' || nc == '*' { break; }
+                                match nc {
+                                    // Length modifiers — keep collecting
+                                    'l' | 'h' | 'j' | 'z' | 't' | 'L' | 'q' => {}
+                                    // Conversion characters — done
+                                    'd' | 'i' | 'u' | 'o' | 'x' | 'X' | 'f' | 'F'
+                                    | 'e' | 'E' | 'g' | 'G' | 'c' | 's' | 'p' | 'n'
+                                    | '%' | '*' => { break; }
+                                    _ => { break; }
+                                }
                             }
                             if spec == "%lld" {
                                 let arg = args.get(extra_start + arg_idx);
@@ -3229,7 +4228,10 @@ fn emit_inst(
                         }
                     }
                     fixed_fmt = result;
-                    let fixed_idx = str_globals.get_index(&fixed_fmt);
+                    // intern (not get_index) — the fixed format may not have been pre-interned
+                    // if it was first produced here. Late additions will be emitted after
+                    // function bodies in the module (see late_str_globals handling).
+                    let fixed_idx = str_globals.intern(&fixed_fmt);
                     let fixed_len = fixed_fmt.len();
                     let pfx = format!("fmtfix.{block_id}.{uid}");
                     writeln!(out, "  %{pfx} = alloca %GorgetString").unwrap();
@@ -3410,6 +4412,35 @@ fn emit_inst(
                 }
             }
 
+            // Redirect no-arg strip variants: gorget_str_strip(s) → gorget_str_trim(s), etc.
+            // Same logic as C backend (emit_call_extern.rs line 708).
+            let name: &str = if args.len() == 1 {
+                match name.as_str() {
+                    "gorget_str_strip" => "gorget_str_trim",
+                    "gorget_str_lstrip" => "gorget_str_lstrip_ws",
+                    "gorget_str_rstrip" => "gorget_str_rstrip_ws",
+                    _ => name.as_str(),
+                }
+            } else { name.as_str() };
+
+            // gorget_str_cmp: C returns int (32-bit). On aarch64, 'mov w0, -1' zero-extends
+            // x0 to 0xFFFFFFFF (not 0xFFFFFFFFFFFFFFFF). Must call as i32 and sext to i64
+            // so the LIR I64 result has the correct sign.
+            if name == "gorget_str_cmp" {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("strcmp32.{block_id}.{uid}");
+                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr %v{}", a.0)).collect();
+                    writeln!(out, "  %{pfx}.raw = call i32 @gorget_str_cmp({})", arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{} = sext i32 %{pfx}.raw to i64", d.0).unwrap();
+                } else {
+                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr %v{}", a.0)).collect();
+                    writeln!(out, "  call i32 @gorget_str_cmp({})", arg_strs.join(", ")).unwrap();
+                }
+                return;
+            }
+
             // Look up the extern declaration
             let ext = module.externs.iter().find(|e| e.name == *name);
             if let Some(ext) = ext {
@@ -3453,6 +4484,18 @@ fn emit_inst(
                     return;
                 }
 
+                // gorget_file_read_all: C function returns GorgetString but LIR expects Result.
+                // Redirect to C wrapper __gorget_file_read_all_r that returns the proper Result.
+                if name == "gorget_file_read_all" && !args.is_empty() {
+                    *trap_counter += 1;
+                    let ret_ty = llvm_type_full(&ext.return_type, snames);
+                    if let Some(d) = dst {
+                        writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                        writeln!(out, "  call void @__gorget_file_read_all_r(ptr sret({ret_ty}) %v{}, ptr %v{})", d.0, args[0].0).unwrap();
+                    }
+                    return;
+                }
+
                 let actual_ret = ext.return_type.clone();
                 let ret_ty = llvm_type_full(&actual_ret, snames);
                 // For each arg, handle type mismatches:
@@ -3477,8 +4520,10 @@ fn emit_inst(
                     // Use param_abis (CStr annotation) or known function list.
                     let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
                     let is_str_to_cstr = (param_abi == crate::ir::abi::AbiKind::CStr
-                        || (expects_ptr && match (name.as_str(), i) {
+                        || (expects_ptr && match (name, i) {
                             ("gorget_assert_fail_values", 0) | ("gorget_panic", 0) => true,
+                            // gorget_string_push_line takes (GorgetString*, const char*) — extract data from arg 1
+                            ("gorget_string_push_line", 1) => true,
                             _ => false,
                         }))
                         && match actual_ty {
@@ -3769,6 +4814,7 @@ fn emit_overflow_check(
     trap_counter: &mut u32,
     current_label: &mut String,
     str_globals: &StrGlobals,
+    val_types: &[Option<LirType>],
 ) {
     let lty = llvm_type(ty);
     let bits = int_bits(ty);
@@ -3784,7 +4830,32 @@ fn emit_overflow_check(
     let trap_label = format!("ov.{block_id}.{trap_id}.trap");
     let ok_label = format!("ov.{block_id}.{trap_id}.ok");
 
-    writeln!(out, "  %{result} = call {{ {lty}, i1 }} {intrinsic}({lty} %v{}, {lty} %v{})", lhs.0, rhs.0).unwrap();
+    // For sub-64-bit types (i8, i16, i32), LIR constants are always emitted as i64,
+    // but some operands may already be the narrower type (e.g., from gorget_str_byte_at).
+    // Only emit trunc when the actual operand type is wider than the target type.
+    let needs_trunc = |vid: u32| -> bool {
+        if bits >= 64 { return false; }
+        match val_types.get(vid as usize).and_then(|t| t.as_ref()) {
+            Some(t) => int_bits(t) > bits,
+            None => true, // unknown — assume i64, truncate to be safe
+        }
+    };
+    let lhs_str = if needs_trunc(lhs.0) {
+        let name = format!("ov.{block_id}.{trap_id}.lhs");
+        writeln!(out, "  %{name} = trunc i64 %v{} to {lty}", lhs.0).unwrap();
+        format!("%{name}")
+    } else {
+        format!("%v{}", lhs.0)
+    };
+    let rhs_str = if needs_trunc(rhs.0) {
+        let name = format!("ov.{block_id}.{trap_id}.rhs");
+        writeln!(out, "  %{name} = trunc i64 %v{} to {lty}", rhs.0).unwrap();
+        format!("%{name}")
+    } else {
+        format!("%v{}", rhs.0)
+    };
+
+    writeln!(out, "  %{result} = call {{ {lty}, i1 }} {intrinsic}({lty} {lhs_str}, {lty} {rhs_str})").unwrap();
     writeln!(out, "  %{val} = extractvalue {{ {lty}, i1 }} %{result}, 0").unwrap();
     writeln!(out, "  %{flag} = extractvalue {{ {lty}, i1 }} %{result}, 1").unwrap();
     writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
@@ -3836,15 +4907,28 @@ fn emit_term(
                     writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
                 }
             } else {
-                // Check for type mismatch: value is i64 but function returns double
-                // (from monomorphized wrappers like Shared__Vector__double__at)
+                // Check for type mismatch between value type and function return type.
                 let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
                 let needs_bitcast = func.return_type.is_float()
                     && val_ty.map_or(false, |t| t.is_integer());
+                let needs_trunc_bool = func.return_type == LirType::Bool
+                    && val_ty.map_or(false, |t| *t != LirType::Bool && t.is_integer());
+                let needs_trunc_i32 = matches!(func.return_type, LirType::I32 | LirType::U32)
+                    && val_ty.map_or(false, |t| matches!(t, LirType::I64 | LirType::U64));
                 if needs_bitcast {
+                    // e.g. function returns double, value is i64
                     let val_ty_str = val_ty.map(|t| llvm_type(t)).unwrap_or("i64");
                     writeln!(out, "  %ret.bc.{} = bitcast {val_ty_str} %v{} to {ret_ty}", val.0, val.0).unwrap();
                     writeln!(out, "  ret {ret_ty} %ret.bc.{}", val.0).unwrap();
+                } else if needs_trunc_bool {
+                    // e.g. function returns i1, value is i64 (bool vector element)
+                    let val_ty_str = val_ty.map(|t| llvm_type(t)).unwrap_or("i64");
+                    writeln!(out, "  %ret.tb.{} = trunc {val_ty_str} %v{} to i1", val.0, val.0).unwrap();
+                    writeln!(out, "  ret i1 %ret.tb.{}", val.0).unwrap();
+                } else if needs_trunc_i32 {
+                    // e.g. function returns i32, value is i64
+                    writeln!(out, "  %ret.t32.{} = trunc i64 %v{} to i32", val.0, val.0).unwrap();
+                    writeln!(out, "  ret i32 %ret.t32.{}", val.0).unwrap();
                 } else {
                     writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
                 }

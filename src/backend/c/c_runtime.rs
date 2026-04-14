@@ -2177,7 +2177,8 @@ static inline int64_t gorget_str_find(Str s, Str needle) {
 // These allocate owned copies today. View-return optimization is deferred
 // (see plan §6a — requires borrow-checker surgery for CoW-on-mutation).
 
-static inline Str gorget_str_trim(Str s) {
+// Non-inline so they are exported symbols in the runtime .o — callable from LLVM IR.
+Str gorget_str_trim(Str s) {
     const char* d = (const char*)s.data;
     size_t start = 0;
     while (start < s.len) {
@@ -2194,7 +2195,7 @@ static inline Str gorget_str_trim(Str s) {
     }
     return gorget_str_view_region(d + start, end - start);
 }
-static inline Str gorget_str_lstrip_ws(Str s) {
+Str gorget_str_lstrip_ws(Str s) {
     const char* d = (const char*)s.data;
     size_t start = 0;
     while (start < s.len) {
@@ -2205,7 +2206,7 @@ static inline Str gorget_str_lstrip_ws(Str s) {
     }
     return gorget_str_view_region(d + start, s.len - start);
 }
-static inline Str gorget_str_rstrip_ws(Str s) {
+Str gorget_str_rstrip_ws(Str s) {
     const char* d = (const char*)s.data;
     size_t end = 0;
     size_t pos = 0;

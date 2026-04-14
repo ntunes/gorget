@@ -849,8 +849,10 @@ fn compile_llvm_pipeline(
     // that prints allocation stats, which the C backend only includes for test/bench mode.
     // Conditionally include heavier runtime modules
     let needs_async = concat_source.contains("std.async")
+        || concat_source.contains("std.time")  // std.time exports gorget_reactor_sleep_seconds
         || !lir_module.spawned_fns.is_empty()
         || !lir_module.externs.iter().all(|e| !e.name.contains("gorget_channel") && !e.name.contains("gorget_task")
+            && !e.name.contains("gorget_reactor")  // reactor sleep / async timer functions
             && !e.name.starts_with("Channel__"));
     if needs_async {
         runtime_src.push_str(c_runtime::ASYNC_RUNTIME);
@@ -1013,11 +1015,13 @@ fn compile_llvm_pipeline(
 
     // Conditional external library flags
     let has_extern = |prefix: &str| lir_module.externs.iter().any(|e| e.name.contains(prefix));
-    if concat_source.contains("xtd.crypto") || has_extern("EVP_") || has_extern("SSL_") {
-        link_cmd.args(&["-lssl", "-lcrypto"]);
+    if concat_source.contains("xtd.crypto") || concat_source.contains("std.net.tls")
+        || concat_source.contains("xtd.http")
+        || has_extern("EVP_") || has_extern("SSL_") || has_extern("gorget_tls_") {
+        add_crypto_flags(&mut link_cmd, true);
     }
-    if concat_source.contains("xtd.regex") || has_extern("pcre2_") {
-        link_cmd.arg("-lpcre2-8");
+    if concat_source.contains("xtd.regex") || has_extern("pcre2_") || has_extern("gorget_regex_") {
+        add_regex_flags(&mut link_cmd, true);
     }
     if has_extern("gorget_sqlite") {
         link_cmd.arg("-lsqlite3");
