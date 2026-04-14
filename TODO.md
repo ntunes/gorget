@@ -11,8 +11,6 @@
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 6 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks, struct+enum init). All work correctly — this is cleanup, not a bug. [demoted from High: 2026-04-12]
 
-- **LIR value/slot split loses GIR MoveZero for consuming args**: Fixed. GIR lowering marks consuming call args as `Operand::Move` (Rust-style); LIR emits generic post-call zeroing. Hardcoded function-name fallback removed — `ensure_owned_at_consuming_arg` now correctly clones non-last-use args (including Ptr-typed named locals from `.get().unwrap()` chains). [updated: 2026-04-13]
-
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
 
@@ -34,9 +32,7 @@
 
 - **Collection Resource semantics: remaining call-site ownership gaps**: Borrow checker doesn't cover field assignment or method-call ownership transfer. [updated: 2026-03-22]
 
-- **Remove GIR MoveZero emissions for borrow-wrapped call args**: C runtime safety nets and `arg_owners` removed. GIR MoveZero retained for args behind borrow ptrs (field loads, MutPtr params) — the LIR `emit_post_call_zeros` only reaches direct `Operand::Move` args. Removing these requires either flattening the borrow indirection or a drop elaboration pass. [updated: 2026-04-13]
-
-- **Drop elaboration — remaining 24 Memsets**: V7 reduced to 24 across 17 fixtures (from 872). These are genuinely necessary: IndexLoad element zeroing (zeroing inside collection data arrays after move-out) and projected Deref/Field MoveZero (field-level ownership transfer through pointers). Could be eliminated with: (1) element drop flags on collections, (2) `MoveField { slot, field }` instruction. Low priority — these are rare hot-path operations. [updated: 2026-04-14]
+- **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
 - **LLVM backend test results (2026-04-13, 831 tested / 913 total)**:
   - PASS: 669 (80.5% of tested); file_io fixed 2026-04-14 (gorget_file_read_all ABI mismatch)
