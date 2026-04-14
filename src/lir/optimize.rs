@@ -203,6 +203,7 @@ fn collect_inst_func_refs(inst: &Inst, cb: &mut dyn FnMut(FuncId)) {
     match inst {
         Inst::Call { func, .. } => cb(*func),
         Inst::FuncAddr { func, .. } => cb(*func),
+        Inst::ClosurePack { call_func, .. } => cb(*call_func),
         _ => {}
     }
 }
@@ -229,6 +230,11 @@ fn rewrite_func_refs(inst: &mut Inst, remap: &[Option<FuncId>]) {
         Inst::FuncAddr { func, .. } => {
             if let Some(new_id) = remap[func.0 as usize] {
                 *func = new_id;
+            }
+        }
+        Inst::ClosurePack { call_func, .. } => {
+            if let Some(new_id) = remap[call_func.0 as usize] {
+                *call_func = new_id;
             }
         }
         _ => {}

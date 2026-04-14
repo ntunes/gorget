@@ -391,8 +391,14 @@ impl<'a> FuncLowering<'a> {
             // -- Calls --
             Instruction::Call { dst, func, args, .. } => {
                 if let Some(fid) = self.func_index.get(func) {
-                    let lir_args: Vec<ValueId> =
+                    let mut lir_args: Vec<ValueId> =
                         args.iter().map(|a| self.lower_operand(a, bb)).collect();
+                    // Closure→callable wrapping: detect __Closure_N args and FuncRef
+                    // args and pack them into GorgetClosure slots so backends don't
+                    // need to detect and wrap at code-gen time.
+                    if !func.contains("__call") {
+                        self.wrap_closure_call_args(args, &mut lir_args, bb);
+                    }
                     let result = dst.map(|_| self.lir_func.next_value());
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
                         dst: result,

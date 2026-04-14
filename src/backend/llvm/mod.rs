@@ -1384,6 +1384,9 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
                 if let Inst::FuncAddr { func: fid, .. } = inst {
                     adapter_fids.insert(fid.0);
                 }
+                if let Inst::ClosurePack { call_func, needs_adapter: true, .. } = inst {
+                    adapter_fids.insert(call_func.0);
+                }
             }
         }
     }
@@ -2393,7 +2396,7 @@ fn emit_inst(
         Inst::Call { dst, func: fid, args } => {
             let target = &module.functions[fid.0 as usize];
             let ret_ty = llvm_type_full(&target.return_type, snames);
-            let is_closure_call_fn = target.name.contains("__call");
+            // Closure→callable wrapping is now done in LIR (ClosurePack).
             // For aggregate params: if value is ptr but param is aggregate, load first
             let mut load_lines = Vec::new();
             let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
@@ -2401,35 +2404,6 @@ fn emit_inst(
                 let actual_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_ptr_val = actual_ty.map_or(false, |t| t.is_ptr());
                 let is_agg_param = param_ty.map_or(false, |t| t.is_aggregate());
-                let param_is_void_or_ptr = !is_closure_call_fn && param_ty
-                    .map_or(false, |p| p.is_ptr() || matches!(p, LirType::Void));
-
-                // Closure→callable wrapping: when passing a __Closure_N struct to a
-                // void/ptr parameter, wrap in [fn_ptr, env_ptr] array on the stack.
-                if param_is_void_or_ptr {
-                    let closure_name = {
-                        let check_closure = |sid: &StructId| -> Option<String> {
-                            module.structs.get(sid.0 as usize)
-                                .filter(|sd| sd.name.starts_with("__Closure_"))
-                                .map(|sd| sd.name.clone())
-                        };
-                        match actual_ty {
-                            Some(LirType::Struct(sid)) => check_closure(sid),
-                            Some(LirType::PtrTo(sid)) => check_closure(sid),
-                            _ => None,
-                        }
-                    };
-                    if let Some(cname) = closure_name {
-                        let call_fn = format!("{cname}__call");
-                        let pfx = format!("cw.{}.{i}", a.0);
-                        load_lines.push(format!("  %{pfx} = alloca [2 x ptr]"));
-                        load_lines.push(format!("  %{pfx}.0 = getelementptr [2 x ptr], ptr %{pfx}, i32 0, i32 0"));
-                        load_lines.push(format!("  store ptr @{call_fn}, ptr %{pfx}.0"));
-                        load_lines.push(format!("  %{pfx}.1 = getelementptr [2 x ptr], ptr %{pfx}, i32 0, i32 1"));
-                        load_lines.push(format!("  store ptr %v{}, ptr %{pfx}.1", a.0));
-                        return format!("ptr %{pfx}");
-                    }
-                }
 
                 if is_agg_param && is_ptr_val {
                     let pty = llvm_arg_type(param_ty.unwrap(), snames);

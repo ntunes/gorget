@@ -674,6 +674,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
                     if let Inst::FuncAddr { func: fid, .. } = inst {
                         adapter_fids.insert(fid.0);
                     }
+                    if let Inst::ClosurePack { call_func, needs_adapter: true, .. } = inst {
+                        adapter_fids.insert(call_func.0);
+                    }
                 }
             }
         }
@@ -1564,7 +1567,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
     let extern_cstr_return_vals = ctx.extern_cstr_return_vals;
     let null_vals = ctx.null_vals;
     let ptr_pointee = ctx.ptr_pointee;
-    let func_addr_targets = ctx.func_addr_targets;
+    let _func_addr_targets = ctx.func_addr_targets;
     let _spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
@@ -2035,45 +2038,16 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 if i > 0 {
                     write!(out, ", ").unwrap();
                 }
-                // Closure→callable wrapping: when passing a __Closure_N to a void/Ptr param,
-                // wrap in (void*)(void*[2]){(void*)__Closure_N__call, (void*)&env_struct}.
-                // Skip for __Closure_N__call functions — they take the env pointer directly.
-                let is_closure_call_fn = target_func.name.contains("__call");
-                let param_is_void = !is_closure_call_fn && target_func.params.get(i)
+                // Closure→callable wrapping is now done in LIR (ClosurePack).
+                // Only handle string-literal→const-param and default coercion.
+                let param_is_void = target_func.params.get(i)
                     .map_or(false, |p| p.is_ptr() || matches!(p, LirType::Void));
-                let arg_closure_name = if param_is_void {
-                    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                    let check_closure = |sid: &StructId| -> Option<String> {
-                        module.structs.get(sid.0 as usize)
-                            .filter(|sd| sd.name.starts_with("__Closure_"))
-                            .map(|sd| sd.name.clone())
-                    };
-                    if let Some(LirType::Struct(sid)) = arg_ty {
-                        check_closure(sid)
-                    } else if matches!(arg_ty, Some(LirType::Ptr)) {
-                        ptr_pointee.get(a.0 as usize).and_then(|p| p.as_ref())
-                            .and_then(|pt| if let LirType::Struct(sid) = pt { check_closure(sid) } else { None })
-                    } else { None }
-                } else { None };
-                if let Some(closure_name) = arg_closure_name {
-                    let call_fn = format!("{closure_name}__call");
-                    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                    if matches!(arg_ty, Some(LirType::Ptr)) {
-                        // arg is already a pointer to the closure struct
-                        write!(out, "(void*)(void*[2]){{(void*){call_fn}, (void*){}}}", v(*a)).unwrap();
-                    } else {
-                        // arg is the closure struct by value — take its address
-                        write!(out, "(void*)(void*[2]){{(void*){call_fn}, (void*)&{}}}", v(*a)).unwrap();
-                    }
-                } else if param_is_void {
+                if param_is_void {
                     let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                     let is_const = target_func.const_params.get(i).copied().unwrap_or(false);
                     if is_str_lit_arg && is_const {
                         // String literal → Str const param: stack-allocated literal with header.
                         write!(out, "&{v}", v = v(*a)).unwrap();
-                    } else if let Some(fid) = func_addr_targets.get(a.0 as usize).and_then(|t| *t) {
-                        let adapt_name = format!("__adapt_{}", c_func_name(&module.functions[fid.0 as usize].name));
-                        write!(out, "(void*)(void*[2]){{(void*){adapt_name}, NULL}}").unwrap();
                     } else {
                         emit_coerced_arg(out, a, target_func.params.get(i), val_types, str_lit_vals, sn);
                     }
