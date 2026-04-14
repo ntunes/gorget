@@ -205,6 +205,9 @@ enum LirInst:
     # Inline C
     IInlineC(int, String)             # dst (-1=none), code
 
+    # Move annotation (dataflow only, no runtime cost — swept by drop elaboration)
+    IMoveSlot(int)                    # slot
+
     # No-op
     INop
 

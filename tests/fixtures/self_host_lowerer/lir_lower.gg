@@ -232,6 +232,39 @@ int map_gir_type(int type_id, GirModule &gmod, StructRegistry &sr):
 
 # ── Type definition lowering ────────────────────────────────
 
+# Map a type name (from GirFieldInfo) to an LIR type constant.
+int resolve_field_lir_type(String type_name, StructRegistry &sr):
+    if type_name == "int64_t" or type_name == "int":
+        return LT_I64
+    elif type_name == "int32_t":
+        return LT_I32
+    elif type_name == "int16_t":
+        return LT_I16
+    elif type_name == "int8_t":
+        return LT_I8
+    elif type_name == "uint64_t":
+        return LT_U64
+    elif type_name == "uint32_t":
+        return LT_U32
+    elif type_name == "uint16_t":
+        return LT_U16
+    elif type_name == "uint8_t":
+        return LT_U8
+    elif type_name == "double" or type_name == "float64":
+        return LT_F64
+    elif type_name == "float" or type_name == "float32":
+        return LT_F32
+    elif type_name == "bool":
+        return LT_BOOL
+    elif type_name == "void":
+        return LT_VOID
+    # Named types — look up in struct registry
+    int sid = sr_lookup(&sr, type_name)
+    if sid >= 0:
+        return LT_STRUCT_BASE + sid
+    # Fallback: treat as pointer (opaque or unresolved type)
+    return LT_PTR
+
 # Register user-defined structs and enums from the GIR type table.
 void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     # Two-pass registration: Pass 1 creates placeholder entries,
@@ -277,10 +310,69 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 pass
         ti += 1
 
-    # Pass 2: Fill in fields from GIR function metadata
-    # (The GIR module doesn't carry struct field info directly — it's
-    #  embedded in StructInit instructions and type annotations.
-    #  For now, fields are populated during instruction lowering.)
+    # Pass 1b: Ensure all types from type_infos have LIR struct entries
+    Vector[String] ti_keys = gmod.type_infos.keys()
+    int tki_pre = 0
+    while tki_pre < ti_keys.len():
+        String tname = ti_keys.get(tki_pre).unwrap()
+        if sr_lookup(&sr, tname) < 0:
+            Vector[StructField] empty_fields = []
+            String ph_name = tname.clone()
+            int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1))
+            sr_register(&sr, tname, sid)
+        tki_pre += 1
+
+    # Pass 2: Fill in struct/enum fields from GIR type info
+    int tki = 0
+    while tki < ti_keys.len():
+        String tname = ti_keys.get(tki).unwrap()
+        int sid = sr_lookup(&sr, tname)
+        if sid < 0:
+            tki += 1
+            continue
+        GirTypeInfo tinfo = gmod.type_infos.get(tname).unwrap()
+        LirStructDef sdef = m.structs.get(sid).unwrap()
+        # Only fill if placeholder (empty fields)
+        if sdef.fields.len() > 0:
+            tki += 1
+            continue
+        if tinfo.is_enum:
+            # Enum: tag (I32) + variant fields
+            Vector[StructField] efields = []
+            efields.push(StructField("tag", LT_I32))
+            int vi = 0
+            while vi < tinfo.variants.len():
+                GirEnumVariantInfo vinfo = tinfo.variants.get(vi).unwrap()
+                int vfi = 0
+                while vfi < vinfo.fields.len():
+                    GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
+                    String fname = vinfo.name + "_" + int_to_str(vfi)
+                    int fty = resolve_field_lir_type(finfo.type_name, &sr)
+                    efields.push(StructField(fname, fty))
+                    vfi += 1
+                vi += 1
+            bool is_union = efields.len() > 5
+            int ek = 0
+            if tname.starts_with("Option__"):
+                ek = 1
+            elif tname.starts_with("Result__"):
+                ek = 2
+            elif tinfo.variants.len() > 0:
+                ek = 3
+            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, -1)
+            m.structs.set(sid, new_sdef)
+        else:
+            # Struct: map fields
+            Vector[StructField] sfields = []
+            int sfi = 0
+            while sfi < tinfo.fields.len():
+                GirFieldInfo finfo = tinfo.fields.get(sfi).unwrap()
+                int fty = resolve_field_lir_type(finfo.type_name, &sr)
+                sfields.push(StructField(finfo.name, fty))
+                sfi += 1
+            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, -1)
+            m.structs.set(sid, new_sdef)
+        tki += 1
 
 # ── Runtime function name mapping ───────────────────────────
 
@@ -625,17 +717,11 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             pass
 
         case GIMoveZero(local_id):
-            # Zero-out the slot after move — will be replaced by drop elaboration
+            # Mark slot as moved — pure dataflow annotation (V6: no Memset for
+            # non-projected places). MoveSlot is swept by drop elaboration.
             int slot = local_to_slot.get(local_id).unwrap()
-            int addr = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotAddr(addr, slot))
-            # Emit memset(addr, 0, sizeof(type))
-            int zero = lir_fn_next_value(&f)
-            int size = lir_fn_next_value(&f)
-            blk.insts.push(IIConst(zero, LT_I32, 0))
-            blk.insts.push(IIConst(size, LT_I64, 8))
-            blk.insts.push(IMemset(addr, zero, size))
+            blk.insts.push(IMoveSlot(slot))
             f.blocks.set(bb, blk)
 
         case GINop():
