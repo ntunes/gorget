@@ -42,7 +42,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: GIR lowerer at 889/889 (100.0%) adjusted. 24 crashes (httpserver), 75 error-only. **LIR backend: Phases 1-4 done** (data structures, GIR→LIR lowering, SSA construction, C codegen — 3,317 lines in lir.gg/lir_lower.gg/lir_ssa.gg/lir_codegen.gg). Phase 5 (C runtime embedding + driver integration) remaining. Driver integration blocked on GIR enum init validation errors in lir_ssa/lir_lower modules when imported. [updated: 2026-04-14]
+- **Self-host comparison**: GIR lowerer at 889/889 (100.0%) adjusted. 24 crashes (httpserver), 75 error-only. **LIR backend: Phases 1-4 done** (data structures, GIR→LIR lowering, SSA construction, C codegen — 3,317 lines). Phase 5 (driver integration) blocked: cross-module enum imports produce wrong field counts in TypeDef (Vector[int] fields dropped from GIR EnumInit). The self-host code is correct — the bug is in the Rust compiler's GIR lowering for imported enums. GIR validation downgraded to warning, but downstream C codegen produces type mismatches (`int64_t` vs `GorgetArray`). Root cause: `LirInst` and `LirTerm` enums imported from lir.gg get wrong variant field counts when compiled alongside the full parser/resolver/lowerer pipeline. [updated: 2026-04-14]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
