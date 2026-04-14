@@ -8,7 +8,7 @@ from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, Spann
 from scope import ScopeTable
 from types import TypeTable
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
-from gir import Operand, GirType, GirExtern
+from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo
 from gir import BOOL_TYPE, I32_TYPE, I64_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
@@ -85,6 +85,40 @@ int prim_name_to_type(String name):
             return F32_TYPE
         else:
             return -1
+
+# Resolve a SpannedType to a type name string (for drop analysis).
+# Does NOT require GirModule — uses direct primitive and generic name resolution.
+String spanned_type_to_name(SpannedType stype):
+    match stype.ty:
+        case TPrimitive(name):
+            return prim_to_c_name(name)
+        case TNamed(name, targs):
+            if name == "String":
+                return "GorgetString"
+            if targs.len() == 0:
+                return name
+            String result = name
+            int i = 0
+            while i < targs.len():
+                SpannedType ta = targs.get(i).unwrap()
+                result = result + "__" + spanned_type_to_name(ta)
+                i += 1
+            return result
+        case TRef(inner):
+            return spanned_type_to_name(inner)
+        case TTuple(elems):
+            if elems.len() == 0:
+                return "void"
+            String result = "Tuple"
+            int i = 0
+            while i < elems.len():
+                SpannedType te = elems.get(i).unwrap()
+                result = result + "__" + spanned_type_to_name(te)
+                i += 1
+            return result
+        else:
+            pass
+    return "int64_t"
 
 String mangle_type_name(String name, Vector[SpannedType] targs, GirModule &gmod):
     # Mangle generic type names: Vector[int] → Vector__int64_t
@@ -2304,7 +2338,42 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tai += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns)
+    # Build type field info for LIR drop analysis
+    Dict[String, GirTypeInfo] type_infos = {}
+    int tfi = 0
+    while tfi < m.items.len():
+        Item tfi_item = m.items.get(tfi).unwrap()
+        match tfi_item:
+            case IStruct(sdef):
+                Vector[GirFieldInfo] fields = []
+                int ffi = 0
+                while ffi < sdef.fields.len():
+                    Param fld = sdef.fields.get(ffi).unwrap()
+                    String ftype_name = spanned_type_to_name(fld.param_type)
+                    fields.push(GirFieldInfo(fld.param_name, ftype_name))
+                    ffi += 1
+                Vector[GirEnumVariantInfo] no_variants = []
+                type_infos.put(sdef.name, GirTypeInfo(sdef.name, fields, no_variants, false))
+            case IEnum(edef):
+                Vector[GirFieldInfo] no_fields = []
+                Vector[GirEnumVariantInfo] variants = []
+                int evi = 0
+                while evi < edef.variants.len():
+                    EnumVariant var = edef.variants.get(evi).unwrap()
+                    Vector[GirFieldInfo] vfields = []
+                    int evfi = 0
+                    while evfi < var.fields.len():
+                        SpannedType vft = var.fields.get(evfi).unwrap()
+                        String vftype_name = spanned_type_to_name(vft)
+                        vfields.push(GirFieldInfo("_" + int_to_str(evfi), vftype_name))
+                        evfi += 1
+                    variants.push(GirEnumVariantInfo(var.name, vfields))
+                    evi += 1
+                type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
+            else:
+                pass
+        tfi += 1
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos)
 
     # Collect generic templates and discover instances
     Dict[String, FunctionDef] fn_templates = {}

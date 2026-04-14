@@ -5,6 +5,7 @@
 # explicit LIR instructions.
 
 from gir import GirModule, GirFunction, GirLocal, GirType, GirExtern, BasicBlock, Instruction, Terminator, Operand
+from gir import GirTypeInfo, GirFieldInfo, GirEnumVariantInfo
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
@@ -745,6 +746,103 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry 
 
     return f
 
+# ── Drop metadata population ────────────────────────────────
+
+# Determine the drop function name for a given type name.
+# Returns "" if the type doesn't need dropping.
+String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types):
+    if type_name == "GorgetString" or type_name == "Str":
+        return "gorget_string_free"
+    elif type_name == "GorgetArray":
+        return "gorget_array_free"
+    elif type_name == "GorgetMap":
+        return "gorget_map_free"
+    elif type_name == "GorgetSet":
+        return "gorget_set_free"
+    elif type_name == "GorgetClosure":
+        return "gorget_closure_free"
+    elif type_name.starts_with("Vector__") or type_name.starts_with("Deque__"):
+        return "gorget_array_free"
+    elif type_name.starts_with("Dict__") or type_name.starts_with("HashMap__"):
+        return "gorget_map_free"
+    elif type_name.starts_with("Set__") or type_name.starts_with("HashSet__"):
+        return "gorget_set_free"
+    elif type_name.starts_with("Box__"):
+        return "free"
+    elif resource_types.contains(type_name):
+        return type_name + "__drop"
+    return ""
+
+# Populate drop/clone metadata on the LirModule from GIR type info.
+void populate_drop_metadata(LirModule &m, GirModule &gmod):
+    # Pass 1: Struct field drops
+    Vector[String] type_keys = gmod.type_infos.keys()
+    int ki = 0
+    while ki < type_keys.len():
+        String type_name = type_keys.get(ki).unwrap()
+        GirTypeInfo info = gmod.type_infos.get(type_name).unwrap()
+        if info.is_enum:
+            ki += 1
+            continue
+        # Check if this struct has any droppable fields
+        Vector[FieldDrop] field_drops = []
+        int fi = 0
+        while fi < info.fields.len():
+            GirFieldInfo finfo = info.fields.get(fi).unwrap()
+            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types)
+            if drop_fn != "":
+                field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
+            fi += 1
+        if field_drops.len() > 0:
+            String tname = type_name
+            m.recursive_drop_structs.put(tname, field_drops)
+            # Also add to type_drop_fns for unified emission
+            String drop_fn_name = type_name + "__drop"
+            Vector[FieldDrop] fd_copy = []
+            int di = 0
+            while di < field_drops.len():
+                FieldDrop fd = field_drops.get(di).unwrap()
+                fd_copy.push(FieldDrop(fd.field_name, fd.drop_fn_name, fd.field_type_name))
+                di += 1
+            Vector[EnumVariantDrop] no_evd = []
+            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, fd_copy, "", no_evd))
+        ki += 1
+
+    # Pass 2: Enum variant drops
+    ki = 0
+    while ki < type_keys.len():
+        String type_name = type_keys.get(ki).unwrap()
+        GirTypeInfo info = gmod.type_infos.get(type_name).unwrap()
+        if not info.is_enum:
+            ki += 1
+            continue
+        Vector[EnumVariantDrop] variant_drops = []
+        int vi = 0
+        while vi < info.variants.len():
+            GirEnumVariantInfo vinfo = info.variants.get(vi).unwrap()
+            int vfi = 0
+            while vfi < vinfo.fields.len():
+                GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
+                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types)
+                if drop_fn != "":
+                    variant_drops.push(EnumVariantDrop(vi, vinfo.name, finfo.name, drop_fn, finfo.type_name))
+                vfi += 1
+            vi += 1
+        if variant_drops.len() > 0:
+            String tname = type_name
+            m.recursive_drop_enums.put(tname, variant_drops)
+            # Also add to type_drop_fns
+            String drop_fn_name = type_name + "__drop"
+            Vector[FieldDrop] no_fd = []
+            Vector[EnumVariantDrop] evd_copy = []
+            int di = 0
+            while di < variant_drops.len():
+                EnumVariantDrop evd = variant_drops.get(di).unwrap()
+                evd_copy.push(EnumVariantDrop(evd.variant_index, evd.variant_name, evd.field_name, evd.drop_fn_name, evd.field_type_name))
+                di += 1
+            m.type_drop_fns.put(type_name, TypeDropInfo(drop_fn_name, no_fd, "", evd_copy))
+        ki += 1
+
 # ── Module lowering (main entry point) ──────────────────────
 
 LirModule lower_gir_to_lir(GirModule &gmod):
@@ -756,6 +854,9 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 
     # Lower user-defined type definitions
     lower_type_defs(&gmod, &m, &sr)
+
+    # Populate drop/clone metadata from GIR type field info
+    populate_drop_metadata(&m, &gmod)
 
     # Build function index: name → FuncId
     Dict[String, int] func_index = {}

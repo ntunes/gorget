@@ -126,6 +126,21 @@ struct GirExtern:
 
 # ── Module ───────────────────────────────────────────────
 
+# Struct/enum field info for drop/clone analysis in LIR lowering.
+struct GirFieldInfo:
+    String name
+    String type_name  # resolved type name (e.g., "GorgetString", "Vector__int64_t")
+
+struct GirEnumVariantInfo:
+    String name
+    Vector[GirFieldInfo] fields
+
+struct GirTypeInfo:
+    String name
+    Vector[GirFieldInfo] fields          # struct fields
+    Vector[GirEnumVariantInfo] variants  # enum variants (empty for structs)
+    bool is_enum
+
 struct GirModule:
     Vector[GirFunction] functions
     Vector[GirExtern] externs
@@ -137,6 +152,7 @@ struct GirModule:
     Dict[String, String] meta_aliases
     Dict[String, String] call_redirects
     Dict[String, bool] imported_fns
+    Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
 
 # ── Helpers ──────────────────────────────────────────────
 
