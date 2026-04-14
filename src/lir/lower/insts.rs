@@ -25,6 +25,12 @@ impl<'a> FuncLowering<'a> {
                 if self.try_trait_object_construct(dst, value, bb) {
                     return;
                 }
+                // Special-case: primitive → Result/Option slot wrapping.
+                if dst.projections.is_empty() {
+                    if self.try_result_option_wrap(dst.local, value, bb) {
+                        return;
+                    }
+                }
                 let is_move = matches!(mode, ir::instructions::AssignMode::Move);
                 let val = self.lower_operand(value, bb);
                 if is_move && dst.projections.is_empty() {

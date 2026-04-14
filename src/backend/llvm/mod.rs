@@ -1505,34 +1505,8 @@ fn emit_function(
             }
         }
 
-        // Sentinel-based Option wrapping type override: when a CallExtern returns scalar
-        // but the result is stored into an Option slot, the emitter will construct an
-        // Option alloca (ptr) instead. Override the value type so SlotStore uses memcpy.
-        for inst in &block.insts {
-            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                let vid = d.0 as usize;
-                let is_scalar = val_types.get(vid).and_then(|t| t.as_ref())
-                    .map_or(false, |t| t.is_integer() || t.is_float());
-                if !is_scalar { continue; }
-                let skip = name.ends_with("__upgrade")
-                    || name.ends_with("__recv_timeout")
-                    || name.contains("try_parse");
-                if skip { continue; }
-                // Scan block for SlotStore of this value into an Option slot
-                for next in &block.insts {
-                    if let Inst::SlotStore { slot, value, .. } = next {
-                        if value.0 == d.0 {
-                            if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
-                                if module.structs.get(sid.0 as usize)
-                                    .map_or(false, |s| s.name.starts_with("Option__")) {
-                                    val_types[vid] = Some(LirType::PtrTo(*sid));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        // Primitive → Option/Result wrapping is handled by the LIR lowerer
+        // (explicit memset + tag + FieldPtr/Store sequence).
     }
 
     // Guard/shared value accessor type override: gorget_guard_get / gorget_shared_get

@@ -1661,45 +1661,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 write!(out, "memcpy(&{}, (void*){}, sizeof(GorgetClosure));", s(*slot), v(*value)).unwrap();
                 return;
             }
-            // Implicit Result::Ok / Option::Some wrapping: scalar or non-wrapper struct → Result/Option slot.
-            if let LirType::Struct(slot_sid) = slot_ty {
-                let slot_struct_name = module.structs.get(slot_sid.0 as usize).map(|sd| sd.name.as_str()).unwrap_or("");
-                let is_result_slot = slot_struct_name.starts_with("Result__");
-                let is_option_slot = slot_struct_name.starts_with("Option__");
-                if is_result_slot || is_option_slot {
-                    let val_is_same_wrapper = match val_ty {
-                        Some(LirType::Struct(val_sid)) => {
-                            let vn = module.structs.get(val_sid.0 as usize).map(|sd| sd.name.as_str()).unwrap_or("");
-                            (is_result_slot && vn.starts_with("Result__")) || (is_option_slot && vn.starts_with("Option__"))
-                        }
-                        _ => false,
-                    };
-                    // Only wrap when val_ty is a primitive numeric/bool type (not Ptr, not struct, not void/unknown).
-                    let val_is_primitive = matches!(val_ty, Some(
-                        LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
-                        | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64
-                        | LirType::F32 | LirType::F64 | LirType::Bool
-                    ));
-                    if !val_is_same_wrapper && val_is_primitive {
-                        let ty_name = c_type_named(slot_ty, sn);
-                        let payload_field = if is_result_slot {
-                            // Find Ok field name from struct def
-                            module.structs.get(slot_sid.0 as usize)
-                                .and_then(|sd| sd.fields.iter().find(|(n, _)| n.starts_with("Ok")))
-                                .map(|(n, _)| c_field_name(n))
-                                .unwrap_or_else(|| "Ok_0".to_string())
-                        } else {
-                            module.structs.get(slot_sid.0 as usize)
-                                .and_then(|sd| sd.fields.iter().find(|(n, _)| n.starts_with("Some")))
-                                .map(|(n, _)| c_field_name(n))
-                                .unwrap_or_else(|| "Some_0".to_string())
-                        };
-                        write!(out, "memset(&{s}, 0, sizeof({ty})); {s}.tag = 0; {s}.{f} = {val};",
-                            s = s(*slot), ty = ty_name, f = payload_field, val = v(*value)).unwrap();
-                        return;
-                    }
-                }
-            }
+            // Implicit Result::Ok / Option::Some wrapping for primitives is
+            // handled by the LIR lowerer (memset + tag + FieldPtr/Store sequence).
             if slot_is_str && is_str_lit_val {
                 // String literal → Str slot: direct assign (Phase 3 — static .rodata, zero alloc).
                 write!(out, "{} = {};", s(*slot), v(*value)).unwrap();

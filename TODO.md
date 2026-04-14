@@ -7,6 +7,8 @@
 
 - **`borrowed` qualifier for extern return types**: All extern function results are currently assumed owned. If we wrap a C library function returning a borrowed pointer (e.g., SDL_GetError's internal buffer), we need `extern borrowed String sdl_get_error()` to tell the compiler to auto-clone at the boundary. Currently these cases are handled by making the C wrapper return Str (copying internally). [added: 2026-04-03]
 
+- **`Inst::ClosurePack` — explicit closure→GorgetClosure coercion in LIR**: C and LLVM backends each have ~40 lines detecting `__Closure_N → GorgetClosure` slot stores and emitting heap-alloc + fn_ptr/env packing. This is a semantic decision that belongs in the LIR lowerer. Fix: add `Inst::ClosurePack { slot: SlotId, env_ptr: ValueId, call_func: FuncId }` — the operation that coerces a {function, env} pair into the GorgetClosure protocol (analogous to Rust's `fn → dyn Fn`). LIR lowerer emits malloc+memcpy for env then ClosurePack. Each backend gets a trivial match arm. Touches ~11 files: LIR enum, SSA, display, validate, optimize, drop_elab, both backends, self-host LIR def + SSA + codegen. [added: 2026-04-14]
+
 ## Medium
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 6 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks, struct+enum init). All work correctly — this is cleanup, not a bug. [demoted from High: 2026-04-12]

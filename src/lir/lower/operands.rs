@@ -770,6 +770,115 @@ impl<'a> FuncLowering<'a> {
         true
     }
 
+    /// Detect primitive → Result/Option slot stores and emit explicit wrapping:
+    /// memset to zero, set tag = 0 (Ok/Some), store payload into the Ok_0/Some_0 field.
+    /// Returns true if wrapping was emitted; false to fall through to normal store.
+    pub(super) fn try_result_option_wrap(
+        &mut self,
+        dst_local: ir::types::LocalId,
+        value: &Operand,
+        bb: BlockId,
+    ) -> bool {
+        let dst_idx = dst_local.0 as usize;
+        if dst_idx >= self.local_to_slot.len() { return false; }
+        let dst_slot = self.local_to_slot[dst_idx];
+        let slot_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
+
+        // Check if destination slot is a Result__ or Option__ struct.
+        let slot_sid = match &slot_ty {
+            LirType::Struct(sid) => *sid,
+            _ => return false,
+        };
+        let slot_name = self.module_structs.get(slot_sid.0 as usize)
+            .map(|s| s.name.as_str()).unwrap_or("");
+        let is_result = slot_name.starts_with("Result__");
+        let is_option = slot_name.starts_with("Option__");
+        if !is_result && !is_option { return false; }
+
+        // Check the source operand's GIR type — skip if already an Option/Result
+        // (e.g. int8_t__parse returns Option[int8] but GIR types the temp as I64;
+        // the C backend inlines the parse+range-check, so we must not re-wrap).
+        // Also skip when the GIR source type doesn't match the slot's payload type
+        // (e.g. I64 temp → Option__int8_t: the I64 is a sentinel-encoded Option,
+        // not a bare int to be wrapped).
+        if let Operand::Copy(place) | Operand::Move(place) = value {
+            let src_idx = place.local.0 as usize;
+            if place.projections.is_empty() && src_idx < self.gir_func.locals.len() {
+                let src_gir_ty = self.gir_func.locals[src_idx].type_id;
+                if let Some(GirType::Named(n)) = self.gir_types.get(src_gir_ty) {
+                    if n.starts_with("Option__") || n.starts_with("Result__") {
+                        return false;
+                    }
+                }
+                // Source GIR type maps to I64/F64 but destination is an Option/Result
+                // with a narrower payload (e.g. Option__int8_t): the I64 is a sentinel-
+                // encoded Option from a parse function, not a bare value to be wrapped.
+                let src_lir = self.map_type(&src_gir_ty);
+                if src_lir != self.map_type(&self.gir_func.locals[dst_idx].type_id) {
+                    // GIR source and dest types differ at the LIR level — this is a
+                    // normal store (possibly sentinel-encoded), not a primitive wrap.
+                    return false;
+                }
+            }
+        }
+
+        // Check the source operand's LIR type — only wrap primitives.
+        let src_lir_ty = self.operand_lir_type(value);
+        let is_primitive = matches!(src_lir_ty,
+            LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+            | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64
+            | LirType::F32 | LirType::F64 | LirType::Bool
+        );
+        if !is_primitive { return false; }
+
+        // Find the payload field index (Ok_0 or Some_0).
+        let prefix = if is_result { "Ok" } else { "Some" };
+        let payload_field_idx = self.module_structs.get(slot_sid.0 as usize)
+            .and_then(|sd| sd.fields.iter().enumerate()
+                .find(|(_, (n, _))| n.starts_with(prefix))
+                .map(|(i, _)| i as u32));
+        let payload_field_idx = match payload_field_idx {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        // Lower the value operand.
+        let val = self.lower_operand(value, bb);
+
+        // Get slot address.
+        let slot_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            dst: slot_addr, slot: dst_slot,
+        });
+
+        // 1. memset(&slot, 0, sizeof(slot)) — zero the whole struct.
+        let size = c_sizeof_lir_type(&slot_ty, self.module_structs) as i64;
+        let size_val = self.emit_i64_const(bb, size);
+        let zero_byte = self.emit_i32_const(bb, 0);
+        self.ensure_extern("memset", &[LirType::Ptr, LirType::I32, LirType::I64], &LirType::Ptr);
+        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            dst: None,
+            name: "memset".to_string(),
+            args: vec![slot_addr, zero_byte, size_val],
+            original_name: None, arg_abis: vec![],
+        });
+
+        // 2. Set tag = 0 (Ok/Some is always variant 0).
+        self.emit_enum_tag_store(slot_addr, slot_sid, 0, bb);
+
+        // 3. Store payload into the Ok_0/Some_0 field.
+        let payload_ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            dst: payload_ptr, base: slot_addr, struct_id: slot_sid,
+            field: payload_field_idx,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            ptr: payload_ptr, value: val,
+        });
+
+        true
+    }
+
     /// Emit instructions to set the tag field of an enum at `base` address.
     pub(super) fn emit_enum_tag_store(&mut self, base: ValueId, struct_id: StructId, tag_ordinal: usize, bb: BlockId) {
         let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
