@@ -131,6 +131,17 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
+                // Wrap with guard when conditional (value may have been moved).
+                if conditional {
+                    let guard_addr = self.lower_place_addr(place, bb);
+                    let byte_size = self.compute_place_byte_size(place);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                        args: vec![guard_addr],
+                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
                 let slot = self.local_to_slot[local_idx];
                 let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
 
@@ -228,20 +239,44 @@ impl<'a> FuncLowering<'a> {
                         original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 }
+                if conditional {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "__gorget_drop_if_alive_close".to_string(),
+                        args: vec![],
+                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
             }
             DropStrategy::Trivial(ref fn_name) => {
                 // Trivial drop: single free/cleanup call. fn_name(&place)
+                // Wrap with guard when conditional (value may have been moved).
                 let addr = self.lower_place_addr(place, bb);
-
-                // Self-cleaning: collections drop elements via elem_drop/val_drop.
-
+                if conditional {
+                    let byte_size = self.compute_place_byte_size(place);
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
+                        args: vec![addr],
+                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
+                let drop_addr = if conditional { self.lower_place_addr(place, bb) } else { addr };
                 if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
                     self.lir_func.block_mut(bb).insts.push(Inst::Call {
-                        dst: None, func: fid, args: vec![addr],
+                        dst: None, func: fid, args: vec![drop_addr],
                     });
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None, name: fn_name.clone(), args: vec![addr],
+                        dst: None, name: fn_name.clone(), args: vec![drop_addr],
+                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
+                if conditional {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None,
+                        name: "__gorget_drop_if_alive_close".to_string(),
+                        args: vec![],
                         original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 }

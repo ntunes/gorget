@@ -956,6 +956,7 @@ pub(super) fn lower_call(
         let pending: Vec<LocalId> = ctx.func_state.pending_move_zeros.drain(move_zero_baseline..).collect();
         for local in pending {
             builder.move_zero(Place::local(local));
+            ctx.drops.mark_moved(local);
         }
 
         result

@@ -143,6 +143,19 @@ pub(super) fn emit_call_extern(
                 return;
             }
 
+            // ── Drop flag guard (V3) ──
+            // __gorget_drop_flag_open(bool_val) → `if (val) {`
+            if name == "__gorget_drop_flag_open" {
+                if !args.is_empty() {
+                    write!(out, "if ({}) {{", v(args[0])).unwrap();
+                }
+                return;
+            }
+            if name == "__gorget_drop_flag_close" {
+                write!(out, "}}").unwrap();
+                return;
+            }
+
             // ── Builtin type casts ────────────────────────────────────────
             // `float`, `int`, `bool` are C keywords — can't emit as function calls.
             // Gorget's `float(x)`, `int(x)`, `bool(x)` are type casts. Emit inline C casts.

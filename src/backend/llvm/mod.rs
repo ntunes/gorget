@@ -3745,6 +3745,9 @@ fn emit_inst(
             }
         }
 
+        // ── MoveSlot (consumed by drop elaboration) ────────────────
+        Inst::MoveSlot { .. } => {}
+
         // ── Nop ─────────────────────────────────────────────────────
         Inst::Nop => {
             // nothing

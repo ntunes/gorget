@@ -263,6 +263,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write!(f, "]")
         }
 
+        Inst::MoveSlot { slot } => write!(f, "move_slot {slot}"),
         Inst::Nop => write!(f, "nop"),
         Inst::InlineC { dst, code } => {
             if let Some(d) = dst {

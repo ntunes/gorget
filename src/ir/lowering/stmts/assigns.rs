@@ -162,7 +162,16 @@ pub(super) fn lower_assign(
                         } else { false }
                     } else { false };
                     if !used_explicit_drop {
-                        builder.drop(Place::local(local_id));
+                        // Use DropIfAlive if the variable may have been moved
+                        // (e.g., pushed into a collection earlier).  MoveSlot
+                        // marks the slot as dead; DropIfAlive lets the drop
+                        // elaboration pass skip the drop when the slot is
+                        // provably uninitialized.
+                        if ctx.drops.is_moved(local_id) {
+                            builder.drop_if_alive(Place::local(local_id));
+                        } else {
+                            builder.drop(Place::local(local_id));
+                        }
                     }
                 }
                 // If this is a mutable capture pointer, write through the pointer
@@ -589,6 +598,7 @@ pub(super) fn lower_index_assign(
                 );
                 if !is_ptr {
                     builder.move_zero(Place::local(place.local));
+                    ctx.drops.mark_moved(place.local);
                 }
             }
         }

@@ -17,6 +17,14 @@ pub struct OptStats {
     pub branches_folded: usize,
     pub algebraic_simplified: usize,
     pub cse_eliminated: usize,
+    /// Guard instructions eliminated by the drop elaboration pass (V1).
+    pub drops_elaborated: usize,
+    /// Companion `Memset`-to-zero instructions removed after guard elimination (V2).
+    pub memsets_removed: usize,
+    /// Guard sequences replaced with bool drop flags (V3).
+    pub drop_flags_inserted: usize,
+    /// `MoveSlot` annotations consumed and removed (V4).
+    pub move_slots_removed: usize,
 }
 
 /// Run all optimization passes on an LIR module.
@@ -26,6 +34,20 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.dead_globals_eliminated = eliminate_dead_globals(module);
     for func in &mut module.functions {
         optimize_function(func, &mut stats);
+    }
+    // Drop elaboration (V1–V4).
+    // Runs after the main optimization loop so DCE has already cleaned up the LIR.
+    let elab = super::drop_elab::elaborate_drops(module);
+    stats.drops_elaborated = elab.guards_eliminated;
+    stats.memsets_removed = elab.memsets_removed;
+    stats.drop_flags_inserted = elab.flags_inserted;
+    stats.move_slots_removed = elab.move_slots_removed;
+    // Follow-up DCE to remove orphaned SlotAddr/IConst values left by deleted guards
+    // and Memsets.
+    if elab.total() > 0 || elab.flags_inserted > 0 {
+        for func in &mut module.functions {
+            stats.dead_instructions_eliminated += eliminate_dead_code(func);
+        }
     }
     stats
 }
@@ -369,6 +391,7 @@ fn has_side_effects(inst: &Inst) -> bool {
             | Inst::Trap { .. }
             | Inst::Printf { .. }
             | Inst::Fprintf { .. }
+            | Inst::MoveSlot { .. }
             | Inst::Nop
     )
 }
@@ -1213,8 +1236,8 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
         Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
         | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-        | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop
-        | Inst::InlineC { .. } => {}
+        | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
+        | Inst::Nop | Inst::InlineC { .. } => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }
         | Inst::Rem { lhs, rhs, .. } | Inst::Mod { lhs, rhs, .. } => {

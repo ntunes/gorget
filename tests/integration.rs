@@ -1175,6 +1175,17 @@ done",
 }
 
 #[test]
+fn drop_flag() {
+    run_gg(
+        "drop_flag.gg",
+        "\
+consumed: test (42)
+done
+done",
+    );
+}
+
+#[test]
 fn ownership_showcase() {
     run_gg(
         "ownership_showcase.gg",

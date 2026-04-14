@@ -2360,6 +2360,10 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, ");").unwrap();
         }
 
+        Inst::MoveSlot { .. } => {
+            // No-op: consumed by drop elaboration. Should not reach backend normally.
+        }
+
         Inst::Nop => {
             write!(out, "/* nop */;").unwrap();
         }

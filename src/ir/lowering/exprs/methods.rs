@@ -1846,6 +1846,7 @@ pub(super) fn lower_method_call(
         let pending: Vec<LocalId> = ctx.func_state.pending_move_zeros.drain(move_zero_baseline..).collect();
         for local in pending {
             builder.move_zero(Place::local(local));
+            ctx.drops.mark_moved(local);
         }
 
         // Track ViewOf provenance for view-returning builtin methods (slice, trim, etc.).

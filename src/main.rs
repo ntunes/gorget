@@ -499,10 +499,11 @@ fn try_build_ir(
         }
         if !no_opt {
             let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
-            eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd",
+            eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd, {} drops elab'd, {} memsets rm'd, {} flags, {} moves",
                 stats.dead_functions_eliminated, stats.dead_globals_eliminated,
                 stats.dead_instructions_eliminated, stats.constants_folded,
-                stats.copies_propagated);
+                stats.copies_propagated, stats.drops_elaborated, stats.memsets_removed,
+                stats.drop_flags_inserted, stats.move_slots_removed);
         }
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);

@@ -4,6 +4,7 @@
 //! vtable dispatch, closures, coercions) are explicit here.
 
 pub mod display;
+pub mod drop_elab;
 mod integration;
 pub mod lower;
 pub mod optimize;
@@ -315,6 +316,11 @@ pub enum Inst {
     /// that the GIR generates as raw C (e.g., `_x = (int64_t)_y.cap`).
     InlineC { dst: Option<ValueId>, code: String },
 
+    // ── Ownership ────────────────────────────────────────────────────
+    /// Marks a slot as moved (ownership transferred).  No runtime effect —
+    /// pure dataflow annotation consumed by the drop elaboration pass.
+    MoveSlot { slot: SlotId },
+
     // ── No-op (source mapping placeholder) ──────────────────────────
     Nop,
 }
@@ -326,7 +332,7 @@ impl Inst {
             Inst::SlotStore { .. } | Inst::Store { .. } | Inst::Memset { .. }
             | Inst::Memcpy { .. } | Inst::BoundsCheck { .. } | Inst::DivCheck { .. }
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
-            | Inst::Nop => None,
+            | Inst::MoveSlot { .. } | Inst::Nop => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -377,8 +383,8 @@ impl Inst {
             Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => vec![],
             Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
             | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
-            | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::Nop
-            | Inst::InlineC { .. } => vec![],
+            | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
+            | Inst::Nop | Inst::InlineC { .. } => vec![],
 
             Inst::Add { lhs, rhs, .. }
             | Inst::Sub { lhs, rhs, .. }

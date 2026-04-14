@@ -1099,12 +1099,18 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::MoveZero { place } => {
-                // Zero out a place after move. Emit memset(addr, 0, sizeof).
-                // For PtrTo(GorgetString) locals (pointer-wrapped strings), zero
-                // the POINTER SLOT (set to NULL), not the pointee. lower_place_addr
-                // for these does SlotLoad (returns pointer value), so memset would
-                // corrupt pointee.
+                // Mark a place as moved after ownership transfer.
+                // For simple (non-projected) places, emit MoveSlot (dataflow
+                // annotation) AND Memset (safety net — match-destructure on
+                // enums inside loops produces use-after-move that the borrow
+                // checker doesn't catch yet; the Memset zeroes the dead slot
+                // so subsequent matches see tag=0 instead of freed data).
+                // For projected places (field-level moves), emit Memset only.
                 let slot = self.local_to_slot[place.local.0 as usize];
+                if place.projections.is_empty() {
+                    self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot { slot });
+                }
+                // Emit Memset as safety net.
                 let is_ptr_slot = match &self.lir_func.slots[slot.0 as usize].ty {
                     LirType::PtrTo(sid) => self.struct_reg.lookup("GorgetString") == Some(*sid),
                     _ => false,
@@ -1117,12 +1123,9 @@ impl<'a> FuncLowering<'a> {
                     self.lower_place_addr(place, bb)
                 };
                 let zero = self.emit_i32_const(bb, 0);
-                // Resolve the actual type being zeroed, following projections.
                 let effective_ty = if place.projections.is_empty() {
-                    let slot_idx = place.local.0 as usize;
-                    self.lir_func.slots[self.local_to_slot[slot_idx].0 as usize].ty.clone()
+                    self.lir_func.slots[slot.0 as usize].ty.clone()
                 } else {
-                    // Follow projections to find the leaf type.
                     let mut gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
                     for proj in &place.projections {
                         match proj {
@@ -1132,10 +1135,7 @@ impl<'a> FuncLowering<'a> {
                             Projection::Deref => {
                                 gir_type = self.resolve_deref_gir_type_id(gir_type);
                             }
-                            Projection::Index(_) => {
-                                // Index projection: element type unknown at this level.
-                                break;
-                            }
+                            Projection::Index(_) => break,
                         }
                     }
                     self.map_type(&gir_type)
@@ -1485,22 +1485,14 @@ impl<'a> FuncLowering<'a> {
         } else { false }
     }
 
-    /// Zero a GIR local's LIR slot after ownership transfer (move).
-    /// Emits SlotAddr + Memset to prevent double-free at scope-exit drop.
+    /// Mark a GIR local's LIR slot as moved (ownership transferred).
+    /// Emits `MoveSlot` — a pure dataflow annotation with no runtime cost.
+    /// The drop elaboration pass uses this to determine slot liveness;
+    /// the scope-exit drop (now always `DropIfAlive` for moved locals)
+    /// is resolved statically by the elaboration pass.
     fn emit_move_zero_for_local(&mut self, local_idx: usize, bb: BlockId) {
         let slot = self.local_to_slot[local_idx];
-        let slot_ty = self.lir_func.slots[slot.0 as usize].ty.clone();
-        let byte_size = match &slot_ty {
-            LirType::Struct(_) => c_sizeof_lir_type(&slot_ty, &self.module_structs) as i64,
-            _ => crate::lir::types::scalar_size(&slot_ty).unwrap_or(8) as i64,
-        };
-        let addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: addr, slot });
-        let zero_val = self.emit_i32_const(bb, 0);
-        let size_val = self.emit_i64_const(bb, byte_size);
-        self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-            ptr: addr, byte: zero_val, size: size_val,
-        });
+        self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot { slot });
     }
 
     /// Emit post-call zeroing for all Move operands in a call's argument list.

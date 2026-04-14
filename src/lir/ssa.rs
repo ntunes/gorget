@@ -516,6 +516,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::StrLit { .. }
         | Inst::ParamRef { .. }
         | Inst::Trap { .. }
+        | Inst::MoveSlot { .. }
         | Inst::Nop | Inst::InlineC { .. } => {}
     }
 }

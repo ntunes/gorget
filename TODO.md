@@ -36,7 +36,7 @@
 
 - **Remove GIR MoveZero emissions for borrow-wrapped call args**: C runtime safety nets and `arg_owners` removed. GIR MoveZero retained for args behind borrow ptrs (field loads, MutPtr params) — the LIR `emit_post_call_zeros` only reaches direct `Operand::Move` args. Removing these requires either flattening the borrow indirection or a drop elaboration pass. [updated: 2026-04-13]
 
-- **Drop elaboration pass — replace zeroing with static analysis**: Rust-inspired dataflow-based drop elaboration on LIR. Compute MaybeInitialized/MaybeUninitialized at each program point. Definitely-moved drops deleted, conditionally-moved get stack-local bool drop flags. Eliminates all post-move zeroing and DropIfAlive runtime guards. Major project (~3000 lines in Rust). [added: 2026-04-13]
+- **Drop elaboration V6 — eliminate `Instruction::MoveZero` Memsets**: V5 removed Memsets from `emit_move_zero_for_local` (consuming-arg moves). `Instruction::MoveZero` retains Memset alongside MoveSlot. Match-in-loop is NOT the issue (liveness two-pass correctly prevents destructive match when scrutinee is reused). The actual blocker is a subtle double-free in xtd/dataframe.gg `GroupBy__agg()` — likely a dict get/set aliasing bug or Option unwrap ownership issue that the Memset masks. **Next step**: ASan build on macOS to pinpoint the exact allocation, fix the runtime bug, then remove the Memset. [updated: 2026-04-13]
 
 ## Low
 
