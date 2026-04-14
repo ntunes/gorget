@@ -1,0 +1,9 @@
+# Local module that defines parse_float with a DIFFERENT signature
+# (non-throws, returns float directly). Must not shadow the stdlib
+# parse_float imported via `from std.conv import parse_float` in main.
+
+float parse_float(String s):
+    return 0.0
+
+int parse_int(String s):
+    return 0

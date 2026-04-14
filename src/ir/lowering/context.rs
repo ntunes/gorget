@@ -357,6 +357,10 @@ pub struct LoweringContext<'a> {
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
     pub runtime_callees: FxHashMap<String, String>,
+    /// Maps callee span start → mangled function name for cross-module calls.
+    /// Built from resolution_map + module_fn_manglings so that call lowering
+    /// uses the correct target when multiple modules define the same bare name.
+    pub call_resolved_names: FxHashMap<usize, String>,
 }
 
 
@@ -396,6 +400,7 @@ impl<'a> LoweringContext<'a> {
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),
             runtime_callees: FxHashMap::default(),
+            call_resolved_names: FxHashMap::default(),
         }
     }
 

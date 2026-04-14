@@ -1565,6 +1565,11 @@ fn modules_pkg() {
 }
 
 #[test]
+fn modules_import_shadow() {
+    run_gg_dir("modules_import_shadow", "main.gg", "ok\n42\ndone");
+}
+
+#[test]
 fn self_host_lexer() {
     run_gg_dir(
         "self_host_lexer",

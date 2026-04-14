@@ -1,0 +1,26 @@
+# Regression test: cross-module import must not be shadowed by a
+# same-named function in a sibling module.
+#
+# local_math.gg defines plain `float parse_float(String)` (non-throws).
+# main.gg imports `from std.conv import parse_float` which IS throws and
+# returns Result[float, String].  If the GIR lowerer picks the wrong
+# target, the Result wrapping is lost and compilation fails.
+
+from std.conv import parse_float, parse_int
+
+void main():
+    Result[float, String] r = parse_float("3.14")
+    match r:
+        case Ok(v):
+            print("ok")
+        case Error(e):
+            print("err")
+
+    Result[int, String] ri = parse_int("42")
+    match ri:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print("err")
+
+    print("done")

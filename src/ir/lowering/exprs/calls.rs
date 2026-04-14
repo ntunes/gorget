@@ -709,6 +709,16 @@ pub(super) fn lower_call(
             name.clone()
         };
 
+        // Cross-module resolution: when the semantic resolver mapped this call site
+        // to a specific module-qualified function, use the mangled name.  This prevents
+        // bare-name collisions when multiple modules define the same function name
+        // (e.g., `parse_float` in both std.conv and game.entity_parser).
+        let effective_name = if let Some(resolved) = ctx.call_resolved_names.get(&callee.span.start) {
+            resolved.clone()
+        } else {
+            effective_name
+        };
+
         // Check if this is an Option/Result variant constructor — resolve with type-aware logic
         {
             let call_arg_values: Vec<Spanned<Expr>> = args.iter()

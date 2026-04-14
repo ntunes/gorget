@@ -764,6 +764,18 @@ pub fn lower_module(
         }
     }
 
+    // Build call_resolved_names: for each entry in resolution_map that points to a
+    // module-mangled function, record call_span → mangled_name.  This lets call lowering
+    // pick the correct target when multiple modules define the same bare function name.
+    for (&call_span_start, &def_id) in &analysis.resolution_map {
+        let def_info = analysis.scopes.get_def(def_id);
+        if def_info.kind == crate::semantic::scope::DefKind::Function {
+            if let Some(mangled) = module_fn_manglings.get(&def_info.span.start) {
+                ctx.call_resolved_names.insert(call_span_start, mangled.clone());
+            }
+        }
+    }
+
     // Register monomorphized function signatures
     generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
