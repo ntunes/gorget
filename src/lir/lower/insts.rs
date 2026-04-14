@@ -98,20 +98,95 @@ impl<'a> FuncLowering<'a> {
             Instruction::Cmp {
                 dst,
                 op,
-                type_id: _,
+                type_id,
                 lhs,
                 rhs,
             } => {
-                let l = self.lower_operand(lhs, bb);
-                let r = self.lower_operand(rhs, bb);
-                let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
-                    dst: result,
-                    op: map_cmp_op(*op),
-                    lhs: l,
-                    rhs: r,
-                });
-                self.store_to_local(*dst, result, bb);
+                // Check if either operand is Null — that's a pointer null-check
+                // (e.g. Option unwrap), not a string content comparison.
+                let has_null = matches!(lhs, Operand::Constant(Constant::Null))
+                    || matches!(rhs, Operand::Constant(Constant::Null));
+                let is_string_type = match self.gir_types.get(*type_id) {
+                    Some(GirType::Named(name)) if name == "GorgetString" => true,
+                    Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                        matches!(self.gir_types.get(*inner), Some(GirType::Named(n)) if n == "GorgetString")
+                    }
+                    _ => false,
+                };
+                let is_string = is_string_type && !has_null;
+
+                if is_string {
+                    let l = self.lower_operand(lhs, bb);
+                    let r = self.lower_operand(rhs, bb);
+                    let lir_op = map_cmp_op(*op);
+                    let str_ty = self.struct_reg.lookup("GorgetString")
+                        .map(LirType::Struct).unwrap_or(LirType::Ptr);
+
+                    match lir_op {
+                        CmpOp::Eq | CmpOp::Ne => {
+                            // gorget_str_eq(lhs, rhs) → bool
+                            self.ensure_extern("gorget_str_eq",
+                                &[str_ty.clone(), str_ty.clone()], &LirType::Bool);
+                            let abis = self.pending_externs.iter()
+                                .find(|e| e.name == "gorget_str_eq")
+                                .map(|e| e.param_abis.clone())
+                                .unwrap_or_default();
+                            let eq_result = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                dst: Some(eq_result),
+                                name: "gorget_str_eq".to_string(),
+                                args: vec![l, r],
+                                original_name: None, arg_abis: abis,
+                            });
+                            if lir_op == CmpOp::Ne {
+                                let not_result = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::Not {
+                                    dst: not_result,
+                                    operand: eq_result,
+                                });
+                                self.store_to_local(*dst, not_result, bb);
+                            } else {
+                                self.store_to_local(*dst, eq_result, bb);
+                            }
+                        }
+                        _ => {
+                            // gorget_str_cmp(lhs, rhs) → int, then compare with 0
+                            self.ensure_extern("gorget_str_cmp",
+                                &[str_ty.clone(), str_ty.clone()], &LirType::I64);
+                            let abis = self.pending_externs.iter()
+                                .find(|e| e.name == "gorget_str_cmp")
+                                .map(|e| e.param_abis.clone())
+                                .unwrap_or_default();
+                            let cmp_result = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                dst: Some(cmp_result),
+                                name: "gorget_str_cmp".to_string(),
+                                args: vec![l, r],
+                                original_name: None, arg_abis: abis,
+                            });
+                            let zero = self.emit_i64_const(bb, 0);
+                            let result = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                                dst: result,
+                                op: lir_op,
+                                lhs: cmp_result,
+                                rhs: zero,
+                            });
+                            self.store_to_local(*dst, result, bb);
+                        }
+                    }
+                } else {
+                    let l = self.lower_operand(lhs, bb);
+                    let r = self.lower_operand(rhs, bb);
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                        dst: result,
+                        op: map_cmp_op(*op),
+                        lhs: l,
+                        rhs: r,
+                    });
+                    self.store_to_local(*dst, result, bb);
+                }
             }
 
             Instruction::Cast {

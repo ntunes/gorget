@@ -2209,48 +2209,9 @@ fn emit_inst(
             }
         }
 
-        // ── Comparison & Logic ──────────────────────────────────────
+        // ── Comparison & Logic (purely scalar — string comparisons are lowered
+        // to CallExtern(gorget_str_eq/gorget_str_cmp) by the LIR lowerer) ────
         Inst::Cmp { dst, op, lhs, rhs } => {
-            // Detect Str-typed operands for string comparison via gorget_str_eq.
-            let is_str_val = |vid: &ValueId| -> bool {
-                match val_types.get(vid.0 as usize).and_then(|t| t.as_ref()) {
-                    Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
-                        snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str")
-                    }
-                    _ => false,
-                }
-            };
-            let lhs_str = is_str_val(lhs);
-            let rhs_str = is_str_val(rhs);
-            // Use gorget_str_eq for string content comparison (not pointer equality).
-            // Require BOTH operands to be strings — if only one is a string, this is a
-            // null-pointer check (e.g. gorget_array_safe_pop result vs null constant).
-            // Calling gorget_str_eq with a null arg would dereference address 0 → crash.
-            if (lhs_str && rhs_str) && !matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge) {
-                // Call gorget_str_eq(Str a, Str b) → bool
-                // Both args are ptrs to GorgetString — pass as-is (Str is >16 bytes → indirect)
-                let result = format!("strcmpres.{}.{}", dst.0, lhs.0);
-                writeln!(out, "  %{result} = call i1 @gorget_str_eq(ptr %v{}, ptr %v{})", lhs.0, rhs.0).unwrap();
-                if matches!(op, CmpOp::Eq) {
-                    writeln!(out, "  %v{} = add i1 0, %{result}", dst.0).unwrap();
-                } else {
-                    // Ne
-                    writeln!(out, "  %v{} = xor i1 %{result}, 1", dst.0).unwrap();
-                }
-            } else if lhs_str && rhs_str {
-                // Ordering comparison: gorget_str_cmp returns i32 (-1, 0, 1)
-                // Only when BOTH operands are strings — see note above about null checks.
-                let cmp_result = format!("strcmpord.{}.{}", dst.0, lhs.0);
-                let cmp_ext = format!("strcmpext.{}.{}", dst.0, lhs.0);
-                writeln!(out, "  %{cmp_result} = call i32 @gorget_str_cmp(ptr %v{}, ptr %v{})", lhs.0, rhs.0).unwrap();
-                writeln!(out, "  %{cmp_ext} = sext i32 %{cmp_result} to i64").unwrap();
-                let icmp_op = match op {
-                    CmpOp::Lt => "slt", CmpOp::Le => "sle",
-                    CmpOp::Gt => "sgt", CmpOp::Ge => "sge",
-                    _ => unreachable!(),
-                };
-                writeln!(out, "  %v{} = icmp {icmp_op} i64 %{cmp_ext}, 0", dst.0).unwrap();
-            } else {
             // Determine operand type from val_types
             let lhs_ty = val_types.get(lhs.0 as usize).and_then(|t| t.as_ref());
             let rhs_ty = val_types.get(rhs.0 as usize).and_then(|t| t.as_ref());
@@ -2310,7 +2271,6 @@ fn emit_inst(
                 };
                 writeln!(out, "  %v{} = icmp {icmp_op} {lty} %v{}, {rhs_name}", dst.0, lhs.0).unwrap();
             }
-            } // close string comparison else
         }
         Inst::Not { dst, operand } => {
             writeln!(out, "  %v{} = xor i1 %v{}, 1", dst.0, operand.0).unwrap();

@@ -1933,77 +1933,18 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{} = {} >> {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
         }
 
-        // Comparison & logic
+        // Comparison & logic (purely scalar — string comparisons are lowered
+        // to CallExtern(gorget_str_eq/gorget_str_cmp) by the LIR lowerer).
         Inst::Cmp { dst, op, lhs, rhs } => {
-            // Detect Str-typed operands for string comparison.
-            let is_str = |vid: &ValueId| -> bool {
-                if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) { return true; }
-                if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
-                    if let LirType::Struct(sid) = pt {
-                        let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
-                        if name == "Str" || name == "GorgetString" { return true; }
-                    }
-                }
-                if let Some(Some(LirType::Struct(sid))) = val_types.get(vid.0 as usize) {
-                    let name = sn.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
-                    if name == "Str" || name == "GorgetString" { return true; }
-                }
-                false
+            let c_op = match op {
+                CmpOp::Eq => "==",
+                CmpOp::Ne => "!=",
+                CmpOp::Lt => "<",
+                CmpOp::Le => "<=",
+                CmpOp::Gt => ">",
+                CmpOp::Ge => ">=",
             };
-            let lhs_str = is_str(lhs);
-            let rhs_str = is_str(rhs);
-            // Don't use string comparison when either operand is null —
-            // this is a pointer null-check (e.g., from GIR-level Option wrapping),
-            // not a string equality test.
-            let lhs_null = null_vals.get(lhs.0 as usize).copied().unwrap_or(false);
-            let rhs_null = null_vals.get(rhs.0 as usize).copied().unwrap_or(false);
-            if (lhs_str || rhs_str) && !lhs_null && !rhs_null {
-                // String comparison — wrap operands into Str values for gorget_str_eq/gorget_str_cmp.
-                let wrap = |vid: &ValueId| -> String {
-                    if str_lit_vals.get(vid.0 as usize).copied().unwrap_or(false) {
-                        // StrLit values are already valid Str (from static .rodata).
-                        format!("{v}", v = v(*vid))
-                    } else if let Some(Some(pt)) = ptr_pointee.get(vid.0 as usize) {
-                        if pt.is_aggregate() {
-                            // Known Ptr-to-Str slot — dereference.
-                            format!("(*(Str*){v})", v = v(*vid))
-                        } else {
-                            v(*vid)
-                        }
-                    } else if is_str_ptr_opt(val_types.get(vid.0 as usize).and_then(|t| t.as_ref()), module) {
-                        // PtrTo(Str) value (e.g., from Option unwrap) — deref to Str.
-                        format!("(*(Str*){v})", v = v(*vid))
-                    } else {
-                        v(*vid)
-                    }
-                };
-                let lhs_c = wrap(lhs);
-                let rhs_c = wrap(rhs);
-                match op {
-                    CmpOp::Eq => write!(out, "{} = gorget_str_eq({}, {});", v(*dst), lhs_c, rhs_c).unwrap(),
-                    CmpOp::Ne => write!(out, "{} = !gorget_str_eq({}, {});", v(*dst), lhs_c, rhs_c).unwrap(),
-                    _ => {
-                        let c_op = match op {
-                            CmpOp::Lt => "<",
-                            CmpOp::Le => "<=",
-                            CmpOp::Gt => ">",
-                            CmpOp::Ge => ">=",
-                            _ => unreachable!(),
-                        };
-                        write!(out, "{} = gorget_str_cmp({}, {}) {} 0;", v(*dst), lhs_c, rhs_c, c_op).unwrap();
-                    }
-                }
-            } else {
-                let c_op = match op {
-                    CmpOp::Eq => "==",
-                    CmpOp::Ne => "!=",
-                    CmpOp::Lt => "<",
-                    CmpOp::Le => "<=",
-                    CmpOp::Gt => ">",
-                    CmpOp::Ge => ">=",
-                };
-                write!(out, "{} = {} {} {};", v(*dst), v(*lhs), c_op, v(*rhs)).unwrap();
-            }
+            write!(out, "{} = {} {} {};", v(*dst), v(*lhs), c_op, v(*rhs)).unwrap();
         }
         Inst::Not { dst, operand } => {
             write!(out, "{} = !{};", v(*dst), v(*operand)).unwrap();
