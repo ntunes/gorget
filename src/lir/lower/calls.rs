@@ -442,6 +442,13 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
             sig(vec![LirType::Ptr, LirType::I64], LirType::F64, vec![Ptr, Scalar])
         }
 
+        // Memory allocation / deallocation (used by arena, pool, closure heap-alloc)
+        "malloc" => sig(vec![LirType::I64], LirType::Ptr, vec![Scalar]),
+        "memset" => sig(vec![LirType::Ptr, LirType::I32, LirType::I64], LirType::Ptr, vec![Opaque, Scalar, Scalar]),
+        "__gorget_alloc" => sig(vec![LirType::Ptr], LirType::Ptr, vec![Opaque]),
+        "__gorget_alloc_array" => sig(vec![LirType::I64, LirType::Ptr], LirType::Ptr, vec![Scalar, Opaque]),
+        "__gorget_dealloc" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Opaque, Opaque]),
+
         _ => None,
     }
 }

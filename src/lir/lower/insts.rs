@@ -77,17 +77,23 @@ impl<'a> FuncLowering<'a> {
                     // Emit: result = gorget_array_clone(&lhs); gorget_array_extend(&result, &rhs);
                     // The c_lir backend handles &-address-of via arg_abis (AbiKind::Ptr).
                     let result = self.lir_func.next_value();
+                    let arr_ty = self.struct_reg.lookup("GorgetArray")
+                        .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                    self.ensure_extern("gorget_array_clone", &[LirType::Ptr], &arr_ty);
+                    let abis = self.lookup_arg_abis("gorget_array_clone");
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(result),
                         name: "gorget_array_clone".to_string(),
                         args: vec![l],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
+                    self.ensure_extern("gorget_array_extend", &[LirType::Ptr, LirType::Ptr], &LirType::Void);
+                    let abis = self.lookup_arg_abis("gorget_array_extend");
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None,
                         name: "gorget_array_extend".to_string(),
                         args: vec![result, r],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else {
@@ -145,10 +151,7 @@ impl<'a> FuncLowering<'a> {
                             // gorget_str_eq(lhs, rhs) → bool
                             self.ensure_extern("gorget_str_eq",
                                 &[str_ty.clone(), str_ty.clone()], &LirType::Bool);
-                            let abis = self.pending_externs.iter()
-                                .find(|e| e.name == "gorget_str_eq")
-                                .map(|e| e.param_abis.clone())
-                                .unwrap_or_default();
+                            let abis = self.lookup_arg_abis("gorget_str_eq");
                             let eq_result = self.lir_func.next_value();
                             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                 dst: Some(eq_result),
@@ -171,10 +174,7 @@ impl<'a> FuncLowering<'a> {
                             // gorget_str_cmp(lhs, rhs) → int, then compare with 0
                             self.ensure_extern("gorget_str_cmp",
                                 &[str_ty.clone(), str_ty.clone()], &LirType::I64);
-                            let abis = self.pending_externs.iter()
-                                .find(|e| e.name == "gorget_str_cmp")
-                                .map(|e| e.param_abis.clone())
-                                .unwrap_or_default();
+                            let abis = self.lookup_arg_abis("gorget_str_cmp");
                             let cmp_result = self.lir_func.next_value();
                             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                 dst: Some(cmp_result),
@@ -266,27 +266,29 @@ impl<'a> FuncLowering<'a> {
                         // Ptr source (const char*) → GorgetString: wrap directly with gorget_str_from_cstr.
                         let str_ty = self.struct_reg.lookup("GorgetString")
                             .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
+                        let abis = self.lookup_arg_abis("gorget_str_from_cstr");
                         let cstr_result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(cstr_result),
                             name: "gorget_str_from_cstr".to_string(),
                             args: vec![val],
-                            original_name: None, arg_abis: vec![],
+                            original_name: None, arg_abis: abis,
                         });
-                        self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
                         self.store_to_local(*dst, cstr_result, bb);
                     } else if is_str_source {
                         // String → String: no-op cast. Clone the source to produce an owned copy.
                         // val is a Ptr (SlotAddr) since GorgetString is an aggregate.
                         let str_ty = str_sid.map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        self.ensure_extern("gorget_string_clone", &[LirType::Ptr], &str_ty);
+                        let abis = self.lookup_arg_abis("gorget_string_clone");
                         let clone_result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(clone_result),
                             name: "gorget_string_clone".to_string(),
                             args: vec![val],
-                            original_name: None, arg_abis: vec![],
+                            original_name: None, arg_abis: abis,
                         });
-                        self.ensure_extern("gorget_string_clone", &[LirType::Ptr], &str_ty);
                         self.store_to_local(*dst, clone_result, bb);
                     } else {
                     let conv_fn = if is_int {
@@ -299,16 +301,17 @@ impl<'a> FuncLowering<'a> {
                         // Unknown source — use int_to_str as best-effort fallback.
                         "gorget_int_to_str"
                     };
+                    let str_ty = if let Some(sid) = self.struct_reg.lookup("Str") { LirType::Struct(sid) } else { LirType::Ptr };
+                    self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &str_ty);
+                    let abis = self.lookup_arg_abis(conv_fn);
                     // Emit CallExtern to the conversion function (returns const char*).
                     let cstr_result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(cstr_result),
                         name: conv_fn.to_string(),
                         args: vec![val],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
-                    let str_ty = if let Some(sid) = self.struct_reg.lookup("Str") { LirType::Struct(sid) } else { LirType::Ptr };
-                    self.ensure_extern(conv_fn, &[if is_float { LirType::F64 } else if is_bool { LirType::Bool } else { LirType::I64 }], &str_ty);
                     // The result is a Str struct (returned by gorget_string_adopt in the C runtime).
                     self.store_to_local(*dst, cstr_result, bb);
                     } // close else (non-ptr/non-str) branch
@@ -338,10 +341,7 @@ impl<'a> FuncLowering<'a> {
                             .map(LirType::Struct).unwrap_or(LirType::Ptr);
                         self.ensure_extern("gorget_str_ord",
                             &[str_ty], &LirType::I64);
-                        let abis = self.pending_externs.iter()
-                            .find(|e| e.name == "gorget_str_ord")
-                            .map(|e| e.param_abis.clone())
-                            .unwrap_or_default();
+                        let abis = self.lookup_arg_abis("gorget_str_ord");
                         let ord_result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(ord_result),
@@ -799,12 +799,13 @@ impl<'a> FuncLowering<'a> {
                         vec![LirType::Ptr, LirType::I64, LirType::I64]
                     };
                     self.ensure_extern(fn_name, &arg_types, &ret_ty);
+                    let abis = self.lookup_arg_abis(fn_name);
                     let result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(result),
                         name: fn_name.to_string(),
                         args: vec![base_val, start, end],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_str {
@@ -815,12 +816,13 @@ impl<'a> FuncLowering<'a> {
                         .map(LirType::Struct).unwrap_or(LirType::Ptr);
                     // Return type is Str by value (the C function returns Str, not Ptr).
                     self.ensure_extern("gorget_str_index", &[str_ty.clone(), LirType::I64], &str_ty);
+                    let abis = self.lookup_arg_abis("gorget_str_index");
                     let result = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(result),
                         name: "gorget_str_index".to_string(),
                         args: vec![base_val, idx],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
                     self.store_to_local(*dst, result, bb);
                 } else if is_array || is_dict {
@@ -846,12 +848,13 @@ impl<'a> FuncLowering<'a> {
                     let idx = self.lower_operand(index, bb);
                     let fn_name = if is_dict { "gorget_map_get" } else { "gorget_array_get" };
                     self.ensure_extern(fn_name, &[LirType::Ptr, LirType::I64], &LirType::Ptr);
+                    let abis = self.lookup_arg_abis(fn_name);
                     let ptr_val = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: Some(ptr_val),
                         name: fn_name.to_string(),
                         args: vec![base_val, idx],
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
                     // gorget_array_get / gorget_map_get return void* pointing to the element.
                     // If dst is Ptr(T), return the raw pointer (borrowed reference).
@@ -914,12 +917,13 @@ impl<'a> FuncLowering<'a> {
                         };
                         let ret_ty = elem_ty.clone();
                         self.ensure_extern(actual_fn, &[LirType::Ptr], &ret_ty);
+                        let abis = self.lookup_arg_abis(actual_fn);
                         let result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(result),
                             name: actual_fn.to_string(),
                             args: vec![ptr_val],
-                            original_name: None, arg_abis: vec![],
+                            original_name: None, arg_abis: abis,
                         });
                         self.store_to_local(*dst, result, bb);
                     } else {
@@ -931,12 +935,13 @@ impl<'a> FuncLowering<'a> {
                             let clone_fn = format!("{elem_type_name}__clone");
                             let ret_ty = elem_ty.clone();
                             self.ensure_extern(&clone_fn, &[LirType::Ptr], &ret_ty);
+                            let abis = self.lookup_arg_abis(&clone_fn);
                             let result = self.lir_func.next_value();
                             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                 dst: Some(result),
                                 name: clone_fn,
                                 args: vec![ptr_val],
-                                original_name: None, arg_abis: vec![],
+                                original_name: None, arg_abis: abis,
                             });
                             self.store_to_local(*dst, result, bb);
                         } else {
@@ -1309,12 +1314,14 @@ impl<'a> FuncLowering<'a> {
             } => {
                 // Placeholder: lower as CallExtern to malloc-like.
                 let alloc = self.lower_operand(allocator, bb);
+                self.ensure_extern("__gorget_alloc", &[LirType::Ptr], &LirType::Ptr);
+                let abis = self.lookup_arg_abis("__gorget_alloc");
                 let result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: Some(result),
                     name: "__gorget_alloc".into(),
                     args: vec![alloc],
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -1327,12 +1334,14 @@ impl<'a> FuncLowering<'a> {
             } => {
                 let cnt = self.lower_operand(count, bb);
                 let alloc = self.lower_operand(allocator, bb);
+                self.ensure_extern("__gorget_alloc_array", &[LirType::I64, LirType::Ptr], &LirType::Ptr);
+                let abis = self.lookup_arg_abis("__gorget_alloc_array");
                 let result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: Some(result),
                     name: "__gorget_alloc_array".into(),
                     args: vec![cnt, alloc],
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
                 self.store_to_local(*dst, result, bb);
             }
@@ -1340,19 +1349,23 @@ impl<'a> FuncLowering<'a> {
             Instruction::Dealloc { ptr, allocator } => {
                 let p = self.lower_operand(ptr, bb);
                 let a = self.lower_operand(allocator, bb);
+                self.ensure_extern("__gorget_dealloc", &[LirType::Ptr, LirType::Ptr], &LirType::Void);
+                let abis = self.lookup_arg_abis("__gorget_dealloc");
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_dealloc".into(),
                     args: vec![p, a],
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
             }
 
             Instruction::LoadThreadLocal { dst, name } => {
+                let tls_name = format!("__gorget_tls_{name}");
+                self.ensure_extern(&tls_name, &[], &LirType::Ptr);
                 let result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: Some(result),
-                    name: format!("__gorget_tls_{name}"),
+                    name: tls_name,
                     args: vec![],
                     original_name: None, arg_abis: vec![],
                 });
@@ -1361,15 +1374,18 @@ impl<'a> FuncLowering<'a> {
 
             Instruction::PushAllocator { allocator } => {
                 let alloc = self.lower_operand(allocator, bb);
+                self.ensure_extern("__gorget_push_allocator", &[LirType::Ptr], &LirType::Void);
+                let abis = self.lookup_arg_abis("__gorget_push_allocator");
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_push_allocator".into(),
                     args: vec![alloc],
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
             }
 
             Instruction::PopAllocator => {
+                self.ensure_extern("__gorget_pop_allocator", &[], &LirType::Void);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: "__gorget_pop_allocator".into(),
@@ -1523,11 +1539,19 @@ impl<'a> FuncLowering<'a> {
                         args: lir_args,
                     });
                 } else {
+                    let arg_types: Vec<LirType> = args.iter()
+                        .map(|a| self.operand_lir_type(a)).collect();
+                    let ret_ty = dst.map(|d| {
+                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        self.map_type(&gir_ty)
+                    }).unwrap_or(LirType::Void);
+                    self.ensure_extern(func, &arg_types, &ret_ty);
+                    let abis = self.lookup_arg_abis(func);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: result,
                         name: func.clone(),
                         args: lir_args,
-                        original_name: None, arg_abis: vec![],
+                        original_name: None, arg_abis: abis,
                     });
                 }
 
@@ -1866,11 +1890,12 @@ impl<'a> FuncLowering<'a> {
                 let mut arg_types: Vec<LirType> = args.iter().map(|a| self.operand_lir_type(a)).collect();
                 arg_types.push(LirType::Ptr);
                 self.ensure_extern(&to_name, &arg_types, &LirType::Void);
+                let abis = self.lookup_arg_abis(&to_name);
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: None,
                     name: to_name,
                     args: lir_args,
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
                 return;
             }
@@ -1933,10 +1958,7 @@ impl<'a> FuncLowering<'a> {
 
         // Look up ABI tags from the extern declaration (populated by ensure_extern
         // from runtime_extern_sig's explicit tags or user-declared extern "C" annotations).
-        let call_arg_abis = self.pending_externs.iter()
-            .find(|e| e.name == actual_emit_name)
-            .map(|e| e.param_abis.clone())
-            .unwrap_or_default();
+        let call_arg_abis = self.lookup_arg_abis(&actual_emit_name);
 
 
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
@@ -2098,12 +2120,13 @@ impl<'a> FuncLowering<'a> {
                 );
                 let str_struct_ty = LirType::Struct(self.struct_reg.lookup("GorgetString").unwrap());
                 self.ensure_extern("gorget_bool_to_str", &[LirType::Bool], &str_struct_ty);
+                let abis = self.lookup_arg_abis("gorget_bool_to_str");
                 let str_result = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                     dst: Some(str_result),
                     name: "gorget_bool_to_str".to_string(),
                     args: vec![bool_val],
-                    original_name: None, arg_abis: vec![],
+                    original_name: None, arg_abis: abis,
                 });
                 // Store result to slot
                 self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {

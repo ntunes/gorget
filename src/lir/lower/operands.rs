@@ -313,6 +313,15 @@ impl<'a> FuncLowering<'a> {
         });
     }
 
+    /// Look up ABI tags for an extern function already registered via `ensure_extern`.
+    /// Returns the `param_abis` from the `LirExtern`, or empty if not found.
+    pub(super) fn lookup_arg_abis(&self, name: &str) -> Vec<crate::ir::abi::AbiKind> {
+        self.pending_externs.iter()
+            .find(|e| e.name == name)
+            .map(|e| e.param_abis.clone())
+            .unwrap_or_default()
+    }
+
     pub(super) fn store_to_local(&mut self, local: ir::types::LocalId, value: ValueId, bb: BlockId) {
         let slot = self.local_to_slot[local.0 as usize];
         self.lir_func
@@ -856,11 +865,12 @@ impl<'a> FuncLowering<'a> {
         let size_val = self.emit_i64_const(bb, size);
         let zero_byte = self.emit_i32_const(bb, 0);
         self.ensure_extern("memset", &[LirType::Ptr, LirType::I32, LirType::I64], &LirType::Ptr);
+        let abis = self.lookup_arg_abis("memset");
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: None,
             name: "memset".to_string(),
             args: vec![slot_addr, zero_byte, size_val],
-            original_name: None, arg_abis: vec![],
+            original_name: None, arg_abis: abis,
         });
 
         // 2. Set tag = 0 (Ok/Some is always variant 0).
@@ -1206,12 +1216,14 @@ impl<'a> FuncLowering<'a> {
         // Emit: env_ptr = malloc(env_size)
         let size_val = self.emit_i64_const(bb, env_size as i64);
         let heap_ptr = self.lir_func.next_value();
+        self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
+        let malloc_abis = self.lookup_arg_abis("malloc");
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: Some(heap_ptr),
             name: "malloc".to_string(),
             args: vec![size_val],
             original_name: None,
-            arg_abis: vec![],
+            arg_abis: malloc_abis,
         });
 
         // Emit: memcpy(env_ptr, &src_slot, env_size)
@@ -1320,12 +1332,14 @@ impl<'a> FuncLowering<'a> {
             // Emit: env_ptr = malloc(env_size)
             let size_val = self.emit_i64_const(bb, env_size as i64);
             let heap_ptr = self.lir_func.next_value();
+            self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
+            let malloc_abis = self.lookup_arg_abis("malloc");
             self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                 dst: Some(heap_ptr),
                 name: "malloc".to_string(),
                 args: vec![size_val],
                 original_name: None,
-                arg_abis: vec![],
+                arg_abis: malloc_abis,
             });
 
             // Emit: memcpy(env_ptr, &src_slot, env_size)
