@@ -1580,6 +1580,383 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
     out = out + "}\n"
     return out
 
+# ── Drop/Clone function emission ──────────────────────────
+
+# Map a drop function name to the corresponding clone function name.
+String drop_to_clone_fn(String drop_fn):
+    if drop_fn == "gorget_string_free":
+        return "gorget_string_clone_to_owned"
+    elif drop_fn == "gorget_array_free":
+        return "gorget_array_clone"
+    elif drop_fn == "gorget_map_free":
+        return "gorget_map_clone"
+    elif drop_fn == "gorget_set_free":
+        return "gorget_set_clone"
+    elif drop_fn.ends_with("__drop"):
+        return drop_fn.slice(0, drop_fn.len() - 4) + "clone"
+    return ""
+
+# Find the C struct name for a Gorget type name.
+String find_c_name(String type_name, LirModule &m, Dict[String, String] &sn):
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == type_name:
+            return c_type_name(LT_STRUCT_BASE + i, &sn)
+        i += 1
+    return type_name
+
+# Check if a function already exists in the module.
+bool fn_exists(String name, LirModule &m):
+    int i = 0
+    while i < m.functions.len():
+        LirFunction f = m.functions.get(i).unwrap()
+        if f.name == name:
+            return true
+        i += 1
+    return false
+
+# Struct field access pattern — handles union layout for enum types.
+String field_access(String sdef_name, String field_name, LirModule &m, Dict[String, String] &sn, bool use_arrow):
+    # Find struct def to check union layout
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == sdef_name:
+            if sdef.is_union_layout:
+                String accessor = ""
+                if use_arrow:
+                    accessor = "self->data."
+                else:
+                    accessor = "dst.data."
+                # Check if this variant has multiple fields
+                String vprefix = field_variant_prefix(field_name)
+                int vcount = 0
+                int fi = 1
+                while fi < sdef.fields.len():
+                    StructField sf = sdef.fields.get(fi).unwrap()
+                    if field_variant_prefix(sf.name) == vprefix:
+                        vcount += 1
+                    fi += 1
+                if vcount > 1:
+                    return accessor + c_field_name(vprefix) + "." + c_field_name(field_name)
+                return accessor + c_field_name(field_name)
+            break
+        i += 1
+    # Regular struct
+    if use_arrow:
+        return "self->" + c_field_name(field_name)
+    return "dst." + c_field_name(field_name)
+
+# Emit struct drop functions from recursive_drop_structs metadata.
+String emit_struct_drops(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[String] keys = m.recursive_drop_structs.keys()
+    int ki = 0
+    while ki < keys.len():
+        String type_name = keys.get(ki).unwrap()
+        # Skip if user already defined a drop function
+        String drop_name = type_name + "__drop"
+        if fn_exists(drop_name, &m):
+            ki += 1
+            continue
+        String cname = find_c_name(type_name, &m, &sn)
+        Vector[FieldDrop] drops = m.recursive_drop_structs.get(type_name).unwrap()
+        out = out + "static inline void " + drop_name + "(" + cname + "* self) {\n"
+        int di = 0
+        while di < drops.len():
+            FieldDrop fd = drops.get(di).unwrap()
+            # Skip clone-only markers
+            if not fd.drop_fn_name.starts_with("__clone_only:"):
+                String access = field_access(type_name, fd.field_name, &m, &sn, true)
+                if fd.drop_fn_name == "free":
+                    out = out + "    free(" + access + ");\n"
+                else:
+                    out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
+            di += 1
+        out = out + "}\n\n"
+        ki += 1
+    return out
+
+# Emit struct clone functions from recursive_drop_structs metadata.
+String emit_struct_clones(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[String] keys = m.recursive_drop_structs.keys()
+    int ki = 0
+    while ki < keys.len():
+        String type_name = keys.get(ki).unwrap()
+        String clone_name = type_name + "__clone"
+        if fn_exists(clone_name, &m):
+            ki += 1
+            continue
+        String cname = find_c_name(type_name, &m, &sn)
+        Vector[FieldDrop] drops = m.recursive_drop_structs.get(type_name).unwrap()
+
+        # Clone function: T T__clone(void* __p)
+        out = out + cname + " " + clone_name + "(void* __p) {\n"
+        out = out + "    if (!__p) { " + cname + " z = {0}; return z; }\n"
+        out = out + "    " + cname + " dst = *(" + cname + "*)__p;\n"
+        int di = 0
+        while di < drops.len():
+            FieldDrop fd = drops.get(di).unwrap()
+            String clone_fn = ""
+            if fd.drop_fn_name.starts_with("__clone_only:"):
+                clone_fn = fd.drop_fn_name.slice(13, fd.drop_fn_name.len())
+            else:
+                clone_fn = drop_to_clone_fn(fd.drop_fn_name)
+            if clone_fn != "":
+                String access = field_access(type_name, fd.field_name, &m, &sn, false)
+                out = out + "    " + access + " = " + clone_fn + "(&" + access + ");\n"
+            di += 1
+        out = out + "    return dst;\n"
+        out = out + "}\n\n"
+
+        # Clone-inplace wrapper
+        out = out + "void " + type_name + "__clone_inplace(void* __p) { *(" + cname + "*)__p = " + clone_name + "(__p); }\n\n"
+        ki += 1
+    return out
+
+# Emit enum drop functions from recursive_drop_enums metadata.
+String emit_enum_drops(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[String] keys = m.recursive_drop_enums.keys()
+    int ki = 0
+    while ki < keys.len():
+        String type_name = keys.get(ki).unwrap()
+        String drop_name = type_name + "__drop"
+        if fn_exists(drop_name, &m):
+            ki += 1
+            continue
+        # Skip if also in recursive_drop_structs (structs take priority)
+        if m.recursive_drop_structs.contains(type_name):
+            ki += 1
+            continue
+        String cname = find_c_name(type_name, &m, &sn)
+        Vector[EnumVariantDrop] variants = m.recursive_drop_enums.get(type_name).unwrap()
+
+        out = out + "void " + drop_name + "(void* __p) {\n"
+        out = out + "    " + cname + "* self = (" + cname + "*)__p;\n"
+        out = out + "    switch (self->tag) {\n"
+
+        # Group by variant index
+        int vi = 0
+        int max_idx = -1
+        int vvi = 0
+        while vvi < variants.len():
+            EnumVariantDrop evd = variants.get(vvi).unwrap()
+            if evd.variant_index > max_idx:
+                max_idx = evd.variant_index
+            vvi += 1
+
+        vi = 0
+        while vi <= max_idx:
+            # Collect all drops for this variant
+            bool has_drops = false
+            String case_body = ""
+            vvi = 0
+            while vvi < variants.len():
+                EnumVariantDrop evd = variants.get(vvi).unwrap()
+                if evd.variant_index == vi:
+                    has_drops = true
+                    String access = field_access(type_name, evd.field_name, &m, &sn, true)
+                    if evd.drop_fn_name == "free":
+                        case_body = case_body + "            free(self->" + c_field_name(evd.field_name) + ");\n"
+                    else:
+                        case_body = case_body + "            " + evd.drop_fn_name + "(&" + access + ");\n"
+                vvi += 1
+            out = out + "        case " + int_to_str(vi) + ":"
+            if has_drops:
+                out = out + "\n" + case_body + "            break;\n"
+            else:
+                out = out + " break;\n"
+            vi += 1
+        out = out + "    }\n"
+        out = out + "}\n\n"
+        ki += 1
+    return out
+
+# Emit enum clone functions from recursive_drop_enums metadata.
+String emit_enum_clones(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[String] keys = m.recursive_drop_enums.keys()
+    int ki = 0
+    while ki < keys.len():
+        String type_name = keys.get(ki).unwrap()
+        String clone_name = type_name + "__clone"
+        if fn_exists(clone_name, &m):
+            ki += 1
+            continue
+        if m.recursive_drop_structs.contains(type_name):
+            ki += 1
+            continue
+        String cname = find_c_name(type_name, &m, &sn)
+        Vector[EnumVariantDrop] variants = m.recursive_drop_enums.get(type_name).unwrap()
+
+        out = out + cname + " " + clone_name + "(void* __p) {\n"
+        out = out + "    if (!__p) { " + cname + " z = {0}; return z; }\n"
+        out = out + "    " + cname + " dst = *(" + cname + "*)__p;\n"
+        out = out + "    switch (dst.tag) {\n"
+
+        int max_idx = -1
+        int vvi = 0
+        while vvi < variants.len():
+            EnumVariantDrop evd = variants.get(vvi).unwrap()
+            if evd.variant_index > max_idx:
+                max_idx = evd.variant_index
+            vvi += 1
+
+        int vi = 0
+        while vi <= max_idx:
+            bool has_clones = false
+            String case_body = ""
+            vvi = 0
+            while vvi < variants.len():
+                EnumVariantDrop evd = variants.get(vvi).unwrap()
+                if evd.variant_index == vi:
+                    String clone_fn = drop_to_clone_fn(evd.drop_fn_name)
+                    if clone_fn != "":
+                        has_clones = true
+                        String access = field_access(type_name, evd.field_name, &m, &sn, false)
+                        case_body = case_body + "            " + access + " = " + clone_fn + "(&" + access + ");\n"
+                vvi += 1
+            out = out + "        case " + int_to_str(vi) + ":"
+            if has_clones:
+                out = out + "\n" + case_body + "            break;\n"
+            else:
+                out = out + " break;\n"
+            vi += 1
+        out = out + "    }\n"
+        out = out + "    return dst;\n"
+        out = out + "}\n\n"
+
+        # Clone-inplace wrapper
+        out = out + "void " + type_name + "__clone_inplace(void* __p) { *(" + cname + "*)__p = " + clone_name + "(__p); }\n\n"
+        ki += 1
+    return out
+
+# Emit unified drop/clone functions from type_drop_fns metadata.
+String emit_type_drop_fns(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[String] keys = m.type_drop_fns.keys()
+    int ki = 0
+    while ki < keys.len():
+        String type_name = keys.get(ki).unwrap()
+        TypeDropInfo info = m.type_drop_fns.get(type_name).unwrap()
+
+        # Skip if already handled by recursive_drop_* or user-defined
+        if m.recursive_drop_structs.contains(type_name):
+            ki += 1
+            continue
+        if m.recursive_drop_enums.contains(type_name):
+            ki += 1
+            continue
+        if fn_exists(info.drop_fn_name, &m):
+            ki += 1
+            continue
+
+        String cname = find_c_name(type_name, &m, &sn)
+        bool is_enum = info.enum_variants.len() > 0
+
+        # Drop function
+        out = out + "void " + info.drop_fn_name + "(void* __p) {\n"
+        out = out + "    " + cname + "* self = (" + cname + "*)__p;\n"
+        if info.user_drop_fn != "":
+            out = out + "    " + info.user_drop_fn + "(__p);\n"
+        if is_enum:
+            out = out + "    switch (self->tag) {\n"
+            int max_idx = -1
+            int vvi = 0
+            while vvi < info.enum_variants.len():
+                EnumVariantDrop evd = info.enum_variants.get(vvi).unwrap()
+                if evd.variant_index > max_idx:
+                    max_idx = evd.variant_index
+                vvi += 1
+            int vi = 0
+            while vi <= max_idx:
+                bool has_drops = false
+                String case_body = ""
+                vvi = 0
+                while vvi < info.enum_variants.len():
+                    EnumVariantDrop evd = info.enum_variants.get(vvi).unwrap()
+                    if evd.variant_index == vi:
+                        has_drops = true
+                        String access = field_access(type_name, evd.field_name, &m, &sn, true)
+                        if evd.drop_fn_name == "free":
+                            case_body = case_body + "            free(self->" + c_field_name(evd.field_name) + ");\n"
+                        else:
+                            case_body = case_body + "            " + evd.drop_fn_name + "(&" + access + ");\n"
+                    vvi += 1
+                out = out + "        case " + int_to_str(vi) + ":"
+                if has_drops:
+                    out = out + "\n" + case_body + "            break;\n"
+                else:
+                    out = out + " break;\n"
+                vi += 1
+            out = out + "    }\n"
+        else:
+            int di = 0
+            while di < info.field_drops.len():
+                FieldDrop fd = info.field_drops.get(di).unwrap()
+                String access = field_access(type_name, fd.field_name, &m, &sn, true)
+                if fd.drop_fn_name == "free":
+                    out = out + "    free(" + access + ");\n"
+                else:
+                    out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
+                di += 1
+        out = out + "}\n\n"
+
+        # Clone function
+        String clone_name = type_name + "__clone"
+        if not fn_exists(clone_name, &m):
+            out = out + cname + " " + clone_name + "(void* __p) {\n"
+            out = out + "    if (!__p) { " + cname + " z = {0}; return z; }\n"
+            out = out + "    " + cname + " dst = *(" + cname + "*)__p;\n"
+            if is_enum:
+                out = out + "    switch (dst.tag) {\n"
+                int max_idx2 = -1
+                int vvi2 = 0
+                while vvi2 < info.enum_variants.len():
+                    EnumVariantDrop evd = info.enum_variants.get(vvi2).unwrap()
+                    if evd.variant_index > max_idx2:
+                        max_idx2 = evd.variant_index
+                    vvi2 += 1
+                int vi2 = 0
+                while vi2 <= max_idx2:
+                    bool has_clones = false
+                    String case_body = ""
+                    vvi2 = 0
+                    while vvi2 < info.enum_variants.len():
+                        EnumVariantDrop evd = info.enum_variants.get(vvi2).unwrap()
+                        if evd.variant_index == vi2:
+                            String clone_fn = drop_to_clone_fn(evd.drop_fn_name)
+                            if clone_fn != "":
+                                has_clones = true
+                                String access = field_access(type_name, evd.field_name, &m, &sn, false)
+                                case_body = case_body + "            " + access + " = " + clone_fn + "(&" + access + ");\n"
+                        vvi2 += 1
+                    out = out + "        case " + int_to_str(vi2) + ":"
+                    if has_clones:
+                        out = out + "\n" + case_body + "            break;\n"
+                    else:
+                        out = out + " break;\n"
+                    vi2 += 1
+                out = out + "    }\n"
+            else:
+                int di = 0
+                while di < info.field_drops.len():
+                    FieldDrop fd = info.field_drops.get(di).unwrap()
+                    String clone_fn = drop_to_clone_fn(fd.drop_fn_name)
+                    if clone_fn != "":
+                        String access = field_access(type_name, fd.field_name, &m, &sn, false)
+                        out = out + "    " + access + " = " + clone_fn + "(&" + access + ");\n"
+                    di += 1
+            out = out + "    return dst;\n"
+            out = out + "}\n\n"
+            out = out + "void " + type_name + "__clone_inplace(void* __p) { *(" + cname + "*)__p = " + clone_name + "(__p); }\n\n"
+
+        ki += 1
+    return out
+
 # ── Top-level code generation ──────────────────────────────
 
 String generate_c(LirModule &m):
@@ -1607,6 +1984,13 @@ String generate_c(LirModule &m):
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)
     out = out + emit_adapter_functions(&m, &sn, &fa_targets)
+
+    # Drop/clone functions (must come after forward decls, before function defs)
+    out = out + emit_struct_drops(&m, &sn)
+    out = out + emit_struct_clones(&m, &sn)
+    out = out + emit_enum_drops(&m, &sn)
+    out = out + emit_enum_clones(&m, &sn)
+    out = out + emit_type_drop_fns(&m, &sn)
 
     # Function definitions
     out = out + "// ── Function Definitions ──\n"
