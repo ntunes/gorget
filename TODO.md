@@ -42,7 +42,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host comparison**: GIR lowerer at 889/889 (100.0%) adjusted. 24 crashes (httpserver), 75 error-only. **LIR backend: Phases 1-4 done + driver integrated** (data structures, GIR→LIR lowering, SSA construction, C codegen — 3,327 lines). Driver supports `--lir-c` flag for LIR→C pipeline. Phase 5 (C runtime embedding) remaining — currently the self-host C output requires the Rust-compiled runtime to link against. [updated: 2026-04-14]
+- **Self-host LIR backend**: 3,906 lines across 4 files. hello.gg compiles+runs end-to-end through self-host pipeline. 0/26 testable fixtures pass C compilation (all produce C output but fail cc). Main blockers: (1) void-return functions assigned to values, (2) value type gaps from ICallExtern return types, (3) SSA value ID gaps from block param numbering, (4) Ptr-to-struct return type coercion. C runtime embedding still manual (prepend extracted runtime header). [updated: 2026-04-14]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
