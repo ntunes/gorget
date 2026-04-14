@@ -1340,11 +1340,18 @@ fn lower_throw(
     let val = lower_expr(ctx, builder, expr);
     if let Some(result_type) = ctx.func_state.current_throws_result_type {
         // Wrap error in Result.Error and return
+        let val_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+            if place.projections.is_empty() { Some(place.local) } else { None }
+        } else { None };
         let err_dst = {
                 let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
                 builder.enum_init(type_name, "Error", result_type, vec![val])
             };
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        // Mark consumed operand as moved to prevent double-free during early-exit drops
+        if let Some(local) = val_local {
+            ctx.move_zero_and_mark(builder, local);
+        }
         emit_on_error_cleanups(ctx, builder);
         ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, DropScopeKind::Function, None);
         builder.ret(FunctionBuilder::copy(LocalId(0)));

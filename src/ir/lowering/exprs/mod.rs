@@ -1983,6 +1983,8 @@ pub fn emit_result_auto_propagate(
     } else {
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
     }
+    // Mark consumed error value as moved to prevent double-free during early-exit drops
+    ctx.move_zero_and_mark(builder, err_val);
     super::stmts::emit_on_error_cleanups(ctx, builder);
     ctx.drops.emit_early_exit_drops(builder, &ctx.type_registry, super::drops::DropScopeKind::Function, None);
     builder.ret(FunctionBuilder::copy(LocalId(0)));
@@ -2134,12 +2136,19 @@ fn lower_rethrow_expr(
     let new_err = lower_expr(ctx, builder, transform);
 
     // Wrap the transformed error in the current function's Result.Error and return
+    let new_err_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = new_err {
+        if place.projections.is_empty() { Some(place.local) } else { None }
+    } else { None };
     if let Some(result_type) = ctx.func_state.current_throws_result_type {
         let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
         let err_dst = builder.enum_init(type_name, "Error", result_type, vec![new_err]);
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
     } else {
         builder.assign(Place::local(LocalId(0)), new_err);
+    }
+    // Mark consumed operand as moved to prevent double-free during early-exit drops
+    if let Some(local) = new_err_local {
+        ctx.move_zero_and_mark(builder, local);
     }
     // Emit on_error cleanups before drops
     super::stmts::emit_on_error_cleanups(ctx, builder);

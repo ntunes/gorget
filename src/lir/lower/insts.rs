@@ -927,11 +927,12 @@ impl<'a> FuncLowering<'a> {
                     });
                 }
 
-                // Post-init zero: after moving a resource-type local into an enum variant
-                // (e.g. Some(vec)), zero the source to prevent double-free. The enum now
-                // owns the data. This mirrors the old GIR→C backend's post-EnumInit zeroing.
-                // Collect slots to zero first to avoid borrow conflicts.
-                let slots_to_zero: Vec<(SlotId, i64)> = fields.iter().filter_map(|field_op| {
+                // Post-init move: mark resource-type source slots as moved.
+                // The GIR's move_zero_consumed_args + move_zero_and_mark on
+                // error/rethrow paths handle mark_moved for scope-exit drops.
+                // MoveSlot feeds the dataflow; C zero-initialization of locals
+                // provides null-safety for uninitialized paths.
+                for field_op in fields.iter() {
                     if let Operand::Copy(place) | Operand::Move(place) = field_op {
                         if place.projections.is_empty() {
                             let local_idx = place.local.0 as usize;
@@ -939,33 +940,19 @@ impl<'a> FuncLowering<'a> {
                                 let src_slot = self.local_to_slot[local_idx];
                                 let src_ty = &self.lir_func.slots[src_slot.0 as usize].ty;
                                 if let LirType::Struct(sid) = src_ty {
-                                    let needs_zero = self.module_structs.get(sid.0 as usize)
+                                    let needs_move = self.module_structs.get(sid.0 as usize)
                                         .map_or(false, |s| matches!(s.name.as_str(),
                                             "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" | "GorgetClosure"
                                         ));
-                                    if needs_zero {
-                                        let byte_size = c_sizeof_lir_type(src_ty, &self.module_structs) as i64;
-                                        return Some((src_slot, byte_size));
+                                    if needs_move {
+                                        self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot {
+                                            slot: src_slot,
+                                        });
                                     }
                                 }
                             }
                         }
                     }
-                    None
-                }).collect();
-                for (src_slot, byte_size) in slots_to_zero {
-                    let addr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                        dst: addr,
-                        slot: src_slot,
-                    });
-                    let zero = self.emit_i32_const(bb, 0);
-                    let size = self.emit_i64_const(bb, byte_size);
-                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                        ptr: addr,
-                        byte: zero,
-                        size,
-                    });
                 }
             }
 

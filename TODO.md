@@ -36,7 +36,7 @@
 
 - **Remove GIR MoveZero emissions for borrow-wrapped call args**: C runtime safety nets and `arg_owners` removed. GIR MoveZero retained for args behind borrow ptrs (field loads, MutPtr params) — the LIR `emit_post_call_zeros` only reaches direct `Operand::Move` args. Removing these requires either flattening the borrow indirection or a drop elaboration pass. [updated: 2026-04-13]
 
-- **Drop elaboration V7 — eliminate projected MoveZero Memsets**: V6 eliminated all non-projected Memsets. Projected MoveZero (field-level moves via `Projection::Field/Deref`) still emits Memset because `MoveSlot` only operates on whole slots. Options: (1) extend `MoveSlot` with a projection field, (2) introduce `MoveField { slot, field }` instruction, (3) leave as-is (projected moves are rare). [added: 2026-04-14]
+- **Drop elaboration — remaining 24 Memsets**: V7 reduced to 24 across 17 fixtures (from 872). These are genuinely necessary: IndexLoad element zeroing (zeroing inside collection data arrays after move-out) and projected Deref/Field MoveZero (field-level ownership transfer through pointers). Could be eliminated with: (1) element drop flags on collections, (2) `MoveField { slot, field }` instruction. Low priority — these are rare hot-path operations. [updated: 2026-04-14]
 
 ## Low
 
