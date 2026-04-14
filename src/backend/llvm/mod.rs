@@ -110,6 +110,28 @@ fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     }
 }
 
+/// C reserved keywords — function names clashing with these are prefixed with `__gg_`.
+/// Must match the C backend's `c_func_name()` in helpers.rs.
+const C_RESERVED: &[&str] = &[
+    "auto", "break", "case", "char", "const", "continue", "default", "do",
+    "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "int", "long", "register", "return", "short", "signed", "sizeof",
+    "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+    "volatile", "while", "inline", "restrict", "_Bool", "_Complex",
+    "_Imaginary", "bool", "true", "false",
+];
+
+/// Escape a function name that clashes with C keywords.
+/// The LLVM backend must match the C backend's escaping since the binary
+/// links against C-compiled runtime code that references these mangled names.
+fn c_func_name(name: &str) -> String {
+    if C_RESERVED.contains(&name) {
+        format!("__gg_{name}")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Parse a monomorphized name like `Vector__int64_t__map` into (elem_c_name, method).
 /// Returns None if not a vector higher-order operation.
 fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
@@ -804,7 +826,7 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                     match init {
                         LirGlobalInit::Zeroed => format!("{fty} zeroinitializer"),
                         LirGlobalInit::FuncAddr(fid) => {
-                            let fname = &module.functions[fid.0 as usize].name;
+                            let fname = c_func_name(&module.functions[fid.0 as usize].name);
                             format!("ptr @{fname}")
                         }
                         LirGlobalInit::Bytes(data) if data.len() <= 8 => {
@@ -913,13 +935,16 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     }
     // gorget_string_clone_to_owned: used by gorget_str_str inline expansion
     writeln!(out, "declare void @gorget_string_clone_to_owned(ptr sret(%GorgetString), ptr)").unwrap();
-    // Runtime collection constructors — used for static global initialization
-    // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs.
+    // Runtime constructors — used for static global initialization
+    // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs
+    // or already declared above in hof_decls.
     let has_runtime_init = module.globals.iter().any(|g| matches!(&g.init, crate::lir::LirGlobalInit::RuntimeCall(_)));
     if has_runtime_init {
         let existing_externs: std::collections::HashSet<&str> = module.externs.iter().map(|e| e.name.as_str()).collect();
+        let hof_names: std::collections::HashSet<&str> = hof_decls.iter().map(|(n, _)| *n).collect();
         let runtime_init_fns: &[(&str, &str)] = &[
             ("gorget_array_new",      "declare void @gorget_array_new(ptr sret(%GorgetArray), i64)"),
+            ("gorget_array_extend",   "declare void @gorget_array_extend(ptr, ptr)"),
             ("gorget_map_new",        "declare void @gorget_map_new(ptr sret(%GorgetMap), i64, i64)"),
             ("gorget_map_new_str",    "declare void @gorget_map_new_str(ptr sret(%GorgetMap), i64)"),
             ("gorget_dict_new",       "declare void @gorget_dict_new(ptr sret(%GorgetMap), i64, i64)"),
@@ -928,8 +953,28 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             ("gorget_set_new_str",    "declare void @gorget_set_new_str(ptr sret(%GorgetSet))"),
         ];
         for (fn_name, decl) in runtime_init_fns {
-            if !existing_externs.contains(*fn_name) {
+            if !existing_externs.contains(*fn_name) && !hof_names.contains(*fn_name) {
                 writeln!(out, "{decl}").unwrap();
+            }
+        }
+        // Also declare any other functions referenced in RuntimeCall expressions
+        // that aren't already covered (e.g. gorget_mutex_new, gorget_atomic_int_new).
+        let known_init_fns: std::collections::HashSet<&str> = runtime_init_fns.iter().map(|(n, _)| *n).collect();
+        for global in &module.globals {
+            if let crate::lir::LirGlobalInit::RuntimeCall(expr) = &global.init {
+                if let Some(paren) = expr.find('(') {
+                    let fn_name = &expr[..paren];
+                    if !existing_externs.contains(fn_name) && !hof_names.contains(fn_name)
+                        && !known_init_fns.contains(fn_name) {
+                        // Parse arg count from expression to determine declaration
+                        let args_str = &expr[paren+1..];
+                        let args_str = args_str.strip_suffix(')').unwrap_or(args_str);
+                        let n_args = if args_str.trim().is_empty() { 0 }
+                            else { args_str.split(',').count() };
+                        let params: Vec<&str> = (0..n_args).map(|_| "i64").collect();
+                        writeln!(out, "declare i64 @{fn_name}({})", params.join(", ")).unwrap();
+                    }
+                }
             }
         }
     }
@@ -943,7 +988,35 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
 
     // Module externs
     writeln!(out, "; -- runtime externs --").unwrap();
-    let mut seen = std::collections::HashSet::new();
+    // Seed seen set with preamble-declared function names to avoid redefinition.
+    // Only include hof_decls that were actually emitted (i.e., not in module.externs).
+    let mut seen: std::collections::HashSet<String> = hof_decls.iter()
+        .filter(|(n, _)| !module.externs.iter().any(|e| e.name == *n))
+        .map(|(n, _)| n.to_string())
+        .collect();
+    // Add other preamble declarations
+    for name in &[
+        "gorget_str_eq", "gorget_str_cmp", "gorget_string_format", "gorget_string_format_alloc",
+        "gorget_bool_to_str", "malloc", "free", "gorget_string_push_int", "gorget_string_push_float",
+        "gorget_string_push_bool", "gorget_string_push_char", "gorget_string_push_line_int",
+        "gorget_string_push_line_float", "gorget_string_push_line_bool", "gorget_string_push_line",
+        "exit", "gorget_task_group_submit_raw", "gorget_try_parse_int", "gorget_try_parse_float",
+        "gorget_str_to_cstr", "gorget_string_clone_to_owned",
+    ] {
+        seen.insert(name.to_string());
+    }
+    if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
+        seen.insert("gorget_str_from_cstr".to_string());
+    }
+    // Also add runtime_init_fns if they were declared
+    if has_runtime_init {
+        for (fn_name, _) in &[
+            ("gorget_map_new", ""), ("gorget_map_new_str", ""),
+            ("gorget_dict_new", ""), ("gorget_dict_new_str", ""),
+        ] {
+            seen.insert(fn_name.to_string());
+        }
+    }
     for ext in &module.externs {
         if !seen.insert(ext.name.clone()) {
             continue;
@@ -972,6 +1045,18 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         }
         // gorget_task_group_submit is a C macro — expanded inline via gorget_task_group_submit_raw.
         if ext.name == "gorget_task_group_submit" {
+            continue;
+        }
+        // gorget_regex_find_at is a C macro alias for gorget_regex_find
+        if ext.name == "gorget_regex_find_at" {
+            // Emit declaration with the real function name
+            let params: Vec<String> = ext.params.iter().map(|p| llvm_arg_type(p, snames)).collect();
+            let ret = llvm_type_full(&ext.return_type, snames);
+            if needs_sret(&ext.return_type, &module.structs) {
+                writeln!(out, "declare void @gorget_regex_find(ptr sret({ret}), {})", params.join(", ")).unwrap();
+            } else {
+                writeln!(out, "declare {ret} @gorget_regex_find({})", params.join(", ")).unwrap();
+            }
             continue;
         }
         // gorget_file_open with 1 arg means "open for reading".
@@ -1060,7 +1145,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     }
                     // Skip inline-expanded names — no extern declaration needed.
                     if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")
-                        || name.starts_with("__gorget_drop_if_alive_") {
+                        || name.starts_with("__gorget_drop_if_alive_")
+                        || name == "__gorget_drop_flag_open" || name == "__gorget_drop_flag_close" {
                         continue;
                     }
                     // Skip monomorphized parse methods
@@ -1303,7 +1389,8 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     }
     for fid_raw in &adapter_fids {
         let target = &module.functions[*fid_raw as usize];
-        let adapt_name = format!("__adapt_{}", target.name);
+        let safe_name = c_func_name(&target.name);
+        let adapt_name = format!("__adapt_{safe_name}");
         let target_uses_sret = needs_sret(&target.return_type, &module.structs);
         let ret_llvm = llvm_type_full(&target.return_type, snames);
 
@@ -1331,15 +1418,15 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
 
         if target_uses_sret {
             writeln!(out, "define void @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
-            writeln!(out, "  call void @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  call void @{safe_name}({fwd_args})").unwrap();
             writeln!(out, "  ret void").unwrap();
         } else if target.return_type == LirType::Void {
             writeln!(out, "define void @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
-            writeln!(out, "  call void @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  call void @{safe_name}({fwd_args})").unwrap();
             writeln!(out, "  ret void").unwrap();
         } else {
             writeln!(out, "define {ret_llvm} @{adapt_name}({}) {{", param_decls.join(", ")).unwrap();
-            writeln!(out, "  %a.r = call {ret_llvm} @{}({fwd_args})", target.name).unwrap();
+            writeln!(out, "  %a.r = call {ret_llvm} @{safe_name}({fwd_args})").unwrap();
             writeln!(out, "  ret {ret_llvm} %a.r").unwrap();
         }
         writeln!(out, "}}").unwrap();
@@ -1375,9 +1462,9 @@ fn emit_function(
         } else {
             format!("ptr sret({ret}) %sret.out, {}", params.join(", "))
         };
-        writeln!(out, "define void @{}({sret_params}) {{", &func.name).unwrap();
+        writeln!(out, "define void @{}({sret_params}) {{", c_func_name(&func.name)).unwrap();
     } else {
-        writeln!(out, "define {} @{}({}) {{", ret, &func.name, params.join(", ")).unwrap();
+        writeln!(out, "define {} @{}({}) {{", ret, c_func_name(&func.name), params.join(", ")).unwrap();
     }
 
     // Build value type map for this function
@@ -1563,6 +1650,7 @@ fn emit_function(
             let bid = block.id.0;
             let mut label = format!("bb{bid}");
             let mut counter = 0u32; // mirrors trap_counter exactly
+            let mut df_stack: Vec<u32> = Vec::new(); // drop flag open/close nesting
             for inst in &block.insts {
                 match inst {
                     Inst::Add { overflow: Overflow::Trap, ty, .. }
@@ -1592,6 +1680,9 @@ fn emit_function(
                     Inst::CallExtern { name, args, dst, .. } => {
                         let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
                             || name == "__gorget_drop_if_alive_close";
+                        // Drop flag guards (V3) — emit conditional branches.
+                        let is_drop_flag_open = name == "__gorget_drop_flag_open";
+                        let is_drop_flag_close = name == "__gorget_drop_flag_close";
                         let is_callable = name.starts_with("__callable_");
                         let is_closure_call = name.starts_with("__gorget_closure_call_");
                         let is_map_get = name == "gorget_map_get" || name == "gorget_map_safe_get";
@@ -1624,6 +1715,16 @@ fn emit_function(
 
                         // Count ALL counter increments to stay in sync with emission
                         if is_drop_guard { /* no counter */ }
+                        else if is_drop_flag_open {
+                            // Creates body + join labels; counter used as uid.
+                            df_stack.push(counter);
+                            counter += 1;
+                        }
+                        else if is_drop_flag_close {
+                            if let Some(uid) = df_stack.pop() {
+                                label = format!("df.{bid}.{uid}.join");
+                            }
+                        }
                         else if is_callable && !args.is_empty() { counter += 1; }
                         else if is_closure_call && !args.is_empty() { counter += 1; }
                         else if vector_hof_needs_inline && !args.is_empty() {
@@ -1699,8 +1800,9 @@ fn emit_function(
         // changing the effective predecessor label for phi nodes in successor blocks.
         let mut trap_counter = 0u32;
         let mut current_label = format!("bb{bid}");
+        let mut df_stack: Vec<u32> = Vec::new(); // drop flag open/close nesting
         for inst in &block.insts {
-            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label);
+            emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack);
 
         }
 
@@ -1765,6 +1867,7 @@ fn emit_inst(
     block_id: u32,
     trap_counter: &mut u32,
     current_label: &mut String,
+    df_stack: &mut Vec<u32>,
 ) {
     match inst {
         // ── Slot Access ─────────────────────────────────────────────
@@ -1899,7 +2002,7 @@ fn emit_inst(
             // so callable dispatch (load from [0] and [1]) works correctly.
             // The adapter function (defined by the C wrapper glue) ignores the env pointer.
             let target = &module.functions[fid.0 as usize];
-            let adapt_name = format!("__adapt_{}", target.name);
+            let adapt_name = format!("__adapt_{}", c_func_name(&target.name));
             let fa = format!("fa.{}", dst.0);
             writeln!(out, "  %{fa} = alloca [2 x ptr]").unwrap();
             writeln!(out, "  %{fa}.0 = getelementptr [2 x ptr], ptr %{fa}, i32 0, i32 0").unwrap();
@@ -2474,9 +2577,10 @@ fn emit_inst(
             for line in &load_lines {
                 writeln!(out, "{line}").unwrap();
             }
+            let call_name = c_func_name(&target.name);
             if let Some(d) = dst {
                 if target.return_type == LirType::Void {
-                    writeln!(out, "  call void @{}({})", target.name, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  call void @{}({})", call_name, arg_strs.join(", ")).unwrap();
                 } else if needs_sret(&target.return_type, &module.structs) {
                     // Large aggregate return: sret convention
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
@@ -2485,17 +2589,17 @@ fn emit_inst(
                     } else {
                         format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
                     };
-                    writeln!(out, "  call void @{}({sret_args})", target.name).unwrap();
+                    writeln!(out, "  call void @{}({sret_args})", call_name).unwrap();
                 } else if target.return_type.is_aggregate() {
                     // Small aggregate: returned in registers, store to alloca
-                    writeln!(out, "  %v{}.ret = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{}.ret = call {ret_ty} @{}({})", d.0, call_name, arg_strs.join(", ")).unwrap();
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
                 } else {
-                    writeln!(out, "  %v{} = call {ret_ty} @{}({})", d.0, target.name, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{} = call {ret_ty} @{}({})", d.0, call_name, arg_strs.join(", ")).unwrap();
                 }
             } else {
-                writeln!(out, "  call {ret_ty} @{}({})", target.name, arg_strs.join(", ")).unwrap();
+                writeln!(out, "  call {ret_ty} @{}({})", call_name, arg_strs.join(", ")).unwrap();
             }
         }
         Inst::CallExtern { dst, name, args, .. } => {
@@ -2503,6 +2607,31 @@ fn emit_inst(
             // Drop-if-alive guards — no-op in LLVM (drops happen unconditionally)
             if name.starts_with("__gorget_drop_if_alive_open__") || name == "__gorget_drop_if_alive_close" {
                 writeln!(out, "  ; {name} (no-op in LLVM)").unwrap();
+                return;
+            }
+
+            // ── Drop flag guards (V3) ──────────────────────────────────────
+            // __gorget_drop_flag_open(bool_val) → conditional branch: if true, execute drops
+            // __gorget_drop_flag_close → end of conditional drop block
+            if name == "__gorget_drop_flag_open" {
+                let uid = *trap_counter;
+                *trap_counter += 1;
+                let flag_val = args.first().map(|a| a.0).unwrap_or(0);
+                let body_label = format!("df.{block_id}.{uid}.body");
+                let join_label = format!("df.{block_id}.{uid}.join");
+                writeln!(out, "  br i1 %v{flag_val}, label %{body_label}, label %{join_label}").unwrap();
+                writeln!(out, "{body_label}:").unwrap();
+                *current_label = body_label;
+                df_stack.push(uid);
+                return;
+            }
+            if name == "__gorget_drop_flag_close" {
+                if let Some(uid) = df_stack.pop() {
+                    let join_label = format!("df.{block_id}.{uid}.join");
+                    writeln!(out, "  br label %{join_label}").unwrap();
+                    writeln!(out, "{join_label}:").unwrap();
+                    *current_label = join_label;
+                }
                 return;
             }
 
@@ -4422,6 +4551,8 @@ fn emit_inst(
                     _ => name.as_str(),
                 }
             } else { name.as_str() };
+            // gorget_regex_find_at is a C macro alias for gorget_regex_find
+            let name: &str = if name == "gorget_regex_find_at" { "gorget_regex_find" } else { name };
 
             // gorget_str_cmp: C returns int (32-bit). On aarch64, 'mov w0, -1' zero-extends
             // x0 to 0xFFFFFFFF (not 0xFFFFFFFFFFFFFFFF). Must call as i32 and sext to i64
@@ -4888,24 +5019,24 @@ fn emit_term(
         Term::Ret(val) => {
             let ret_ty = llvm_type_full(&func.return_type, snames);
             let is_main = func.name == "main";
-            if needs_sret(&func.return_type, &_module.structs) && !is_main {
-                // Large aggregate: sret convention — memcpy result into %sret.out, then ret void
-                let sz = sizeof_lir_type(&func.return_type, &_module.structs, snames);
-                writeln!(out, "  call ptr @memcpy(ptr %sret.out, ptr %v{}, i64 {sz})", val.0).unwrap();
-                writeln!(out, "  ret void").unwrap();
-            } else if func.return_type.is_aggregate() && !is_main {
-                // Small aggregate: load from pointer and return by value
-                writeln!(out, "  %retval.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
-                writeln!(out, "  ret {ret_ty} %retval.{}", val.0).unwrap();
-            } else if is_main {
-                // main() returns i32 but the LIR return value might be i64.
+            if is_main {
+                // main() always returns i32. LIR return value might be i64 or ptr to Result.
                 let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());
                 if matches!(val_ty, Some(LirType::I64 | LirType::U64)) {
                     writeln!(out, "  %main.ret.{} = trunc i64 %v{} to i32", val.0, val.0).unwrap();
                     writeln!(out, "  ret i32 %main.ret.{}", val.0).unwrap();
                 } else {
-                    writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                    writeln!(out, "  ret i32 0 ; main implicit return").unwrap();
                 }
+            } else if needs_sret(&func.return_type, &_module.structs) {
+                // Large aggregate: sret convention — memcpy result into %sret.out, then ret void
+                let sz = sizeof_lir_type(&func.return_type, &_module.structs, snames);
+                writeln!(out, "  call ptr @memcpy(ptr %sret.out, ptr %v{}, i64 {sz})", val.0).unwrap();
+                writeln!(out, "  ret void").unwrap();
+            } else if func.return_type.is_aggregate() {
+                // Small aggregate: load from pointer and return by value
+                writeln!(out, "  %retval.{} = load {ret_ty}, ptr %v{}", val.0, val.0).unwrap();
+                writeln!(out, "  ret {ret_ty} %retval.{}", val.0).unwrap();
             } else {
                 // Check for type mismatch between value type and function return type.
                 let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());

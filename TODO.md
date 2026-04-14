@@ -34,16 +34,17 @@
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
-- **LLVM backend test results (2026-04-13, 831 tested / 913 total)**:
-  - PASS: 669 (80.5% of tested); file_io fixed 2026-04-14 (gorget_file_read_all ABI mismatch)
-  - FAIL: 40 (output mismatch — see categories below)
-  - CRASH: 73 (segfault/abort — mostly dataframe, p2p, toml, yaml, xml, httpserver, threads)
-  - BUILD_FAIL: 47 (LLVM IR/linker errors — see categories below)
-  - SKIP: 82 (C backend also fails — error programs, benches, etc.)
-  - Build fail categories: 17x gorget_task_group_submit undefined, 10x LLC type mismatch (ptr/struct type confusion), 9x LLC forward-ref / undefined-value, 9x other undefined refs (__adapt_double, gorget_reactor_sleep_seconds, etc.), 2x TLS runtime missing
-  - Fail categories: 8x tensor (float stored as i64?), 6x leak/alloc tracking, 4x CoW/Shared issues, 3x result/coroutine combinators, 3x process/socket (networking), 5x drop/destructor ordering, 5x test framework divergence, others
-  - Key bug patterns: float fields in structs read as 0.0 (shared_float, tensor_*), memory not being freed (stress_alloc_*, leak_*), drop order wrong (drop_collections, drop_struct_collection_fields), Shared[T] write not visible (shared_struct/weak), __adapt_double / gorget_task_group_submit missing from LLVM wrapper generation [updated: 2026-04-14]
-  - Root cause pattern: C runtime fns returning GorgetString directly but LLVM IR expects Result — gorget_file_read_all fixed; may affect other fns [added: 2026-04-14]
+- **LLVM backend test results (2026-04-14, 815 tested / 913 total)**:
+  - PASS: 703 (86.3% of tested); up from 669 (80.5%) after 2026-04-14 session
+  - FAIL: 34 (output mismatch — see categories below)
+  - CRASH: 70 (segfault/abort/timeout — mostly dataframe, p2p, toml, yaml, xml, httpserver)
+  - BUILD_FAIL: 8 (LLC type mismatch / forward-ref / missing symbols)
+  - SKIP: 99 (C backend also fails — error programs, benches, etc.)
+  - Fixes applied 2026-04-14: (1) `__gorget_drop_flag_open/close` conditional branches, (2) preamble dedup via `seen` set, (3) `c_func_name` for C-reserved keywords, (4) RuntimeCall global init declarations, (5) main_throws: `is_main` check before aggregate return, (6) gorget_regex_find_at→gorget_regex_find macro alias redirect
+  - Remaining BUILD_FAIL (8): 4x LLC forward-ref type mismatch (phi i64 vs defined i32 — block param type inconsistency), 1x LLC struct type mismatch (shared_iterator_invalidation: ptr vs GorgetArray), 1x struct initializer mismatch (print_trait_object), 1x type width mismatch (string_enum_variants: i8 vs i64), 1x undefined runtime ref (sqlite_basic: gorget_sqlite_bind_int static fn)
+  - Remaining CRASH (70): ~16x dataframe, ~13x p2p, ~6x httpserver, ~4x toml, ~3x xml, ~2x yaml, ~2x json, ~2x crypto, ~3x serialize, ~5x timeout (async/httpserver), ~5x misc — most previously BUILD_FAIL, likely deeper ABI issues (enum layout, collection element access)
+  - Remaining FAIL (34): ~5x leak/stress_alloc (leaked=true), ~3x shared/weak (wrong values), ~3x process/socket, ~3x drop ordering, ~3x result combinators, ~2x ecs (field reads 0), ~2x coroutine, ~13x others
+  - Key bug patterns: Shared[T] write not visible (-1 vs 5000), float/int field reads 0 (ecs_advanced), memory not freed (leaked=true vs false), drop order wrong (drop_collections missing drops), serializable/deserializable crashes (enum layout ABI)
 
 ## Low
 
