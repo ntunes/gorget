@@ -848,6 +848,54 @@ int runtime_fn_return_type(String name, LirModule &m):
         return LT_BOOL
     return LT_VOID
 
+# Check if a call name is a struct constructor (not a runtime function).
+bool is_struct_constructor(String name, LirModule &m):
+    # Skip runtime/collection prefixed names
+    if name.starts_with("gorget_") or name.starts_with("__gorget_"):
+        return false
+    if name.starts_with("Vector__") or name.starts_with("Dict__") or name.starts_with("Set__"):
+        return false
+    if name.starts_with("HashMap__") or name.starts_with("HashSet__"):
+        return false
+    if name.starts_with("Channel__") or name.starts_with("Shared__") or name.starts_with("Mutex__"):
+        return false
+    if name.starts_with("Box__") or name.starts_with("Task__"):
+        return false
+    if name == "printf" or name == "fprintf":
+        return false
+    # Check if there's a struct with this name in the module
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == name:
+            return sdef.fields.len() > 0  # Only if we have field info
+        i += 1
+    return false
+
+String find_c_struct_name(String name, LirModule &m, Dict[String, String] &sn):
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == name:
+            return c_type_name(LT_STRUCT_BASE + i, &sn)
+        i += 1
+    return name
+
+Vector[String] get_struct_field_names(String name, LirModule &m):
+    Vector[String] names = []
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == name:
+            int fi = 0
+            while fi < sdef.fields.len():
+                StructField f = sdef.fields.get(fi).unwrap()
+                names.push(f.name)
+                fi += 1
+            return names
+        i += 1
+    return names
+
 int find_struct_type(String name, LirModule &m):
     int i = 0
     while i < m.structs.len():
@@ -960,6 +1008,13 @@ int infer_inst_type(LirInst &inst, LirModule &m):
                     if func.name == name:
                         return func.return_type
                     fi += 1
+                # Struct constructors: return the struct type.
+                int si = 0
+                while si < m.structs.len():
+                    LirStructDef sdef = m.structs.get(si).unwrap()
+                    if sdef.name == name and sdef.fields.len() > 0:
+                        return LT_STRUCT_BASE + si
+                    si += 1
             return LT_VOID
         case ICallPtr(dst, _, _):
             if dst >= 0:
@@ -1450,6 +1505,21 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
         return "/* drop flag open */;"
     if name == "__gorget_drop_flag_close":
         return "}"
+
+    # Struct constructor: Name(args...) → (C_Type){ .field0 = arg0, .field1 = arg1, ... }
+    if is_struct_constructor(name, &m):
+        String cname = find_c_struct_name(name, &m, &sn)
+        if dst >= 0:
+            String out = v(dst) + " = (" + cname + "){ "
+            Vector[String] field_names = get_struct_field_names(name, &m)
+            int ai = 0
+            while ai < args.len() and ai < field_names.len():
+                if ai > 0:
+                    out = out + ", "
+                out = out + "." + c_field_name(field_names.get(ai).unwrap()) + " = " + v(args.get(ai).unwrap())
+                ai += 1
+            return out + " };"
+        return ";"
 
     # Builtin type casts.
     if args.len() == 1:
