@@ -840,7 +840,11 @@ int runtime_fn_return_type(String name, LirModule &m):
         return LT_BOOL
     if name == "gorget_str_cmp":
         return LT_I32
-    if name == "gorget_array_get" or name == "gorget_map_get":
+    if name == "gorget_array_get" or name == "gorget_array_safe_get" or name == "gorget_map_get":
+        return LT_PTR
+    if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
+        return LT_PTR
+    if name == "gorget_map_remove" or name == "gorget_array_remove_opt":
         return LT_PTR
     if name == "gorget_array_contains" or name == "gorget_map_contains" or name == "gorget_set_contains":
         return LT_BOOL

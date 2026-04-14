@@ -281,6 +281,21 @@ String type_id_to_name(int tid, GirModule &gmod):
 
 # ── Resource type detection ──────────────────────────────
 
+# Get parameter type IDs for a function from the GIR module.
+Vector[int] get_fn_param_types(String name, GirModule &gmod):
+    Vector[int] types = []
+    int fi = 0
+    while fi < gmod.functions.len():
+        GirFunction gfn = gmod.functions.get(fi).unwrap()
+        if gfn.name == name:
+            int pi = 0
+            while pi < gfn.param_types.len():
+                types.push(gfn.param_types.get(pi).unwrap())
+                pi += 1
+            return types
+        fi += 1
+    return types
+
 # Check if a call name is a type constructor (produces a named type).
 bool is_type_constructor(String name):
     if name.starts_with("Vector__") or name.starts_with("Deque__"):
@@ -340,8 +355,35 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "strip" or method == "lstrip" or method == "rstrip":
         return lookup_or_register_named(&gmod, "GorgetString")
-    # get/unwrap: return the element type (approximation — use I64 for now)
+    # get/unwrap/pop/last/first: return the element type inferred from receiver
     if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first":
+        String recv_name = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int recv_tid = ctx.locals.get(recv).unwrap().type_id
+            if recv_tid >= 0 and recv_tid < gmod.type_table.len():
+                GirType gt = gmod.type_table.get(recv_tid).unwrap()
+                match gt:
+                    case GtNamed(name):
+                        recv_name = name
+                    else:
+                        pass
+        # Parse element type from collection name: Vector__int64_t → int64_t
+        String elem = collection_element_type(recv_name)
+        if elem == "int64_t":
+            return I64_TYPE
+        elif elem == "double":
+            return F64_TYPE
+        elif elem == "bool":
+            return BOOL_TYPE
+        elif elem == "GorgetString" or elem == "Str":
+            return lookup_or_register_named(&gmod, "GorgetString")
+        elif elem != "":
+            # Named element type (user struct)
+            return lookup_or_register_named(&gmod, elem)
+        # unwrap on an already-typed value: pass through receiver type
+        if method == "unwrap" and recv_name != "":
+            if recv >= 0 and recv < ctx.locals.len():
+                return ctx.locals.get(recv).unwrap().type_id
         return I64_TYPE
     # clone: return receiver type
     if method == "clone":
@@ -350,6 +392,24 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return I64_TYPE
     # Default to I64 for unknown methods
     return I64_TYPE
+
+# Extract element type from a collection name: Vector__int64_t → int64_t
+String collection_element_type(String name):
+    if name.starts_with("Vector__"):
+        return name.slice(8, name.len())
+    if name.starts_with("Deque__"):
+        return name.slice(7, name.len())
+    if name.starts_with("Set__"):
+        return name.slice(5, name.len())
+    if name.starts_with("HashSet__"):
+        return name.slice(9, name.len())
+    # For Option__T, extract T
+    if name.starts_with("Option__"):
+        return name.slice(8, name.len())
+    # For Result__T, extract T (ok type)
+    if name.starts_with("Result__"):
+        return name.slice(8, name.len())
+    return ""
 
 # Check if a GIR local holds a string type.
 bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
@@ -533,11 +593,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
         case EMethodCall(recv_box, mname, margs, _):
+            # unwrap() is a no-op passthrough — the self-host doesn't wrap in Option
+            int recv = lower_expr(&ctx, *recv_box, &gmod)
+            if mname == "unwrap" or mname == "unwrap_or":
+                return recv
+            # clone() — return a copy of the receiver
+            if mname == "clone":
+                int clone_dst = add_local(&ctx, ctx.locals.get(recv).unwrap().type_id, NO_NAME)
+                emit(&ctx, GIAssign(clone_dst, OpCopy(recv)))
+                return clone_dst
             # Method call: lower receiver as first arg (&self), then args.
             # Most collection/object methods take self by pointer.
             # We pass OpMove(recv) — the LIR lowerer will use SlotAddr for
             # the first arg of collection methods that expect a pointer.
-            int recv = lower_expr(&ctx, *recv_box, &gmod)
             Vector[Operand] call_args = []
             call_args.push(OpMove(recv))
             int mi2 = 0
@@ -713,11 +781,27 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             call_name = gmod.call_redirects.get(call_name).unwrap()
         # User function call
         Vector[Operand] gir_args = []
+        # Look up borrow params from pre-scanned ownership info
+        Vector[bool] borrow_flags = []
+        if gmod.fn_borrow_params.contains(call_name):
+            borrow_flags = gmod.fn_borrow_params.get(call_name).unwrap()
         int ai = 0
         while ai < args.len():
             SpannedExpr arg = args.get(ai).unwrap()
             int arg_local = lower_expr(&ctx, arg, &gmod)
-            gir_args.push(OpCopy(arg_local))
+            # Detect &arg (borrow) or pre-scanned borrow param
+            bool is_borrow = false
+            match arg.expr:
+                case EMutableBorrow(_):
+                    is_borrow = true
+                else:
+                    pass
+            if not is_borrow and ai < borrow_flags.len():
+                is_borrow = borrow_flags.get(ai).unwrap()
+            if is_borrow:
+                gir_args.push(OpMove(arg_local))
+            else:
+                gir_args.push(OpCopy(arg_local))
             ai = ai + 1
         # Look up return type from module's fn_sigs, or infer from call name
         int ret_type = I64_TYPE
@@ -2392,6 +2476,24 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         ii = ii + 1
 
+    # Pre-scan function param ownership for borrow detection
+    Dict[String, Vector[bool]] fn_borrow_params = {}
+    int bpi = 0
+    while bpi < m.items.len():
+        Item bp_item = m.items.get(bpi).unwrap()
+        match bp_item:
+            case IFunction(fdef):
+                Vector[bool] borrows = []
+                int bpj = 0
+                while bpj < fdef.params.len():
+                    Param p = fdef.params.get(bpj).unwrap()
+                    borrows.push(p.ownership == 1)  # 1 = OWN_MUTABLE (&)
+                    bpj += 1
+                fn_borrow_params.put(fdef.name, borrows)
+            else:
+                pass
+        bpi += 1
+
     Dict[String, int] named_types = {}
     # Scan struct/enum defs to determine which types have resource fields
     Dict[String, bool] resource_types = {}
@@ -2487,7 +2589,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tfi += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params)
 
     # Collect generic templates and discover instances
     Dict[String, FunctionDef] fn_templates = {}

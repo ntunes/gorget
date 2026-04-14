@@ -153,6 +153,7 @@ struct GirModule:
     Dict[String, String] call_redirects
     Dict[String, bool] imported_fns
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
+    Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
 
 # ── Helpers ──────────────────────────────────────────────
 
