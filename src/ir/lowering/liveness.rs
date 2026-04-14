@@ -78,21 +78,29 @@ fn walk_stmt(
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
         Stmt::While { condition, body, else_body, .. } => {
+            // Pass 1: collect live-at-exit set.  Discard last-use decisions —
+            // they don't account for the loop back-edge and produce false
+            // positives (e.g., match scrutinee incorrectly marked last-use).
             let mut live_body = live.clone();
-            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, lu); }
-            walk_block(&body.stmts, &mut live_body, lu);
-            uses_expr(&condition.node, condition.span.start, &mut live_body, lu);
+            let mut lu_discard = FxHashSet::default();
+            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
+            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
+            uses_expr(&condition.node, condition.span.start, &mut live_body, &mut lu_discard);
             live.extend(live_body);
-            // Pass 2
+            // Pass 2: walk with loop-propagated live set.  Only this pass
+            // records last-use decisions.
             walk_block(&body.stmts, live, lu);
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
         Stmt::For { pattern, iterable, body, else_body, .. } => {
+            // Pass 1: collect live set (discard last-use decisions).
             let mut live_body = live.clone();
-            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, lu); }
-            walk_block(&body.stmts, &mut live_body, lu);
+            let mut lu_discard = FxHashSet::default();
+            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
+            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
             kill_pattern(pattern, &mut live_body);
             live.extend(live_body);
+            // Pass 2: record last-use decisions.
             walk_block(&body.stmts, live, lu);
             kill_pattern(pattern, live);
             uses_expr(&iterable.node, iterable.span.start, live, lu);

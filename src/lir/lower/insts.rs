@@ -1100,32 +1100,14 @@ impl<'a> FuncLowering<'a> {
 
             Instruction::MoveZero { place } => {
                 // Mark a place as moved after ownership transfer.
-                // For simple (non-projected) places, emit MoveSlot (dataflow
-                // annotation) AND Memset (safety net — match-destructure on
-                // enums inside loops produces use-after-move that the borrow
-                // checker doesn't catch yet; the Memset zeroes the dead slot
-                // so subsequent matches see tag=0 instead of freed data).
-                // For projected places (field-level moves), emit Memset only.
-                let slot = self.local_to_slot[place.local.0 as usize];
+                // Simple (non-projected) places: MoveSlot only (zero runtime cost).
+                // Projected places (field-level moves): Memset (MoveSlot is whole-slot).
                 if place.projections.is_empty() {
+                    let slot = self.local_to_slot[place.local.0 as usize];
                     self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot { slot });
-                }
-                // Emit Memset as safety net.
-                let is_ptr_slot = match &self.lir_func.slots[slot.0 as usize].ty {
-                    LirType::PtrTo(sid) => self.struct_reg.lookup("GorgetString") == Some(*sid),
-                    _ => false,
-                };
-                let addr = if is_ptr_slot && place.projections.is_empty() {
-                    let a = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: a, slot });
-                    a
                 } else {
-                    self.lower_place_addr(place, bb)
-                };
-                let zero = self.emit_i32_const(bb, 0);
-                let effective_ty = if place.projections.is_empty() {
-                    self.lir_func.slots[slot.0 as usize].ty.clone()
-                } else {
+                    let addr = self.lower_place_addr(place, bb);
+                    let zero = self.emit_i32_const(bb, 0);
                     let mut gir_type = self.gir_func.locals[place.local.0 as usize].type_id;
                     for proj in &place.projections {
                         match proj {
@@ -1138,18 +1120,18 @@ impl<'a> FuncLowering<'a> {
                             Projection::Index(_) => break,
                         }
                     }
-                    self.map_type(&gir_type)
-                };
-                let byte_size = match &effective_ty {
-                    LirType::Struct(_) => c_sizeof_lir_type(&effective_ty, &self.module_structs) as i64,
-                    _ => crate::lir::types::scalar_size(&effective_ty).unwrap_or(8) as i64,
-                };
-                let size = self.emit_i64_const(bb, byte_size);
-                self.lir_func.block_mut(bb).insts.push(Inst::Memset {
-                    ptr: addr,
-                    byte: zero,
-                    size,
-                });
+                    let effective_ty = self.map_type(&gir_type);
+                    let byte_size = match &effective_ty {
+                        LirType::Struct(_) => c_sizeof_lir_type(&effective_ty, &self.module_structs) as i64,
+                        _ => crate::lir::types::scalar_size(&effective_ty).unwrap_or(8) as i64,
+                    };
+                    let size = self.emit_i64_const(bb, byte_size);
+                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                        ptr: addr,
+                        byte: zero,
+                        size,
+                    });
+                }
             }
 
             Instruction::Borrow { dst, place } | Instruction::BorrowMut { dst, place } => {

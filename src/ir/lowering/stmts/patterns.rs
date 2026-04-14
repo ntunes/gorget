@@ -550,16 +550,19 @@ pub fn emit_pattern_bindings(
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                             ctx.set_owned(dst);
                         }
-                    } else if ctx.is_owned_local(scrut_local) {
-                        // User struct without clone_fn: register directly, but
-                        // ONLY when the scrutinee owns its data. Borrowed
-                        // scrutinees (from .get().unwrap() etc.) share data with
-                        // the source — dropping would corrupt it. The scrutinee
-                        // is MoveZeroed after extraction (line ~538), so the
-                        // binding takes ownership of the fields.
+                    } else if ctx.is_owned_local(scrut_local)
+                        && ctx.func_state.scrutinee_clone_elision
+                    {
+                        // Clone elision (scrutinee is last-use): take ownership
+                        // directly.  Both the scrutinee copy AND the original
+                        // will be MoveZero'd — the extracted field owns the data.
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                         ctx.set_owned(dst);
                     }
+                    // Non-last-use: extracted field is a VIEW into the scrutinee
+                    // copy (no registration, no drop).  The copy is dropped at
+                    // the merge point, freeing the data.  This avoids both
+                    // cloning and double-free for match-in-loop patterns.
                 }
 
                 // Recurse on sub-pattern
@@ -580,10 +583,14 @@ pub fn emit_pattern_bindings(
                 }
                 false
             });
-            if has_resource_field {
+            if has_resource_field && ctx.func_state.scrutinee_clone_elision {
+                // Last-use (clone elision active): extracted fields took
+                // ownership — zero the copy to prevent double-free.
                 builder.move_zero(Place::local(scrut_local));
                 ctx.drops.mark_moved(scrut_local);
             }
+            // Non-last-use: the copy stays alive — extracted fields are views.
+            // The copy is dropped at scope exit via the normal drop tracker.
         }
 
         Pattern::Tuple(elems) => {
