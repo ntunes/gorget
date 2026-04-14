@@ -283,8 +283,7 @@ impl<'a> FuncLowering<'a> {
             }
             DropStrategy::Custom(ref fn_name) => {
                 // Custom drop: call user drop, then drop fields.
-                // Always guard Custom/Recursive drops — the drop elaborator's
-                // maybe_moved tracking doesn't cover all MoveZero paths yet.
+                // Always guarded — the elaboration pass resolves statically.
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);
@@ -330,7 +329,7 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             DropStrategy::Recursive => {
-                // Always guard Recursive drops (same as Custom).
+                // Always guarded — the elaboration pass resolves statically.
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);

@@ -1,57 +1,19 @@
 //! Drop elaboration pass — static dataflow analysis over LIR.
 //!
 //! Replaces runtime `__gorget_drop_if_alive_open__SIZE` / `__gorget_drop_if_alive_close`
-//! guards with compile-time knowledge:
+//! guards with compile-time knowledge via forward dataflow over the CFG:
 //!
-//! * **Definitely Uninitialized** slot at a conditional-drop site → delete the entire guard
-//!   sequence (open + drop calls + close).  The slot was zeroed by `emit_post_call_zeros`
-//!   on all predecessor paths, so the runtime memcmp would always skip the drop anyway.
+//! * **Definitely Uninitialized** → delete the entire guard + drop sequence.
+//! * **Definitely Initialized** → strip guard wrappers, keep unconditional drop.
+//! * **MaybeInitialized** → replace with a stack-local `bool` drop flag:
+//!   `flag := true` at entry, `false` at each `MoveSlot`, checked at the drop site
+//!   via `if (flag) { Type__drop(&slot); }`.
 //!
-//! * **Definitely Initialized** slot → the guard is redundant in the other direction: the
-//!   value is always live, so we can drop it unconditionally.  Delete the open/close guards
-//!   and leave the inner drop calls in place.
-//!
-//! * **MaybeInitialized** (moved on some paths, live on others) → replaced with a stack-local
-//!   `bool` drop flag (V3).  The flag is `true` at entry, set to `false` at each move site,
-//!   and checked at the drop site: `if (flag) { Type__drop(&slot); }`.  This is strictly
-//!   cheaper than the runtime `memcmp` guard.
-//!
-//! ## V2: post-elaboration Memset removal
-//!
-//! For every slot whose DropIfAlive guard was eliminated in the **Uninitialized** case
-//! (i.e. the drop call was also deleted), the `Memset`-to-zero emitted by
-//! `emit_post_call_zeros` is now dead weight — the slot will never be checked again.
-//! After elaboration these Memsets are removed, and a follow-up DCE pass cleans the
-//! orphaned `SlotAddr` / `IConst` values they leave behind.
-//!
-//! Memsets for slots that still have active guards (MaybeInitialized) are left alone;
-//! the runtime `memcmp` still needs them.  Memsets for slots with only plain (non-guarded)
-//! drops (e.g. `gorget_string_free`) are also left alone — those drops rely on the slot
-//! being zeroed for null-safety.
-//!
-//! ## V3: bool drop flags for MaybeInitialized slots
-//!
-//! For every slot that is `MaybeInitialized` at a conditional-drop site, a new `bool`
-//! stack slot is allocated:
-//!   1. Entry block: `flag := true` (slot starts live).
-//!   2. At each move site (`MoveSlot` or `Memset`-to-zero): `flag := false`.
-//!   3. At the drop site: guard open/close replaced with
-//!      `SlotLoad flag_val, flag_slot` → `__gorget_drop_flag_open(flag_val)` / `__gorget_drop_flag_close()`.
-//!      The C backend emits `if (flag_val) {` ... `}`.
-//!
-//! This is strictly cheaper than the `memcmp`-based guard: a single `bool` check
-//! vs. a stack-allocated zero buffer + `memcmp` call.
-//!
-//! ## V4: MoveSlot annotations replace post-move Memsets
-//!
-//! The LIR lowering now emits `MoveSlot { slot }` instead of
-//! `SlotAddr + IConst 0 + IConst SIZE + Memset` after ownership transfers.
-//! `MoveSlot` is a pure dataflow annotation with no runtime cost — it tells the
-//! forward dataflow "this slot is now dead" without emitting any code.
-//!
-//! All drop strategies (Trivial, Custom, Recursive) now emit guards when
-//! `conditional` is true, so the elaboration pass handles them uniformly.
-//! After elaboration, `MoveSlot` instructions are swept from all blocks.
+//! The dataflow uses `MoveSlot { slot }` (zero-cost annotation) to detect ownership
+//! transfer, and `SlotStore` / `Memset` for (re)initialization.  After elaboration:
+//! - Companion `Memset`s for deleted guards are removed.
+//! - All `MoveSlot` annotations are swept from all blocks.
+//! - A follow-up DCE pass cleans orphaned `SlotAddr` / `IConst` values.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -181,7 +143,7 @@ fn apply_inst_effect(
             state.insert(*slot, InitState::Uninitialized);
         }
         // memset-to-zero of a slot address → definitely uninitialized.
-        // Kept for backward compat with GIR MoveZero (projected places still emit Memset).
+        // Only projected MoveZero (field-level moves) still emits Memset.
         Inst::Memset { ptr, .. } => {
             if let Some(&slot) = val_to_slot.get(ptr) {
                 state.insert(slot, InitState::Uninitialized);
@@ -337,17 +299,9 @@ fn elaborate_block(
 
 // ── Post-elaboration Memset removal ──────────────────────────────────────────
 
-/// Remove `Memset`-to-zero instructions that were the companion zeroing for slots
-/// whose DropIfAlive guards were fully deleted by `elaborate_block`.
-///
-/// A Memset is a companion zero if:
-///   1. Its `ptr` argument was produced by a `SlotAddr { slot }` instruction, AND
-///   2. `slot` is in `deleted_slots` (i.e., the drop call for that slot was also deleted).
-///
-/// Memsets for slots that still have guards (MaybeInitialized) are NOT removed —
-/// the runtime `memcmp` still needs them.  Memsets for slots with only plain
-/// (non-guarded) drops (e.g. `gorget_string_free`) are also NOT in `deleted_slots`
-/// and are therefore left alone.
+/// Remove `Memset`-to-zero instructions whose target slot had its guard + drop
+/// fully deleted (Uninitialized case).  These Memsets are dead — no runtime check
+/// or drop will ever read the zeroed data.
 ///
 /// Returns the number of `Memset` instructions removed.
 fn remove_companion_memsets(
@@ -421,7 +375,6 @@ fn insert_drop_flags(
     }
 
     // 3. After each MoveSlot / Memset that moves a flagged slot, insert `flag := false`.
-    //    Take insts out via mem::take to avoid overlapping borrows with func.next_value().
     for bi in 0..func.blocks.len() {
         let old_insts = std::mem::take(&mut func.blocks[bi].insts);
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
@@ -429,7 +382,7 @@ fn insert_drop_flags(
             let flag_slot = if let Inst::MoveSlot { slot } = &inst {
                 slot_to_flag.get(slot).copied()
             } else if let Inst::Memset { ptr, .. } = &inst {
-                // Fallback for GIR MoveZero (projected places still emit Memset).
+                // Projected MoveZero (field-level moves) still emits Memset.
                 val_to_slot.get(ptr)
                     .and_then(|s| slot_to_flag.get(s))
                     .copied()
@@ -538,10 +491,10 @@ impl ElabStats {
 }
 
 /// Run drop elaboration on every function in the module:
-///   - V1: guard elimination for Uninitialized / Initialized slots.
-///   - V2: companion Memset removal for Uninitialized slots.
-///   - V3: bool drop flags for MaybeInitialized slots.
-///   - V4: MoveSlot cleanup (remove consumed annotations).
+///   1. Guard elimination — Uninitialized → delete, Initialized → strip.
+///   2. Companion Memset removal for deleted (Uninitialized) slots.
+///   3. Bool drop flags for MaybeInitialized slots.
+///   4. MoveSlot sweep — remove consumed annotations.
 pub fn elaborate_drops(module: &mut LirModule) -> ElabStats {
     let mut stats = ElabStats::default();
     for func in &mut module.functions {
