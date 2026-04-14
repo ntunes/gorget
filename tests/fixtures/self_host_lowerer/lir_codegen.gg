@@ -812,7 +812,7 @@ int runtime_fn_return_type(String name, LirModule &m):
     if name == "gorget_ordered_set_new" or name == "gorget_set_new" or name == "gorget_ordered_set_new_str" or name == "gorget_set_new_str":
         return find_struct_type("GorgetSet", &m)
     # String functions
-    if name == "gorget_str_concat" or name == "gorget_string_from_str":
+    if name == "gorget_str_concat" or name == "gorget_str_cat" or name == "gorget_string_from_str":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_from_cstr" or name == "gorget_string_adopt":
         return find_struct_type("GorgetString", &m)

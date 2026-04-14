@@ -281,6 +281,20 @@ String type_id_to_name(int tid, GirModule &gmod):
 
 # ── Resource type detection ──────────────────────────────
 
+# Check if a GIR local holds a string type.
+bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
+    if local_id < 0 or local_id >= ctx.locals.len():
+        return false
+    int tid = ctx.locals.get(local_id).unwrap().type_id
+    if tid >= 0 and tid < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(tid).unwrap()
+        match gt:
+            case GtNamed(name):
+                return name == "GorgetString" or name == "String" or name == "Str"
+            else:
+                pass
+    return false
+
 bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types):
     match stype.ty:
         case TPrimitive(name):
@@ -401,6 +415,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if is_comparison(op):
                 int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+                return dst
+            # String concatenation: + on string operands → gorget_str_cat(Str, Str)
+            if op == "+" and is_string_local(lhs, &ctx, &gmod):
+                int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+                int dst = add_local(&ctx, gs_tid, NO_NAME)
+                Vector[Operand] concat_args = []
+                concat_args.push(OpCopy(lhs))
+                concat_args.push(OpCopy(rhs))
+                emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
                 return dst
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
