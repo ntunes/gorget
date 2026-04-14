@@ -555,16 +555,18 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
             return dst
         case OpCopy(local_id):
             int slot = local_to_slot.get(local_id).unwrap()
+            int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotLoad(dst, slot, LT_I64))
+            blk.insts.push(ISlotLoad(dst, slot, slot_ty))
             f.blocks.set(bb, blk)
             return dst
         case OpMove(local_id):
             int slot = local_to_slot.get(local_id).unwrap()
+            int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotLoad(dst, slot, LT_I64))
+            blk.insts.push(ISlotLoad(dst, slot, slot_ty))
             f.blocks.set(bb, blk)
             return dst
     return -1

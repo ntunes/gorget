@@ -1384,7 +1384,30 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
                 return v(dst) + " = (bool)" + v(args.get(0).unwrap()) + ";"
             return ";"
 
-    # Generic extern call.
+    # Printf/fprintf: Str args need .data extraction for C's printf.
+    if name == "printf" or name == "fprintf":
+        String out = ""
+        if dst >= 0:
+            out = v(dst) + " = "
+        out = out + name + "("
+        int ai = 0
+        while ai < args.len():
+            if ai > 0:
+                out = out + ", "
+            int arg_id = args.get(ai).unwrap()
+            int arg_ty = -1
+            if val_types.contains(arg_id):
+                arg_ty = val_types.get(arg_id).unwrap()
+            if lir_is_aggregate(arg_ty):
+                # Str struct → extract .data for C printf
+                out = out + v(arg_id) + ".data"
+            else:
+                out = out + v(arg_id)
+            ai += 1
+        return out + ");"
+
+    # gorget_str_* functions: pass Str args by value (they expect Str struct).
+    # Generic extern call — pass all args directly.
     String out = ""
     if dst >= 0:
         out = v(dst) + " = "
