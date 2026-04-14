@@ -206,7 +206,7 @@ enum LirInst:
     IInlineC(int, String)             # dst (-1=none), code
 
     # Closure packing: env_ptr + call_func → GorgetClosure slot
-    IClosurePack(int, int, int)       # slot, env_ptr, call_func
+    IClosurePack(int, int, int, bool) # slot, env_ptr, call_func, needs_adapter
 
     # Move annotation (dataflow only, no runtime cost — swept by drop elaboration)
     IMoveSlot(int)                    # slot

@@ -1148,7 +1148,7 @@ int inst_dst(LirInst &inst):
             return -1
         case IInlineC(dst, _):
             return dst
-        case IClosurePack(_, _, _):
+        case IClosurePack(_, _, _, _):
             return -1
         case IMoveSlot(_):
             return -1
@@ -1444,8 +1444,11 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 return "/* inline_c: " + code + " */;"
             return code
 
-        case IClosurePack(slot, env_ptr, call_func):
-            String fn_name = m.functions.get(call_func).unwrap().name
+        case IClosurePack(slot, env_ptr, call_func, needs_adapter):
+            String raw_name = m.functions.get(call_func).unwrap().name
+            String fn_name = raw_name
+            if needs_adapter:
+                fn_name = "__adapt_" + raw_name
             return s(slot) + " = (GorgetClosure){.fn_ptr = (void*)" + fn_name + ", .env = (void*)" + v(env_ptr) + "};"
 
         case IMoveSlot(_):

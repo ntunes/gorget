@@ -321,10 +321,13 @@ pub enum Inst {
     ///
     /// `env_ptr` is a heap-allocated pointer to the captured environment
     /// (the lowerer emits the malloc + memcpy before this instruction).
-    /// `call_func` is the `__Closure_N__call` function.
+    /// `call_func` is the function to call through the closure.
+    /// `needs_adapter`: when true, backends emit an `__adapt_` wrapper around
+    /// `call_func` (bare function ref → callable coercion). When false,
+    /// `call_func` is already a `__Closure_N__call` that takes env directly.
     ///
     /// Semantically: `slot = GorgetClosure { fn_ptr = call_func, env = env_ptr }`.
-    ClosurePack { slot: SlotId, env_ptr: ValueId, call_func: FuncId },
+    ClosurePack { slot: SlotId, env_ptr: ValueId, call_func: FuncId, needs_adapter: bool },
 
     // ── Ownership ────────────────────────────────────────────────────
     /// Marks a slot as moved (ownership transferred).  No runtime effect —

@@ -1584,15 +1584,6 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let slot_is_closure = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetClosure"));
             let is_str_lit_val = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
             let is_cstr = cstr_vals.get(value.0 as usize).copied().unwrap_or(false);
-            // FuncAddr → GorgetClosure slot: wrap named function with adapter.
-            if slot_is_closure {
-                if let Some(fid) = func_addr_targets.get(value.0 as usize).and_then(|t| *t) {
-                    let adapt_name = format!("__adapt_{}", c_func_name(&module.functions[fid.0 as usize].name));
-                    write!(out, "{s} = (GorgetClosure){{.fn_ptr = (void*){adapt}, .env = NULL}};",
-                        s = s(*slot), adapt = adapt_name).unwrap();
-                    return;
-                }
-            }
             // GorgetClosure slot with non-closure value (e.g. void*, int64_t, or void from another slot):
             // memcpy to avoid type mismatch. The value is always a pointer to closure data
             // (from SlotAddr, array_get, etc.), even when LIR types it as I64.
@@ -2193,10 +2184,15 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             // No-op: consumed by drop elaboration. Should not reach backend normally.
         }
 
-        Inst::ClosurePack { slot, env_ptr, call_func } => {
-            let call_fn_name = c_func_name(&module.functions[call_func.0 as usize].name);
+        Inst::ClosurePack { slot, env_ptr, call_func, needs_adapter } => {
+            let raw_name = c_func_name(&module.functions[call_func.0 as usize].name);
+            let fn_name = if *needs_adapter {
+                format!("__adapt_{raw_name}")
+            } else {
+                raw_name
+            };
             write!(out, "{s} = (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*){env}}};",
-                s = s(*slot), fn_name = call_fn_name, env = v(*env_ptr)).unwrap();
+                s = s(*slot), env = v(*env_ptr)).unwrap();
         }
 
         Inst::Nop => {

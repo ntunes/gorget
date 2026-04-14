@@ -15,6 +15,11 @@ impl<'a> FuncLowering<'a> {
                     if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {
                         return;
                     }
+                    // Null → aggregate destination: emit Memset(0) instead of
+                    // NullPtr + Store so backends don't need to scan for NullPtr origin.
+                    if self.try_null_memset(dst, bb) {
+                        return;
+                    }
                 }
                 // Special-case: Option/Result source → non-Option/Result dest.
                 if let Some(val) = self.try_enum_payload_extract(dst, value, bb) {
@@ -641,6 +646,13 @@ impl<'a> FuncLowering<'a> {
                                     ptr: tag_ptr,
                                     value: tag_val,
                                 });
+                                continue;
+                            }
+                            // Non-enum aggregate field: struct is already zero-initialized,
+                            // so Null is a no-op. Skip to avoid NullPtr → Store(aggregate)
+                            // which forces backends to scan for null origin.
+                            let field_lir_ty = self.map_type(fty);
+                            if field_lir_ty.is_aggregate() {
                                 continue;
                             }
                         }

@@ -1087,8 +1087,54 @@ impl<'a> FuncLowering<'a> {
         self.map_type(&current_type)
     }
 
-    /// Detect `__Closure_N` source → `GorgetClosure` dest and emit explicit
-    /// heap-alloc + memcpy + ClosurePack.  Returns `true` if handled.
+    /// Emit Memset(0) for Null → aggregate destination.
+    /// Handles both simple locals (SlotAddr + Memset) and projected fields (FieldPtr + Memset).
+    /// Returns true if the destination is aggregate and was zero-filled.
+    pub(super) fn try_null_memset(&mut self, dst: &Place, bb: BlockId) -> bool {
+        use crate::lir::lower::types::c_sizeof_lir_type;
+
+        // Determine the LIR type of the destination.
+        let dst_ty = if dst.projections.is_empty() {
+            let slot = self.local_to_slot[dst.local.0 as usize];
+            self.lir_func.slots[slot.0 as usize].ty.clone()
+        } else {
+            // Projected destination — resolve through the projection chain.
+            let gir_ty = match self.resolve_projected_gir_type(dst) {
+                Some(ty) => ty,
+                None => return false,
+            };
+            self.map_type(&gir_ty)
+        };
+
+        // Only aggregate types benefit from Memset — scalars and pointers
+        // can use a normal NullPtr store.
+        if !dst_ty.is_aggregate() { return false; }
+
+        let size = c_sizeof_lir_type(&dst_ty, self.module_structs);
+        if size == 0 { return false; }
+
+        // Get the address of the destination.
+        let ptr = if dst.projections.is_empty() {
+            let slot = self.local_to_slot[dst.local.0 as usize];
+            let addr = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: addr, slot });
+            addr
+        } else {
+            self.lower_place_addr(dst, bb)
+        };
+
+        // Emit: memset(ptr, 0, size)
+        let zero = self.emit_i32_const(bb, 0);
+        let sz = self.emit_i64_const(bb, size as i64);
+        self.lir_func.block_mut(bb).insts.push(Inst::Memset { ptr, byte: zero, size: sz });
+        true
+    }
+
+    /// Detect closure/function-ref → `GorgetClosure` slot and emit explicit
+    /// ClosurePack.  Two cases:
+    /// 1. `__Closure_N` local → heap-alloc env + memcpy + ClosurePack(needs_adapter=false)
+    /// 2. `FuncRef` constant → NullPtr env + ClosurePack(needs_adapter=true)
+    /// Returns `true` if handled.
     pub(super) fn try_closure_pack(
         &mut self,
         dst_local: ir::types::LocalId,
@@ -1110,7 +1156,22 @@ impl<'a> FuncLowering<'a> {
         };
         if !is_closure_slot { return false; }
 
-        // Source must be a __Closure_N local.
+        // Case 1: FuncRef constant → bare function ref, env = NULL.
+        if let Operand::Constant(Constant::FuncRef(name)) = value {
+            if let Some(&func_id) = self.func_index.get(name) {
+                let null_env = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_env });
+                self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+                    slot: dst_slot,
+                    env_ptr: null_env,
+                    call_func: func_id,
+                    needs_adapter: true,
+                });
+                return true;
+            }
+        }
+
+        // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
         let src_closure_name = match value {
             Operand::Copy(place) | Operand::Move(place) => {
                 if !place.projections.is_empty() { return false; }
@@ -1170,6 +1231,7 @@ impl<'a> FuncLowering<'a> {
             slot: dst_slot,
             env_ptr: heap_ptr,
             call_func,
+            needs_adapter: false,
         });
 
         true

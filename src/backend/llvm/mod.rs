@@ -4791,12 +4791,17 @@ fn emit_inst(
         }
 
         // ── ClosurePack ─────────────────────────────────────────────
-        Inst::ClosurePack { slot, env_ptr, call_func } => {
-            let call_fn_name = &module.functions[call_func.0 as usize].name;
+        Inst::ClosurePack { slot, env_ptr, call_func, needs_adapter } => {
+            let raw_name = &module.functions[call_func.0 as usize].name;
+            let fn_name = if *needs_adapter {
+                format!("__adapt_{}", c_func_name(raw_name))
+            } else {
+                raw_name.clone()
+            };
             let uid = format!("cp.{}.{}", slot.0, env_ptr.0);
             // Store fn_ptr to GorgetClosure.fn_ptr (field 0)
             writeln!(out, "  %{uid}.fpgep = getelementptr %GorgetClosure, ptr %s{}, i32 0, i32 0", slot.0).unwrap();
-            writeln!(out, "  store ptr @{call_fn_name}, ptr %{uid}.fpgep").unwrap();
+            writeln!(out, "  store ptr @{fn_name}, ptr %{uid}.fpgep").unwrap();
             // Store env_ptr to GorgetClosure.env (field 1)
             writeln!(out, "  %{uid}.envgep = getelementptr %GorgetClosure, ptr %s{}, i32 0, i32 1", slot.0).unwrap();
             writeln!(out, "  store ptr %v{}, ptr %{uid}.envgep", env_ptr.0).unwrap();
