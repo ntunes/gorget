@@ -1,0 +1,42 @@
+# Return borrowed parameter from throws function — the Result.Ok wrapping
+# must clone the value to ensure ownership. Without the clone, the Result
+# holds a dangling pointer to the caller's stack slot.
+
+String identity(String s) throws String:
+    return s
+
+String find_first(Vector[String] items) throws String:
+    if items.len() == 0:
+        throw "empty"
+    return items[0]
+
+void main():
+    # Borrowed param → clone in Result.Ok
+    Vector[String] items = Vector[String]()
+    items.push("hello")
+    items.push("world")
+    String first = items[0]
+    auto r1 = identity(first)
+    match r1:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    # Vector index → clone in Result.Ok
+    auto r2 = find_first(items)
+    match r2:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    # Error path
+    auto r3 = find_first(Vector[String]())
+    match r3:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    print("done")

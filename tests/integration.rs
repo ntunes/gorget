@@ -1243,6 +1243,18 @@ fn drop_dict_loop() {
 }
 
 #[test]
+fn drop_throws_return() {
+    run_gg(
+        "drop_throws_return.gg",
+        "\
+hello
+hello
+empty
+done",
+    );
+}
+
+#[test]
 fn drop_nested_struct_move() {
     run_gg(
         "drop_nested_struct_move.gg",

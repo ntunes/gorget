@@ -831,6 +831,44 @@ fn lower_return(
                 // Expression already produced a Result — assign directly, no wrapping
                 builder.assign(Place::local(LocalId(0)), operand);
             } else {
+                // Ensure the return value is owned before wrapping in Result.Ok.
+                // Bare parameters are Ptr(T) — storing the raw pointer into the
+                // Result creates a dangling alias. Resolve through Ptr and clone.
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty() {
+                        let src_type = builder.local_type(place.local);
+                        // Ptr(T) → clone the inner T (same as non-throws return path)
+                        if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
+                            if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                let cloned = builder.call(
+                                    &clone_fn,
+                                    vec![operand.clone()],
+                                    inner,
+                                );
+                                operand = FunctionBuilder::copy(cloned);
+                                returned_local = Some(cloned);
+                            }
+                        } else if ctx.type_registry.needs_drop(src_type) {
+                            // Owned resource — clone if borrowed/shared
+                            let can_skip_clone = ctx.is_fresh_string(place.local)
+                                || (ctx.is_owned_local(place.local)
+                                    && !ctx.has_string_borrowers(place.local));
+                            if !can_skip_clone {
+                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
+                                    ctx.warn_implicit_clone(expr.span, src_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                    let cloned = builder.call(
+                                        &clone_fn,
+                                        vec![operand.clone()],
+                                        src_type,
+                                    );
+                                    operand = FunctionBuilder::copy(cloned);
+                                    returned_local = Some(cloned);
+                                }
+                            }
+                        }
+                    }
+                }
                 // Wrap value in Result.Ok — the operand's local is consumed (moved into Result)
                 let ok_dst = {
                     let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
