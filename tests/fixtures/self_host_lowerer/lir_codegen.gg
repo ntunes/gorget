@@ -1369,6 +1369,14 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
     if name == "__gorget_drop_if_alive_close":
         return "} }"
 
+    # Drop flag guard (V3 drop elaboration).
+    if name == "__gorget_drop_flag_open":
+        if args.len() > 0:
+            return "if (" + v(args.get(0).unwrap()) + ") {"
+        return "/* drop flag open */;"
+    if name == "__gorget_drop_flag_close":
+        return "}"
+
     # Builtin type casts.
     if args.len() == 1:
         if name == "float":
