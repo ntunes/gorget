@@ -281,6 +281,76 @@ String type_id_to_name(int tid, GirModule &gmod):
 
 # ── Resource type detection ──────────────────────────────
 
+# Check if a call name is a type constructor (produces a named type).
+bool is_type_constructor(String name):
+    if name.starts_with("Vector__") or name.starts_with("Deque__"):
+        return true
+    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        return true
+    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+        return true
+    if name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return true
+    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
+        return true
+    # Also check for user-defined struct names (capitalized, no __)
+    if name.len() > 0:
+        String first = name.slice(0, 1)
+        if first >= "A" and first <= "Z" and not name.contains("__"):
+            return true
+    return false
+
+# Get the type name for a GIR local (e.g., "Vector__int64_t", "GorgetString").
+String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
+    if local_id < 0 or local_id >= ctx.locals.len():
+        return "int64_t"
+    int tid = ctx.locals.get(local_id).unwrap().type_id
+    if tid >= 0 and tid < gmod.type_table.len():
+        GirType gt = gmod.type_table.get(tid).unwrap()
+        match gt:
+            case GtNamed(name):
+                return name
+            else:
+                pass
+    return "int64_t"
+
+# Infer the return type of a method call.
+int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
+    # Void-returning methods
+    if method == "push" or method == "set" or method == "put" or method == "remove":
+        return UNIT_TYPE
+    if method == "clear" or method == "insert" or method == "extend" or method == "reverse":
+        return UNIT_TYPE
+    if method == "sort" or method == "swap":
+        return UNIT_TYPE
+    # Int-returning methods
+    if method == "len" or method == "capacity" or method == "find_index":
+        return I64_TYPE
+    if method == "find":
+        return I64_TYPE
+    # Bool-returning methods
+    if method == "contains" or method == "is_empty" or method == "any" or method == "all":
+        return BOOL_TYPE
+    if method == "starts_with" or method == "ends_with":
+        return BOOL_TYPE
+    # String-returning methods
+    if method == "slice" or method == "trim" or method == "upper" or method == "lower":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "replace" or method == "repeat" or method == "join":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "strip" or method == "lstrip" or method == "rstrip":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    # get/unwrap: return the element type (approximation — use I64 for now)
+    if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first":
+        return I64_TYPE
+    # clone: return receiver type
+    if method == "clone":
+        if recv >= 0 and recv < ctx.locals.len():
+            return ctx.locals.get(recv).unwrap().type_id
+        return I64_TYPE
+    # Default to I64 for unknown methods
+    return I64_TYPE
+
 # Check if a GIR local holds a string type.
 bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
@@ -463,16 +533,34 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
         case EMethodCall(recv_box, mname, margs, _):
-            # Method call: lower receiver and args, return unit placeholder
-            lower_expr(&ctx, *recv_box, &gmod)
+            # Method call: lower receiver as first arg (&self), then args.
+            # Most collection/object methods take self by pointer.
+            # We pass OpMove(recv) — the LIR lowerer will use SlotAddr for
+            # the first arg of collection methods that expect a pointer.
+            int recv = lower_expr(&ctx, *recv_box, &gmod)
+            Vector[Operand] call_args = []
+            call_args.push(OpMove(recv))
             int mi2 = 0
             while mi2 < margs.len():
                 SpannedExpr ma = margs.get(mi2).unwrap()
-                lower_expr(&ctx, ma, &gmod)
+                int ma_val = lower_expr(&ctx, ma, &gmod)
+                call_args.push(OpCopy(ma_val))
                 mi2 += 1
-            int mdst2 = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(mdst2, OpConstUnit()))
-            return mdst2
+            # Build the mangled method name: TypeName__method
+            # Resolve receiver type name from the GIR local's type
+            String recv_type_name = local_type_name(recv, &ctx, &gmod)
+            String full_name = recv_type_name + "__" + mname
+            # Determine return type — most methods return the receiver's type or a scalar
+            int ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
+            if ret_tid == UNIT_TYPE:
+                # Void-returning method — no destination
+                emit(&ctx, GICallExtern(-1, full_name, call_args))
+                int void_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(void_dst, OpConstUnit()))
+                return void_dst
+            int mdst = add_local(&ctx, ret_tid, NO_NAME)
+            emit(&ctx, GICallExtern(mdst, full_name, call_args))
+            return mdst
         case EFieldAccess(base_box, field_name):
             # Field access: lower base, return unit placeholder
             lower_expr(&ctx, *base_box, &gmod)
@@ -631,10 +719,13 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int arg_local = lower_expr(&ctx, arg, &gmod)
             gir_args.push(OpCopy(arg_local))
             ai = ai + 1
-        # Look up return type from module's fn_sigs
+        # Look up return type from module's fn_sigs, or infer from call name
         int ret_type = I64_TYPE
         if gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
+        # Collection/struct constructors: return the named type
+        if ret_type == I64_TYPE and is_type_constructor(call_name):
+            ret_type = lookup_or_register_named(&gmod, call_name)
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
         result = dst
