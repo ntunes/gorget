@@ -298,13 +298,49 @@ impl<'a> FuncLowering<'a> {
                     // Cast to void — just evaluate for side effects, don't generate (void)(val).
                     // No store needed.
                 } else {
-                    let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
-                        dst: result,
-                        value: val,
-                        to,
-                    });
-                    self.store_to_local(*dst, result, bb);
+                    // GorgetString → int: extract first codepoint via gorget_str_ord.
+                    let src_is_str = match value {
+                        Operand::Copy(place) | Operand::Move(place) => {
+                            let idx = place.local.0 as usize;
+                            if idx < self.gir_func.locals.len() {
+                                let gir_ty = self.gir_func.locals[idx].type_id;
+                                match self.gir_types.get(gir_ty) {
+                                    Some(GirType::Named(n)) if n == "GorgetString" => true,
+                                    Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => {
+                                        matches!(self.gir_types.get(*inner), Some(GirType::Named(n)) if n == "GorgetString")
+                                    }
+                                    _ => false,
+                                }
+                            } else { false }
+                        }
+                        _ => false,
+                    };
+                    if src_is_str && to.is_integer() {
+                        let str_ty = self.struct_reg.lookup("GorgetString")
+                            .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        self.ensure_extern("gorget_str_ord",
+                            &[str_ty], &LirType::I64);
+                        let abis = self.pending_externs.iter()
+                            .find(|e| e.name == "gorget_str_ord")
+                            .map(|e| e.param_abis.clone())
+                            .unwrap_or_default();
+                        let ord_result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(ord_result),
+                            name: "gorget_str_ord".to_string(),
+                            args: vec![val],
+                            original_name: None, arg_abis: abis,
+                        });
+                        self.store_to_local(*dst, ord_result, bb);
+                    } else {
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                            dst: result,
+                            value: val,
+                            to,
+                        });
+                        self.store_to_local(*dst, result, bb);
+                    }
                 }
             }
 

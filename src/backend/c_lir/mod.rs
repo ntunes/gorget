@@ -1950,28 +1950,10 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{} = !{};", v(*dst), v(*operand)).unwrap();
         }
 
-        // Type conversions
+        // Type conversions (purely scalar — GorgetString→int is lowered
+        // to CallExtern(gorget_str_ord) by the LIR lowerer).
         Inst::IntCast { dst, value, to } => {
-            // GorgetString → int: extract the first byte (ASCII codepoint), not cast the pointer.
-            let src_is_str_ptr = ptr_pointee.get(value.0 as usize)
-                .and_then(|t| t.as_ref())
-                .map_or(false, |t| matches!(t, LirType::Struct(sid) if {
-                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
-                }));
-            let src_is_str_val = !src_is_str_ptr && val_types.get(value.0 as usize)
-                .and_then(|t| t.as_ref())
-                .map_or(false, |t| matches!(t, LirType::Struct(sid) if {
-                    module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString")
-                }));
-            if src_is_str_ptr {
-                // Value is a pointer to Str struct — deref and extract first byte of .data.
-                write!(out, "{} = ({})((uint8_t)((const char*)((Str*)({}))-> data)[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
-            } else if src_is_str_val {
-                // Value is a Str struct by value — extract first byte of .data.
-                write!(out, "{} = ({})((uint8_t)((const char*){}.data)[0]);", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
-            } else {
-                write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
-            }
+            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::FloatCast { dst, value, to } => {
             write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
