@@ -116,6 +116,7 @@ fn check_slot_refs(
 ) {
     let slot = match inst {
         Inst::SlotStore { slot, .. }
+        | Inst::ClosurePack { slot, .. }
         | Inst::SlotLoad { slot, .. }
         | Inst::SlotAddr { slot, .. }
         | Inst::MoveSlot { slot } => Some(*slot),

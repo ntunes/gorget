@@ -316,6 +316,16 @@ pub enum Inst {
     /// that the GIR generates as raw C (e.g., `_x = (int64_t)_y.cap`).
     InlineC { dst: Option<ValueId>, code: String },
 
+    // ── Closures ─────────────────────────────────────────────────────
+    /// Pack a closure env + call function into a GorgetClosure slot.
+    ///
+    /// `env_ptr` is a heap-allocated pointer to the captured environment
+    /// (the lowerer emits the malloc + memcpy before this instruction).
+    /// `call_func` is the `__Closure_N__call` function.
+    ///
+    /// Semantically: `slot = GorgetClosure { fn_ptr = call_func, env = env_ptr }`.
+    ClosurePack { slot: SlotId, env_ptr: ValueId, call_func: FuncId },
+
     // ── Ownership ────────────────────────────────────────────────────
     /// Marks a slot as moved (ownership transferred).  No runtime effect —
     /// pure dataflow annotation consumed by the drop elaboration pass.
@@ -332,7 +342,7 @@ impl Inst {
             Inst::SlotStore { .. } | Inst::Store { .. } | Inst::Memset { .. }
             | Inst::Memcpy { .. } | Inst::BoundsCheck { .. } | Inst::DivCheck { .. }
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
-            | Inst::MoveSlot { .. } | Inst::Nop => None,
+            | Inst::ClosurePack { .. } | Inst::MoveSlot { .. } | Inst::Nop => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -380,6 +390,7 @@ impl Inst {
     pub fn uses(&self) -> Vec<ValueId> {
         match self {
             Inst::SlotStore { value, .. } => vec![*value],
+            Inst::ClosurePack { env_ptr, .. } => vec![*env_ptr],
             Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => vec![],
             Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
             | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }

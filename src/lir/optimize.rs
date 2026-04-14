@@ -380,6 +380,7 @@ fn has_side_effects(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::SlotStore { .. }
+            | Inst::ClosurePack { .. }
             | Inst::Store { .. }
             | Inst::Memset { .. }
             | Inst::Memcpy { .. }
@@ -1233,6 +1234,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
 
     match inst {
         Inst::SlotStore { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::ClosurePack { env_ptr, .. } => { *env_ptr = next(&uses, &mut idx); }
         Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
         Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
         | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }

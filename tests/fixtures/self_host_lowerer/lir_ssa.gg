@@ -250,6 +250,8 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
     match inst:
         case ISlotStore(slot, value, is_move):
             return ISlotStore(slot, sub_val(value, &subst), is_move)
+        case IClosurePack(slot, env_ptr, call_func):
+            return IClosurePack(slot, sub_val(env_ptr, &subst), call_func)
         case IAdd(dst, ty, lhs, rhs, ovf):
             return IAdd(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
         case ISub(dst, ty, lhs, rhs, ovf):

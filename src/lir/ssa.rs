@@ -430,6 +430,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
 
     match inst {
         Inst::SlotStore { value, .. } => sub(value),
+        Inst::ClosurePack { env_ptr, .. } => sub(env_ptr),
         Inst::Add { lhs, rhs, .. }
         | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. }

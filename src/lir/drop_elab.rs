@@ -135,7 +135,7 @@ fn apply_inst_effect(
 ) {
     match inst {
         // Writing to a slot → definitely initialized.
-        Inst::SlotStore { slot, .. } => {
+        Inst::SlotStore { slot, .. } | Inst::ClosurePack { slot, .. } => {
             state.insert(*slot, InitState::Initialized);
         }
         // MoveSlot annotation → definitely uninitialized (V4).

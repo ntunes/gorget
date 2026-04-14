@@ -31,6 +31,13 @@ impl<'a> FuncLowering<'a> {
                         return;
                     }
                 }
+                // Special-case: __Closure_N → GorgetClosure slot (closure escape).
+                // Heap-allocate the env, memcpy, and emit ClosurePack.
+                if dst.projections.is_empty() {
+                    if self.try_closure_pack(dst.local, value, bb) {
+                        return;
+                    }
+                }
                 let is_move = matches!(mode, ir::instructions::AssignMode::Move);
                 let val = self.lower_operand(value, bb);
                 if is_move && dst.projections.is_empty() {

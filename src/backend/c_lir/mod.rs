@@ -1603,48 +1603,6 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let slot_is_closure = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetClosure"));
             let is_str_lit_val = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
             let is_cstr = cstr_vals.get(value.0 as usize).copied().unwrap_or(false);
-            // __Closure_N struct → GorgetClosure slot: heap-alloc env + pack fn_ptr/env.
-            let val_closure_name = if slot_is_closure {
-                // Check direct struct type or pointee type for __Closure_N
-                let check_sid = |sid: &StructId| -> Option<String> {
-                    let name = sn.get(&sid.0).cloned().unwrap_or_default();
-                    if name.starts_with("__Closure_") {
-                        return Some(name);
-                    }
-                    // __lir_sN aliases — check the actual module struct name
-                    module.structs.get(sid.0 as usize)
-                        .filter(|sd| sd.name.starts_with("__Closure_"))
-                        .map(|sd| sd.name.clone())
-                };
-                if let Some(LirType::Struct(val_sid)) = val_ty {
-                    check_sid(val_sid)
-                } else if matches!(val_ty, Some(LirType::Ptr)) {
-                    // Pointer to a __Closure_N struct (e.g., from SlotAddr)
-                    if let Some(Some(LirType::Struct(pt_sid))) = ptr_pointee.get(value.0 as usize) {
-                        check_sid(pt_sid)
-                    } else { None }
-                } else { None }
-            } else { None };
-            if let Some(closure_struct_name) = val_closure_name {
-                let call_fn = format!("{closure_struct_name}__call");
-                let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));
-                // Use the LIR C name (e.g. __lir_s9) for the struct, not the GIR name (__Closure_0).
-                let c_struct_name = if val_is_ptr {
-                    if let Some(Some(LirType::Struct(pt_sid))) = ptr_pointee.get(value.0 as usize) {
-                        c_type_named(&LirType::Struct(*pt_sid), sn)
-                    } else { closure_struct_name.clone() }
-                } else if let Some(LirType::Struct(sid)) = val_ty {
-                    c_type_named(&LirType::Struct(*sid), sn)
-                } else { closure_struct_name.clone() };
-                if val_is_ptr {
-                    write!(out, "{{ {c_struct_name}* __heap = ({c_struct_name}*)GORGET_ALLOC(sizeof({c_struct_name})); memcpy(__heap, {v}, sizeof({c_struct_name})); {s} = (GorgetClosure){{.fn_ptr = (void*){call_fn}, .env = (void*)__heap}}; }}",
-                        v = v(*value), s = s(*slot)).unwrap();
-                } else {
-                    write!(out, "{{ {c_struct_name}* __heap = ({c_struct_name}*)GORGET_ALLOC(sizeof({c_struct_name})); *__heap = {v}; {s} = (GorgetClosure){{.fn_ptr = (void*){call_fn}, .env = (void*)__heap}}; }}",
-                        v = v(*value), s = s(*slot)).unwrap();
-                }
-                return;
-            }
             // FuncAddr → GorgetClosure slot: wrap named function with adapter.
             if slot_is_closure {
                 if let Some(fid) = func_addr_targets.get(value.0 as usize).and_then(|t| *t) {
@@ -2252,6 +2210,12 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
 
         Inst::MoveSlot { .. } => {
             // No-op: consumed by drop elaboration. Should not reach backend normally.
+        }
+
+        Inst::ClosurePack { slot, env_ptr, call_func } => {
+            let call_fn_name = c_func_name(&module.functions[call_func.0 as usize].name);
+            write!(out, "{s} = (GorgetClosure){{.fn_ptr = (void*){fn_name}, .env = (void*){env}}};",
+                s = s(*slot), fn_name = call_fn_name, env = v(*env_ptr)).unwrap();
         }
 
         Inst::Nop => {
