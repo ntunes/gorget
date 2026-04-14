@@ -144,42 +144,42 @@ String format_args(Vector[Operand] args, GirModule &gmod):
 
 String format_instruction(Instruction inst, GirModule &gmod):
     match inst:
-        case IAssign(dst, val):
+        case GIAssign(dst, val):
             return "        _" + int_to_str(dst) + " = " + format_operand(val, &gmod)
-        case IBinOp(dst, op, tid, lhs, rhs):
+        case GIBinOp(dst, op, tid, lhs, rhs):
             return "        _" + int_to_str(dst) + " = " + binop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
-        case IUnOp(dst, op, tid, operand):
+        case GIUnOp(dst, op, tid, operand):
             return "        _" + int_to_str(dst) + " = " + unop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(operand, &gmod)
-        case ICmp(dst, op, tid, lhs, rhs):
+        case GICmp(dst, op, tid, lhs, rhs):
             return "        _" + int_to_str(dst) + " = " + cmpop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
-        case ICall(dst, name, args):
+        case GICall(dst, name, args):
             String args_str = format_args(args, &gmod)
             if dst >= 0:
                 return "        _" + int_to_str(dst) + " = call @" + name + "(" + args_str + ")"
             return "        call @" + name + "(" + args_str + ")"
-        case ICallExtern(dst, name, args):
+        case GICallExtern(dst, name, args):
             String args_str = format_args(args, &gmod)
             if dst >= 0:
                 return "        _" + int_to_str(dst) + " = call_extern @" + name + "(" + args_str + ")"
             return "        call_extern @" + name + "(" + args_str + ")"
-        case IDrop(lid):
+        case GIDrop(lid):
             return "        drop _" + int_to_str(lid)
-        case IDropIfAlive(lid):
+        case GIDropIfAlive(lid):
             return "        drop_if_alive _" + int_to_str(lid)
-        case IMoveZero(lid):
+        case GIMoveZero(lid):
             return "        move_zero _" + int_to_str(lid)
-        case INop():
+        case GINop():
             return "        nop"
 
 # ── Terminator formatting ────────────────────────────────
 
 String format_terminator(Terminator term, GirModule &gmod):
     match term:
-        case TReturn(val):
+        case GTReturn(val):
             return "        return " + format_operand(val, &gmod)
-        case TJump(bid):
+        case GTJump(bid):
             return "        jump bb" + int_to_str(bid)
-        case TBranch(cond, then_bb, else_bb):
+        case GTBranch(cond, then_bb, else_bb):
             return "        br " + format_operand(cond, &gmod) + ", bb" + int_to_str(then_bb) + ", bb" + int_to_str(else_bb)
 
 # ── Function formatting ──────────────────────────────────
@@ -227,7 +227,7 @@ String format_function(GirFunction func, GirModule &gmod):
             ii = ii + 1
         Terminator t = bb.term
         match t:
-            case TNone():
+            case GTNone():
                 pass
             else:
                 blocks_str = blocks_str + "\n" + format_terminator(t, &gmod)

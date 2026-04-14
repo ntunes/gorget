@@ -23,6 +23,16 @@ from std.conv import int_to_str
 
 # ── C type mapping ─────────────────────────────────────────
 
+# Find substring, returns -1 if not found. Avoids Option[int] return type issue.
+int find_substr(String haystack, String needle):
+    int hi = 0
+    int nlen = needle.len()
+    while hi <= haystack.len() - nlen:
+        if haystack.slice(hi, hi + nlen) == needle:
+            return hi
+        hi += 1
+    return -1
+
 String c_type_name(int ty, Dict[String, String] &sn):
     if ty == LT_I8:
         return "int8_t"
@@ -1288,7 +1298,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
         case IInlineC(dst, code):
             if dst >= 0:
                 # Parse "_X = expr;" → "__vN = expr;"
-                int eq_pos = code.find(" = ")
+                int eq_pos = find_substr(code, " = ")
                 if eq_pos >= 0:
                     String expr = code.slice(eq_pos + 3, code.len())
                     if expr.ends_with(";"):

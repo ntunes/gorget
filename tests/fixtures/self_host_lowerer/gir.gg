@@ -77,24 +77,24 @@ const int UNOP_NOT = 1
 const int UNOP_BITNOT = 2
 
 enum Instruction:
-    IAssign(int, Operand)
-    IBinOp(int, int, int, Operand, Operand)
-    IUnOp(int, int, int, Operand)
-    ICmp(int, int, int, Operand, Operand)
-    ICall(int, String, Vector[Operand])
-    ICallExtern(int, String, Vector[Operand])
-    IDrop(int)
-    IDropIfAlive(int)
-    IMoveZero(int)
-    INop()
+    GIAssign(int, Operand)
+    GIBinOp(int, int, int, Operand, Operand)
+    GIUnOp(int, int, int, Operand)
+    GICmp(int, int, int, Operand, Operand)
+    GICall(int, String, Vector[Operand])
+    GICallExtern(int, String, Vector[Operand])
+    GIDrop(int)
+    GIDropIfAlive(int)
+    GIMoveZero(int)
+    GINop()
 
 # ── Terminators ───────────────────────────────────────────
 
 enum Terminator:
-    TNone()
-    TReturn(Operand)
-    TJump(int)
-    TBranch(Operand, int, int)
+    GTNone()
+    GTReturn(Operand)
+    GTJump(int)
+    GTBranch(Operand, int, int)
 
 # ── Basic block ───────────────────────────────────────────
 

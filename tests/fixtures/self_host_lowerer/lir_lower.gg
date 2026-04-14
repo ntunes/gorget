@@ -480,14 +480,14 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
 
 void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, StructRegistry &sr):
     match inst:
-        case IAssign(local_id, operand):
+        case GIAssign(local_id, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
             int slot = local_to_slot.get(local_id).unwrap()
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(ISlotStore(slot, val, false))
             f.blocks.set(bb, blk)
 
-        case IBinOp(dst_local, op, ty, lhs_op, rhs_op):
+        case GIBinOp(dst_local, op, ty, lhs_op, rhs_op):
             int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
             int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
             int dst = lir_fn_next_value(&f)
@@ -512,7 +512,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             blk2.insts.push(ISlotStore(dst_slot, dst, false))
             f.blocks.set(bb, blk2)
 
-        case IUnOp(dst_local, op, ty, operand):
+        case GIUnOp(dst_local, op, ty, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
             int dst = lir_fn_next_value(&f)
             int lir_ty = map_gir_type(ty, &gmod, &sr)
@@ -529,7 +529,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             blk2.insts.push(ISlotStore(dst_slot, dst, false))
             f.blocks.set(bb, blk2)
 
-        case ICmp(dst_local, op, ty, lhs_op, rhs_op):
+        case GICmp(dst_local, op, ty, lhs_op, rhs_op):
             int lhs = lower_operand(lhs_op, &f, bb, &local_to_slot)
             int rhs = lower_operand(rhs_op, &f, bb, &local_to_slot)
             int dst = lir_fn_next_value(&f)
@@ -541,7 +541,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             blk2.insts.push(ISlotStore(dst_slot, dst, false))
             f.blocks.set(bb, blk2)
 
-        case ICall(dst_local, func_name, args):
+        case GICall(dst_local, func_name, args):
             # Lower call arguments
             Vector[int] lir_args = []
             int ai = 0
@@ -584,7 +584,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     blk2.insts.push(ISlotStore(dst_slot, dst, false))
                     f.blocks.set(bb, blk2)
 
-        case ICallExtern(dst_local, func_name, args):
+        case GICallExtern(dst_local, func_name, args):
             Vector[int] lir_args = []
             int ai = 0
             while ai < args.len():
@@ -609,7 +609,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 blk2.insts.push(ISlotStore(dst_slot, dst, false))
                 f.blocks.set(bb, blk2)
 
-        case IDrop(local_id):
+        case GIDrop(local_id):
             # Emit drop as extern call: Type__drop(&place)
             int slot = local_to_slot.get(local_id).unwrap()
             int addr = lir_fn_next_value(&f)
@@ -619,11 +619,11 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             # For now, emit as nop — drop elaboration will handle this
             # TODO: resolve drop function name from type info
 
-        case IDropIfAlive(local_id):
-            # Similar to IDrop but with runtime liveness check
+        case GIDropIfAlive(local_id):
+            # Similar to GIDrop but with runtime liveness check
             pass
 
-        case IMoveZero(local_id):
+        case GIMoveZero(local_id):
             # Zero-out the slot after move — will be replaced by drop elaboration
             int slot = local_to_slot.get(local_id).unwrap()
             int addr = lir_fn_next_value(&f)
@@ -637,34 +637,34 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             blk.insts.push(IMemset(addr, zero, size))
             f.blocks.set(bb, blk)
 
-        case INop():
+        case GINop():
             pass
 
 # ── Terminator lowering ─────────────────────────────────────
 
 LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &local_to_slot, Vector[int] &block_map):
     match term:
-        case TReturn(operand):
+        case GTReturn(operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
             return TRet(val)
-        case TJump(target):
+        case GTJump(target):
             int lir_target = block_map.get(target).unwrap()
             Vector[int] empty_args = []
             return TJump(lir_target, empty_args)
-        case TBranch(cond_op, then_bb, else_bb):
+        case GTBranch(cond_op, then_bb, else_bb):
             int cond = lower_operand(cond_op, &f, bb, &local_to_slot)
             int lir_then = block_map.get(then_bb).unwrap()
             int lir_else = block_map.get(else_bb).unwrap()
             Vector[int] empty_then = []
             Vector[int] empty_else = []
             return TBranch(cond, lir_then, empty_then, lir_else, empty_else)
-        case TNone():
+        case GTNone():
             return TRetVoid()
     return TUnreachable()
 
 # ── Function lowering ───────────────────────────────────────
 
-LirFunction lower_function(GirFunction gfn, GirModule &gmod, StructRegistry &sr, Dict[String, int] &func_index):
+LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry &sr, Dict[String, int] &func_index):
     # Map parameter types
     Vector[int] param_types = []
     int pi = 0
@@ -779,7 +779,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     int fli = 0
     while fli < gmod.functions.len():
         GirFunction gfn = gmod.functions.get(fli).unwrap()
-        LirFunction lf = lower_function(gfn, &gmod, &sr, &func_index)
+        LirFunction lf = lir_lower_function(gfn, &gmod, &sr, &func_index)
         lir_mod_add_function(&m, lf)
         fli += 1
 

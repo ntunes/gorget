@@ -44,7 +44,7 @@ int new_block(LowerCtx &ctx):
     int id = ctx.block_insts.len()
     Vector[Instruction] empty_insts = []
     ctx.block_insts.push(!empty_insts)
-    ctx.block_terms.push(TNone())
+    ctx.block_terms.push(GTNone())
     return id
 
 void switch_to(LowerCtx &ctx, int block_id):
@@ -334,42 +334,42 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     match sexpr.expr:
         case EIntLiteral(v):
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstI64(v)))
+            emit(&ctx, GIAssign(dst, OpConstI64(v)))
             return dst
         case EFloatLiteral(v):
             int dst = add_local(&ctx, F64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstF64(v)))
+            emit(&ctx, GIAssign(dst, OpConstF64(v)))
             return dst
         case EBoolLiteral(v):
             int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstBool(v)))
+            emit(&ctx, GIAssign(dst, OpConstBool(v)))
             return dst
         case EStringLiteral(s, _):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int dst = add_local(&ctx, gs_tid, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstStr(s)))
+            emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
         case EFString(s, _):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int dst = add_local(&ctx, gs_tid, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstStr(s)))
+            emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
         case EIdentifier(name):
             if ctx.named_locals.contains(name):
                 return ctx.named_locals.get(name).unwrap()
             # Unknown identifier (imported constant, unresolved) — placeholder
             int unk = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(unk, OpConstI64(0)))
+            emit(&ctx, GIAssign(unk, OpConstI64(0)))
             return unk
         case EBinaryOp(lhs_box, op, rhs_box):
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
             if is_comparison(op):
                 int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                emit(&ctx, ICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+                emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
                 return dst
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+            emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
             return dst
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
@@ -377,11 +377,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             match op:
                 case "-":
                     int dst = add_local(&ctx, inner_type, NO_NAME)
-                    emit(&ctx, IUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
+                    emit(&ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
                     return dst
                 case "not":
                     int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                    emit(&ctx, IUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
+                    emit(&ctx, GIUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
                     return dst
                 else:
                     pass
@@ -400,7 +400,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         lower_expr(&ctx, marg, &gmod)
                         mai += 1
                     int mdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-                    emit(&ctx, IAssign(mdst, OpConstUnit()))
+                    emit(&ctx, GIAssign(mdst, OpConstUnit()))
                     return mdst
                 else:
                     pass
@@ -414,42 +414,42 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 lower_expr(&ctx, ma, &gmod)
                 mi2 += 1
             int mdst2 = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, IAssign(mdst2, OpConstUnit()))
+            emit(&ctx, GIAssign(mdst2, OpConstUnit()))
             return mdst2
         case EFieldAccess(base_box, field_name):
             # Field access: lower base, return unit placeholder
             lower_expr(&ctx, *base_box, &gmod)
             int fdst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(fdst, OpConstI64(0)))
+            emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
         case EIndex(base_box, idx_box):
             lower_expr(&ctx, *base_box, &gmod)
             lower_expr(&ctx, *idx_box, &gmod)
             int idst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(idst, OpConstI64(0)))
+            emit(&ctx, GIAssign(idst, OpConstI64(0)))
             return idst
         case EIf(cond_box, then_body, else_branches):
             int cond = lower_expr(&ctx, *cond_box, &gmod)
             int then_bb = new_block(&ctx)
             int else_bb = new_block(&ctx)
             int merge_bb = new_block(&ctx)
-            set_terminator(&ctx, TBranch(OpCopy(cond), then_bb, else_bb))
+            set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
             switch_to(&ctx, then_bb)
             lower_stmts(&ctx, then_body, &gmod, false)
-            set_terminator(&ctx, TJump(merge_bb))
+            set_terminator(&ctx, GTJump(merge_bb))
             switch_to(&ctx, else_bb)
-            set_terminator(&ctx, TJump(merge_bb))
+            set_terminator(&ctx, GTJump(merge_bb))
             switch_to(&ctx, merge_bb)
             int ifdst = add_local(&ctx, I64_TYPE, NO_NAME)
             return ifdst
         case ENoneLiteral():
             int dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstUnit()))
+            emit(&ctx, GIAssign(dst, OpConstUnit()))
             return dst
         case ECharLiteral(ch):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int dst = add_local(&ctx, gs_tid, NO_NAME)
-            emit(&ctx, IAssign(dst, OpConstStr(ch)))
+            emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
             int ei = 0
@@ -458,7 +458,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 lower_expr(&ctx, elem, &gmod)
                 ei += 1
             int adst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(adst, OpConstI64(0)))
+            emit(&ctx, GIAssign(adst, OpConstI64(0)))
             return adst
         case ETupleLiteral(elems):
             int ti = 0
@@ -467,7 +467,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 lower_expr(&ctx, te, &gmod)
                 ti += 1
             int tdst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, IAssign(tdst, OpConstI64(0)))
+            emit(&ctx, GIAssign(tdst, OpConstI64(0)))
             return tdst
         case EStructLiteral(sname, fnames, fvals):
             int si = 0
@@ -476,12 +476,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 lower_expr(&ctx, sv, &gmod)
                 si += 1
             int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), NO_NAME)
-            emit(&ctx, IAssign(sdst, OpConstI64(0)))
+            emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
         case EClosure(cparams, cbody):
             # Closures are opaque in GIR — return unit placeholder
             int cdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, IAssign(cdst, OpConstUnit()))
+            emit(&ctx, GIAssign(cdst, OpConstUnit()))
             return cdst
         case EAs(inner_box, _):
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -516,7 +516,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EIs(inner_box, _, _):
             lower_expr(&ctx, *inner_box, &gmod)
             int isdst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-            emit(&ctx, IAssign(isdst, OpConstBool(false)))
+            emit(&ctx, GIAssign(isdst, OpConstBool(false)))
             return isdst
         case EAwait(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -528,7 +528,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Remaining: EIt, EImplicitClosure, EDictLiteral, ESetComp,
             # EDictComp, EListComp, ERethrow, ECatch, EDo, ERange
             int fallback = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, IAssign(fallback, OpConstUnit()))
+            emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
 
 # ── Call lowering ────────────────────────────────────────
@@ -552,7 +552,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 fmt = "%s\n"
             Vector[Operand] printf_args = [OpConstStr(fmt), OpCopy(val)]
             int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
-            emit(&ctx, ICallExtern(pdst, "printf", printf_args))
+            emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             result = pdst
     else:
         # Compute mangled name for generic calls
@@ -579,7 +579,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         if gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
         int dst = add_local(&ctx, ret_type, NO_NAME)
-        emit(&ctx, ICall(dst, call_name, gir_args))
+        emit(&ctx, GICall(dst, call_name, gir_args))
         result = dst
     return result
 
@@ -591,16 +591,16 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             int val = lower_expr(&ctx, init_expr, &gmod)
             int var_type = ctx.locals.get(val).unwrap().type_id
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
-            emit(&ctx, IAssign(var_local, OpCopy(val)))
+            emit(&ctx, GIAssign(var_local, OpCopy(val)))
             ctx.named_locals.put(name, var_local)
         case SReturn(opt_expr):
             match opt_expr:
                 case Some(ret_expr):
                     int val = lower_expr(&ctx, ret_expr, &gmod)
-                    emit(&ctx, IAssign(0, OpCopy(val)))
-                    set_terminator(&ctx, TReturn(OpCopy(0)))
+                    emit(&ctx, GIAssign(0, OpCopy(val)))
+                    set_terminator(&ctx, GTReturn(OpCopy(0)))
                 case None:
-                    set_terminator(&ctx, TReturn(OpConstUnit()))
+                    set_terminator(&ctx, GTReturn(OpConstUnit()))
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
@@ -614,7 +614,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     if ctx.named_locals.contains(name):
                         int lid = ctx.named_locals.get(name).unwrap()
                         int val = lower_expr(&ctx, value_expr, &gmod)
-                        emit(&ctx, IAssign(lid, OpCopy(val)))
+                        emit(&ctx, GIAssign(lid, OpCopy(val)))
                 else:
                     pass
         else:
@@ -634,15 +634,15 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     int then_bb = new_block(&ctx)
     int else_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
-    set_terminator(&ctx, TBranch(OpCopy(cond), then_bb, else_bb))
+    set_terminator(&ctx, GTBranch(OpCopy(cond), then_bb, else_bb))
     # Then branch
     switch_to(&ctx, then_bb)
     lower_stmts(&ctx, then_body, &gmod, is_main)
     # Only jump to merge if not already terminated (no return/break)
     Terminator then_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match then_term:
-        case TNone():
-            set_terminator(&ctx, TJump(merge_bb))
+        case GTNone():
+            set_terminator(&ctx, GTJump(merge_bb))
         else:
             pass
     # Else branch
@@ -663,8 +663,8 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
                 lower_stmts(&ctx, eb.body, &gmod, is_main)
     Terminator else_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match else_term:
-        case TNone():
-            set_terminator(&ctx, TJump(merge_bb))
+        case GTNone():
+            set_terminator(&ctx, GTJump(merge_bb))
         else:
             pass
     switch_to(&ctx, merge_bb)
@@ -673,18 +673,18 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)
-    set_terminator(&ctx, TJump(header_bb))
+    set_terminator(&ctx, GTJump(header_bb))
     # Header: evaluate condition
     switch_to(&ctx, header_bb)
     int cond = lower_expr(&ctx, cond_expr, &gmod)
-    set_terminator(&ctx, TBranch(OpCopy(cond), body_bb, exit_bb))
+    set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
     # Body
     switch_to(&ctx, body_bb)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
-        case TNone():
-            set_terminator(&ctx, TJump(header_bb))
+        case GTNone():
+            set_terminator(&ctx, GTJump(header_bb))
         else:
             pass
     switch_to(&ctx, exit_bb)
@@ -719,7 +719,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
 
     Vector[Instruction] init_insts = []
     Vector[Vector[Instruction]] block_insts = [!init_insts]
-    Vector[Terminator] block_terms = [TNone()]
+    Vector[Terminator] block_terms = [GTNone()]
     LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {})
 
     # _0 = return place
@@ -759,9 +759,9 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     if is_main:
         Terminator last_term = ctx.block_terms.get(ctx.current_block).unwrap()
         match last_term:
-            case TNone():
-                emit(&ctx, IAssign(0, OpConstI32(0)))
-                set_terminator(&ctx, TReturn(OpConstI32(0)))
+            case GTNone():
+                emit(&ctx, GIAssign(0, OpConstI32(0)))
+                set_terminator(&ctx, GTReturn(OpConstI32(0)))
             else:
                 pass
 
@@ -847,7 +847,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
-        ctx.block_terms.push(TNone())
+        ctx.block_terms.push(GTNone())
 
         # _0 = return place
         add_local(&ctx, ret_type, NO_NAME)
@@ -1110,7 +1110,7 @@ int emit_it_closure(int next_id, GirModule &gmod):
     Vector[int] ic_params = [ic_self_ptr, I64_TYPE]
     int ic_ret = I64_TYPE
     Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
-    Vector[BasicBlock] ic_blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+    Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
     gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
     return next_id + 1
 
@@ -1180,7 +1180,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 int lpt = map_ast_type(lp.param_type, &gmod)
                 locals.push(GirLocal(lpt, Some(lp.param_name)))
                 li += 1
-            Vector[BasicBlock] blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+            Vector[BasicBlock] blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(call_name, !param_types, ret_type, !locals, !blocks))
             next_id = next_id + 1
 
@@ -1198,7 +1198,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             if ic_ret == STRING_MARKER:
                 ic_ret = lookup_or_register_named(&gmod, "GorgetString")
             Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
-            Vector[BasicBlock] ic_blocks = [BasicBlock([], TReturn(OpCopy(0)))]
+            Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
             next_id = next_id + 1
             # Scan body for nested closures
@@ -1260,7 +1260,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 String wrap_name = "__spawn_wrap_" + cl_name
                 Vector[int] sw_wp = []
                 Vector[GirLocal] sw_wl = [GirLocal(UNIT_TYPE, NO_NAME)]
-                Vector[BasicBlock] sw_wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                Vector[BasicBlock] sw_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                 gmod.functions.push(GirFunction(wrap_name, !sw_wp, UNIT_TYPE, !sw_wl, !sw_wb))
             next_id = scan_expr_for_closures(*inner_box, next_id, &gmod)
         case ESpawnBlocking(inner_box):
@@ -1920,7 +1920,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 # Emit a stub function
                                 Vector[int] wp = [I64_TYPE]
                                 Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
-                                Vector[BasicBlock] wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                 gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 emitted.put(callee_name, true)
                         else:
@@ -1937,7 +1937,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                         emitted.put(wrapper_name.clone(), true)
                                         Vector[int] wp = [I64_TYPE]
                                         Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
-                                        Vector[BasicBlock] wb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                        Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                         gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 case None:
                                     pass
@@ -1979,7 +1979,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, Dict[String, String] &clos
                                     emitted.put(wrap.clone(), true)
                                     Vector[int] ncwp = []
                                     Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME)]
-                                    Vector[BasicBlock] ncwb = [BasicBlock([], TReturn(OpConstUnit()))]
+                                    Vector[BasicBlock] ncwb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                     gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
                         else:
                             pass
@@ -2485,13 +2485,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         LowerCtx tctx = LowerCtx([], [], [], 0, {})
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
-                        tctx.block_terms.push(TNone())
+                        tctx.block_terms.push(GTNone())
                         add_local(&tctx, UNIT_TYPE, NO_NAME)
                         lower_stmts(&tctx, test_body, &gmod, false)
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
                         match tterm:
-                            case TNone():
-                                set_terminator(&tctx, TReturn(OpConstUnit()))
+                            case GTNone():
+                                set_terminator(&tctx, GTReturn(OpConstUnit()))
                             else:
                                 pass
                         Vector[BasicBlock] tblocks = []
@@ -2508,14 +2508,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 if not has_main:
                     Vector[int] sp = []
                     Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME)]
-                    Vector[BasicBlock] sb = [BasicBlock([], TReturn(OpConstUnit()))]
+                    Vector[BasicBlock] sb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
                     test_idx += 1
             case ISuiteTeardown(teardown_body):
                 if not has_main:
                     Vector[int] tp = []
                     Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME)]
-                    Vector[BasicBlock] tb = [BasicBlock([], TReturn(OpConstUnit()))]
+                    Vector[BasicBlock] tb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
                     test_idx += 1
             case IEquip(eqblk):

@@ -10,6 +10,10 @@ from lower import lower_module
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
+from lir_lower import lower_gir_to_lir
+from lir_ssa import construct_ssa
+from lir import LirModule, LirFunction
+from lir_codegen import generate_c
 from std.fs import read_file
 from std.os import args
 from std.collections import Vector, Dict
@@ -17,13 +21,18 @@ from std.collections import Vector, Dict
 void main():
     Vector[String] cmd_args = args()
     String path = cmd_args.get(1).unwrap()
-    # Optional second arg: lib directory (default "lib")
     String lib_dir = "lib"
     if cmd_args.len() > 2:
         lib_dir = cmd_args.get(2).unwrap()
+    bool emit_lir_c = false
+    int ai = 2
+    while ai < cmd_args.len():
+        String arg = cmd_args.get(ai).unwrap()
+        if arg == "--lir-c":
+            emit_lir_c = true
+        ai += 1
     String source = read_file(path)
     Module m = parse_source(source)
-    # Always load imports — format_module filters unreachable imported functions
     Dict[String, bool] imported_fns = {}
     Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns)
     expand_derives(&m)
@@ -34,4 +43,17 @@ void main():
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
-    print(format_module(&gir))
+    if emit_lir_c:
+        LirModule lir = lower_gir_to_lir(&gir)
+        run_ssa(&lir)
+        print(generate_c(&lir))
+    else:
+        print(format_module(&gir))
+
+void run_ssa(LirModule &m):
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        construct_ssa(&func)
+        m.functions.set(fi, func)
+        fi += 1
