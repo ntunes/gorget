@@ -260,6 +260,7 @@ struct LirFunction:
     String display_name         # "" if none
     Vector[String] param_names  # "" entries for unnamed
     Vector[bool] const_params
+    Vector[int] value_types     # per-value LirType, -1 = None
 
 # ── Struct Definitions ──────────────────────────────────────────
 

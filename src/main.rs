@@ -505,6 +505,7 @@ fn try_build_ir(
                 stats.copies_propagated, stats.drops_elaborated, stats.memsets_removed,
                 stats.drop_flags_inserted, stats.move_slots_removed);
         }
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {
@@ -528,6 +529,7 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::optimize::optimize_module(&mut lir_module);
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
         let c_code = gorget::backend::c_lir::generate_c(&lir_module);
         print!("{c_code}");
         let input_path = Path::new(filename);
@@ -545,6 +547,7 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::optimize::optimize_module(&mut lir_module);
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
 
         let backend: Box<dyn gorget::backend::Backend> = match backend_name {
             "llvm" => Box::new(gorget::backend::llvm::LlvmBackend),
@@ -1114,6 +1117,7 @@ fn try_profile(
     // Phase 8: LIR optimization
     let t = Instant::now();
     let lir_opt_stats = gorget::lir::optimize::optimize_module(&mut lir_module);
+    gorget::lir::types::compute_module_value_types(&mut lir_module);
     let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
     let lir_functions = lir_module.functions.len();
     let lir_instructions: usize = lir_module.functions.iter()

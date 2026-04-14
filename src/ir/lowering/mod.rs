@@ -2586,6 +2586,7 @@ mod tests {
             crate::lir::ssa::construct_ssa(func);
         }
         crate::lir::optimize::optimize_module(&mut lir_module);
+        crate::lir::types::compute_module_value_types(&mut lir_module);
         let backend = crate::backend::c_lir::CLirBackend;
         crate::backend::Backend::generate(&backend, &lir_module).code
     }

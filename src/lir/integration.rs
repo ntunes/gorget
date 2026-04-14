@@ -35,6 +35,7 @@ mod tests {
 
         // Run optimizer
         optimize::optimize_module(&mut lir);
+        crate::lir::types::compute_module_value_types(&mut lir);
 
         // Validate (post-optimization)
         let errors = validate::validate_module(&lir);

@@ -566,6 +566,10 @@ pub struct LirFunction {
     /// Values that are Ptr to GorgetString.
     /// The C backend uses this to deref Ptr(Str) args in printf, CmpOp, and CallExtern.
     pub str_ptr_values: rustc_hash::FxHashSet<ValueId>,
+    /// Per-value type metadata, indexed by `ValueId.0`.
+    /// Computed once after SSA + optimization; both backends read this
+    /// instead of reconstructing types from instructions.
+    pub value_types: Vec<Option<LirType>>,
 }
 
 impl LirFunction {
@@ -582,6 +586,7 @@ impl LirFunction {
             param_names: Vec::new(),
             const_params: Vec::new(),
             str_ptr_values: rustc_hash::FxHashSet::default(),
+            value_types: Vec::new(),
         }
     }
 

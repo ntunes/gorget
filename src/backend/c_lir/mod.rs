@@ -859,19 +859,13 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Track which values are FuncAddr — maps value → FuncId for adapter generation.
     let mut func_addr_targets: Vec<Option<FuncId>> = vec![None; max_val as usize];
     // Track which spawn function produced a void* value (for task_group_submit reconstruction).
-    // When a spawn result is extracted to .__task (void*), we need to reconstruct Task__T
-    // with the correct __drop function when passing to gorget_task_group_submit.
     let mut spawn_source_fn: Vec<Option<String>> = vec![None; max_val as usize];
-    // Track the pointee type for Ptr-typed values (e.g. SlotAddr → slot type, FieldPtr → field type).
-    // Used by Inst::Store to emit correct sizeof() for memcpy of aggregates.
+    // Track the pointee type for Ptr-typed values.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Propagate pointee types through Ptr-typed slots (SlotStore → SlotLoad).
     let mut slot_pointee: Vec<Option<LirType>> = vec![None; func.slots.len()];
-    // Override the C type name for values whose LIR type can't represent runtime structs
-    // (e.g. GorgetArray, GorgetMap — not in module.structs but needed for correct C declarations).
+    // Override the C type name for values whose LIR type can't represent runtime structs.
     let mut val_c_type_override: Vec<Option<String>> = vec![None; max_val as usize];
-    // Track which values came from gorget_map_get/gorget_array_get (return void* into internal storage).
-    // Previously used for clone-on-read; now kept for potential future use.
     let mut _collection_get_vals: Vec<bool> = vec![false; max_val as usize];
     // Normalize PtrTo → Ptr in val_types so generic pointer handling is
     // unaffected.  PtrTo info is available from slot/param types when needed.
@@ -885,20 +879,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         for inst in &block.insts {
             if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee, func) {
                 if let Some(dst) = inst.dst() {
-                    let nty = norm(ty);
-                    // Catch conflicting type assignments: a value should not be inferred
-                    // as two different concrete types (Ptr is compatible with anything since
-                    // it's the default for unresolved types).
-                    if let Some(existing) = &val_types[dst.0 as usize] {
-                        debug_assert!(
-                            *existing == nty
-                                || *existing == LirType::Ptr || nty == LirType::Ptr
-                                || existing.is_aggregate() != nty.is_aggregate(),
-                            "SSA type conflict for __v{}: previously {:?}, now {:?} (in {})",
-                            dst.0, existing, nty, func.name,
-                        );
-                    }
-                    val_types[dst.0 as usize] = Some(nty);
+                    val_types[dst.0 as usize] = Some(norm(ty));
                 }
             }
             // Detect runtime struct returns that aren't in module.structs

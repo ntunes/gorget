@@ -1467,47 +1467,18 @@ fn emit_function(
         writeln!(out, "define {} @{}({}) {{", ret, c_func_name(&func.name), params.join(", ")).unwrap();
     }
 
-    // Build value type map for this function
+    // Start from shared value_types (computed once after LIR optimization).
+    // The shared computation already uses PtrTo for struct pointers, matching
+    // the LLVM backend's convention.  Struct(sid) values need PtrTo override
+    // since aggregates are always represented as pointers in LLVM codegen.
     let val_count = func.value_count() as usize;
-    let mut val_types: Vec<Option<LirType>> = vec![None; val_count];
-
-    // Infer types from params
-    for (i, p) in func.params.iter().enumerate() {
-        // ParamRef instructions map to specific ValueIds, we'll fill those in below
-        let _ = (i, p);
-    }
-
-    // First pass: infer types from all instructions.
-    // Aggregate returns from Call/CallExtern are stored via temp alloca,
-    // making them pointers in LLVM — override their type to Ptr.
-    for block in &func.blocks {
-        for (vid, vty) in &block.params {
-            if (vid.0 as usize) < val_types.len() {
-                val_types[vid.0 as usize] = Some(vty.clone());
-            }
-        }
-        for inst in &block.insts {
-            if let Some(dst) = inst.dst() {
-                if (dst.0 as usize) < val_types.len() {
-                    let ty = infer_inst_type(inst, module, &val_types, Some(func));
-                    // Aggregates are always represented as pointers in our LLVM codegen:
-                    // - Call/CallExtern results stored via temp alloca
-                    // - Load on aggregate uses pointer alias (no actual load)
-                    // - ParamRef for aggregate uses alloca
-                    // Use PtrTo(sid) instead of plain Ptr to preserve struct identity
-                    // for downstream Store→memcpy detection.
-                    let ty = match &ty {
-                        Some(LirType::Struct(sid)) => Some(LirType::PtrTo(*sid)),
-                        _ => ty,
-                    };
-                    val_types[dst.0 as usize] = ty;
-                }
-            }
-        }
-
-        // Primitive → Option/Result wrapping is handled by the LIR lowerer
-        // (explicit memset + tag + FieldPtr/Store sequence).
-    }
+    let mut val_types: Vec<Option<LirType>> = func.value_types.iter()
+        .map(|t| match t.as_ref() {
+            Some(LirType::Struct(sid)) => Some(LirType::PtrTo(*sid)),
+            other => other.cloned(),
+        })
+        .collect();
+    val_types.resize(val_count, None);
 
     // Guard/shared value accessor type override: gorget_guard_get / gorget_shared_get
     // return void* but the value needs to be loaded as the actual inner type.

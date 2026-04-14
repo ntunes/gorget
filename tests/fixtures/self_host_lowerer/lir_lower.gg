@@ -887,7 +887,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry 
         saved_param_types.push(param_types.get(spi).unwrap())
         spi += 1
 
-    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [])
+    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [])
 
     # Create slots for all GIR locals
     Vector[int] local_to_slot = []
