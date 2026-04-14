@@ -1,66 +1,60 @@
 # Gorget
 
-A compiled language that aims to make safe code easy to write — and easy to read.
+Rust-grade memory safety. Python-grade readability. No GC, no lifetime annotations, no ceremony.
 
-Gorget compiles to native binaries through C. It uses ownership and borrowing to manage memory at compile time — no garbage collector, no runtime cost — while keeping syntax minimal enough that programs read like pseudocode.
+Gorget is a statically typed, compiled language that uses ownership and borrowing to manage memory at compile time — but without the annotation tax. Programs compile to native binaries through C. Moves and borrows are marked at call sites (`!` and `&`), so ownership transfers are visible where they happen, not buried in type signatures.
 
-```
+```gorget
+struct Message:
+    String sender
+    String subject
+    int priority
+
+void preview(Message msg):           # immutable borrow — caller keeps ownership
+    print("[Preview] {msg.subject}")
+
+void send(Message !msg):             # move — ownership transfers, msg is consumed
+    print("[Sent] {msg.subject}")
+
 void main():
-    print("Hello, World!")
+    Message msg = Message("Alice", "Meeting tomorrow", 1)
+    preview(msg)      # borrow — msg still alive
+    send(!msg)        # move — msg is now dead
+    # preview(msg)    # compile error: use of moved value `msg`
 ```
 
 ```
-$ gg run hello.gg
-Hello, World!
+$ gg run mail.gg
+[Preview] Meeting tomorrow
+[Sent] Meeting tomorrow
 ```
 
-> Gorget is in active development. The language is expressive enough to self-host its own lexer, parser, and type checker, but it hasn't seen production use yet. Expect breaking changes before 1.0.
+> Gorget is in active development. The language is expressive enough to self-host its own lexer, parser, and type checker (comparison tests pass at 100% against the Rust originals), but it hasn't seen production use yet. Expect breaking changes before 1.0.
 
 ## Why Gorget
 
-We think safe languages shouldn't have to be verbose. Gorget is our attempt to get there.
+|  | Gorget | Rust | Go | Python |
+|--|--------|------|----|--------|
+| Memory safety | Compile-time ownership | Compile-time ownership | GC | GC |
+| Lifetime annotations | None | Required for complex borrows | N/A | N/A |
+| Error model | Auto-propagating `throws` | `Result` + `?` at every call | `if err != nil` | Exceptions |
+| Null safety | `Option[T]` — no nulls | `Option<T>` — no nulls | Nil pointers | `None` everywhere |
+| Concurrency | Compiler-checked `shared` | `Send`/`Sync` traits | Goroutines + channels | GIL |
+| Compile target | C → native binary | LLVM → native binary | Go toolchain | Interpreted |
+| Syntax | Indentation-based | Braces | Braces | Indentation-based |
+| Generics | Monomorphized | Monomorphized | Type-erased | Dynamic |
+
+We think safe languages shouldn't have to be verbose. Here's what that means in practice:
 
 - **Ownership without lifetime annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are marked at call sites (`&` for mutable borrow, `!` for move), so ownership transfers are visible where they happen.
-- **Error handling that stays out of the way** — functions declare `throws` and errors propagate automatically. No `?` at every call site, no `try` blocks wrapping your logic. When you do need control, `catch`, `rethrow`, and `on error` give you exactly the level of handling you need — from a one-line fallback to full error transformation.
-- **Shared variables with compiler-checked concurrency** — `shared int count = 0` gives you thread-safe mutable state. The compiler selects the right synchronization primitive (atomic, mutex, or rwlock), releases locks at suspension points, acquires them in consistent order to prevent deadlocks, and warns about stale reads, check-then-act races, and lost updates.
+- **Error handling without noise** — functions declare `throws` and errors propagate automatically. No `?` at every call site, no `try` blocks wrapping your logic, no `if err != nil`. When you do need control, `catch`, `rethrow`, and `on error` give you exactly the level of handling you want.
+- **Compiler-checked concurrency** — `shared int count = 0` gives you thread-safe mutable state. The compiler selects the right synchronization primitive (atomic, mutex, or rwlock), prevents deadlocks by enforcing consistent lock ordering, and warns about stale reads, check-then-act races, and lost updates — all at compile time.
 - **Compile-time meta system** — `meta` blocks run at compile time with full type introspection: iterate fields, expand variants, conditionally compile. No macros, no codegen scripts — just the language itself.
-- **Automatic purity inference** — every function is classified as Pure, ReadOnly, MutatesArgs, or HasSideEffects through call-graph analysis. No annotations needed. The compiler uses this to prove that certain operations (like calls inside `with` blocks) are safe.
-- **Contracts** — `assert return` lets you write postconditions directly in function bodies. Preconditions and postconditions are checked at runtime by default, stripped in release builds.
-- **Rich static analysis** — beyond type checking: warns on unchecked `.unwrap()`, variables that could be `const`, unnecessarily mutable borrows, unused imports, unreachable code, and suggests corrections for typos.
-- **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library. One import, no package hunting for basics.
+- **Automatic purity inference** — every function is classified as Pure, ReadOnly, MutatesArgs, or HasSideEffects through call-graph analysis. No annotations needed.
+- **Contracts** — `assert return` lets you write postconditions directly in function bodies. Active by default, strippable for release.
+- **Rich static analysis** — warns on unchecked `.unwrap()`, variables that could be `const`, unnecessarily mutable borrows, unused imports, unreachable code, and suggests corrections for typos.
+- **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library.
 - **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg sim`, `gg add`. No external build system, no formatter choice, no test framework decision.
-
-## Install
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | sh
-```
-
-Or install a specific version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | VERSION=v0.1.0 sh
-```
-
-Binaries are available for macOS (ARM64, x86_64) and Linux (x86_64, ARM64).
-
-### Build from source
-
-```bash
-cargo build --release
-```
-
-## Quick Start
-
-```bash
-cat > hello.gg << 'EOF'
-void main():
-    auto name = "Gorget"
-    print("Hello, {name}!")
-EOF
-
-gg run hello.gg
-```
 
 ## A Taste of the Language
 
@@ -77,57 +71,14 @@ int double(int x) = x * 2
 auto result = add(10, double(5))
 ```
 
-### Pattern matching
-
-```gorget
-enum Shape:
-    Circle(float radius)
-    Rect(float w, float h)
-
-float area(Shape s):
-    match s:
-        case Circle(r):
-            return 3.14159 * r * r
-        case Rect(w, h):
-            return w * h
-```
-
-### Ownership and borrowing
-
-```gorget
-struct Message:
-    String sender
-    String subject
-    int priority
-
-void preview(Message msg):           # borrow — pointer, no copy, caller keeps ownership
-    print("[Preview] {msg.subject}")
-
-equip Message:
-    void set_priority(&self, int p): # mutable borrow — modify, caller keeps ownership
-        self.priority = p
-
-void send(Message !msg):             # move — ownership transfers to callee
-    print("[Sent] {msg.subject}")
-
-void main():
-    Message msg = Message("Alice", "Meeting tomorrow", 1)
-    preview(msg)         # borrow — msg still alive
-    msg.set_priority(5)  # mutable borrow — modify in place
-    send(!msg)           # move — msg is now dead
-    # preview(msg)       # compile error: use of moved value `msg`
-```
-
-Resource types (String, Vector, structs with resource fields) are **never** copied by value. Bare parameters automatically receive an immutable borrow — a pointer, not a copy. The only ways to get an owned resource are construction, `.clone()`, or `!move`.
-
 ### Error handling
 
-Errors propagate automatically — no `?` or `try` needed. When you want control, pick the right tool:
+Errors propagate automatically — you only write code where you want control:
 
 ```gorget
 # Errors propagate up through throwing functions automatically
 Config load_config(String path) throws String:
-    String content = read_file(path)  # throws? we throw too — automatically
+    String content = read_file(path)  # throws? we throw too — automatic
     Config cfg = parse(content)       # same here
     return cfg
 
@@ -156,9 +107,24 @@ void main():
             print("failed: {e}")
 ```
 
+### Pattern matching
+
+```gorget
+enum Shape:
+    Circle(float radius)
+    Rect(float w, float h)
+
+float area(Shape s):
+    match s:
+        case Circle(r):
+            return 3.14159 * r * r
+        case Rect(w, h):
+            return w * h
+```
+
 ### Shared variables
 
-Thread-safe mutable state with automatic synchronization. The compiler selects the right primitive, warns about races, and prevents deadlocks by construction:
+Thread-safe mutable state with automatic synchronization — the compiler selects the primitive, prevents deadlocks, and warns about races:
 
 ```gorget
 async void main():
@@ -263,9 +229,37 @@ async void main():
     print(result)   # 45
 ```
 
-## Self-Hosting
+## Install
 
-Gorget's lexer, parser, and name resolver are implemented in Gorget itself and pass comparison tests against the Rust originals at 100%. The self-hosted type checker is at 99.8%. This is both a test of the language's expressiveness and a practical validation of the compiler's correctness — any bug in code generation shows up as a self-host mismatch.
+```bash
+curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | sh
+```
+
+Or install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ntunes/gorget/main/install.sh | VERSION=v0.1.0 sh
+```
+
+Binaries are available for macOS (ARM64, x86_64) and Linux (x86_64, ARM64).
+
+### Build from source
+
+```bash
+cargo build --release
+```
+
+## Quick Start
+
+```bash
+cat > hello.gg << 'EOF'
+void main():
+    auto name = "Gorget"
+    print("Hello, {name}!")
+EOF
+
+gg run hello.gg
+```
 
 ## CLI
 
@@ -339,8 +333,8 @@ Test files use `test` blocks with `assert` for contracts, `@should_panic` for ex
 
 ```bash
 cargo build                                        # build the compiler
-cargo test --lib                                   # ~975 unit tests
-cargo test --test integration -- --test-threads=4  # ~944 integration tests
+cargo test --lib                                   # ~970 unit tests
+cargo test --test integration -- --test-threads=4  # ~960 integration tests
 ```
 
 Integration tests live in `tests/fixtures/*.gg` — each is a self-contained program with deterministic stdout.
