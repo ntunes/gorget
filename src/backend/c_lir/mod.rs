@@ -2162,7 +2162,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // Unexpected for user-defined structs — likely a lowering bug.
                 debug_assert!(
                     struct_def.fields.is_empty()
-                        || sname.starts_with("Gorget") || sname.starts_with("__gg_Gorget"),
+                        || sname.starts_with("Gorget") || sname.starts_with("__gg_Gorget")
+                        || struct_def.is_union_layout,
                     "FieldPtr field index {} out of bounds for non-opaque struct '{sname}' \
                      ({} fields). This is likely a LIR lowering bug — the struct has known \
                      fields but FieldPtr accesses beyond them.",
