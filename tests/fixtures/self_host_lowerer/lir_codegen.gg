@@ -794,6 +794,69 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 
 # ── Value type inference (simplified) ──────────────────────
 
+# Map runtime function names to their return LIR types.
+int runtime_fn_return_type(String name, LirModule &m):
+    # Array functions
+    if name == "gorget_array_new" or name == "gorget_array_new_drop":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_clone":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_slice":
+        return find_struct_type("GorgetArray", &m)
+    # Map functions
+    if name == "gorget_dict_new" or name == "gorget_map_new" or name == "gorget_dict_new_str" or name == "gorget_map_new_str":
+        return find_struct_type("GorgetMap", &m)
+    if name == "gorget_map_clone":
+        return find_struct_type("GorgetMap", &m)
+    # Set functions
+    if name == "gorget_ordered_set_new" or name == "gorget_set_new" or name == "gorget_ordered_set_new_str" or name == "gorget_set_new_str":
+        return find_struct_type("GorgetSet", &m)
+    # String functions
+    if name == "gorget_str_concat" or name == "gorget_string_from_str":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_from_cstr" or name == "gorget_string_adopt":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_string_clone_to_owned" or name == "gorget_string_copy_cow":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_slice" or name == "gorget_str_trim":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_replace" or name == "gorget_str_upper" or name == "gorget_str_lower":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_repeat" or name == "gorget_str_join":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_split":
+        return find_struct_type("GorgetArray", &m)
+    # Int/float to string
+    if name == "gorget_int_to_str" or name == "gorget_float_to_str" or name == "gorget_bool_to_str":
+        return LT_PTR  # returns const char*
+    # Scalar returns
+    if name == "gorget_array_len" or name == "gorget_map_len" or name == "gorget_set_len":
+        return LT_I64
+    if name == "gorget_str_len" or name == "gorget_str_codepoint_count":
+        return LT_I64
+    if name == "gorget_str_find":
+        return LT_I64
+    if name == "gorget_str_eq":
+        return LT_BOOL
+    if name == "gorget_str_cmp":
+        return LT_I32
+    if name == "gorget_array_get" or name == "gorget_map_get":
+        return LT_PTR
+    if name == "gorget_array_contains" or name == "gorget_map_contains" or name == "gorget_set_contains":
+        return LT_BOOL
+    if name == "gorget_array_is_empty":
+        return LT_BOOL
+    return LT_VOID
+
+int find_struct_type(String name, LirModule &m):
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        if sdef.name == name:
+            return LT_STRUCT_BASE + i
+        i += 1
+    return LT_PTR
+
 # Infer the result type of an LIR instruction.
 int infer_inst_type(LirInst &inst, LirModule &m):
     match inst:
@@ -879,6 +942,10 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_VOID
         case ICallExtern(dst, name, _, _, _):
             if dst >= 0:
+                # Check runtime function return types first.
+                int rt_ret = runtime_fn_return_type(name, &m)
+                if rt_ret != LT_VOID:
+                    return rt_ret
                 # Look up extern return type.
                 int ei = 0
                 while ei < m.externs.len():
@@ -886,6 +953,13 @@ int infer_inst_type(LirInst &inst, LirModule &m):
                     if ext.name == name:
                         return ext.return_type
                     ei += 1
+                # Check user functions (ICall redirected through CallExtern).
+                int fi = 0
+                while fi < m.functions.len():
+                    LirFunction func = m.functions.get(fi).unwrap()
+                    if func.name == name:
+                        return func.return_type
+                    fi += 1
             return LT_VOID
         case ICallPtr(dst, _, _):
             if dst >= 0:
@@ -1233,7 +1307,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 LirFunction callee = m.functions.get(fid).unwrap()
                 String fname = c_func_name(callee.name)
                 String out = ""
-                if dst >= 0:
+                if dst >= 0 and callee.return_type != LT_VOID:
                     out = v(dst) + " = "
                 out = out + fname + "("
                 int ai = 0
@@ -1414,10 +1488,30 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
             ai += 1
         return out + ");"
 
-    # gorget_str_* functions: pass Str args by value (they expect Str struct).
     # Generic extern call — pass all args directly.
-    String out = ""
+    # Check if extern returns void to suppress assignment.
+    bool returns_void = false
     if dst >= 0:
+        int ei = 0
+        while ei < m.externs.len():
+            LirExtern ext = m.externs.get(ei).unwrap()
+            if ext.name == name:
+                if ext.return_type == LT_VOID:
+                    returns_void = true
+                break
+            ei += 1
+        # Also check user functions (ICall masquerading as CallExtern via redirect)
+        if not returns_void:
+            int fi = 0
+            while fi < m.functions.len():
+                LirFunction func = m.functions.get(fi).unwrap()
+                if func.name == name:
+                    if func.return_type == LT_VOID:
+                        returns_void = true
+                    break
+                fi += 1
+    String out = ""
+    if dst >= 0 and not returns_void:
         out = v(dst) + " = "
     out = out + name + "("
     int ai = 0
@@ -1540,8 +1634,8 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
         out = out + ";\n"
         si += 1
 
-    # Value declarations — find max value id
-    int max_val = 0
+    # Value declarations — find max value id (scan block params, inst dsts, and func.next_value)
+    int max_val = func.next_value
     int bi = 0
     while bi < func.blocks.len():
         LirBlock blk = func.blocks.get(bi).unwrap()

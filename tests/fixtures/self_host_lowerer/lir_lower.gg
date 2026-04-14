@@ -377,6 +377,23 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
 # ── Runtime function name mapping ───────────────────────────
 
 String map_runtime_name(String name):
+    # Collection constructors (bare name, no method suffix).
+    # Vector__int64_t() → gorget_array_new(sizeof(int64_t))
+    # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V))
+    # Set__T() → gorget_ordered_set_new(sizeof(T))
+    if is_collection_constructor(name):
+        if name.starts_with("Vector__") or name.starts_with("Deque__"):
+            return "gorget_array_new"
+        elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+            return "gorget_dict_new"
+        elif name.starts_with("Set__") or name.starts_with("HashSet__"):
+            return "gorget_ordered_set_new"
+        elif name.starts_with("Channel__"):
+            return "gorget_channel_new"
+        elif name.starts_with("Shared__"):
+            return "gorget_shared_new"
+        return name
+
     # Vector methods
     if name.starts_with("Vector__") and name.contains("__"):
         # Extract method name after the last "__"
@@ -484,6 +501,59 @@ String map_runtime_name(String name):
 
     # No mapping
     return ""
+
+# Check if a name is a bare collection constructor (no method suffix).
+# E.g., "Vector__int64_t" is a constructor, "Vector__int64_t__push" is a method.
+bool is_collection_constructor(String name):
+    if not (name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("Channel__") or name.starts_with("Shared__")):
+        return false
+    # Count "__" separators. Constructors have exactly 1 (prefix__type).
+    # Methods have 2+ (prefix__type__method).
+    String method = extract_method_name(name)
+    # If the extracted "method" looks like a type name (starts with uppercase or is a C type),
+    # it's a constructor, not a method call.
+    if method == "int64_t" or method == "double" or method == "bool" or method == "int32_t":
+        return true
+    if method == "GorgetString" or method == "Str":
+        return true
+    if method.len() > 0:
+        String first = method.slice(0, 1)
+        if first >= "A" and first <= "Z":
+            return true
+    return false
+
+# Get the element size for a collection constructor.
+int collection_elem_size(String name, StructRegistry &sr):
+    # Extract element type from name like "Vector__int64_t" or "Vector__GorgetString"
+    String elem = ""
+    if name.starts_with("Vector__"):
+        elem = name.slice(8, name.len())
+    elif name.starts_with("Deque__"):
+        elem = name.slice(7, name.len())
+    elif name.starts_with("Set__"):
+        elem = name.slice(5, name.len())
+    elif name.starts_with("HashSet__"):
+        elem = name.slice(9, name.len())
+    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        # Dict needs key_size, val_size — for now just pass key_size
+        return 8
+    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return 8
+    if elem == "int64_t" or elem == "double":
+        return 8
+    elif elem == "int32_t" or elem == "float":
+        return 4
+    elif elem == "int16_t" or elem == "uint16_t":
+        return 2
+    elif elem == "int8_t" or elem == "uint8_t" or elem == "bool":
+        return 1
+    elif elem == "GorgetString" or elem == "Str":
+        return 32
+    # Named struct — look up in registry and use pointer size as fallback
+    int sid = sr_lookup(&sr, elem)
+    if sid >= 0:
+        return 8  # TODO: compute actual struct size
+    return 8
 
 String extract_method_name(String name):
     # Find the last "__" and return everything after it
@@ -666,6 +736,14 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 String call_name = func_name
                 if mapped != "":
                     call_name = mapped
+                # Collection constructors need element size argument
+                if is_collection_constructor(func_name):
+                    int elem_size = collection_elem_size(func_name, &sr)
+                    int size_val = lir_fn_next_value(&f)
+                    LirBlock sblk = f.blocks.get(bb).unwrap()
+                    sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
+                    f.blocks.set(bb, sblk)
+                    lir_args.push(size_val)
                 int dst = -1
                 if dst_local >= 0:
                     dst = lir_fn_next_value(&f)
