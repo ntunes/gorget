@@ -1,0 +1,1610 @@
+# LIR → C codegen.
+#
+# Thin 1:1 translation from LIR to C source code. No semantic decisions —
+# all type coercions, drop calls, vtable dispatch, closures, etc. are already
+# explicit in LIR instructions.
+#
+# Phase 4 of the self-host LIR backend.
+
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
+from lir import LirStructDef, LirExtern, LirGlobal, LirSpawnedFn, LirTestFn, LirBenchFn
+from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo
+from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
+from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
+from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
+from lir import lir_is_scalar, lir_is_aggregate, lir_is_ptr, lir_is_integer, lir_is_float
+from lir import lir_struct_id, lir_pointee_struct
+from lir import OVF_TRAP, OVF_WRAP
+from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
+from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
+from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL
+from std.collections import Vector, Dict
+from std.conv import int_to_str
+
+# ── C type mapping ─────────────────────────────────────────
+
+String c_type_name(int ty, Dict[String, String] &sn):
+    if ty == LT_I8:
+        return "int8_t"
+    elif ty == LT_I16:
+        return "int16_t"
+    elif ty == LT_I32:
+        return "int32_t"
+    elif ty == LT_I64:
+        return "int64_t"
+    elif ty == LT_U8:
+        return "uint8_t"
+    elif ty == LT_U16:
+        return "uint16_t"
+    elif ty == LT_U32:
+        return "uint32_t"
+    elif ty == LT_U64:
+        return "uint64_t"
+    elif ty == LT_F32:
+        return "float"
+    elif ty == LT_F64:
+        return "double"
+    elif ty == LT_BOOL:
+        return "bool"
+    elif ty == LT_PTR:
+        return "void*"
+    elif ty == LT_VOID:
+        return "void"
+    elif ty >= LT_STRUCT_BASE:
+        int sid = ty - LT_STRUCT_BASE
+        String key = int_to_str(sid)
+        if sn.contains(key):
+            return sn.get(key).unwrap()
+        return "__lir_s" + key
+    elif ty >= LT_PTR_TO_BASE:
+        return "void*"
+    return "void*"
+
+# ── Name helpers ───────────────────────────────────────────
+
+# Runtime struct names that should NOT be re-defined by codegen.
+bool is_runtime_struct(String name):
+    if name == "Str" or name == "GorgetString" or name == "GorgetArray":
+        return true
+    if name == "GorgetClosure" or name == "TraitObj":
+        return true
+    if name == "GorgetMap" or name == "GorgetSet":
+        return true
+    return false
+
+# Structs defined by LIR that preserve their original name.
+bool is_lir_named_struct(String name):
+    if name == "TaskHandle" or name == "GorgetRange" or name == "ExecResult":
+        return true
+    if name == "GorgetCipherContext" or name == "GorgetX25519KeyPair":
+        return true
+    if name == "GorgetArena" or name == "GorgetArenaCheckpoint":
+        return true
+    if name == "GorgetPoolAllocator" or name == "GorgetTlsfAllocator":
+        return true
+    if name == "GorgetFixedBufferAllocator" or name == "GorgetFallbackAllocator":
+        return true
+    if name == "GorgetFile" or name == "GorgetError":
+        return true
+    return false
+
+# Runtime-defined named structs (skip emission).
+bool is_runtime_defined_named(String name):
+    if name == "ExecResult" or name == "GorgetCipherContext":
+        return true
+    if name == "GorgetX25519KeyPair" or name == "GorgetArena":
+        return true
+    if name == "GorgetArenaCheckpoint" or name == "GorgetPoolAllocator":
+        return true
+    if name == "GorgetTlsfAllocator" or name == "GorgetFixedBufferAllocator":
+        return true
+    if name == "GorgetFallbackAllocator" or name == "GorgetFile" or name == "GorgetError":
+        return true
+    if name == "GorgetSemaphore" or name == "GorgetWaitGroup" or name == "GorgetOnceFlag":
+        return true
+    if name == "GorgetUdpAddr" or name == "GorgetUdpPacket":
+        return true
+    if name == "GorgetSocket" or name == "GorgetServerSocket":
+        return true
+    if name == "GorgetTlsSocket" or name == "GorgetTlsServerSocket":
+        return true
+    if name == "GorgetUdpSocket" or name == "GorgetBigNum":
+        return true
+    if name == "GorgetRSAKey" or name == "GorgetEd25519KeyPair":
+        return true
+    if name == "GorgetRegex" or name == "GorgetRegexMatch":
+        return true
+    return false
+
+# Monomorphized wrapper types that get typedef'd to runtime types.
+bool is_mono_wrapper(String name):
+    if name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return true
+    if name.starts_with("Weak__") or name.starts_with("Vector__"):
+        return true
+    if name.starts_with("Dict__") or name.starts_with("Set__"):
+        return true
+    if name.starts_with("HashMap__") or name.starts_with("HashSet__"):
+        return true
+    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
+        return true
+    if name.starts_with("Guard__") or name.starts_with("ReadGuard__"):
+        return true
+    if name.starts_with("WriteGuard__") or name == "AtomicInt":
+        return true
+    if name == "AtomicBool" or name == "TaskGroup":
+        return true
+    if name.starts_with("Task__") or name.starts_with("Box__"):
+        return true
+    return false
+
+# Map LIR struct names to their runtime C names when they differ.
+String lir_to_runtime_name(String name):
+    if name == "GorgetString":
+        return "Str"
+    elif name == "ArenaCheckpoint":
+        return "GorgetArenaCheckpoint"
+    elif name == "Socket":
+        return "GorgetSocket"
+    elif name == "ServerSocket":
+        return "GorgetServerSocket"
+    elif name == "TlsSocket":
+        return "GorgetTlsSocket"
+    elif name == "TlsServerSocket":
+        return "GorgetTlsServerSocket"
+    elif name == "UdpSocket":
+        return "GorgetUdpSocket"
+    elif name == "UdpAddr":
+        return "GorgetUdpAddr"
+    elif name == "UdpPacket":
+        return "GorgetUdpPacket"
+    elif name == "Semaphore":
+        return "GorgetSemaphore"
+    elif name == "WaitGroup":
+        return "GorgetWaitGroup"
+    elif name == "OnceFlag":
+        return "GorgetOnceFlag"
+    elif name == "CipherContext":
+        return "GorgetCipherContext"
+    elif name == "BigNum":
+        return "GorgetBigNum"
+    elif name == "RSAKey":
+        return "GorgetRSAKey"
+    elif name == "Ed25519KeyPair":
+        return "GorgetEd25519KeyPair"
+    elif name == "X25519KeyPair":
+        return "GorgetX25519KeyPair"
+    elif name == "Regex":
+        return "GorgetRegex"
+    elif name == "RegexMatch" or name == "Match":
+        return "GorgetRegexMatch"
+    elif name == "File":
+        return "GorgetFile"
+    elif name == "Barrier":
+        return "GorgetBarrier"
+    elif name == "CondVar":
+        return "GorgetCondVar"
+    elif name == "AtomicInt":
+        return "GorgetAtomicInt"
+    elif name == "AtomicBool":
+        return "GorgetAtomicBool"
+    elif name == "Process":
+        return "GorgetProcess"
+    elif name == "SDLWindow":
+        return "GorgetSDLWindow"
+    elif name == "SDLRenderer":
+        return "GorgetSDLRenderer"
+    elif name == "SDLTexture":
+        return "GorgetSDLTexture"
+    elif name == "SDLFont":
+        return "GorgetSDLFont"
+    elif name == "SDLEvent":
+        return "GorgetSDLEvent"
+    elif name == "AudioChunk":
+        return "GorgetAudioChunk"
+    elif name == "AudioMusic":
+        return "GorgetAudioMusic"
+    elif name == "GLContext":
+        return "GorgetGLContext"
+    return ""
+
+# Build a mapping from struct index (as string) → C type name.
+Dict[String, String] build_struct_names(LirModule &m):
+    Dict[String, String] map = {}
+    int i = 0
+    while i < m.structs.len():
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        String key = int_to_str(i)
+        String rt = lir_to_runtime_name(sdef.name)
+        if rt != "":
+            map.put(key, rt)
+        elif is_runtime_struct(sdef.name) or is_lir_named_struct(sdef.name):
+            map.put(key, sdef.name)
+        elif is_mono_wrapper(sdef.name):
+            map.put(key, sdef.name)
+        else:
+            # Sanitize: replace non-alphanumeric chars with underscores.
+            String sanitized = sanitize_c_name(sdef.name)
+            map.put(key, "__gg_" + sanitized)
+        i += 1
+    return map
+
+String sanitize_c_name(String name):
+    String out = ""
+    int i = 0
+    while i < name.len():
+        String ch = name.slice(i, i + 1)
+        if ch == "_":
+            out = out + ch
+        elif ch >= "a" and ch <= "z":
+            out = out + ch
+        elif ch >= "A" and ch <= "Z":
+            out = out + ch
+        elif ch >= "0" and ch <= "9":
+            out = out + ch
+        else:
+            out = out + "_"
+        i += 1
+    return out
+
+# Should this struct be skipped during emission?
+bool should_skip_struct(LirStructDef &sdef):
+    if is_runtime_struct(sdef.name):
+        return true
+    if is_runtime_defined_named(sdef.name):
+        return true
+    if is_mono_wrapper(sdef.name):
+        return true
+    if lir_to_runtime_name(sdef.name) != "":
+        return true
+    return false
+
+# Escape a function name that clashes with C keywords.
+String c_func_name(String name):
+    if is_c_keyword(name):
+        return "__gg_" + name
+    return name
+
+bool is_c_keyword(String name):
+    if name == "auto" or name == "break" or name == "case" or name == "char":
+        return true
+    if name == "const" or name == "continue" or name == "default" or name == "do":
+        return true
+    if name == "double" or name == "else" or name == "enum" or name == "extern":
+        return true
+    if name == "float" or name == "for" or name == "goto" or name == "if":
+        return true
+    if name == "int" or name == "long" or name == "register" or name == "return":
+        return true
+    if name == "short" or name == "signed" or name == "sizeof" or name == "static":
+        return true
+    if name == "struct" or name == "switch" or name == "typedef" or name == "union":
+        return true
+    if name == "unsigned" or name == "void" or name == "volatile" or name == "while":
+        return true
+    if name == "inline" or name == "restrict" or name == "bool":
+        return true
+    if name == "true" or name == "false":
+        return true
+    return false
+
+# Sanitize a field name for C.
+String c_field_name(String name):
+    return name.replace(".", "_").replace("-", "_")
+
+# Escape a string for a C string literal.
+String escape_c_string(String s):
+    String out = ""
+    int i = 0
+    while i < s.len():
+        String ch = s.slice(i, i + 1)
+        if ch == "\"":
+            out = out + "\\\""
+        elif ch == "\\":
+            out = out + "\\\\"
+        elif ch == "\n":
+            out = out + "\\n"
+        elif ch == "\r":
+            out = out + "\\r"
+        elif ch == "\t":
+            out = out + "\\t"
+        else:
+            # For non-ASCII bytes we'd need hex escaping, but the self-host
+            # only handles ASCII fixtures. Pass through as-is.
+            out = out + ch
+        i += 1
+    return out
+
+# ── Comparison operator to C string ────────────────────────
+
+String cmp_op_str(int op):
+    if op == CMP_EQ:
+        return "=="
+    elif op == CMP_NE:
+        return "!="
+    elif op == CMP_LT:
+        return "<"
+    elif op == CMP_LE:
+        return "<="
+    elif op == CMP_GT:
+        return ">"
+    elif op == CMP_GE:
+        return ">="
+    return "=="
+
+# ── Topological sort (Kahn's algorithm) ───────────────────
+
+Vector[int] topo_sort_structs(LirModule &m):
+    int n = m.structs.len()
+    # Build dependency graph: deps[i] = list of j where struct i embeds struct j.
+    Vector[Vector[int]] deps = []
+    Vector[Vector[int]] dependents = []
+    Vector[int] in_degree = []
+    int i = 0
+    while i < n:
+        Vector[int] empty1 = []
+        Vector[int] empty2 = []
+        deps.push(empty1)
+        dependents.push(empty2)
+        in_degree.push(0)
+        i += 1
+
+    i = 0
+    while i < n:
+        LirStructDef sdef = m.structs.get(i).unwrap()
+        int fi = 0
+        while fi < sdef.fields.len():
+            StructField field = sdef.fields.get(fi).unwrap()
+            if field.ty >= LT_STRUCT_BASE:
+                int j = field.ty - LT_STRUCT_BASE
+                if j != i and j < n:
+                    deps.get(i).unwrap().push(j)
+                    dependents.get(j).unwrap().push(i)
+                    int cur = in_degree.get(i).unwrap()
+                    in_degree.set(i, cur + 1)
+            fi += 1
+        i += 1
+
+    # BFS: emit structs with no deps first.
+    Vector[int] queue = []
+    i = 0
+    while i < n:
+        if in_degree.get(i).unwrap() == 0:
+            queue.push(i)
+        i += 1
+
+    Vector[int] order = []
+    int qi = 0
+    while qi < queue.len():
+        int k = queue.get(qi).unwrap()
+        order.push(k)
+        Vector[int] dep_list = dependents.get(k).unwrap()
+        int di = 0
+        while di < dep_list.len():
+            int dep = dep_list.get(di).unwrap()
+            int deg = in_degree.get(dep).unwrap() - 1
+            in_degree.set(dep, deg)
+            if deg == 0:
+                queue.push(dep)
+            di += 1
+        qi += 1
+
+    # Remaining (cycles) — append in original order.
+    if order.len() < n:
+        Dict[int, bool] in_order = {}
+        int oi = 0
+        while oi < order.len():
+            in_order.put(order.get(oi).unwrap(), true)
+            oi += 1
+        i = 0
+        while i < n:
+            if not in_order.contains(i):
+                order.push(i)
+            i += 1
+
+    return order
+
+# ── Struct emission ────────────────────────────────────────
+
+String emit_structs(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    Vector[int] order = topo_sort_structs(&m)
+
+    # Forward declarations
+    int oi = 0
+    while oi < order.len():
+        int idx = order.get(oi).unwrap()
+        LirStructDef sdef = m.structs.get(idx).unwrap()
+        if should_skip_struct(&sdef):
+            oi += 1
+            continue
+        String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
+        out = out + "typedef struct " + cname + " " + cname + ";\n"
+        oi += 1
+    out = out + "\n"
+
+    # Struct definitions
+    oi = 0
+    while oi < order.len():
+        int idx = order.get(oi).unwrap()
+        LirStructDef sdef = m.structs.get(idx).unwrap()
+        if should_skip_struct(&sdef):
+            oi += 1
+            continue
+        String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
+        out = out + "// " + sdef.name + "\n"
+        out = out + "struct " + cname + " {\n"
+        if sdef.fields.len() == 0:
+            out = out + "    char __pad;\n"
+        elif sdef.is_union_layout and sdef.fields.len() > 1:
+            # Enum type: tag + union of variant structs.
+            StructField tag_field = sdef.fields.get(0).unwrap()
+            String tag_ty = c_type_name(tag_field.ty, &sn)
+            out = out + "    " + tag_ty + " " + c_field_name(tag_field.name) + ";\n"
+            out = out + "    union {\n"
+            # Group remaining fields by variant prefix.
+            Vector[String] variant_names = []
+            Vector[Vector[int]] variant_field_indices = []
+            int fi = 1
+            while fi < sdef.fields.len():
+                StructField f = sdef.fields.get(fi).unwrap()
+                String vname = field_variant_prefix(f.name)
+                if variant_names.len() == 0 or variant_names.get(variant_names.len() - 1).unwrap() != vname:
+                    variant_names.push(vname)
+                    Vector[int] indices = []
+                    indices.push(fi)
+                    variant_field_indices.push(indices)
+                else:
+                    variant_field_indices.get(variant_field_indices.len() - 1).unwrap().push(fi)
+                fi += 1
+
+            int vi = 0
+            while vi < variant_names.len():
+                String vname = variant_names.get(vi).unwrap()
+                Vector[int] indices = variant_field_indices.get(vi).unwrap()
+                if indices.len() == 1:
+                    int fidx = indices.get(0).unwrap()
+                    StructField f = sdef.fields.get(fidx).unwrap()
+                    String fty = field_type_str(f.ty, &sn)
+                    out = out + "        " + fty + " " + c_field_name(f.name) + ";  // " + vname + "\n"
+                else:
+                    out = out + "        struct {  // " + vname + "\n"
+                    int ii = 0
+                    while ii < indices.len():
+                        int fidx = indices.get(ii).unwrap()
+                        StructField f = sdef.fields.get(fidx).unwrap()
+                        String fty = field_type_str(f.ty, &sn)
+                        out = out + "            " + fty + " " + c_field_name(f.name) + ";\n"
+                        ii += 1
+                    out = out + "        } " + c_field_name(vname) + ";\n"
+                vi += 1
+            out = out + "    } data;\n"
+        else:
+            int fi = 0
+            while fi < sdef.fields.len():
+                StructField f = sdef.fields.get(fi).unwrap()
+                String fty = field_type_str(f.ty, &sn)
+                out = out + "    " + fty + " " + c_field_name(f.name) + ";\n"
+                fi += 1
+        out = out + "};\n\n"
+        oi += 1
+    return out
+
+# Extract variant name prefix from "VariantName_N" → "VariantName"
+String field_variant_prefix(String fname):
+    int i = fname.len() - 1
+    while i >= 0:
+        String ch = fname.slice(i, i + 1)
+        if ch == "_":
+            return fname.slice(0, i)
+        i -= 1
+    return fname
+
+# Type string for a struct field (Void → uint8_t placeholder).
+String field_type_str(int ty, Dict[String, String] &sn):
+    if ty == LT_VOID:
+        return "uint8_t"
+    return c_type_name(ty, &sn)
+
+# ── Extern declarations ────────────────────────────────────
+
+String emit_externs(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    int i = 0
+    while i < m.externs.len():
+        LirExtern ext = m.externs.get(i).unwrap()
+        # Skip runtime-provided functions (they're in the included runtime).
+        if is_runtime_fn(ext.name) or is_std_header_fn(ext.name):
+            i += 1
+            continue
+        # Skip C keyword casts.
+        if ext.name == "float" or ext.name == "int" or ext.name == "bool":
+            i += 1
+            continue
+        # Skip monomorphized wrapper methods.
+        if is_mono_wrapper_method(ext.name):
+            i += 1
+            continue
+        # Skip variadic externs with no params.
+        if ext.is_variadic and ext.params.len() == 0:
+            i += 1
+            continue
+        String ret = c_type_name(ext.return_type, &sn)
+        out = out + ret + " " + ext.name + "("
+        if ext.params.len() == 0 and not ext.is_variadic:
+            out = out + "void"
+        else:
+            int pi = 0
+            while pi < ext.params.len():
+                if pi > 0:
+                    out = out + ", "
+                int pty = ext.params.get(pi).unwrap()
+                if pty == LT_VOID:
+                    out = out + "void*"
+                else:
+                    out = out + c_type_name(pty, &sn)
+                pi += 1
+            if ext.is_variadic:
+                if ext.params.len() > 0:
+                    out = out + ", "
+                out = out + "..."
+        out = out + ");\n"
+        i += 1
+    if m.externs.len() > 0:
+        out = out + "\n"
+    return out
+
+bool is_mono_wrapper_method(String name):
+    if name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return true
+    if name.starts_with("Weak__") or name.starts_with("Mutex__"):
+        return true
+    if name.starts_with("RWLock__") or name.starts_with("Guard__"):
+        return true
+    if name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__"):
+        return true
+    if name.starts_with("Box__"):
+        return true
+    return false
+
+# Simple check for common runtime functions (they're already in the C runtime).
+bool is_runtime_fn(String name):
+    if name.starts_with("gorget_") or name.starts_with("__gorget_"):
+        return true
+    if name == "printf" or name == "fprintf" or name == "snprintf":
+        return true
+    if name == "malloc" or name == "calloc" or name == "realloc" or name == "free":
+        return true
+    if name == "memcpy" or name == "memset" or name == "memmove" or name == "memcmp":
+        return true
+    if name == "strlen" or name == "strcmp" or name == "strncmp":
+        return true
+    if name == "abort" or name == "exit":
+        return true
+    return false
+
+bool is_std_header_fn(String name):
+    if name == "fopen" or name == "fclose" or name == "fread" or name == "fwrite":
+        return true
+    if name == "fgets" or name == "fputs" or name == "fflush":
+        return true
+    if name == "fseek" or name == "ftell" or name == "rewind":
+        return true
+    if name == "getenv" or name == "system" or name == "atoi" or name == "atof":
+        return true
+    if name == "clock" or name == "time" or name == "sleep" or name == "usleep":
+        return true
+    return false
+
+# ── Globals ────────────────────────────────────────────────
+
+String emit_globals(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    int i = 0
+    while i < m.globals.len():
+        LirGlobal g = m.globals.get(i).unwrap()
+        String kw = ""
+        if g.is_const:
+            kw = "const "
+        String ty = c_type_name(g.ty, &sn)
+        out = out + kw + ty + " __lir_g" + int_to_str(i)
+        if g.init_kind == GINIT_ZEROED:
+            if lir_is_scalar(g.ty):
+                out = out + " = 0"
+            else:
+                out = out + " = {0}"
+        elif g.init_kind == GINIT_FUNC_ADDR:
+            # Deferred — needs function forward decls first.
+            out = out + " = {0}"
+        elif g.init_kind == GINIT_RUNTIME_CALL:
+            out = out + " = {0}"
+        out = out + "; // " + g.name + "\n"
+        i += 1
+    if m.globals.len() > 0:
+        out = out + "\n"
+    return out
+
+# ── String literal pooling ─────────────────────────────────
+
+struct StringLitEntry:
+    String value
+    int index
+
+Vector[StringLitEntry] collect_string_lits(LirModule &m):
+    Dict[String, int] seen = {}
+    Vector[StringLitEntry] entries = []
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            LirBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                match inst:
+                    case IStrLit(_, value):
+                        if not seen.contains(value):
+                            int idx = entries.len()
+                            String k = value
+                            String v2 = value
+                            seen.put(k, idx)
+                            entries.push(StringLitEntry(v2, idx))
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    return entries
+
+Dict[String, int] build_string_lit_map(Vector[StringLitEntry] &entries):
+    Dict[String, int] map = {}
+    int i = 0
+    while i < entries.len():
+        StringLitEntry e = entries.get(i).unwrap()
+        map.put(e.value, e.index)
+        i += 1
+    return map
+
+String emit_string_lits(Vector[StringLitEntry] &entries):
+    if entries.len() == 0:
+        return ""
+    String out = "// ── Static string literals (views into .rodata, cap=0) ──\n"
+    int i = 0
+    while i < entries.len():
+        StringLitEntry e = entries.get(i).unwrap()
+        String escaped = escape_c_string(e.value)
+        String slen = int_to_str(e.value.len())
+        String line = "static const Str __slit_" + int_to_str(e.index)
+        line = line + " = { .data = (char*)\"" + escaped + "\", .cap = 0, .len = " + slen + ", .alloc = NULL };\n"
+        out = out + line
+        i += 1
+    out = out + "\n"
+    return out
+
+# ── Function forward declarations ──────────────────────────
+
+String emit_func_forward_decls(LirModule &m, Dict[String, String] &sn):
+    String out = ""
+    int i = 0
+    while i < m.functions.len():
+        LirFunction func = m.functions.get(i).unwrap()
+        if func.name == "main":
+            out = out + "int main(int argc, char** argv);\n"
+            i += 1
+            continue
+        String ret = c_type_name(func.return_type, &sn)
+        out = out + ret + " " + c_func_name(func.name) + "("
+        if func.params.len() == 0:
+            out = out + "void"
+        else:
+            int pi = 0
+            while pi < func.params.len():
+                if pi > 0:
+                    out = out + ", "
+                int pty = func.params.get(pi).unwrap()
+                String ty_str = ""
+                if pty == LT_VOID:
+                    ty_str = "void*"
+                else:
+                    ty_str = c_type_name(pty, &sn)
+                # const params
+                if pi < func.const_params.len():
+                    bool is_const = func.const_params.get(pi).unwrap()
+                    if is_const and lir_is_ptr(pty):
+                        ty_str = "const " + ty_str
+                out = out + ty_str + " __p" + int_to_str(pi)
+                pi += 1
+        out = out + ");\n"
+        i += 1
+    out = out + "\n"
+    return out
+
+# ── Adapter functions ──────────────────────────────────────
+
+# Collect FuncAddr targets for adapter generation.
+Dict[int, bool] collect_func_addr_targets(LirModule &m):
+    Dict[int, bool] targets = {}
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            LirBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                match inst:
+                    case IFuncAddr(_, fid):
+                        targets.put(fid, true)
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    return targets
+
+String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, bool] &targets):
+    String out = ""
+    int fi = 0
+    while fi < m.functions.len():
+        if not targets.contains(fi):
+            fi += 1
+            continue
+        LirFunction target = m.functions.get(fi).unwrap()
+        String ret_c = c_type_name(target.return_type, &sn)
+        String tname = c_func_name(target.name)
+        String adapt_name = "__adapt_" + tname
+        out = out + ret_c + " " + adapt_name + "(void* __env"
+        int pi = 0
+        while pi < target.params.len():
+            int pty = target.params.get(pi).unwrap()
+            String ty_str = ""
+            if pty == LT_VOID:
+                ty_str = "void*"
+            else:
+                ty_str = c_type_name(pty, &sn)
+            out = out + ", " + ty_str + " __p" + int_to_str(pi)
+            pi += 1
+        out = out + ") { "
+        if target.return_type != LT_VOID:
+            out = out + "return "
+        out = out + tname + "("
+        pi = 0
+        while pi < target.params.len():
+            if pi > 0:
+                out = out + ", "
+            out = out + "__p" + int_to_str(pi)
+            pi += 1
+        out = out + "); }\n"
+        fi += 1
+    if targets.len() > 0:
+        out = out + "\n"
+    return out
+
+# ── Value type inference (simplified) ──────────────────────
+
+# Infer the result type of an LIR instruction.
+int infer_inst_type(LirInst &inst, LirModule &m):
+    match inst:
+        case ISlotLoad(_, _, ty):
+            return ty
+        case ISlotAddr(_, _):
+            return LT_PTR
+        case IIConst(_, ty, _):
+            return ty
+        case IFConst(_, ty, _):
+            return ty
+        case IBoolConst(_, _):
+            return LT_BOOL
+        case INullPtr(_):
+            return LT_PTR
+        case IFuncAddr(_, _):
+            return LT_PTR
+        case IGlobalAddr(_, _):
+            return LT_PTR
+        case IStrLit(_, _):
+            # StrLit produces a Str struct value. Find GorgetString struct ID.
+            int si = 0
+            while si < m.structs.len():
+                LirStructDef sdef = m.structs.get(si).unwrap()
+                if sdef.name == "GorgetString":
+                    return LT_STRUCT_BASE + si
+                si += 1
+            return LT_PTR
+        case IParamRef(_, _, ty):
+            return ty
+        case IAdd(_, ty, _, _, _):
+            return ty
+        case ISub(_, ty, _, _, _):
+            return ty
+        case IMul(_, ty, _, _, _):
+            return ty
+        case IDiv(_, ty, _, _):
+            return ty
+        case IRem(_, ty, _, _):
+            return ty
+        case IMod(_, ty, _, _):
+            return ty
+        case INeg(_, ty, _):
+            return ty
+        case IBitAnd(_, ty, _, _):
+            return ty
+        case IBitOr(_, ty, _, _):
+            return ty
+        case IBitXor(_, ty, _, _):
+            return ty
+        case IBitNot(_, ty, _):
+            return ty
+        case IShl(_, ty, _, _):
+            return ty
+        case IShr(_, ty, _, _):
+            return ty
+        case ICmp(_, _, _, _):
+            return LT_BOOL
+        case INot(_, _):
+            return LT_BOOL
+        case IIntCast(_, _, to_ty):
+            return to_ty
+        case IFloatCast(_, _, to_ty):
+            return to_ty
+        case IIntToFloat(_, _, to_ty):
+            return to_ty
+        case IFloatToInt(_, _, to_ty):
+            return to_ty
+        case IPtrCast(_, _):
+            return LT_PTR
+        case IBitcast(_, _, to_ty):
+            return to_ty
+        case ILoad(_, _, ty):
+            return ty
+        case IFieldPtr(_, _, _, _):
+            return LT_PTR
+        case IElemPtr(_, _, _, _):
+            return LT_PTR
+        case ICall(dst, fid, _):
+            if dst >= 0 and fid >= 0 and fid < m.functions.len():
+                LirFunction callee = m.functions.get(fid).unwrap()
+                return callee.return_type
+            return LT_VOID
+        case ICallExtern(dst, name, _, _, _):
+            if dst >= 0:
+                # Look up extern return type.
+                int ei = 0
+                while ei < m.externs.len():
+                    LirExtern ext = m.externs.get(ei).unwrap()
+                    if ext.name == name:
+                        return ext.return_type
+                    ei += 1
+            return LT_VOID
+        case ICallPtr(dst, _, _):
+            if dst >= 0:
+                return LT_PTR
+            return LT_VOID
+        else:
+            return LT_VOID
+
+# Compute value types for all values in a function.
+Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
+    Dict[int, int] types = {}
+    int bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        # Block params
+        int pi = 0
+        while pi < blk.params.len():
+            BlockParam bp = blk.params.get(pi).unwrap()
+            types.put(bp.value_id, bp.ty)
+            pi += 1
+        # Instructions
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            int dst = inst_dst(&inst)
+            if dst >= 0:
+                int ty = infer_inst_type(&inst, &m)
+                types.put(dst, ty)
+            ii += 1
+        bi += 1
+    return types
+
+# Extract the destination value ID from an instruction (-1 if none).
+int inst_dst(LirInst &inst):
+    match inst:
+        case ISlotStore(_, _, _):
+            return -1
+        case ISlotLoad(dst, _, _):
+            return dst
+        case ISlotAddr(dst, _):
+            return dst
+        case IIConst(dst, _, _):
+            return dst
+        case IFConst(dst, _, _):
+            return dst
+        case IBoolConst(dst, _):
+            return dst
+        case INullPtr(dst):
+            return dst
+        case IFuncAddr(dst, _):
+            return dst
+        case IGlobalAddr(dst, _):
+            return dst
+        case IStrLit(dst, _):
+            return dst
+        case IParamRef(dst, _, _):
+            return dst
+        case IAdd(dst, _, _, _, _):
+            return dst
+        case ISub(dst, _, _, _, _):
+            return dst
+        case IMul(dst, _, _, _, _):
+            return dst
+        case IDiv(dst, _, _, _):
+            return dst
+        case IRem(dst, _, _, _):
+            return dst
+        case IMod(dst, _, _, _):
+            return dst
+        case INeg(dst, _, _):
+            return dst
+        case IBitAnd(dst, _, _, _):
+            return dst
+        case IBitOr(dst, _, _, _):
+            return dst
+        case IBitXor(dst, _, _, _):
+            return dst
+        case IBitNot(dst, _, _):
+            return dst
+        case IShl(dst, _, _, _):
+            return dst
+        case IShr(dst, _, _, _):
+            return dst
+        case ICmp(dst, _, _, _):
+            return dst
+        case INot(dst, _):
+            return dst
+        case IIntCast(dst, _, _):
+            return dst
+        case IFloatCast(dst, _, _):
+            return dst
+        case IIntToFloat(dst, _, _):
+            return dst
+        case IFloatToInt(dst, _, _):
+            return dst
+        case IPtrCast(dst, _):
+            return dst
+        case IBitcast(dst, _, _):
+            return dst
+        case ILoad(dst, _, _):
+            return dst
+        case IFieldPtr(dst, _, _, _):
+            return dst
+        case IElemPtr(dst, _, _, _):
+            return dst
+        case ICall(dst, _, _):
+            return dst
+        case ICallExtern(dst, _, _, _, _):
+            return dst
+        case ICallPtr(dst, _, _):
+            return dst
+        case IMemset(_, _, _):
+            return -1
+        case IMemcpy(_, _, _):
+            return -1
+        case IStore(_, _):
+            return -1
+        case IBoundsCheck(_, _):
+            return -1
+        case IDivCheck(_):
+            return -1
+        case ITrap(_):
+            return -1
+        case IPrintf(_, _):
+            return -1
+        case IFprintf(_, _, _):
+            return -1
+        case IInlineC(dst, _):
+            return dst
+        case INop:
+            return -1
+
+# ── Instruction emission ───────────────────────────────────
+
+String v(int id): "__v" + int_to_str(id)
+String s(int id): "__s" + int_to_str(id)
+
+String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, String] &sn,
+                 Dict[int, int] &val_types, Dict[String, int] &slit_map):
+    match inst:
+        # ── Slot access ──
+        case ISlotStore(slot, value, is_move):
+            # Skip store to slot 0 (return slot) in void-returning functions.
+            if slot == 0 and func.return_type == LT_VOID:
+                return "/* void store */;"
+            int slot_ty = func.slots.get(slot).unwrap().ty
+            if lir_is_aggregate(slot_ty):
+                int vty = -1
+                if val_types.contains(value):
+                    vty = val_types.get(value).unwrap()
+                if vty == LT_PTR:
+                    String ty_name = c_type_name(slot_ty, &sn)
+                    return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
+                return s(slot) + " = " + v(value) + ";"
+            return s(slot) + " = " + v(value) + ";"
+
+        case ISlotLoad(dst, slot, _):
+            return v(dst) + " = " + s(slot) + ";"
+
+        case ISlotAddr(dst, slot):
+            return v(dst) + " = &" + s(slot) + ";"
+
+        # ── Constants ──
+        case IIConst(dst, ty, value):
+            return v(dst) + " = (" + c_type_name(ty, &sn) + ")" + int_to_str(value) + "LL;"
+
+        case IFConst(dst, ty, bits):
+            # Float from bits — simplified: use direct value for common cases.
+            return v(dst) + " = (" + c_type_name(ty, &sn) + ")0.0; memcpy(&" + v(dst) + ", &(int64_t){" + int_to_str(bits) + "LL}, sizeof(double));"
+
+        case IBoolConst(dst, value):
+            if value:
+                return v(dst) + " = true;"
+            return v(dst) + " = false;"
+
+        case INullPtr(dst):
+            return v(dst) + " = NULL;"
+
+        case IFuncAddr(dst, fid):
+            if fid >= 0 and fid < m.functions.len():
+                LirFunction target = m.functions.get(fid).unwrap()
+                String adapt = "__adapt_" + c_func_name(target.name)
+                return "{ static void* __fa_" + int_to_str(dst) + "[] = { (void*)" + adapt + ", NULL }; " + v(dst) + " = (void*)__fa_" + int_to_str(dst) + "; }"
+            return v(dst) + " = NULL;"
+
+        case IGlobalAddr(dst, gid):
+            return v(dst) + " = &__lir_g" + int_to_str(gid) + ";"
+
+        case IStrLit(dst, value):
+            if slit_map.contains(value):
+                int idx = slit_map.get(value).unwrap()
+                return v(dst) + " = __slit_" + int_to_str(idx) + ";"
+            String escaped = escape_c_string(value)
+            return v(dst) + " = \"" + escaped + "\";"
+
+        case IParamRef(dst, index, _):
+            return v(dst) + " = __p" + int_to_str(index) + ";"
+
+        # ── Arithmetic ──
+        case IAdd(dst, ty, lhs, rhs, overflow):
+            if overflow == OVF_TRAP and lir_is_integer(ty):
+                String ct = c_type_name(ty, &sn)
+                return "if (__builtin_add_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+            String ct = c_type_name(ty, &sn)
+            return v(dst) + " = (" + ct + ")" + v(lhs) + " + (" + ct + ")" + v(rhs) + ";"
+
+        case ISub(dst, ty, lhs, rhs, overflow):
+            if overflow == OVF_TRAP and lir_is_integer(ty):
+                String ct = c_type_name(ty, &sn)
+                return "if (__builtin_sub_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+            String ct = c_type_name(ty, &sn)
+            return v(dst) + " = (" + ct + ")" + v(lhs) + " - (" + ct + ")" + v(rhs) + ";"
+
+        case IMul(dst, ty, lhs, rhs, overflow):
+            if overflow == OVF_TRAP and lir_is_integer(ty):
+                String ct = c_type_name(ty, &sn)
+                return "if (__builtin_mul_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+            String ct = c_type_name(ty, &sn)
+            return v(dst) + " = (" + ct + ")" + v(lhs) + " * (" + ct + ")" + v(rhs) + ";"
+
+        case IDiv(dst, ty, lhs, rhs):
+            if lir_is_integer(ty):
+                String ct = c_type_name(ty, &sn)
+                return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + v(dst) + " = (" + ct + ")" + v(lhs) + " / (" + ct + ")" + v(rhs) + ";"
+            return v(dst) + " = " + v(lhs) + " / " + v(rhs) + ";"
+
+        case IRem(dst, ty, lhs, rhs):
+            if lir_is_float(ty):
+                return v(dst) + " = fmod(" + v(lhs) + ", " + v(rhs) + ");"
+            String ct = c_type_name(ty, &sn)
+            return v(dst) + " = (" + ct + ")" + v(lhs) + " % (" + ct + ")" + v(rhs) + ";"
+
+        case IMod(dst, ty, lhs, rhs):
+            if lir_is_float(ty):
+                return "{ double __t = fmod(" + v(lhs) + ", " + v(rhs) + "); " + v(dst) + " = __t + (__t != 0.0 && ((__t < 0) != (" + v(rhs) + " < 0)) ? " + v(rhs) + " : 0.0); }"
+            return "{ typeof(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
+
+        case INeg(dst, _, operand):
+            return v(dst) + " = -" + v(operand) + ";"
+
+        # ── Bitwise ──
+        case IBitAnd(dst, _, lhs, rhs):
+            return v(dst) + " = " + v(lhs) + " & " + v(rhs) + ";"
+
+        case IBitOr(dst, _, lhs, rhs):
+            return v(dst) + " = " + v(lhs) + " | " + v(rhs) + ";"
+
+        case IBitXor(dst, _, lhs, rhs):
+            return v(dst) + " = " + v(lhs) + " ^ " + v(rhs) + ";"
+
+        case IBitNot(dst, _, operand):
+            return v(dst) + " = ~" + v(operand) + ";"
+
+        case IShl(dst, _, lhs, rhs):
+            return v(dst) + " = " + v(lhs) + " << " + v(rhs) + ";"
+
+        case IShr(dst, _, lhs, rhs):
+            return v(dst) + " = " + v(lhs) + " >> " + v(rhs) + ";"
+
+        # ── Comparison & Logic ──
+        case ICmp(dst, op, lhs, rhs):
+            # Simplified: doesn't detect string comparison (handled by LIR lowering).
+            String cop = cmp_op_str(op)
+            return v(dst) + " = " + v(lhs) + " " + cop + " " + v(rhs) + ";"
+
+        case INot(dst, operand):
+            return v(dst) + " = !" + v(operand) + ";"
+
+        # ── Type conversions ──
+        case IIntCast(dst, value, to_ty):
+            return v(dst) + " = (" + c_type_name(to_ty, &sn) + ")(" + v(value) + ");"
+
+        case IFloatCast(dst, value, to_ty):
+            return v(dst) + " = (" + c_type_name(to_ty, &sn) + ")(" + v(value) + ");"
+
+        case IIntToFloat(dst, value, to_ty):
+            return v(dst) + " = (" + c_type_name(to_ty, &sn) + ")(" + v(value) + ");"
+
+        case IFloatToInt(dst, value, to_ty):
+            return v(dst) + " = (" + c_type_name(to_ty, &sn) + ")(" + v(value) + ");"
+
+        case IPtrCast(dst, value):
+            return v(dst) + " = (void*)(" + v(value) + ");"
+
+        case IBitcast(dst, value, to_ty):
+            return "memcpy(&" + v(dst) + ", &" + v(value) + ", sizeof(" + c_type_name(to_ty, &sn) + "));"
+
+        # ── Memory ──
+        case ILoad(dst, ptr, ty):
+            return v(dst) + " = *(" + c_type_name(ty, &sn) + " *)(" + v(ptr) + ");"
+
+        case IStore(ptr, value):
+            int vty = -1
+            if val_types.contains(value):
+                vty = val_types.get(value).unwrap()
+            if lir_is_aggregate(vty):
+                return "memcpy(" + v(ptr) + ", &" + v(value) + ", sizeof(" + v(value) + "));"
+            elif lir_is_scalar(vty):
+                String ty_name = c_type_name(vty, &sn)
+                return "*(" + ty_name + "*)(" + v(ptr) + ") = " + v(value) + ";"
+            elif vty == LT_PTR:
+                return "*(void**)(" + v(ptr) + ") = " + v(value) + ";"
+            return "*(void**)(" + v(ptr) + ") = " + v(value) + ";"
+
+        case IFieldPtr(dst, base, struct_id, field):
+            if struct_id >= 0 and struct_id < m.structs.len():
+                LirStructDef sdef = m.structs.get(struct_id).unwrap()
+                String sname = c_type_name(LT_STRUCT_BASE + struct_id, &sn)
+                if field < sdef.fields.len():
+                    StructField f = sdef.fields.get(field).unwrap()
+                    String fname = c_field_name(f.name)
+                    if sdef.is_union_layout and field > 0:
+                        # Enum union layout: access through data.field_name
+                        String vprefix = field_variant_prefix(f.name)
+                        # Count fields in this variant
+                        int vcount = 0
+                        int fi = 1
+                        while fi < sdef.fields.len():
+                            StructField sf = sdef.fields.get(fi).unwrap()
+                            if field_variant_prefix(sf.name) == vprefix:
+                                vcount += 1
+                            fi += 1
+                        if vcount > 1:
+                            return v(dst) + " = (void*)&((" + sname + " *)(" + v(base) + "))->data." + c_field_name(vprefix) + "." + fname + ";"
+                        return v(dst) + " = (void*)&((" + sname + " *)(" + v(base) + "))->data." + fname + ";"
+                    return v(dst) + " = (void*)&((" + sname + " *)(" + v(base) + "))->" + fname + ";"
+                # Out of bounds — byte offset fallback.
+                return v(dst) + " = (void*)((char*)(" + v(base) + ") + " + int_to_str(field) + " * sizeof(void*));"
+            return v(dst) + " = (void*)((char*)(" + v(base) + ") + " + int_to_str(field) + " * sizeof(void*));"
+
+        case IElemPtr(dst, base, index, elem_size):
+            return v(dst) + " = (void*)((char*)(" + v(base) + ") + (int64_t)(" + v(index) + ") * " + int_to_str(elem_size) + ");"
+
+        case IMemset(ptr, byte, size):
+            return "memset(" + v(ptr) + ", (int)" + v(byte) + ", (size_t)" + v(size) + ");"
+
+        case IMemcpy(dst_ptr, src_ptr, size):
+            return "memcpy(" + v(dst_ptr) + ", " + v(src_ptr) + ", (size_t)" + v(size) + ");"
+
+        # ── Calls ──
+        case ICall(dst, fid, args):
+            if fid >= 0 and fid < m.functions.len():
+                LirFunction callee = m.functions.get(fid).unwrap()
+                String fname = c_func_name(callee.name)
+                String out = ""
+                if dst >= 0:
+                    out = v(dst) + " = "
+                out = out + fname + "("
+                int ai = 0
+                while ai < args.len():
+                    if ai > 0:
+                        out = out + ", "
+                    out = out + v(args.get(ai).unwrap())
+                    ai += 1
+                out = out + ");"
+                return out
+            return "/* unknown call */;"
+
+        case ICallExtern(dst, name, args, original_name, arg_abis):
+            return emit_call_extern(dst, name, &args, &sn, &val_types, &m)
+
+        case ICallPtr(dst, callee, args):
+            String out = ""
+            if dst >= 0:
+                out = v(dst) + " = "
+            out = out + "((void*(*)(void*"
+            int ai = 0
+            while ai < args.len():
+                if ai > 0:
+                    out = out + ", void*"
+                ai += 1
+            out = out + "))(" + v(callee) + "))("
+            ai = 0
+            while ai < args.len():
+                if ai > 0:
+                    out = out + ", "
+                out = out + "(void*)" + v(args.get(ai).unwrap())
+                ai += 1
+            out = out + ");"
+            return out
+
+        # ── Runtime checks ──
+        case IBoundsCheck(index, len):
+            return "if ((uint64_t)" + v(index) + " >= (uint64_t)" + v(len) + ") { fprintf(stderr, \"index out of bounds\\n\"); abort(); }"
+
+        case IDivCheck(divisor):
+            return "if (" + v(divisor) + " == 0) { fprintf(stderr, \"division by zero\\n\"); abort(); }"
+
+        case ITrap(msg):
+            return "fprintf(stderr, \"" + escape_c_string(msg) + "\"); abort();"
+
+        # ── Printf ──
+        case IPrintf(fmt, args):
+            String out = "printf(\"" + escape_c_string(fmt) + "\""
+            int ai = 0
+            while ai < args.len():
+                out = out + ", " + v(args.get(ai).unwrap())
+                ai += 1
+            return out + ");"
+
+        case IFprintf(fd, fmt, args):
+            String out = "fprintf((FILE*)" + v(fd) + ", \"" + escape_c_string(fmt) + "\""
+            int ai = 0
+            while ai < args.len():
+                out = out + ", " + v(args.get(ai).unwrap())
+                ai += 1
+            return out + ");"
+
+        # ── Inline C ──
+        case IInlineC(dst, code):
+            if dst >= 0:
+                # Parse "_X = expr;" → "__vN = expr;"
+                int eq_pos = code.find(" = ")
+                if eq_pos >= 0:
+                    String expr = code.slice(eq_pos + 3, code.len())
+                    if expr.ends_with(";"):
+                        expr = expr.slice(0, expr.len() - 1)
+                    return v(dst) + " = " + expr + ";"
+                return "/* inline_c: " + code + " */;"
+            return code
+
+        case INop:
+            return "/* nop */;"
+
+# ── CallExtern emission (simplified) ──────────────────────
+
+String emit_call_extern(int dst, String name, Vector[int] &args,
+                        Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+    # Closure call dispatch.
+    if name.starts_with("__gorget_closure_call_"):
+        if args.len() > 0:
+            int closure_val = args.get(0).unwrap()
+            String out = ""
+            if dst >= 0:
+                out = v(dst) + " = "
+            # Cast: ret_type(*)(void*, args...) applied to closure's fn_ptr
+            out = out + "((void*(*)(void*"
+            int ai = 1
+            while ai < args.len():
+                out = out + ", void*"
+                ai += 1
+            out = out + "))(" + v(closure_val) + ".fn_ptr))(" + v(closure_val) + ".env"
+            ai = 1
+            while ai < args.len():
+                out = out + ", " + v(args.get(ai).unwrap())
+                ai += 1
+            return out + ");"
+        return "/* bad closure call */;"
+
+    # Callable dispatch.
+    if name.starts_with("__callable_"):
+        if args.len() > 0:
+            int closure_val = args.get(0).unwrap()
+            String out = ""
+            if dst >= 0:
+                out = v(dst) + " = "
+            out = out + "((void*(*)(void*"
+            int ai = 1
+            while ai < args.len():
+                out = out + ", void*"
+                ai += 1
+            out = out + "))((void**)" + v(closure_val) + ")[0])(((void**)" + v(closure_val) + ")[1]"
+            ai = 1
+            while ai < args.len():
+                out = out + ", " + v(args.get(ai).unwrap())
+                ai += 1
+            return out + ");"
+        return "/* bad callable */;"
+
+    # DropIfAlive guard.
+    if name.starts_with("__gorget_drop_if_alive_open__"):
+        String size_str = name.slice(28, name.len())
+        if args.len() > 0:
+            return "{ char __dia_z[" + size_str + "] = {0}; if (memcmp(" + v(args.get(0).unwrap()) + ", __dia_z, " + size_str + ") != 0) {"
+        return "/* dia open */;"
+    if name == "__gorget_drop_if_alive_close":
+        return "} }"
+
+    # Builtin type casts.
+    if args.len() == 1:
+        if name == "float":
+            if dst >= 0:
+                return v(dst) + " = (double)" + v(args.get(0).unwrap()) + ";"
+            return ";"
+        if name == "int":
+            if dst >= 0:
+                return v(dst) + " = (int64_t)" + v(args.get(0).unwrap()) + ";"
+            return ";"
+        if name == "bool":
+            if dst >= 0:
+                return v(dst) + " = (bool)" + v(args.get(0).unwrap()) + ";"
+            return ";"
+
+    # Generic extern call.
+    String out = ""
+    if dst >= 0:
+        out = v(dst) + " = "
+    out = out + name + "("
+    int ai = 0
+    while ai < args.len():
+        if ai > 0:
+            out = out + ", "
+        out = out + v(args.get(ai).unwrap())
+        ai += 1
+    return out + ");"
+
+# ── Terminator emission ───────────────────────────────────
+
+String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dict[int, int] &val_types):
+    match term:
+        case TRet(value):
+            # If function returns aggregate but value is pointer, deref.
+            if lir_is_aggregate(func.return_type):
+                int vty = -1
+                if val_types.contains(value):
+                    vty = val_types.get(value).unwrap()
+                if vty == LT_PTR:
+                    String ty_name = c_type_name(func.return_type, &sn)
+                    return "return *(" + ty_name + "*)" + v(value) + ";"
+            return "return " + v(value) + ";"
+
+        case TRetVoid:
+            return "return;"
+
+        case TJump(target, args):
+            return emit_jump_args(target, &args, &func) + "goto __bb" + int_to_str(target) + ";"
+
+        case TBranch(cond, then_blk, then_args, else_blk, else_args):
+            String out = "if (" + v(cond) + ") {\n"
+            if then_args.len() > 0:
+                out = out + "        " + emit_jump_args(then_blk, &then_args, &func) + "\n"
+            out = out + "        goto __bb" + int_to_str(then_blk) + ";\n"
+            out = out + "    } else {\n"
+            if else_args.len() > 0:
+                out = out + "        " + emit_jump_args(else_blk, &else_args, &func) + "\n"
+            out = out + "        goto __bb" + int_to_str(else_blk) + ";\n"
+            out = out + "    }"
+            return out
+
+        case TSwitch(value, cases, default_blk, default_args):
+            String out = "switch ((int64_t)" + v(value) + ") {\n"
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                String ja = emit_jump_args(sc.target, &sc.args, &func)
+                out = out + "        case " + int_to_str(sc.value) + ": " + ja + "goto __bb" + int_to_str(sc.target) + ";\n"
+                ci += 1
+            String da = emit_jump_args(default_blk, &default_args, &func)
+            out = out + "        default: " + da + "goto __bb" + int_to_str(default_blk) + ";\n"
+            out = out + "    }"
+            return out
+
+        case TUnreachable:
+            return "__builtin_unreachable();"
+
+# Emit parallel-copy assignments for block parameter passing.
+String emit_jump_args(int target, Vector[int] &args, LirFunction &func):
+    if args.len() == 0:
+        return ""
+    LirBlock target_blk = func.blocks.get(target).unwrap()
+    String out = ""
+    int i = 0
+    while i < args.len() and i < target_blk.params.len():
+        BlockParam bp = target_blk.params.get(i).unwrap()
+        int arg = args.get(i).unwrap()
+        out = out + "__bp" + int_to_str(bp.value_id) + " = __v" + int_to_str(arg) + "; "
+        i += 1
+    return out
+
+# ── Function emission ──────────────────────────────────────
+
+String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, Dict[String, int] &slit_map):
+    String out = ""
+    Dict[int, int] val_types = compute_val_types(&func, &m)
+
+    # Function signature
+    if func.name == "main":
+        out = out + "int main(int argc, char** argv) {\n"
+        out = out + "    gorget_init_args(argc, argv);\n"
+    else:
+        String ret = c_type_name(func.return_type, &sn)
+        out = out + ret + " " + c_func_name(func.name) + "("
+        if func.params.len() == 0:
+            out = out + "void"
+        else:
+            int pi = 0
+            while pi < func.params.len():
+                if pi > 0:
+                    out = out + ", "
+                int pty = func.params.get(pi).unwrap()
+                String ty_str = ""
+                if pty == LT_VOID:
+                    ty_str = "void*"
+                else:
+                    ty_str = c_type_name(pty, &sn)
+                if pi < func.const_params.len():
+                    bool is_const = func.const_params.get(pi).unwrap()
+                    if is_const and lir_is_ptr(pty):
+                        ty_str = "const " + ty_str
+                out = out + ty_str + " __p" + int_to_str(pi)
+                pi += 1
+        out = out + ") {\n"
+
+    # Slot declarations
+    int si = 0
+    while si < func.slots.len():
+        LirSlot slot = func.slots.get(si).unwrap()
+        String ty_str = c_type_name(slot.ty, &sn)
+        if ty_str == "void":
+            ty_str = "void*"
+        out = out + "    " + ty_str + " __s" + int_to_str(si)
+        if lir_is_scalar(slot.ty):
+            out = out + " = 0"
+        else:
+            out = out + " = {0}"
+        out = out + ";\n"
+        si += 1
+
+    # Value declarations — find max value id
+    int max_val = 0
+    int bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        int pi = 0
+        while pi < blk.params.len():
+            BlockParam bp = blk.params.get(pi).unwrap()
+            if bp.value_id >= max_val:
+                max_val = bp.value_id + 1
+            pi += 1
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            int dst = inst_dst(&inst)
+            if dst >= max_val:
+                max_val = dst + 1
+            ii += 1
+        bi += 1
+
+    int vi = 0
+    while vi < max_val:
+        String ty_str = "void*"
+        if val_types.contains(vi):
+            int vty = val_types.get(vi).unwrap()
+            String ts = c_type_name(vty, &sn)
+            if ts == "void":
+                ty_str = "void*"
+            else:
+                ty_str = ts
+        out = out + "    " + ty_str + " __v" + int_to_str(vi) + ";\n"
+        vi += 1
+
+    # Block parameter move variables
+    bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        int pi = 0
+        while pi < blk.params.len():
+            BlockParam bp = blk.params.get(pi).unwrap()
+            String ty_str = c_type_name(bp.ty, &sn)
+            out = out + "    " + ty_str + " __bp" + int_to_str(bp.value_id) + ";\n"
+            pi += 1
+        bi += 1
+
+    out = out + "\n"
+
+    # Blocks
+    bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        out = out + "__bb" + int_to_str(blk.id) + ":\n"
+
+        # Move block params from temporaries
+        int pi = 0
+        while pi < blk.params.len():
+            BlockParam bp = blk.params.get(pi).unwrap()
+            out = out + "    __v" + int_to_str(bp.value_id) + " = __bp" + int_to_str(bp.value_id) + ";\n"
+            pi += 1
+
+        # Instructions
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            String code = emit_inst(&inst, &m, &func, &sn, &val_types, &slit_map)
+            out = out + "    " + code + "\n"
+            ii += 1
+
+        # Terminator
+        String tcode = emit_term(&blk.term, &func, &sn, &val_types)
+        out = out + "    " + tcode + "\n"
+        bi += 1
+
+    out = out + "}\n"
+    return out
+
+# ── Top-level code generation ──────────────────────────────
+
+String generate_c(LirModule &m):
+    Dict[String, String] sn = build_struct_names(&m)
+
+    String out = ""
+
+    # Struct definitions
+    out = out + emit_structs(&m, &sn)
+
+    # Extern declarations
+    out = out + emit_externs(&m, &sn)
+
+    # Globals
+    out = out + emit_globals(&m, &sn)
+
+    # String literal pool
+    Vector[StringLitEntry] slits = collect_string_lits(&m)
+    Dict[String, int] slit_map = build_string_lit_map(&slits)
+    out = out + emit_string_lits(&slits)
+
+    # Function forward declarations
+    out = out + emit_func_forward_decls(&m, &sn)
+
+    # Adapter functions (FuncAddr → closure protocol)
+    Dict[int, bool] fa_targets = collect_func_addr_targets(&m)
+    out = out + emit_adapter_functions(&m, &sn, &fa_targets)
+
+    # Function definitions
+    out = out + "// ── Function Definitions ──\n"
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        out = out + emit_function(&func, &m, &sn, &slit_map)
+        out = out + "\n"
+        fi += 1
+
+    return out
