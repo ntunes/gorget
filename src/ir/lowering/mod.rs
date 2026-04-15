@@ -1318,8 +1318,9 @@ pub fn lower_module(
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();
 
-    // Transfer implicit clone warnings
+    // Transfer implicit clone warnings and move suggestions
     module.implicit_clone_warnings = ctx.implicit_clone_warnings;
+    module.move_suggestions = ctx.move_suggestions;
 
     // Transfer runtime callees table for LIR backend
     module.runtime_callees = ctx.runtime_callees;

@@ -842,6 +842,7 @@ fn lower_return(
                         // if the caller still needs the argument after the call.
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                ctx.record_param_cloned(builder, place.local);
                                 ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                 let cloned = builder.call(
                                     &clone_fn,
@@ -931,6 +932,7 @@ fn lower_return(
                             if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
                                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                        ctx.record_param_cloned(builder, p.local);
                                         ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                                         let cloned = builder.call(&clone_fn, vec![operand.clone()], inner);
                                         operand = FunctionBuilder::copy(cloned);

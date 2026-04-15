@@ -424,6 +424,7 @@ pub fn lower_function(
 
     // Clear and register locals for this function
     ctx.clear_locals();
+    ctx.func_state.current_fn_name = name.to_string();
 
     // Register parameters as locals
     ctx.func_state.callable_return_types.clear();
@@ -691,6 +692,7 @@ pub fn lower_equip_method(
 
     // Clear and register locals
     ctx.clear_locals();
+    ctx.func_state.current_fn_name = mangled_name.clone();
     ctx.func_state.callable_return_types.clear();
     ctx.func_state.consuming_self = self_is_consuming;
 
@@ -980,6 +982,7 @@ pub fn lower_generic_function(
     // Clear and register locals — assign sequential LocalIds to runtime params only
     // (meta op params carry no runtime value and are skipped).
     ctx.clear_locals();
+    ctx.func_state.current_fn_name = mangled_name.to_string();
     ctx.func_state.callable_return_types.clear();
     // Store move_override_params in context so return-statement lowering can zero sources.
     // Must be set AFTER clear_locals() which resets it.

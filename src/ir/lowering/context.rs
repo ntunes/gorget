@@ -227,6 +227,8 @@ pub struct FunctionState {
     /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
     /// The return path must zero the source through the pointer to prevent caller double-free.
     pub move_override_params: std::collections::HashSet<String>,
+    /// Name of the function currently being lowered (for tracking consumed params).
+    pub current_fn_name: String,
     /// True when the current method has `!self` (consuming self). Field loads
     /// from self use MoveZeroSource for resource fields instead of Ptr borrows.
     pub consuming_self: bool,
@@ -353,6 +355,12 @@ pub struct LoweringContext<'a> {
     pub sentinel_to_option_methods: rustc_hash::FxHashSet<String>,
     /// Accumulated implicit clone warnings during lowering.
     pub implicit_clone_warnings: Vec<crate::ir::ImplicitCloneWarning>,
+    /// Suggestions to pass arguments with `!` (move) for last-use optimization.
+    pub move_suggestions: Vec<crate::ir::MoveSuggestion>,
+    /// Functions that clone a bare-param at a return/ownership boundary.
+    /// Maps fn_name → set of param names that are cloned.
+    /// Populated during callee lowering, queried at caller call sites.
+    pub fn_consumed_params: FxHashMap<String, rustc_hash::FxHashSet<String>>,
     /// Maps monomorphized method name → C runtime function name.
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
@@ -399,6 +407,8 @@ impl<'a> LoweringContext<'a> {
             trivial_getter_methods: rustc_hash::FxHashSet::default(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),
             implicit_clone_warnings: Vec::new(),
+            move_suggestions: Vec::new(),
+            fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
             call_resolved_names: FxHashMap::default(),
         }
@@ -671,11 +681,31 @@ impl<'a> LoweringContext<'a> {
         });
     }
 
+    /// Record that the current function clones a bare-param at an ownership boundary.
+    /// Called alongside warn_implicit_clone when the clone source is a Ptr(T) param.
+    /// Used by call-site analysis to suggest `!arg` for last-use arguments.
+    pub fn record_param_cloned(
+        &mut self,
+        builder: &crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+    ) {
+        if !self.is_bare_param(local) { return; }
+        if let Some(name) = builder.local_name(local).map(|s| s.to_string()) {
+            let fn_name = self.func_state.current_fn_name.clone();
+            if !fn_name.is_empty() {
+                self.fn_consumed_params
+                    .entry(fn_name)
+                    .or_default()
+                    .insert(name);
+            }
+        }
+    }
+
 }
 
 /// Convert an internal mangled type name to user-friendly Gorget syntax.
 /// e.g., `Vector__int64_t` → `Vector[int]`, `Dict__GorgetString__int64_t` → `Dict[String, int]`
-fn demangle_type_name(name: &str) -> String {
+pub(crate) fn demangle_type_name(name: &str) -> String {
     // Map C type names back to Gorget names
     fn c_to_gorget(s: &str) -> &str {
         match s {
@@ -1295,9 +1325,11 @@ impl<'a> LoweringContext<'a> {
 
         // Case 1: Ptr(T) → clone inner.
         // Cannot move through Ptr: the callee doesn't know if the caller still
-        // needs the argument. Caller-side optimization is deferred to Phase 2.
+        // needs the argument. Record the param as consumed so the caller can
+        // suggest `!` at last-use call sites.
         if let Some(inner) = self.pointee_type(local_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+                self.record_param_cloned(builder, local);
                 self.warn_implicit_clone(span, inner, reason);
                 let cloned = builder.call(
                     &clone_fn,

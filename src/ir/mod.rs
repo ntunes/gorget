@@ -141,6 +141,19 @@ pub struct ImplicitCloneWarning {
     pub reason: ImplicitCloneReason,
 }
 
+/// Suggestion to pass an argument with `!` (move) instead of by borrow,
+/// because the argument is the last use of the variable and the callee
+/// would otherwise deep-clone it.
+#[derive(Debug, Clone)]
+pub struct MoveSuggestion {
+    /// Span of the argument expression at the call site.
+    pub span: crate::span::Span,
+    /// Name of the variable being passed.
+    pub name: String,
+    /// Human-readable type name.
+    pub type_name: String,
+}
+
 /// Why the compiler inserted an implicit clone.
 #[derive(Debug, Clone)]
 pub enum ImplicitCloneReason {
@@ -202,6 +215,8 @@ pub struct Module {
     pub fn_purity: crate::semantic::purity::PurityByName,
     /// Implicit clone warnings emitted during lowering.
     pub implicit_clone_warnings: Vec<ImplicitCloneWarning>,
+    /// Suggestions to use `!arg` (move) for last-use arguments.
+    pub move_suggestions: Vec<MoveSuggestion>,
     /// Maps monomorphized method name → C runtime function name.
     /// Populated from BuiltinTypeProtocol declarations. Used by LIR backend
     /// to replace `map_monomorphized_to_runtime()`.
@@ -232,6 +247,7 @@ impl Module {
             fn_param_abis: rustc_hash::FxHashMap::default(),
             fn_purity: rustc_hash::FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
+            move_suggestions: Vec::new(),
             runtime_callees: rustc_hash::FxHashMap::default(),
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
