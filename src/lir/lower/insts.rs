@@ -1965,9 +1965,15 @@ impl<'a> FuncLowering<'a> {
 
         // ── Tier 1: Return-value wrapping lifts ──────────────────────────
         // Block-splitting lifts (nullable void→Option, cstr→Option, sentinel→Option,
-        // last_error→Result) are implemented in lifts.rs but DISABLED pending SSA
-        // value-numbering fix for mid-block branching.  The infrastructure
-        // (lower_instruction returning BlockId) is in place.
+        // last_error→Result) are implemented in lifts.rs but DISABLED.
+        //
+        // Root cause: the lifts write to the destination slot via FieldPtr+Store
+        // in branch blocks (some_bb/none_bb).  The C backend's value type inference
+        // assigns the slot's default-initialized value (0/NULL) to variables used
+        // in later blocks, causing NULL dereferences at runtime.  Fixing this
+        // requires either (a) emitting SlotStore with the complete Option/Result
+        // struct as a single value, or (b) fixing the C backend's type inference
+        // to track pointer-written slots across blocks.
 
         // ── Tier 2b: Tag checks ──────────────────────────────────────────
         // __option_is_some, __option_is_none, *__is_some, *__is_ok, *__is_none, *__is_err

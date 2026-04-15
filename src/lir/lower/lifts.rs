@@ -4,10 +4,11 @@
 //! inline with a sequence of LIR instructions (Call, Branch, FieldPtr, Load, Store,
 //! etc.) that express the same logic portably.
 //!
-//! Currently DISABLED: the block-splitting lifts create new basic blocks mid-
-//! instruction-sequence, which changes SSA value numbering and causes runtime
-//! regressions.  The infrastructure (`lower_instruction` returning `BlockId`) is
-//! in place; these methods will be re-enabled once the SSA interaction is fixed.
+//! DISABLED: The block-splitting lifts write to the destination slot via
+//! FieldPtr+Store in branch blocks, but the C backend's value type inference
+//! assigns the slot's default-initialized value (0/NULL) to variables in later
+//! blocks, causing NULL dereferences.  Requires fixing C backend slot tracking
+//! across split blocks before enabling.
 
 #![allow(dead_code)]
 
@@ -261,21 +262,7 @@ impl<'a> FuncLowering<'a> {
         self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
             dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
         });
-        // String is aggregate — store to temp slot then memcpy from its address.
-        // (Can't pass struct value directly to memcpy — need a pointer.)
-        let temp_slot = self.lir_func.add_slot(str_ty.clone(), None);
-        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
-            slot: temp_slot, value: wrapped, is_move: true,
-        });
-        let temp_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotAddr {
-            dst: temp_addr, slot: temp_slot,
-        });
-        let sz = c_sizeof_lir_type(&str_ty, self.module_structs) as i64;
-        let sz_val = self.emit_i64_const(some_bb, sz);
-        self.lir_func.block_mut(some_bb).insts.push(Inst::Memcpy {
-            dst_ptr: payload_ptr, src_ptr: temp_addr, size: sz_val,
-        });
+        self.emit_value_to_field(wrapped, payload_ptr, &str_ty, some_bb);
 
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -306,10 +293,11 @@ impl<'a> FuncLowering<'a> {
         let ok_ty = sdef.fields.get(1).map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
 
         // 1. Call the extern function (returns the raw ok value)
-        // Register the extern with the Result struct return type to preserve
-        // compatibility with C backend wrapper generation (_r functions).
+        // Register the extern with the ok type — the actual C function return type.
+        // The _r wrapper in emit_types.rs has a fallback struct-name lookup
+        // so it doesn't depend on this extern declaration's return type.
         let raw_result = self.lir_func.next_value();
-        self.ensure_extern(emit_name, arg_types, &LirType::Struct(result_sid));
+        self.ensure_extern(emit_name, arg_types, &ok_ty);
         let call_abis = self.lookup_arg_abis(emit_name);
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: Some(raw_result),
@@ -374,26 +362,7 @@ impl<'a> FuncLowering<'a> {
         self.lir_func.block_mut(err_bb).insts.push(Inst::FieldPtr {
             dst: err_field_ptr, base: slot_addr, struct_id: result_sid, field: 2,
         });
-        if str_ty.is_aggregate() {
-            // Store to temp slot then memcpy (can't pass struct value to memcpy)
-            let temp_slot = self.lir_func.add_slot(str_ty.clone(), None);
-            self.lir_func.block_mut(err_bb).insts.push(Inst::SlotStore {
-                slot: temp_slot, value: err_str, is_move: true,
-            });
-            let temp_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(err_bb).insts.push(Inst::SlotAddr {
-                dst: temp_addr, slot: temp_slot,
-            });
-            let sz = c_sizeof_lir_type(&str_ty, self.module_structs) as i64;
-            let sz_val = self.emit_i64_const(err_bb, sz);
-            self.lir_func.block_mut(err_bb).insts.push(Inst::Memcpy {
-                dst_ptr: err_field_ptr, src_ptr: temp_addr, size: sz_val,
-            });
-        } else {
-            self.lir_func.block_mut(err_bb).insts.push(Inst::Store {
-                ptr: err_field_ptr, value: err_str,
-            });
-        }
+        self.emit_value_to_field(err_str, err_field_ptr, &str_ty, err_bb);
         self.lir_func.block_mut(err_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 6. Ok branch: tag=0, store raw value
@@ -402,25 +371,7 @@ impl<'a> FuncLowering<'a> {
         self.lir_func.block_mut(ok_bb).insts.push(Inst::FieldPtr {
             dst: ok_field_ptr, base: slot_addr, struct_id: result_sid, field: 1,
         });
-        if ok_ty.is_aggregate() {
-            let temp_slot = self.lir_func.add_slot(ok_ty.clone(), None);
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotStore {
-                slot: temp_slot, value: raw_result, is_move: true,
-            });
-            let temp_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotAddr {
-                dst: temp_addr, slot: temp_slot,
-            });
-            let sz = c_sizeof_lir_type(&ok_ty, self.module_structs) as i64;
-            let sz_val = self.emit_i64_const(ok_bb, sz);
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::Memcpy {
-                dst_ptr: ok_field_ptr, src_ptr: temp_addr, size: sz_val,
-            });
-        } else {
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::Store {
-                ptr: ok_field_ptr, value: raw_result,
-            });
-        }
+        self.emit_value_to_field(raw_result, ok_field_ptr, &ok_ty, ok_bb);
         self.lir_func.block_mut(ok_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 7. Post-call zeros
@@ -766,6 +717,39 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Store a value into a struct field pointer, handling aggregate types correctly.
+    /// For aggregates with known size > 0, stores to a temp slot then memcpy.
+    /// For scalars or zero-size aggregates (opaque types), uses direct Store.
+    pub(super) fn emit_value_to_field(
+        &mut self,
+        value: ValueId,
+        field_ptr: ValueId,
+        ty: &LirType,
+        bb: BlockId,
+    ) {
+        let sz = c_sizeof_lir_type(ty, self.module_structs);
+        if ty.is_aggregate() && sz > 0 {
+            // Aggregate with known size: temp slot → memcpy
+            let temp_slot = self.lir_func.add_slot(ty.clone(), None);
+            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                slot: temp_slot, value, is_move: true,
+            });
+            let temp_addr = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                dst: temp_addr, slot: temp_slot,
+            });
+            let sz_val = self.emit_i64_const(bb, sz as i64);
+            self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
+                dst_ptr: field_ptr, src_ptr: temp_addr, size: sz_val,
+            });
+        } else {
+            // Scalar or opaque type: direct store
+            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                ptr: field_ptr, value,
+            });
         }
     }
 }
