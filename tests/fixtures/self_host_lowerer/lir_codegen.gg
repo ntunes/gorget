@@ -100,6 +100,8 @@ bool is_lir_named_struct(String name):
 
 # Runtime-defined named structs (skip emission).
 bool is_runtime_defined_named(String name):
+    if name == "TaskHandle" or name == "GorgetRange":
+        return true
     if name == "ExecResult" or name == "GorgetCipherContext":
         return true
     if name == "GorgetX25519KeyPair" or name == "GorgetArena":
@@ -796,22 +798,35 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 
 # Map runtime function names to their return LIR types.
 int runtime_fn_return_type(String name, LirModule &m):
-    # Array functions
-    if name == "gorget_array_new" or name == "gorget_array_new_drop":
+    # Array functions returning GorgetArray
+    if name == "gorget_array_new" or name == "gorget_array_new_drop" or name == "gorget_array_with_capacity":
         return find_struct_type("GorgetArray", &m)
-    if name == "gorget_array_clone":
+    if name == "gorget_array_clone" or name == "gorget_array_slice":
         return find_struct_type("GorgetArray", &m)
-    if name == "gorget_array_slice":
+    if name == "gorget_array_sorted" or name == "gorget_array_reversed" or name == "gorget_array_unique":
         return find_struct_type("GorgetArray", &m)
-    # Map functions
+    if name == "gorget_array_filter" or name == "gorget_array_map" or name == "gorget_array_zip":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_flat_map" or name == "gorget_array_flatten":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_enumerate" or name == "gorget_array_chunks":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_take" or name == "gorget_array_skip":
+        return find_struct_type("GorgetArray", &m)
+    # Map functions returning GorgetMap
     if name == "gorget_dict_new" or name == "gorget_map_new" or name == "gorget_dict_new_str" or name == "gorget_map_new_str":
         return find_struct_type("GorgetMap", &m)
-    if name == "gorget_map_clone":
+    if name == "gorget_map_clone" or name == "gorget_map_keys" or name == "gorget_map_values":
         return find_struct_type("GorgetMap", &m)
-    # Set functions
+    # gorget_map_keys/values return GorgetArray
+    if name == "gorget_map_keys" or name == "gorget_map_values":
+        return find_struct_type("GorgetArray", &m)
+    # Set functions returning GorgetMap (Set is typedef to Map)
     if name == "gorget_ordered_set_new" or name == "gorget_set_new" or name == "gorget_ordered_set_new_str" or name == "gorget_set_new_str":
         return find_struct_type("GorgetSet", &m)
-    # String functions
+    if name == "gorget_set_clone":
+        return find_struct_type("GorgetSet", &m)
+    # String functions returning GorgetString (Str)
     if name == "gorget_str_concat" or name == "gorget_str_cat" or name == "gorget_string_from_str":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_from_cstr" or name == "gorget_string_adopt":
@@ -824,22 +839,47 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_repeat" or name == "gorget_str_join":
         return find_struct_type("GorgetString", &m)
-    if name == "gorget_str_split":
+    if name == "gorget_str_strip" or name == "gorget_str_lstrip" or name == "gorget_str_rstrip":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_removeprefix" or name == "gorget_str_removesuffix":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_center" or name == "gorget_str_ljust" or name == "gorget_str_rjust":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_zfill" or name == "gorget_str_reverse":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_pad_left" or name == "gorget_str_pad_right":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_string_new":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_from_literal" or name == "gorget_str_from_raw":
+        return find_struct_type("GorgetString", &m)
+    # String functions returning GorgetArray
+    if name == "gorget_str_split" or name == "gorget_str_split_n":
         return find_struct_type("GorgetArray", &m)
-    # Int/float to string
+    if name == "gorget_str_lines" or name == "gorget_str_chars":
+        return find_struct_type("GorgetArray", &m)
+    # Int/float to string: returns const char*
     if name == "gorget_int_to_str" or name == "gorget_float_to_str" or name == "gorget_bool_to_str":
-        return LT_PTR  # returns const char*
+        return LT_PTR
+    if name == "gorget_char_to_str" or name == "gorget_uint8_to_str":
+        return LT_PTR
     # Scalar returns
     if name == "gorget_array_len" or name == "gorget_map_len" or name == "gorget_set_len":
         return LT_I64
     if name == "gorget_str_len" or name == "gorget_str_codepoint_count":
         return LT_I64
-    if name == "gorget_str_find":
+    if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":
         return LT_I64
-    if name == "gorget_str_eq":
+    if name == "gorget_str_hash" or name == "gorget_array_index_of":
+        return LT_I64
+    if name == "gorget_str_eq" or name == "gorget_str_ne":
+        return LT_BOOL
+    if name == "gorget_str_lt" or name == "gorget_str_le" or name == "gorget_str_gt" or name == "gorget_str_ge":
         return LT_BOOL
     if name == "gorget_str_cmp":
         return LT_I32
+    if name == "gorget_str_contains" or name == "gorget_str_starts_with" or name == "gorget_str_ends_with":
+        return LT_BOOL
     if name == "gorget_array_get" or name == "gorget_array_safe_get" or name == "gorget_map_get":
         return LT_PTR
     if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
@@ -848,9 +888,74 @@ int runtime_fn_return_type(String name, LirModule &m):
         return LT_PTR
     if name == "gorget_array_contains" or name == "gorget_map_contains" or name == "gorget_set_contains":
         return LT_BOOL
-    if name == "gorget_array_is_empty":
+    if name == "gorget_array_is_empty" or name == "gorget_map_is_empty":
         return LT_BOOL
+    if name == "gorget_array_any" or name == "gorget_array_all":
+        return LT_BOOL
+    # Array reduce/fold returns I64 (generic)
+    if name == "gorget_array_reduce" or name == "gorget_array_fold":
+        return LT_I64
+    # Parse functions
+    if name == "gorget_parse_int":
+        return LT_I64
+    if name == "gorget_parse_float":
+        return LT_F64
+    # Time functions
+    if name == "gorget_time_now" or name == "gorget_monotonic_ns":
+        return LT_I64
+    # Misc
+    if name == "gorget_str_to_cstr":
+        return LT_PTR
+    if name == "gorget_hash_combine" or name == "gorget_hash_i64":
+        return LT_I64
+    if name == "gorget_array_pop":
+        return LT_I64
+    # Printf returns int32_t
+    if name == "printf" or name == "fprintf":
+        return LT_I32
+    # malloc/calloc/realloc return ptr
+    if name == "malloc" or name == "calloc" or name == "realloc":
+        return LT_PTR
+    # File/IO functions
+    if name == "gorget_read_file" or name == "gorget_read_line":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_getenv":
+        return find_struct_type("GorgetString", &m)
     return LT_VOID
+
+# Known void-returning runtime functions (used to suppress assignment in emit).
+bool is_void_runtime_fn(String name):
+    if name == "gorget_array_push" or name == "gorget_array_set":
+        return true
+    if name == "gorget_array_sort" or name == "gorget_array_reverse":
+        return true
+    if name == "gorget_array_clear" or name == "gorget_array_free":
+        return true
+    if name == "gorget_array_insert" or name == "gorget_array_remove":
+        return true
+    if name == "gorget_array_extend":
+        return true
+    if name == "gorget_map_put" or name == "gorget_map_put_cloned":
+        return true
+    if name == "gorget_map_clear" or name == "gorget_map_free":
+        return true
+    if name == "gorget_set_add" or name == "gorget_set_remove":
+        return true
+    if name == "gorget_set_clear" or name == "gorget_set_free":
+        return true
+    if name == "gorget_string_free" or name == "gorget_string_materialize_inplace":
+        return true
+    if name == "gorget_string_clone_inplace":
+        return true
+    if name == "gorget_init_args" or name == "gorget_print_capture_flush":
+        return true
+    if name == "free" or name == "abort" or name == "exit":
+        return true
+    if name.starts_with("gorget_array_each") or name.starts_with("gorget_map_each"):
+        return true
+    if name.ends_with("__drop") or name.ends_with("__clone_inplace"):
+        return true
+    return false
 
 # Check if a call name is a struct constructor (not a runtime function).
 bool is_struct_constructor(String name, LirModule &m):
@@ -872,7 +977,7 @@ bool is_struct_constructor(String name, LirModule &m):
     while i < m.structs.len():
         LirStructDef sdef = m.structs.get(i).unwrap()
         if sdef.name == name:
-            return sdef.fields.len() > 0  # Only if we have field info
+            return true
         i += 1
     return false
 
@@ -994,7 +1099,25 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_VOID
         case ICallExtern(dst, name, _, _, _):
             if dst >= 0:
-                # Check runtime function return types first.
+                # Builtin type casts.
+                if name == "float":
+                    return LT_F64
+                if name == "int":
+                    return LT_I64
+                if name == "bool":
+                    return LT_BOOL
+                # Struct constructors: return the struct type.
+                # Must come before extern/function lookup because constructors
+                # may also appear as extern declarations with void return type.
+                # Note: check name match only (not fields.len() > 0) because
+                # enum variant structs like Some/Ok/Error have 0 fields.
+                int si = 0
+                while si < m.structs.len():
+                    LirStructDef sdef = m.structs.get(si).unwrap()
+                    if sdef.name == name:
+                        return LT_STRUCT_BASE + si
+                    si += 1
+                # Check runtime function return types.
                 int rt_ret = runtime_fn_return_type(name, &m)
                 if rt_ret != LT_VOID:
                     return rt_ret
@@ -1003,7 +1126,10 @@ int infer_inst_type(LirInst &inst, LirModule &m):
                 while ei < m.externs.len():
                     LirExtern ext = m.externs.get(ei).unwrap()
                     if ext.name == name:
-                        return ext.return_type
+                        if ext.return_type != LT_VOID:
+                            return ext.return_type
+                        # Extern says void but dst >= 0: use I64 fallback.
+                        return LT_I64
                     ei += 1
                 # Check user functions (ICall redirected through CallExtern).
                 int fi = 0
@@ -1012,17 +1138,18 @@ int infer_inst_type(LirInst &inst, LirModule &m):
                     if func.name == name:
                         return func.return_type
                     fi += 1
-                # Struct constructors: return the struct type.
-                int si = 0
-                while si < m.structs.len():
-                    LirStructDef sdef = m.structs.get(si).unwrap()
-                    if sdef.name == name and sdef.fields.len() > 0:
-                        return LT_STRUCT_BASE + si
-                    si += 1
+                # Default: I64 (matches Rust backend fallback).
+                return LT_I64
             return LT_VOID
         case ICallPtr(dst, _, _):
             if dst >= 0:
-                return LT_PTR
+                return LT_I64
+            return LT_VOID
+        case ICallClosure(dst2, _, _, _, _, ret_ty):
+            if dst2 >= 0 and ret_ty != LT_VOID:
+                return ret_ty
+            if dst2 >= 0:
+                return LT_I64
             return LT_VOID
         else:
             return LT_VOID
@@ -1290,7 +1417,26 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
 
         # ── Comparison & Logic ──
         case ICmp(dst, op, lhs, rhs):
-            # Simplified: doesn't detect string comparison (handled by LIR lowering).
+            # Defensive: if both operands are Str (aggregate), use gorget_str_eq/cmp.
+            # The LIR lowerer should have lowered this to a CallExtern but the self-host
+            # lowerer sometimes doesn't.
+            if val_types.contains(lhs):
+                int lty = val_types.get(lhs).unwrap()
+                if lir_is_aggregate(lty):
+                    # Aggregate comparison — use memcmp fallback for eq/ne,
+                    # gorget_str_eq for known Str types.
+                    if op == CMP_EQ:
+                        return v(dst) + " = gorget_str_eq(&" + v(lhs) + ", &" + v(rhs) + ");"
+                    elif op == CMP_NE:
+                        return v(dst) + " = !gorget_str_eq(&" + v(lhs) + ", &" + v(rhs) + ");"
+                    elif op == CMP_LT:
+                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") < 0;"
+                    elif op == CMP_LE:
+                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") <= 0;"
+                    elif op == CMP_GT:
+                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") > 0;"
+                    elif op == CMP_GE:
+                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") >= 0;"
             String cop = cmp_op_str(op)
             return v(dst) + " = " + v(lhs) + " " + cop + " " + v(rhs) + ";"
 
@@ -1506,8 +1652,60 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
 
 # ── CallExtern emission (simplified) ──────────────────────
 
-String emit_call_extern(int dst, String name, Vector[int] &args,
+# Map monomorphized Vector/Dict/Set method names to runtime function names.
+# e.g. int64_t__push → gorget_array_push, GorgetString__len → gorget_array_len
+# Only maps names that look like scalar_type__method patterns.
+String map_mono_to_runtime(String name, LirModule &m):
+    # Skip known non-Vector prefixes (struct constructors, closures, etc.)
+    if name.starts_with("__gorget_") or name.starts_with("gorget_"):
+        return name
+    if name.starts_with("__Closure_") or name.starts_with("__adapt_"):
+        return name
+    # Check for T__method pattern where T is a scalar or collection element type
+    int uscore = find_substr(name, "__")
+    if uscore <= 0:
+        return name
+    String prefix = name.slice(0, uscore)
+    String method = name.slice(uscore + 2, name.len())
+    # Only map if prefix is a scalar type name, not a struct/enum name
+    bool is_scalar_prefix = false
+    if prefix == "int64_t" or prefix == "int32_t" or prefix == "int16_t" or prefix == "int8_t":
+        is_scalar_prefix = true
+    if prefix == "uint8_t" or prefix == "uint16_t" or prefix == "uint32_t" or prefix == "uint64_t":
+        is_scalar_prefix = true
+    if prefix == "double" or prefix == "float" or prefix == "bool":
+        is_scalar_prefix = true
+    if prefix == "GorgetString" or prefix == "Str":
+        is_scalar_prefix = true
+    if not is_scalar_prefix:
+        return name
+    # Check for double underscores in method (skip things like Channel__int64_t__close)
+    if find_substr(method, "__") >= 0:
+        return name
+    # Map known Vector methods (only ones with matching arg counts/types).
+    # Avoid mapping `get` — mono version has variable arg counts.
+    # Avoid mapping `new` — mono version passes different args.
+    if method == "push" or method == "len" or method == "pop":
+        return "gorget_array_" + method
+    if method == "is_empty" or method == "clear" or method == "free":
+        return "gorget_array_" + method
+    if method == "set" or method == "insert" or method == "remove":
+        return "gorget_array_" + method
+    if method == "extend" or method == "contains":
+        return "gorget_array_" + method
+    if method == "sort" or method == "reverse" or method == "slice":
+        return "gorget_array_" + method
+    if method == "index_of":
+        return "gorget_array_index_of"
+    if method == "clone":
+        return "gorget_array_clone"
+    return name
+
+String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                         Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+    # Map monomorphized names to runtime names.
+    String name = map_mono_to_runtime(raw_name, &m)
+
     # Closure call dispatch.
     if name.starts_with("__gorget_closure_call_"):
         if args.len() > 0:
@@ -1622,14 +1820,18 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
     # Check if extern returns void to suppress assignment.
     bool returns_void = false
     if dst >= 0:
-        int ei = 0
-        while ei < m.externs.len():
-            LirExtern ext = m.externs.get(ei).unwrap()
-            if ext.name == name:
-                if ext.return_type == LT_VOID:
-                    returns_void = true
-                break
-            ei += 1
+        # Check known void runtime functions first.
+        if is_void_runtime_fn(name):
+            returns_void = true
+        if not returns_void:
+            int ei = 0
+            while ei < m.externs.len():
+                LirExtern ext = m.externs.get(ei).unwrap()
+                if ext.name == name:
+                    if ext.return_type == LT_VOID:
+                        returns_void = true
+                    break
+                ei += 1
         # Also check user functions (ICall masquerading as CallExtern via redirect)
         if not returns_void:
             int fi = 0
@@ -1657,6 +1859,9 @@ String emit_call_extern(int dst, String name, Vector[int] &args,
 String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dict[int, int] &val_types):
     match term:
         case TRet(value):
+            # Void-returning functions: suppress the return value.
+            if func.return_type == LT_VOID:
+                return "return;"
             # If function returns aggregate but value is pointer, deref.
             if lir_is_aggregate(func.return_type):
                 int vty = -1
@@ -2219,6 +2424,53 @@ String emit_type_drop_fns(LirModule &m, Dict[String, String] &sn):
 
 # ── Top-level code generation ──────────────────────────────
 
+# Emit typedefs for monomorphized wrapper types.
+# These types are skipped as struct definitions (they map to runtime types)
+# but still need typedef'd so C code can reference them.
+String emit_mono_typedefs(LirModule &m):
+    String out = ""
+    Dict[String, bool] seen = {}
+    int si = 0
+    while si < m.structs.len():
+        LirStructDef sdef = m.structs.get(si).unwrap()
+        if is_mono_wrapper(sdef.name) and not seen.contains(sdef.name):
+            seen.put(sdef.name, true)
+            String runtime_ty = mono_wrapper_runtime_type(sdef.name)
+            if runtime_ty != "":
+                out = out + "typedef " + runtime_ty + " " + sdef.name + ";\n"
+        si += 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+# Map monomorphized wrapper type names to their runtime C type.
+String mono_wrapper_runtime_type(String name):
+    if name.starts_with("Vector__"):
+        return "GorgetArray"
+    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        return "GorgetMap"
+    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+        return "GorgetSet"
+    if name.starts_with("Channel__"):
+        return "void*"
+    if name.starts_with("Shared__") or name.starts_with("Weak__"):
+        return "void*"
+    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
+        return "void*"
+    if name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__"):
+        return "void*"
+    if name.starts_with("Task__"):
+        return "TaskHandle"
+    if name.starts_with("Box__"):
+        return "void*"
+    if name == "TaskGroup":
+        return "gorget_task_group_t*"
+    if name == "AtomicInt":
+        return "GorgetAtomicInt"
+    if name == "AtomicBool":
+        return "GorgetAtomicBool"
+    return ""
+
 String generate_c(LirModule &m):
     Dict[String, String] sn = build_struct_names(&m)
 
@@ -2226,6 +2478,9 @@ String generate_c(LirModule &m):
 
     # Struct definitions
     out = out + emit_structs(&m, &sn)
+
+    # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
+    out = out + emit_mono_typedefs(&m)
 
     # Extern declarations
     out = out + emit_externs(&m, &sn)

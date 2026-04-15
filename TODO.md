@@ -57,7 +57,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host LIR backend**: 3,906 lines across 4 files. hello.gg compiles+runs end-to-end through self-host pipeline. 0/26 testable fixtures pass C compilation (all produce C output but fail cc). Main blockers: (1) void-return functions assigned to values, (2) value type gaps from ICallExtern return types, (3) SSA value ID gaps from block param numbering, (4) Ptr-to-struct return type coercion. C runtime embedding still manual (prepend extracted runtime header). [updated: 2026-04-14]
+- **Self-host LIR backend**: ~4,200 lines across 4 files. 205/923 fixtures compile through self-host LIR codegen pipeline (up from 0/26). Codegen fixes: void-return suppression, I64 fallback for unknown CallExtern types, struct constructor type inference, aggregate string comparison (gorget_str_eq/cmp), mono wrapper typedefs, monomorphized method→runtime name mapping. Remaining blockers: (1) self-host LIR lowerer uses wrong function names (int64_t__get instead of gorget_array_get — ~165 linker errors), (2) gorget_dict_new called with wrong arg count (~33 errors), (3) Option/Result variant construction doesn't match parent enum type, (4) SSA value gaps in closure bodies. C runtime embedding still manual. [updated: 2026-04-15]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
