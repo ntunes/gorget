@@ -4441,6 +4441,20 @@ The Gorget compiler is invoked as `gg` with the following commands:
 | `--show-clones`      | Print clone report: all implicit clones with location, type, and reason (including CoW materializations) |
 | `-i` / `--in-place`  | Format file in place (for `gg fmt`)                     |
 
+**Target selection:**
+
+| Flag                              | Description                                              |
+|-----------------------------------|----------------------------------------------------------|
+| `--target native`                 | Default — build for host OS with full runtime            |
+| `--target freestanding`           | Bare-metal UEFI application (auto-detects host arch)     |
+| `--target freestanding-x86_64`    | UEFI application for x86_64 (produces BOOTX64.EFI)      |
+| `--target freestanding-aarch64`   | UEFI application for aarch64 (produces BOOTAA64.EFI)     |
+
+The freestanding target compiles Gorget programs with no OS, no libc, and a
+minimal bump-allocator runtime. The output is a PE binary suitable for UEFI
+boot. Requires `clang` with `lld` linker. See [Build Targets](book/22-targets.md)
+for details, prerequisites, and QEMU run instructions.
+
 ---
 
 ## 18. Testing

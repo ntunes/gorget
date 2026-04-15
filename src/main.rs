@@ -1994,6 +1994,13 @@ fn main() {
         println!("  --emit-gir              Dump GIR (intermediate representation) to stdout instead of compiling");
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
+        println!("  --show-clones           Print report of all implicit clones during compilation");
+        println!();
+        println!("Targets:");
+        println!("  --target native                 Default — build for the host OS with full runtime");
+        println!("  --target freestanding           Bare-metal UEFI application (auto-detects host arch)");
+        println!("  --target freestanding-x86_64    UEFI application for x86_64 (BOOTX64.EFI)");
+        println!("  --target freestanding-aarch64   UEFI application for aarch64 (BOOTAA64.EFI)");
         println!();
         println!("Interpreter:");
         println!("  gg sim                         Interactive REPL (interpreted, no compilation)");

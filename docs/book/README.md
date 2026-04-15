@@ -111,6 +111,10 @@ need prior exposure to follow along.
     `extern` blocks, calling C from Gorget, `unsafe` blocks, the C backend,
     compilation model.
 
+22. **[Build Targets](22-targets.md)**
+    The `--target` flag, native vs freestanding, architecture selection,
+    UEFI bare-metal applications, the `gg.fb` framebuffer API.
+
 ### Appendices
 
 - **[A — Operator Precedence](appendix-operators.md)**
