@@ -371,6 +371,7 @@ fn try_build_ir(
     emit_c_lir: bool,
     show_clones: bool,
     backend_name: &str,
+    target: &str,
 ) -> Result<PathBuf, String> {
     let mut parser = Parser::new(source);
     let module = parser.parse_module();
@@ -551,6 +552,7 @@ fn try_build_ir(
     // ── LIR → C → binary ──────────
     // Lower GIR → LIR → SSA → optimize → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        lir_module.target = target.to_string();
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
@@ -740,9 +742,67 @@ fn try_build_ir(
         }
 
         // ── C backend: .c → cc → binary ──
-        let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
+        let is_freestanding = target == "freestanding";
+        let cc = if is_freestanding {
+            // Freestanding target requires clang for cross-compilation to UEFI PE format
+            env::var("CC").unwrap_or_else(|_| "clang".to_string())
+        } else {
+            env::var("CC").unwrap_or_else(|_| "cc".to_string())
+        };
         let mut cc_cmd = Command::new(&cc);
         let needs_metal = concat_source.contains("xtd.metal");
+
+        if is_freestanding {
+            // Freestanding: UEFI PE application, no libc, no stdlib
+            let freestanding_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("lib/freestanding");
+            // Override exe extension to .efi
+            let efi_path = exe_path.with_extension("efi");
+            cc_cmd
+                .arg("-std=c11")
+                .arg("-target").arg("x86_64-unknown-windows")
+                .arg("-ffreestanding")
+                .arg("-nostdlib")
+                .arg("-mno-red-zone")
+                .arg("-fno-stack-protector")
+                .arg("-Wall")
+                .arg("-Wno-unused-parameter")
+                .arg("-Wno-unused-variable")
+                .arg("-Wno-unused-function")
+                .arg("-Wno-unused-but-set-variable")
+                .arg("-Wno-sometimes-uninitialized")
+                .arg("-Wno-unknown-warning-option")
+                .arg(format!("-I{}", freestanding_dir.display()))
+                .arg("-o")
+                .arg(&efi_path)
+                .arg(&src_path)
+                .arg(freestanding_dir.join("uefi_stub.c"))
+                .arg("-Wl,-subsystem:efi_application")
+                .arg("-Wl,-entry:efi_main")
+                .arg("-fuse-ld=lld");
+            let status = cc_cmd.status();
+            return match status {
+                Ok(s) if s.success() => {
+                    eprintln!("Built UEFI application: {}", efi_path.display());
+                    // Create ESP directory for QEMU
+                    let esp_dir = efi_path.parent().unwrap_or(Path::new(".")).join("esp/EFI/BOOT");
+                    let _ = fs::create_dir_all(&esp_dir);
+                    let bootx64_path = esp_dir.join("BOOTX64.EFI");
+                    let _ = fs::copy(&efi_path, &bootx64_path);
+                    eprintln!("ESP directory: {}", esp_dir.parent().unwrap().parent().unwrap().display());
+                    eprintln!("Run: qemu-system-x86_64 -bios OVMF.fd -drive format=raw,file=fat:rw:{} -m 128M",
+                        esp_dir.parent().unwrap().parent().unwrap().display());
+                    Ok(efi_path)
+                }
+                Ok(s) => Err(format!(
+                    "C compiler exited with: {s}\nGenerated source file: {}\nNote: freestanding target requires clang with lld. Install with: apt install clang lld",
+                    src_path.display()
+                )),
+                Err(e) => Err(format!(
+                    "Failed to run C compiler '{cc}': {e}\nNote: freestanding target requires clang. Install with: apt install clang",
+                    )),
+            };
+        }
+
         cc_cmd
             .arg("-std=c11")
             .arg("-Wall")
@@ -1465,7 +1525,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1501,7 +1561,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1967,7 +2027,7 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir")
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -2103,6 +2163,12 @@ fn main() {
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let show_clones = args.iter().any(|a| a == "--show-clones");
     let warn_const = args.iter().any(|a| a == "--warn-const");
+    let target = args.iter()
+        .position(|a| a == "--target")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .or_else(|| args.iter().find_map(|a| a.strip_prefix("--target=")))
+        .unwrap_or("native");
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {
@@ -2121,7 +2187,7 @@ fn main() {
     // Find positional filename, skipping values of known flag pairs.
     // For `gg sim test <file>`, "test" is a subcommand not the filename.
     let filename = {
-        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature", "--backend"];
+        let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature", "--backend", "--target"];
         // Subcommand words that appear after the command and are NOT filenames.
         let sim_subcommands: &[&str] = if command == "sim" { &["test"] } else { &[] };
         let mut skip_next = false;
@@ -2410,7 +2476,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2440,7 +2506,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2507,7 +2573,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir");
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -2742,7 +2808,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir")
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

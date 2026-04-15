@@ -1,0 +1,16 @@
+# gg.fb — Framebuffer API for freestanding targets.
+# Provides pixel-level access to a UEFI GOP framebuffer.
+
+extern "C":
+    void gorget_fb_plot(int x, int y, int color)
+    int gorget_fb_width()
+    int gorget_fb_height()
+
+void plot(int x, int y, int color):
+    gorget_fb_plot(x, y, color)
+
+int fb_width():
+    return gorget_fb_width()
+
+int fb_height():
+    return gorget_fb_height()

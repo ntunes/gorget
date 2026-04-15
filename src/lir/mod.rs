@@ -875,6 +875,9 @@ pub struct LirModule {
     /// Maps type name → drop function specification. The C backend generates
     /// one `Type__drop(void*)` per entry. Scope-exit emits a single call.
     pub type_drop_fns: HashMap<String, TypeDropInfo>,
+    /// Target environment: "native" (default), "freestanding".
+    /// Affects which runtime is emitted by the C backend.
+    pub target: String,
 }
 
 /// Specification for a generated `Type__drop` function.
@@ -915,6 +918,7 @@ impl LirModule {
             recursive_drop_enums: HashMap::new(),
             drop_collision_types: HashSet::new(),
             type_drop_fns: HashMap::new(),
+            target: "native".to_string(),
         }
     }
 

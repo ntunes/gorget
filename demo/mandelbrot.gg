@@ -1,0 +1,40 @@
+# Mandelbrot fractal rendered to UEFI framebuffer.
+# Build:  gg build --target freestanding demo/mandelbrot.gg
+# Run:    qemu-system-x86_64 -bios OVMF.fd -drive format=raw,file=fat:rw:esp/
+
+from gg.fb import plot, fb_width, fb_height
+
+int mandelbrot_color(float cx, float cy, int max_iter):
+    float zx = 0.0
+    float zy = 0.0
+    int i = 0
+    while i < max_iter:
+        float zx2 = zx * zx
+        float zy2 = zy * zy
+        if zx2 + zy2 > 4.0:
+            # Smooth coloring via iteration count
+            int r = (i * 9) % 256
+            int g = (i * 5 + 64) % 256
+            int b = (i * 13 + 128) % 256
+            return r * 65536 + g * 256 + b
+        zy = 2.0 * zx * zy + cy
+        zx = zx2 - zy2 + cx
+        i = i + 1
+    return 0
+
+void main():
+    int w = fb_width()
+    int h = fb_height()
+    int max_iter = 256
+
+    # Mandelbrot bounds: real [-2.5, 1.0], imag [-1.0, 1.0]
+    int y = 0
+    while y < h:
+        int x = 0
+        while x < w:
+            float cx = (x as float / w as float) * 3.5 - 2.5
+            float cy = (y as float / h as float) * 2.0 - 1.0
+            int color = mandelbrot_color(cx, cy, max_iter)
+            plot(x, y, color)
+            x = x + 1
+        y = y + 1

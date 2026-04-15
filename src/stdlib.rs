@@ -43,6 +43,8 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
             | "db" | "sqlite" | "influx" | "jsonpath"
             | "math3d" | "gl" | "image" | "audio" | "compress"
             | "metal" | "gpu"),
+        Some("gg") => segments.len() == 2 && matches!(segments[1].as_str(),
+            "fb"),
         _ => false,
     }
 }
@@ -123,6 +125,11 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("gl") => Some(include_str!("../lib/xtd/gl.gg")),
             Some("metal") => Some(include_str!("../lib/xtd/metal.gg")),
             Some("gpu") => Some(include_str!("../lib/xtd/gpu.gg")),
+            _ => None,
+        },
+        // gg.* platform modules
+        Some("gg") => match segments.get(1).map(|s| s.as_str()) {
+            Some("fb") => Some(include_str!("../lib/gg/fb.gg")),
             _ => None,
         },
         _ => None,

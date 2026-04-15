@@ -2312,6 +2312,13 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     // Also check struct names for monomorphized types that need specific runtimes.
     let _has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
 
+    // ── Freestanding target: include minimal runtime, skip hosted modules ──
+    if module.target == "freestanding" {
+        out.push_str("/* Gorget freestanding runtime */\n");
+        out.push_str("#include \"runtime.c\"\n\n");
+        return;
+    }
+
     // ── Minimal preamble (headers, allocator, scoped alloc stubs) ──
     out.push_str(crate::backend::c::c_runtime::RUNTIME_PREAMBLE);
 
