@@ -208,6 +208,17 @@ enum LirInst:
     # Closure packing: env_ptr + call_func → GorgetClosure slot
     IClosurePack(int, int, int, bool) # slot, env_ptr, call_func, needs_adapter
 
+    # Closure dispatch: indirect call through fn_ptr + env
+    # kind: 0=CallableParam (void*[2]), 1=EscapedClosure (GorgetClosure struct)
+    # args: user arguments (closure excluded). arg_abis: per-arg ABI tags.
+    # ret_ty: LIR return type index.
+    ICallClosure(int, int, int, Vector[int], Vector[int], int) # dst, kind, closure, args, arg_abis, ret_ty
+
+    # Drop guard: conditional block open/close
+    # kind: 0=Bool (flag), 1+=NonZero (kind-1 = byte size)
+    IDropGuardOpen(int, int)          # kind, value
+    IDropGuardClose
+
     # Move annotation (dataflow only, no runtime cost — swept by drop elaboration)
     IMoveSlot(int)                    # slot
 

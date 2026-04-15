@@ -312,6 +312,11 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
             return ICallExtern(dst, name, sub_vals(args, &subst), orig, abis)
         case ICallPtr(dst, callee, args):
             return ICallPtr(dst, sub_val(callee, &subst), sub_vals(args, &subst))
+        case ICallClosure(dst, kind, closure, args, abis, ret_ty):
+            return ICallClosure(dst, kind, sub_val(closure, &subst), sub_vals(args, &subst), abis, ret_ty)
+        case IDropGuardOpen(kind, value):
+            return IDropGuardOpen(kind, sub_val(value, &subst))
+        # IDropGuardClose has no values to substitute — falls through to `else: return inst`
         case IBoundsCheck(idx, len):
             return IBoundsCheck(sub_val(idx, &subst), sub_val(len, &subst))
         case IDivCheck(divisor):

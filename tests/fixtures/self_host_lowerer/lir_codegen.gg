@@ -1150,6 +1150,12 @@ int inst_dst(LirInst &inst):
             return dst
         case IClosurePack(_, _, _, _):
             return -1
+        case ICallClosure(dst, _, _, _, _, _):
+            return dst
+        case IDropGuardOpen(_, _):
+            return -1
+        case IDropGuardClose:
+            return -1
         case IMoveSlot(_):
             return -1
         case INop:
@@ -1450,6 +1456,47 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             if needs_adapter:
                 fn_name = "__adapt_" + raw_name
             return s(slot) + " = (GorgetClosure){.fn_ptr = (void*)" + fn_name + ", .env = (void*)" + v(env_ptr) + "};"
+
+        case ICallClosure(dst2, kind, closure, cl_args, cl_abis, ret_ty):
+            # Closure dispatch: fn_ptr(env, args...)
+            String cv = v(closure)
+            String fp = ""
+            String ep = ""
+            if kind == 0:
+                # CallableParam: void*[2]
+                fp = "((void**)" + cv + ")[0]"
+                ep = "((void**)" + cv + ")[1]"
+            else:
+                # EscapedClosure: GorgetClosure struct
+                fp = "((GorgetClosure*)" + cv + ")->fn_ptr"
+                ep = "((GorgetClosure*)" + cv + ")->env"
+            String out = ""
+            if dst2 >= 0:
+                out = v(dst2) + " = "
+            out = out + "((" + "void*" + "(*)(void*"
+            int ai = 0
+            while ai < cl_args.len():
+                out = out + ", void*"
+                ai = ai + 1
+            out = out + "))(" + fp + "))(" + ep
+            ai = 0
+            while ai < cl_args.len():
+                out = out + ", " + v(cl_args.get(ai).unwrap())
+                ai = ai + 1
+            out = out + ");"
+            return out
+
+        case IDropGuardOpen(kind, value):
+            if kind == 0:
+                # Bool guard
+                return "{ if (" + v(value) + ") {"
+            else:
+                # NonZero guard: kind-1 = byte size
+                int byte_size = kind - 1
+                return "{ char __dia_z[" + int_to_str(byte_size) + "] = {0}; if (memcmp(" + v(value) + ", __dia_z, " + int_to_str(byte_size) + ") != 0) {"
+
+        case IDropGuardClose:
+            return "} }"
 
         case IMoveSlot(_):
             return "/* move_slot */;"
