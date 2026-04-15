@@ -40,17 +40,17 @@
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
-- **LLVM backend test results (2026-04-14, 815 tested / 913 total)**:
-  - PASS: 703 (86.3% of tested); up from 669 (80.5%) after 2026-04-14 session
-  - FAIL: 34 (output mismatch — see categories below)
-  - CRASH: 70 (segfault/abort/timeout — mostly dataframe, p2p, toml, yaml, xml, httpserver)
-  - BUILD_FAIL: 8 (LLC type mismatch / forward-ref / missing symbols)
-  - SKIP: 99 (C backend also fails — error programs, benches, etc.)
-  - Fixes applied 2026-04-14: (1) `__gorget_drop_flag_open/close` conditional branches, (2) preamble dedup via `seen` set, (3) `c_func_name` for C-reserved keywords, (4) RuntimeCall global init declarations, (5) main_throws: `is_main` check before aggregate return, (6) gorget_regex_find_at→gorget_regex_find macro alias redirect
-  - Remaining BUILD_FAIL (8): 4x LLC forward-ref type mismatch (phi i64 vs defined i32 — block param type inconsistency), 1x LLC struct type mismatch (shared_iterator_invalidation: ptr vs GorgetArray), 1x struct initializer mismatch (print_trait_object), 1x type width mismatch (string_enum_variants: i8 vs i64), 1x undefined runtime ref (sqlite_basic: gorget_sqlite_bind_int static fn)
-  - Remaining CRASH (70): ~16x dataframe, ~13x p2p, ~6x httpserver, ~4x toml, ~3x xml, ~2x yaml, ~2x json, ~2x crypto, ~3x serialize, ~5x timeout (async/httpserver), ~5x misc — most previously BUILD_FAIL, likely deeper ABI issues (enum layout, collection element access)
-  - Remaining FAIL (34): ~5x leak/stress_alloc (leaked=true), ~3x shared/weak (wrong values), ~3x process/socket, ~3x drop ordering, ~3x result combinators, ~2x ecs (field reads 0), ~2x coroutine, ~13x others
-  - Key bug patterns: Shared[T] write not visible (-1 vs 5000), float/int field reads 0 (ecs_advanced), memory not freed (leaked=true vs false), drop order wrong (drop_collections missing drops), serializable/deserializable crashes (enum layout ABI)
+- **LLVM backend test results (2026-04-15, 815 tested / 913 total)**:
+  - PASS: 730 (89.6% of tested); up from 669 (80.5%) start of 2026-04-14
+  - FAIL: 36 (output mismatch — see categories below)
+  - CRASH: 40 (segfault/abort/timeout)
+  - BUILD_FAIL: 9 (LLC type mismatch / forward-ref / missing symbols)
+  - SKIP: 108 (C backend also fails — error programs, benches, etc.)
+  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch (phi i64 vs i32), 1x conv_stdlib ptr vs i64, 1x shared_iterator_invalidation ptr vs GorgetArray, 1x print_trait_object struct init, 1x string_enum_variants i8 vs i64, 1x sqlite undefined ref
+  - Remaining CRASH (40): 13x p2p (signal 11), 3x httpserver, 2x crypto, 3x drop/box (signal 6 — double free from ptr-slot free(stack_addr)), 2x leak (signal 6), toml_stringify, serializable, deserializable, socket_connect, sync_condvar, thread_mutex, test_hashset_all, test_set_string, etc.
+  - Remaining FAIL (36): ~7x json/xml/serialize (int values read as 0 from enum payload — ptr-slot memcpy overflow), ~5x leak/stress_alloc (leaked=true), ~3x drop ordering, ~3x result combinators, ~3x process/socket, ~2x ecs (field reads 0), ~2x coroutine, ~11x others
+  - Root cause identified for remaining crashes/fails: **Ptr-typed LIR slots holding struct data** — `alloca ptr` (8 bytes) receives `memcpy(32+ bytes)`, overflowing stack. C backend is unaffected because C stack variables have implicit sizing. Fix needs to be in LIR slot typing or LIR lowering, not the backend.
+  - Double-free crashes (drop_raii, box_heap): `free(slot_addr)` frees the stack address instead of the heap pointer inside the slot. Needs `load ptr, ptr %slot` before `free`. Same ptr-slot issue.
 
 ## Low
 
