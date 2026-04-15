@@ -850,217 +850,20 @@ pub(super) fn emit_call_extern(
             };
             let ret_is_void = ext_decl.as_ref().map_or(false, |e| matches!(e.return_type, LirType::Void));
 
-            // ── last_error Result wrapping ────────────────────────────
-            // Runtime functions that return a raw scalar + set a thread-local error.
-            // The LIR expects a Result struct. Wrap the call to construct it.
-            if let Some(err_fn) = last_error_fn(emit_name) {
-                if let Some(d) = dst {
-                    let dst_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
-                    if let Some(LirType::Struct(sid)) = dst_ty {
-                        let sdef = &module.structs[sid.0 as usize];
-                        if sdef.name.starts_with("Result__") && sdef.fields.len() >= 3 {
-                            let result_c = c_type_named(dst_ty.unwrap(), sn);
-                            // Ok payload: field[1] (after tag)
-                            let ok_fname = c_field_name(&sdef.fields[1].0);
-                            let ok_ty_c = c_type_named(&sdef.fields[1].1, sn);
-                            // Error payload: field[2]
-                            let err_fname = c_field_name(&sdef.fields[2].0);
-                            write!(out, "{dv} = ({{ {ok_ty_c} __raw = ", dv = v(*d)).unwrap();
-                            write!(out, "{}(", emit_name).unwrap();
-                            for (i, a) in emit_args.iter().enumerate() {
-                                if i > 0 { write!(out, ", ").unwrap(); }
-                                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                                // ABI-driven marshalling: explicit tag or whitelist-derived.
-                                {
-                                    let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
-                                    if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                        if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
-                                            continue;
-                                        }
-                                    }
-                                    let abi = resolve_param_abi(ext_decl, emit_name, i);
-                                    if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
-                                        continue;
-                                    }
-                                }
-                                // CStr and Ptr cases handled by resolve_param_abi above.
-                                let ext_param = ext_params.and_then(|p| p.get(i));
-                                emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
-                            }
-                            write!(out, ")").unwrap();
-                            write!(out, "; const char* __err = {err_fn}(); \
-                                {result_c} __wr; if (__err) {{ __wr.tag = 1; __wr.{err_fname} = gorget_str_from_cstr(__err); }} \
-                                else {{ __wr.tag = 0; __wr.{ok_fname} = __raw; }} __wr; }});").unwrap();
-                            return;
-                        }
-                    }
-                }
-            }
+            // ── last_error → Result wrapping is now handled by the LIR lowerer (lifts.rs).
 
-            // ── Sentinel-based Option wrapping ───────────────────────
-            // Runtime functions that return a scalar (int64_t) with -1 sentinel for "not found".
-            // The GIR expects Option[T] — wrap: if (__raw >= 0) Some(__raw) else None.
-            if let Some(d) = dst {
-                let dst_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
-                if let Some(LirType::Struct(sid)) = dst_ty {
-                    let sdef = &module.structs[sid.0 as usize];
-                    if sdef.name.starts_with("Option__") {
-                        // Check if the extern returns a scalar, not a struct/void*
-                        let ext_ret = ext_decl.map(|e| &e.return_type);
-                        let ext_ret_is_scalar = matches!(ext_ret, Some(LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8
-                            | LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8 | LirType::F64 | LirType::F32));
-                        // Skip functions that already return Option (upgrade, recv_timeout, try_parse)
-                        let skip = emit_name.ends_with("__upgrade")
-                            || emit_name.ends_with("__recv_timeout")
-                            || emit_name.contains("try_parse");
-                        if ext_ret_is_scalar && !skip {
-                            let opt_c = c_type_named(dst_ty.unwrap(), sn);
-                            let payload_fname = sdef.fields.get(1)
-                                .map(|(n, _)| c_field_name(n)).unwrap_or_else(|| "Some_0".to_string());
-                            let payload_ty_c = sdef.fields.get(1)
-                                .map(|(_, t)| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
-                            let opt_void_params = collection_void_param_indices(emit_name);
-                            write!(out, "{dv} = ({{ {payload_ty_c} __raw = {emit_name}(", dv = v(*d)).unwrap();
-                            for (i, a) in emit_args.iter().enumerate() {
-                                if i > 0 { write!(out, ", ").unwrap(); }
-                                let arg_ty2 = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                                let is_str_lit2 = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                                if opt_void_params.contains(&i) && arg_ty2.map_or(false, |t| !matches!(t, LirType::Ptr)) {
-                                    let ty_name2 = c_type_named(arg_ty2.unwrap(), sn);
-                                    if ty_name2 == "Str" || ty_name2 == "GorgetString" {
-                                        write!(out, "&{v}", v = v(*a)).unwrap();
-                                    } else {
-                                        write!(out, "&({ty_name2}){{ {} }}", v(*a)).unwrap();
-                                    }
-                                } else if opt_void_params.contains(&i) && is_str_lit2 {
-                                    write!(out, "&{v}", v = v(*a)).unwrap();
-                                } else {
-                                    let ext_param = ext_params.and_then(|p| p.get(i));
-                                    emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
-                                }
-                            }
-                            // Use >= 0 sentinel for integer types, direct for others
-                            if matches!(ext_ret, Some(LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8)) {
-                                write!(out, "); {opt_c} __opt; if (__raw >= 0) {{ __opt.tag = 0; __opt.{payload_fname} = __raw; }} \
-                                    else {{ __opt.tag = 1; }} __opt; }});").unwrap();
-                            } else {
-                                // For unsigned/float: always Some (this case is rare)
-                                write!(out, "); {opt_c} __opt; __opt.tag = 0; __opt.{payload_fname} = __raw; __opt; }});").unwrap();
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
+            // ── Sentinel scalar → Option wrapping is now handled by the LIR lowerer.
 
             // ── Collection void* return dereference ──────────────────
             // Functions like gorget_array_get return void* — dereference
             // to the concrete element type expected by the destination.
             let void_ret = is_collection_void_return(emit_name) || needs_opt_wrapping(emit_name);
-            let dst_ty_opt = dst.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()));
-            let dst_is_option_struct = void_ret && matches!(dst_ty_opt, Some(LirType::Struct(sid)) if {
-                let s = module.structs.get(sid.0 as usize);
-                s.map_or(false, |sd| sd.name.starts_with("Option__") || sd.name.starts_with("Result__"))
-            });
-            let dst_needs_deref = void_ret && !dst_is_option_struct && dst.map_or(false, |d| {
+            let dst_needs_deref = void_ret && dst.map_or(false, |d| {
                 let ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
                 ty.map_or(false, |t| !matches!(t, LirType::Ptr))
             });
 
-            // When the collection function returns void* but the GIR expects Option[T],
-            // we need to construct the Option from the result (NULL → None, non-null → Some(val)).
-            if dst_is_option_struct {
-                let d = dst.unwrap();
-                let dst_ty = val_types[d.0 as usize].as_ref().unwrap();
-                let struct_name = c_type_named(dst_ty, sn);
-                // Find the payload type from the struct definition
-                let sid = match dst_ty { LirType::Struct(s) => *s, _ => unreachable!() };
-                let sdef = &module.structs[sid.0 as usize];
-                // Payload field is the second field (first is "tag")
-                let payload_ty = sdef.fields.get(1).map(|(_, t)| t);
-                let payload_c = payload_ty.map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
-                let payload_fname = sdef.fields.get(1).map(|(n, _)| c_field_name(n)).unwrap_or_else(|| "Some_0".to_string());
-                // For void-returning functions that need to return a value, swap to opt variant.
-                let call_name = void_to_opt_variant(emit_name);
-                // Emit: { void* __tmp = call(args); if (__tmp) { dst.tag = 0; dst.payload = *(Type*)__tmp; } else { memset(&dst, 0, sizeof(StructType)); dst.tag = 1; } }
-                write!(out, "{{ void* __tmp = {}(", call_name).unwrap();
-                for (i, a) in emit_args.iter().enumerate() {
-                    if i > 0 { write!(out, ", ").unwrap(); }
-                    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                    let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                    // ABI-driven marshalling: instruction-level tags first.
-                    {
-                        let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
-                        if inst_abi != crate::ir::abi::AbiKind::Auto {
-                            if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
-                                continue;
-                            }
-                        }
-                        let abi = resolve_param_abi(ext_decl, emit_name, i);
-                        if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
-                            continue;
-                        }
-                    }
-                    if is_str_lit && emit_name.starts_with("gorget_str_") {
-                        write!(out, "{}", v(*a)).unwrap();
-                    } else if collection_void_param_indices(emit_name).contains(&i) && arg_ty.map_or(false, |t| !matches!(t, LirType::Ptr)) {
-                        let ty_name = c_type_named(arg_ty.unwrap(), sn);
-                        if ty_name == "Str" || ty_name == "GorgetString" {
-                            write!(out, "&{v}", v = v(*a)).unwrap();
-                        } else {
-                            write!(out, "&({ty_name}){{ {} }}", v(*a)).unwrap();
-                        }
-                    } else if collection_void_param_indices(emit_name).contains(&i) && is_str_lit {
-                        // String literal arg to void* collection param → wrap as &(Str){...}
-                        write!(out, "&{v}", v = v(*a)).unwrap();
-                    } else {
-                        let ext_param = ext_params.and_then(|p| p.get(i));
-                        emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
-                    }
-                }
-                // When the payload field is Ptr (i.e. Option[T &] — a borrowed reference),
-                // store the pointer directly instead of dereferencing. The reference
-                // borrows from the collection; no clone or drop needed.
-                let payload_is_ptr = payload_ty.map_or(false, |t| t.is_ptr());
-                // For resource-type payloads from borrowing reads (get/first/last),
-                // clone to avoid double-free. For consuming methods (pop/remove),
-                // the element is already removed from the collection — no clone needed.
-                let is_consuming = matches!(call_name,
-                    "gorget_array_safe_pop" | "gorget_array_remove_opt"
-                    | "gorget_map_remove" | "gorget_set_remove");
-                let clone_fn: Option<String> = if payload_is_ptr || is_consuming {
-                    None // Ptr payload (borrowed) or consuming method (moved out)
-                } else {
-                    match payload_c.as_str() {
-                        "GorgetArray" => Some("gorget_array_clone".into()),
-                        "GorgetMap" => Some("gorget_map_clone".into()),
-                        "GorgetSet" => Some("gorget_set_clone".into()),
-                        "GorgetString" | "Str" => Some("gorget_string_clone".into()),
-                        _ => {
-                            // Recursive/Custom types: look up original name → {Name}__clone
-                            module.structs.iter().enumerate()
-                                .find(|(i, _)| sn.get(&(*i as u32)).map(|n| n.as_str()) == Some(payload_c.as_str()))
-                                .and_then(|(_, s)| {
-                                    if module.recursive_drop_structs.contains_key(s.name.as_str())
-                                        || module.recursive_drop_enums.contains_key(s.name.as_str())
-                                    {
-                                        Some(format!("{}__clone", s.name))
-                                    } else { None }
-                                })
-                        }
-                    }
-                };
-                if payload_is_ptr {
-                    // Option[T &]: store pointer directly (borrowed, not dereferenced)
-                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = __tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
-                } else if let Some(ref cfn) = clone_fn {
-                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = {cfn}(({payload_c}*)__tmp); }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
-                } else {
-                    write!(out, "); if (__tmp) {{ {dv}.tag = 0; {dv}.{payload_fname} = *({payload_c}*)__tmp; }} else {{ memset(&{dv}, 0, sizeof({struct_name})); {dv}.tag = 1; }} }}", dv = v(d)).unwrap();
-                }
-                return;
-            }
+            // ── Collection void* → Option wrapping is now handled by the LIR lowerer.
 
             // ── __gorget_spawn_* → Task__T handling ──────────────
             // Spawn helpers now return Task__T. When LIR destination is a Task struct,
@@ -1487,44 +1290,7 @@ pub(super) fn emit_call_extern(
                 }
             }
 
-            // ── Nullable const char* → Option<Str> wrapping ──
-            // Functions like gorget_regex_match_group return NULL for no match.
-            // Wrap into Option<Str> when the destination type is a struct (Option__Str).
-            if is_nullable_cstr_fn(emit_name) {
-                if let Some(d) = dst {
-                    let dst_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
-                    let is_option_struct = matches!(dst_ty, Some(LirType::Struct(sid)) if {
-                        module.structs.get(sid.0 as usize).map_or(false, |s| s.name.contains("Option"))
-                    });
-                    if is_option_struct {
-                        let opt_ty = c_type_named(dst_ty.unwrap(), sn);
-                        write!(out, "{} = ({{ const char* __raw = {}(", v(*d), emit_name).unwrap();
-                        for (i, a) in emit_args.iter().enumerate() {
-                            if i > 0 { write!(out, ", ").unwrap(); }
-                            let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
-                            // ABI-driven marshalling: explicit tag or whitelist-derived.
-                            {
-                                let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
-                                if inst_abi != crate::ir::abi::AbiKind::Auto {
-                                    if emit_abi_arg(out, &v(*a), inst_abi, arg_ty, is_str_lit) {
-                                        continue;
-                                    }
-                                }
-                                let abi = resolve_param_abi(ext_decl, emit_name, i);
-                                if emit_abi_arg(out, &v(*a), abi, arg_ty, is_str_lit) {
-                                    continue;
-                                }
-                            }
-                            // CStr cases handled by resolve_param_abi above; fallback for non-CStr.
-                            let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
-                        }
-                        write!(out, "); {opt_ty} __opt; if (__raw) {{ __opt.tag = 0; __opt.Some_0 = gorget_str_from_cstr(__raw); }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
-                        return;
-                    }
-                }
-            }
+            // ── Nullable cstr → Option wrapping is now handled by the LIR lowerer.
 
             // ── Channel__T__recv_timeout → Option wrapping ──
             // The wrapper returns the raw value, but the GIR expects Option<T>.

@@ -635,6 +635,7 @@ pub(super) fn trait_box_str_arg_positions(module: &LirModule, name: &str) -> Vec
 }
 /// Functions that return a nullable `const char*` (NULL = None, non-NULL = some string).
 /// These need to be wrapped into `Option<Str>` when the destination type is Option.
+#[allow(dead_code)]
 pub(super) fn is_nullable_cstr_fn(name: &str) -> bool {
     matches!(
         name,
@@ -701,6 +702,7 @@ pub(super) fn needs_opt_wrapping(_name: &str) -> bool {
 /// For collection functions that are void but need to return a value when
 /// the GIR expects Option[T], swap to the opt-returning variant.
 /// NOTE: No longer needed — the LIR maps remove directly to gorget_array_remove_opt.
+#[allow(dead_code)]
 pub(super) fn void_to_opt_variant(name: &str) -> &str {
     name
 }
@@ -917,6 +919,7 @@ pub(super) fn emit_collection_constructor(
 /// Functions in this list return a raw scalar value in C, but the GIR expects
 /// them to return a Result struct. The backend must wrap the call with an
 /// error check to construct the Result.
+#[allow(dead_code)]
 pub(super) fn last_error_fn(name: &str) -> Option<&'static str> {
     if name.starts_with("gorget_udp_") {
         return Some("gorget_udp_last_error");

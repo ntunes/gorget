@@ -2998,7 +2998,16 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             .find(|e| e.name == "gorget_file_read_all")
             .and_then(|e| if let crate::lir::LirType::Struct(sid) = &e.return_type {
                 struct_names.get(&sid.0).cloned()
-            } else { None });
+            } else { None })
+            .or_else(|| {
+                // Fallback: the LIR lowerer's last_error lift may have changed the
+                // extern's return_type to the ok payload.  Find the Result struct by name.
+                module.structs.iter().enumerate().find_map(|(i, s)| {
+                    if s.name == "Result__GorgetString__GorgetString" {
+                        struct_names.get(&(i as u32)).cloned()
+                    } else { None }
+                })
+            });
         if let Some(result_ty) = result_c_name {
             writeln!(out, "{result_ty} __gorget_file_read_all_r(GorgetFile* f) {{").unwrap();
             writeln!(out, "    GorgetString gs = gorget_file_read_all(f);").unwrap();

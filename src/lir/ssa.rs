@@ -62,6 +62,34 @@ fn find_promotable_slots(func: &LirFunction) -> HashSet<SlotId> {
     candidates
 }
 
+/// Compute reverse postorder traversal of the CFG.
+/// Ensures dominators are visited before dominated blocks.
+fn compute_rpo(func: &LirFunction) -> Vec<BlockId> {
+    let n = func.blocks.len();
+    let mut visited = vec![false; n];
+    let mut postorder = Vec::with_capacity(n);
+
+    fn dfs(bb: BlockId, func: &LirFunction, visited: &mut [bool], postorder: &mut Vec<BlockId>) {
+        let idx = bb.0 as usize;
+        if idx >= visited.len() || visited[idx] { return; }
+        visited[idx] = true;
+        for succ in func.blocks[idx].terminator.successors() {
+            dfs(succ, func, visited, postorder);
+        }
+        postorder.push(bb);
+    }
+
+    if n > 0 {
+        dfs(BlockId(0), func, &mut visited, &mut postorder);
+        // Include any unreachable blocks (shouldn't happen in practice)
+        for i in 0..n {
+            if !visited[i] { postorder.push(BlockId(i as u32)); }
+        }
+    }
+    postorder.reverse();
+    postorder
+}
+
 /// Compute predecessor blocks for each block.
 fn compute_predecessors(func: &LirFunction) -> Vec<Vec<BlockId>> {
     let mut preds = vec![Vec::new(); func.blocks.len()];
@@ -107,13 +135,15 @@ impl<'a> SsaBuilder<'a> {
     }
 
     fn run(&mut self) {
-        // Phase 1: Walk blocks, replacing SlotLoad with reaching definitions.
-        // For each block, process instructions and track definitions.
-        let num_blocks = self.func.blocks.len();
+        // Phase 1: Walk blocks in reverse postorder (RPO), replacing SlotLoad
+        // with reaching definitions.  RPO ensures dominators are processed before
+        // dominated blocks, so read_variable always finds definitions from
+        // already-processed predecessors — critical when block-splitting lifts
+        // create high-numbered blocks that dominate low-numbered GIR blocks.
+        let rpo = compute_rpo(self.func);
 
-        for bb_idx in 0..num_blocks {
-            let bb = BlockId(bb_idx as u32);
-            self.process_block(bb);
+        for bb in &rpo {
+            self.process_block(*bb);
         }
 
         // Phase 2: Remove promoted SlotStore/SlotLoad instructions.

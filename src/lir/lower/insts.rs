@@ -1964,16 +1964,82 @@ impl<'a> FuncLowering<'a> {
         }
 
         // ── Tier 1: Return-value wrapping lifts ──────────────────────────
-        // Block-splitting lifts (nullable void→Option, cstr→Option, sentinel→Option,
-        // last_error→Result) are implemented in lifts.rs but DISABLED.
-        //
-        // Root cause: the lifts write to the destination slot via FieldPtr+Store
-        // in branch blocks (some_bb/none_bb).  The C backend's value type inference
-        // assigns the slot's default-initialized value (0/NULL) to variables used
-        // in later blocks, causing NULL dereferences at runtime.  Fixing this
-        // requires either (a) emitting SlotStore with the complete Option/Result
-        // struct as a single value, or (b) fixing the C backend's type inference
-        // to track pointer-written slots across blocks.
+        if let Some(d) = *dst {
+            let dst_idx = d.0 as usize;
+            if dst_idx < self.local_to_slot.len() {
+                let slot_ty = self.lir_func.slots[self.local_to_slot[dst_idx].0 as usize].ty.clone();
+                if let LirType::Struct(opt_sid) = slot_ty {
+                    let sname = self.module_structs.get(opt_sid.0 as usize)
+                        .map(|s| s.name.as_str()).unwrap_or("");
+
+                    if sname.starts_with("Result__") {
+                        if let Some(err_fn) = super::lifts::last_error_fn_lir(emit_name) {
+                            let sdef_len = self.module_structs.get(opt_sid.0 as usize)
+                                .map(|s| s.fields.len()).unwrap_or(0);
+                            if sdef_len >= 3 {
+                                return self.emit_last_error_result_wrap(
+                                    emit_name, original_name, d, opt_sid, err_fn,
+                                    &arg_types, lir_args, args, bb,
+                                );
+                            }
+                        }
+                    }
+
+                    if sname.starts_with("Option__") {
+                        let ext_ret = super::calls::runtime_extern_sig(emit_name, self.struct_reg)
+                            .map(|sig| sig.ret)
+                            .or_else(|| {
+                                self.pending_externs.iter()
+                                    .find(|e| e.name == emit_name)
+                                    .map(|e| e.return_type.clone())
+                            });
+
+                        let ext_ret_is_scalar = matches!(ext_ret.as_ref(), Some(
+                            LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8
+                            | LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8
+                            | LirType::F64 | LirType::F32
+                        ));
+                        let skip_scalar = emit_name.ends_with("__upgrade")
+                            || emit_name.ends_with("__recv_timeout")
+                            || emit_name.contains("try_parse");
+                        if ext_ret_is_scalar && !skip_scalar {
+                            return self.emit_sentinel_scalar_option_wrap(
+                                emit_name, original_name, d, opt_sid,
+                                ext_ret.unwrap(), &arg_types, lir_args, args, bb,
+                            );
+                        }
+
+                        if super::lifts::is_collection_void_return_lir(emit_name) {
+                            return self.emit_void_ptr_option_wrap(
+                                emit_name, original_name, d, opt_sid,
+                                &arg_types, lir_args, args, bb,
+                            );
+                        }
+
+                        if super::lifts::is_nullable_cstr_fn_lir(emit_name) {
+                            return self.emit_nullable_cstr_option_wrap(
+                                emit_name, original_name, d, opt_sid,
+                                &arg_types, lir_args, args, bb,
+                            );
+                        }
+
+                        if super::lifts::is_sentinel_option_fn_lir(emit_name) {
+                            return self.emit_sentinel_struct_option_wrap(
+                                emit_name, original_name, d, opt_sid,
+                                &arg_types, lir_args, args, bb,
+                            );
+                        }
+
+                        if super::lifts::is_nullable_ptr_fn_lir(emit_name) {
+                            return self.emit_nullable_ptr_option_wrap(
+                                emit_name, original_name, d, opt_sid,
+                                &arg_types, lir_args, args, bb,
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         // ── Tier 2b: Tag checks ──────────────────────────────────────────
         // __option_is_some, __option_is_none, *__is_some, *__is_ok, *__is_none, *__is_err

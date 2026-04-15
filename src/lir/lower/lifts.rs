@@ -4,13 +4,9 @@
 //! inline with a sequence of LIR instructions (Call, Branch, FieldPtr, Load, Store,
 //! etc.) that express the same logic portably.
 //!
-//! DISABLED: The block-splitting lifts write to the destination slot via
-//! FieldPtr+Store in branch blocks, but the C backend's value type inference
-//! assigns the slot's default-initialized value (0/NULL) to variables in later
-//! blocks, causing NULL dereferences.  Requires fixing C backend slot tracking
-//! across split blocks before enabling.
-
-#![allow(dead_code)]
+//! The block-splitting lifts create new basic blocks mid-instruction-sequence.
+//! The corresponding C backend handlers in emit_call_extern.rs must be stripped
+//! when a lift is enabled, or the C backend will double-wrap the result.
 
 use super::*;
 use super::types::c_sizeof_lir_type;
@@ -108,7 +104,14 @@ impl<'a> FuncLowering<'a> {
             arg_abis: call_abis,
         });
 
-        // 2. Get slot address and zero the struct
+        // 2. Store raw_ptr to a temp slot so the SSA pass can thread it
+        //    across the branch blocks (raw ValueIds aren't tracked by SSA).
+        let raw_slot = self.lir_func.add_slot(LirType::Ptr, None);
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+            slot: raw_slot, value: raw_ptr, is_move: false,
+        });
+
+        // 3. Get slot address and zero the struct
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
@@ -134,7 +137,11 @@ impl<'a> FuncLowering<'a> {
             else_block: none_bb, else_args: vec![],
         };
 
-        // 4. Some branch: tag=0, store payload
+        // 5. Some branch: reload raw_ptr from slot, set tag=0, store payload
+        let raw_in_some = self.lir_func.next_value();
+        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotLoad {
+            dst: raw_in_some, slot: raw_slot, ty: LirType::Ptr,
+        });
         self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
         let payload_ptr = self.lir_func.next_value();
         self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
@@ -142,26 +149,23 @@ impl<'a> FuncLowering<'a> {
         });
 
         if payload_is_ptr {
-            // Option[T &]: store pointer directly (borrowed reference)
             self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: raw_ptr,
+                ptr: payload_ptr, value: raw_in_some,
             });
         } else if let Some(clone_fn) = self.resource_clone_fn_for_payload(&payload_ty, consuming) {
-            // Resource type from borrowing read: clone to avoid double-free
             let cloned = self.lir_func.next_value();
             self.ensure_extern(&clone_fn, &[LirType::Ptr], &payload_ty);
             let abis = self.lookup_arg_abis(&clone_fn);
             self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
                 dst: Some(cloned),
                 name: clone_fn,
-                args: vec![raw_ptr],
+                args: vec![raw_in_some],
                 original_name: None, arg_abis: abis,
             });
             self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
                 ptr: payload_ptr, value: cloned,
             });
         } else if payload_ty.is_aggregate() {
-            // Aggregate payload: memcpy from raw_ptr
             let sz = c_sizeof_lir_type(&payload_ty, self.module_structs) as i64;
             let sz_val = self.emit_i64_const(some_bb, sz);
             self.ensure_extern("memcpy", &[LirType::Ptr, LirType::Ptr, LirType::I64], &LirType::Ptr);
@@ -169,14 +173,13 @@ impl<'a> FuncLowering<'a> {
             self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
                 dst: None,
                 name: "memcpy".to_string(),
-                args: vec![payload_ptr, raw_ptr, sz_val],
+                args: vec![payload_ptr, raw_in_some, sz_val],
                 original_name: None, arg_abis: abis,
             });
         } else {
-            // Scalar payload: dereference void* to concrete type
             let loaded = self.lir_func.next_value();
             self.lir_func.block_mut(some_bb).insts.push(Inst::Load {
-                dst: loaded, ptr: raw_ptr, ty: payload_ty.clone(),
+                dst: loaded, ptr: raw_in_some, ty: payload_ty.clone(),
             });
             self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
                 ptr: payload_ptr, value: loaded,
