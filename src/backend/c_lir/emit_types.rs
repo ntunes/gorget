@@ -2313,7 +2313,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     let _has_struct = |name: &str| module.structs.iter().any(|s| s.name == name);
 
     // ── Freestanding target: include minimal runtime, skip hosted modules ──
-    if module.target == "freestanding" {
+    if module.target.starts_with("freestanding") {
         out.push_str("/* Gorget freestanding runtime */\n");
         out.push_str("#include \"runtime.c\"\n\n");
         return;

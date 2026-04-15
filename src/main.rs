@@ -742,9 +742,8 @@ fn try_build_ir(
         }
 
         // ── C backend: .c → cc → binary ──
-        let is_freestanding = target == "freestanding";
+        let is_freestanding = target.starts_with("freestanding");
         let cc = if is_freestanding {
-            // Freestanding target requires clang for cross-compilation to UEFI PE format
             env::var("CC").unwrap_or_else(|_| "clang".to_string())
         } else {
             env::var("CC").unwrap_or_else(|_| "cc".to_string())
@@ -753,21 +752,38 @@ fn try_build_ir(
         let needs_metal = concat_source.contains("xtd.metal");
 
         if is_freestanding {
-            // Freestanding: UEFI PE application, no libc, no stdlib
+            // Freestanding: UEFI PE application, no libc, no stdlib.
+            // --target freestanding          → host arch (aarch64 on Apple Silicon, x86_64 otherwise)
+            // --target freestanding-x86_64   → cross-compile to x86_64
+            // --target freestanding-aarch64  → cross-compile to aarch64
             let freestanding_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("lib/freestanding");
-            // Override exe extension to .efi
             let efi_path = exe_path.with_extension("efi");
+
+            let is_aarch64 = target == "freestanding-aarch64"
+                || (target == "freestanding" && cfg!(target_arch = "aarch64"));
+
+            let (clang_target, boot_name) = if is_aarch64 {
+                ("aarch64-unknown-windows", "BOOTAA64.EFI")
+            } else {
+                ("x86_64-unknown-windows", "BOOTX64.EFI")
+            };
+            let qemu_bin = if is_aarch64 { "qemu-system-aarch64" } else { "qemu-system-x86_64" };
+
             cc_cmd
                 .arg("-std=c11")
-                .arg("-target").arg("x86_64-unknown-windows")
+                .arg("-target").arg(clang_target)
                 .arg("-ffreestanding")
                 .arg("-nostdlib")
-                .arg("-mno-red-zone")
-                .arg("-fno-stack-protector")
+                .arg("-fno-stack-protector");
+            if !is_aarch64 {
+                cc_cmd.arg("-mno-red-zone");
+            }
+            cc_cmd
                 .arg("-Wall")
                 .arg("-Wno-unused-parameter")
                 .arg("-Wno-unused-variable")
                 .arg("-Wno-unused-function")
+                .arg("-Wno-unused-label")
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-Wno-sometimes-uninitialized")
                 .arg("-Wno-unknown-warning-option")
@@ -780,26 +796,29 @@ fn try_build_ir(
                 .arg("-Wl,-entry:efi_main")
                 .arg("-fuse-ld=lld");
             let status = cc_cmd.status();
+            let esp_dir = efi_path.parent().unwrap_or(Path::new(".")).join("esp/EFI/BOOT");
             return match status {
                 Ok(s) if s.success() => {
-                    eprintln!("Built UEFI application: {}", efi_path.display());
-                    // Create ESP directory for QEMU
-                    let esp_dir = efi_path.parent().unwrap_or(Path::new(".")).join("esp/EFI/BOOT");
                     let _ = fs::create_dir_all(&esp_dir);
-                    let bootx64_path = esp_dir.join("BOOTX64.EFI");
-                    let _ = fs::copy(&efi_path, &bootx64_path);
-                    eprintln!("ESP directory: {}", esp_dir.parent().unwrap().parent().unwrap().display());
-                    eprintln!("Run: qemu-system-x86_64 -bios OVMF.fd -drive format=raw,file=fat:rw:{} -m 128M",
-                        esp_dir.parent().unwrap().parent().unwrap().display());
+                    let boot_path = esp_dir.join(boot_name);
+                    let _ = fs::copy(&efi_path, &boot_path);
+                    let esp_root = esp_dir.parent().unwrap().parent().unwrap();
+                    eprintln!("Built UEFI application: {}", efi_path.display());
+                    eprintln!("ESP directory: {}", esp_root.display());
+                    if is_aarch64 {
+                        eprintln!("Run: {qemu_bin} -M virt -cpu cortex-a72 -bios AAVMF_CODE.fd -drive format=raw,file=fat:rw:{} -m 128M -device ramfb", esp_root.display());
+                    } else {
+                        eprintln!("Run: {qemu_bin} -bios OVMF.fd -drive format=raw,file=fat:rw:{} -m 128M -vga std", esp_root.display());
+                    }
                     Ok(efi_path)
                 }
                 Ok(s) => Err(format!(
-                    "C compiler exited with: {s}\nGenerated source file: {}\nNote: freestanding target requires clang with lld. Install with: apt install clang lld",
+                    "C compiler exited with: {s}\nGenerated source file: {}\nNote: freestanding target requires clang with lld.\nInstall: brew install llvm (macOS) or apt install clang lld (Linux)",
                     src_path.display()
                 )),
                 Err(e) => Err(format!(
-                    "Failed to run C compiler '{cc}': {e}\nNote: freestanding target requires clang. Install with: apt install clang",
-                    )),
+                    "Failed to run C compiler '{cc}': {e}\nNote: freestanding target requires clang.\nInstall: brew install llvm (macOS) or apt install clang lld (Linux)",
+                )),
             };
         }
 
