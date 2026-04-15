@@ -1,8 +1,15 @@
-//! Tier 1/2/3 semantic lifts from C backend to LIR lowerer.
+//! Tier 1 semantic lifts from C backend to LIR lowerer.
 //!
 //! Each lift replaces a single CallExtern that the C backend would have expanded
 //! inline with a sequence of LIR instructions (Call, Branch, FieldPtr, Load, Store,
 //! etc.) that express the same logic portably.
+//!
+//! Currently DISABLED: the block-splitting lifts create new basic blocks mid-
+//! instruction-sequence, which changes SSA value numbering and causes runtime
+//! regressions.  The infrastructure (`lower_instruction` returning `BlockId`) is
+//! in place; these methods will be re-enabled once the SSA interaction is fixed.
+
+#![allow(dead_code)]
 
 use super::*;
 use super::types::c_sizeof_lir_type;

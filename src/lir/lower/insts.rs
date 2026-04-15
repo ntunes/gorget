@@ -1964,30 +1964,10 @@ impl<'a> FuncLowering<'a> {
         }
 
         // ── Tier 1: Return-value wrapping lifts ──────────────────────────
-        // When a GIR CallExtern destination is Option/Result but the runtime
-        // function returns a raw pointer/scalar, expand into a branch sequence
-        // that constructs the wrapper struct.  This moves the semantic logic
-        // from the C backend (emit_call_extern.rs) to the LIR lowerer.
-        if let Some(d) = *dst {
-            let dst_idx = d.0 as usize;
-            if dst_idx < self.local_to_slot.len() {
-                let slot_ty = self.lir_func.slots[self.local_to_slot[dst_idx].0 as usize].ty.clone();
-                if let LirType::Struct(opt_sid) = slot_ty {
-                    let sname = self.module_structs.get(opt_sid.0 as usize)
-                        .map(|s| s.name.as_str()).unwrap_or("");
-
-                    // 1c: last_error → Result wrapping
-                    // DEFERRED: kept in C backend due to _r wrapper function generation dependency.
-                    // The C backend's last_error_fn handler generates inline Result wrapping
-                    // that interacts with the _r wrapper preamble generation.
-
-                    // Option wrapping patterns — TEMPORARILY DISABLED pending
-                    // SSA value-numbering fix for block-splitting lifts.
-                    // The lifts create new blocks which changes SSA value ordering.
-                    // TODO: Re-enable once block-splitting is verified correct.
-                }
-            }
-        }
+        // Block-splitting lifts (nullable void→Option, cstr→Option, sentinel→Option,
+        // last_error→Result) are implemented in lifts.rs but DISABLED pending SSA
+        // value-numbering fix for mid-block branching.  The infrastructure
+        // (lower_instruction returning BlockId) is in place.
 
         // ── Tier 2b: Tag checks ──────────────────────────────────────────
         // __option_is_some, __option_is_none, *__is_some, *__is_ok, *__is_none, *__is_err
