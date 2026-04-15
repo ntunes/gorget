@@ -1482,6 +1482,31 @@ fn emit_function(
         .collect();
     val_types.resize(val_count, None);
 
+    // Fix Call/CallClosure return types: when the target function returns an aggregate,
+    // the emitter stores it via alloca making the value a pointer. Override to PtrTo.
+    for block in &func.blocks {
+        for inst in &block.insts {
+            match inst {
+                Inst::Call { dst: Some(d), func: fid, .. } => {
+                    let target = &module.functions[fid.0 as usize];
+                    if target.return_type.is_aggregate() {
+                        if let LirType::Struct(sid) = &target.return_type {
+                            val_types[d.0 as usize] = Some(LirType::PtrTo(*sid));
+                        }
+                    }
+                }
+                Inst::CallClosure { dst: Some(d), ret_ty, .. } => {
+                    if ret_ty.is_aggregate() {
+                        if let LirType::Struct(sid) = ret_ty {
+                            val_types[d.0 as usize] = Some(LirType::PtrTo(*sid));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     // Guard/shared value accessor type override: gorget_guard_get / gorget_shared_get
     // return void* but the value needs to be loaded as the actual inner type.
     // Infer from downstream consumers (arithmetic, slot store, printf format).
@@ -1824,8 +1849,25 @@ fn emit_inst(
                 // Aggregate slot — value may be a pointer (SlotAddr/FieldPtr) or
                 // aggregate by value (Call return). Check val_types.
                 let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
-                // Assume ptr if type is unknown (None) — aggregate values are always ptrs in our model
-                let is_ptr_val = val_ty.map_or(true, |t| t.is_ptr());
+                // Assume ptr if type is unknown (None) — aggregate values are always ptrs in our model.
+                // Also treat scalar types as ptr if the value was produced by a Call/CallClosure
+                // returning an aggregate (the emitter stores small-agg returns via alloca,
+                // making the value a pointer even though type inference says scalar).
+                let val_is_from_agg_call = if !val_ty.map_or(true, |t| t.is_ptr()) {
+                    func.blocks.iter().any(|b| b.insts.iter().any(|inst| {
+                        match inst {
+                            Inst::Call { dst: Some(d), func: fid, .. } if d.0 == value.0 => {
+                                let target = &module.functions[fid.0 as usize];
+                                target.return_type.is_aggregate()
+                            }
+                            Inst::CallClosure { dst: Some(d), ret_ty, .. } if d.0 == value.0 => {
+                                ret_ty.is_aggregate()
+                            }
+                            _ => false,
+                        }
+                    }))
+                } else { false };
+                let is_ptr_val = val_ty.map_or(true, |t| t.is_ptr()) || val_is_from_agg_call;
                 // Check if the source is a NullPtr — use memset(0) instead of memcpy from null.
                 let value_is_null = func.blocks.iter().any(|b| {
                     b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == value.0))
@@ -1871,6 +1913,10 @@ fn emit_inst(
             if *ty == LirType::Void {
                 // Void slots hold closure env pointers — load the stored pointer.
                 writeln!(out, "  %v{} = load ptr, ptr %s{} ; void slot load", dst.0, slot.0).unwrap();
+            } else if ty.is_aggregate() {
+                // Aggregate types: return a pointer to the slot data (not a by-value load).
+                // Downstream code expects ptr and will memcpy or field-access through it.
+                writeln!(out, "  %v{} = getelementptr i8, ptr %s{}, i32 0", dst.0, slot.0).unwrap();
             } else {
                 let lty = llvm_type_full(ty, snames);
                 writeln!(out, "  %v{} = load {lty}, ptr %s{}", dst.0, slot.0).unwrap();
@@ -4649,7 +4695,19 @@ fn emit_inst(
             let joined_args = call_arg_strs.join(", ");
             if let Some(d) = dst {
                 let ret_type_str = llvm_arg_type(ret_ty, snames);
-                writeln!(out, "  %v{} = call {ret_type_str} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                if needs_sret(ret_ty, &module.structs) {
+                    // Large aggregate: sret convention
+                    writeln!(out, "  %v{} = alloca {ret_type_str}", d.0).unwrap();
+                    let sret_args = format!("ptr sret({ret_type_str}) %v{}, {joined_args}", d.0);
+                    writeln!(out, "  call void %{pfx}.fnp({sret_args})").unwrap();
+                } else if ret_ty.is_aggregate() {
+                    // Small aggregate: returned in registers, store to alloca
+                    writeln!(out, "  %v{}.ret = call {ret_type_str} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                    writeln!(out, "  %v{} = alloca {ret_type_str}", d.0).unwrap();
+                    writeln!(out, "  store {ret_type_str} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = call {ret_type_str} %{pfx}.fnp({joined_args})", d.0).unwrap();
+                }
             } else {
                 writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
             }

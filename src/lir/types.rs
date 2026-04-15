@@ -363,12 +363,20 @@ fn infer_call_extern_type(
     if let Some(inner) = name.strip_prefix("Shared__Vector__")
         .and_then(|rest| rest.strip_suffix("__at"))
     {
+        // Check if the element type is a struct before assuming scalar
+        if let Some(ty) = find_struct_type(inner, module) {
+            return Some(ty);
+        }
         return Some(scalar_from_name(inner));
     }
     if let Some(inner) = name.strip_prefix("Shared__")
         .and_then(|rest| rest.strip_suffix("__get"))
         .filter(|rest| !rest.contains("__"))
     {
+        // Check if the inner type is a struct (not just a scalar)
+        if let Some(ty) = find_struct_type(inner, module) {
+            return Some(ty);
+        }
         return Some(scalar_from_name(inner));
     }
 
