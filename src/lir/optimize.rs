@@ -393,6 +393,9 @@ fn has_side_effects(inst: &Inst) -> bool {
             | Inst::Call { .. }
             | Inst::CallExtern { .. }
             | Inst::CallPtr { .. }
+            | Inst::CallClosure { .. }
+            | Inst::DropGuardOpen { .. }
+            | Inst::DropGuardClose
             | Inst::BoundsCheck { .. }
             | Inst::DivCheck { .. }
             | Inst::Trap { .. }
@@ -857,7 +860,7 @@ fn eliminate_common_subexpressions(func: &mut LirFunction) -> usize {
             }
 
             // Invalidate after calls (they can modify memory)
-            if matches!(inst, Inst::Call { .. } | Inst::CallExtern { .. } | Inst::CallPtr { .. } | Inst::Store { .. }) {
+            if matches!(inst, Inst::Call { .. } | Inst::CallExtern { .. } | Inst::CallPtr { .. } | Inst::CallClosure { .. } | Inst::Store { .. }) {
                 seen.clear();
             }
         }
@@ -1280,6 +1283,11 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::CallPtr { callee, args, .. } => {
             *callee = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
         }
+        Inst::CallClosure { closure, args, .. } => {
+            *closure = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
+        }
+        Inst::DropGuardOpen { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::DropGuardClose => {}
         Inst::BoundsCheck { index, len } => { *index = next(&uses, &mut idx); *len = next(&uses, &mut idx); }
         Inst::DivCheck { divisor } => { *divisor = next(&uses, &mut idx); }
         Inst::Trap { .. } => {}

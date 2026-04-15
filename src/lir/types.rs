@@ -250,6 +250,9 @@ fn infer_inst_type(
         Inst::CallPtr { dst, .. } => {
             if dst.is_some() { Some(LirType::I64) } else { None }
         }
+        Inst::CallClosure { ret_ty, .. } => {
+            if *ret_ty != LirType::Void { Some(ret_ty.clone()) } else { None }
+        }
         Inst::InlineC { dst, .. } => {
             if dst.is_some() { Some(LirType::I64) } else { None }
         }

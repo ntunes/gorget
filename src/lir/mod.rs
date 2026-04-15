@@ -211,6 +211,31 @@ impl fmt::Display for CmpOp {
     }
 }
 
+// ── Closure dispatch kind ──────────────────────────────────────────────────
+
+/// How a closure value is laid out in memory for `CallClosure`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosureDispatchKind {
+    /// Callable parameter: `void*[2]` layout (fn_ptr at `[0]`, env at `[1]`).
+    /// Originally `__callable_N`.
+    CallableParam,
+    /// Escaped closure: `GorgetClosure` struct (fn_ptr field 0, env field 1).
+    /// Originally `__gorget_closure_call_N`.
+    EscapedClosure,
+}
+
+// ── Drop guard kind ───────────────────────────────────────────────────────
+
+/// Condition kind for conditional drop guard blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropGuardKind {
+    /// V3 bool flag: guard fires when the bool value is true.
+    Bool,
+    /// V2 memcmp: guard fires when memory at the value address is non-zero
+    /// for `size` bytes.
+    NonZero { size: u32 },
+}
+
 // ── Instructions ────────────────────────────────────────────────────────────
 
 /// A single LIR instruction. Each produces at most one value (`dst`).
@@ -296,6 +321,18 @@ pub enum Inst {
     CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId>, original_name: Option<String>, arg_abis: Vec<crate::ir::abi::AbiKind> },
     /// Indirect call through a function pointer.
     CallPtr { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId> },
+    /// Indirect call through a closure (fn_ptr + env dispatch).
+    /// `kind` distinguishes void*[2] (CallableParam) from GorgetClosure struct (EscapedClosure).
+    /// `arg_abis` carries per-arg ABI decisions (deref for non-resource aggregates).
+    /// `ret_ty` is explicit so backends don't need to re-derive it.
+    CallClosure {
+        dst: Option<ValueId>,
+        kind: ClosureDispatchKind,
+        closure: ValueId,
+        args: Vec<ValueId>,
+        arg_abis: Vec<crate::ir::abi::AbiKind>,
+        ret_ty: LirType,
+    },
 
     // ── Runtime Checks ──────────────────────────────────────────────
     /// Trap if `index >= len`.
@@ -329,6 +366,14 @@ pub enum Inst {
     /// Semantically: `slot = GorgetClosure { fn_ptr = call_func, env = env_ptr }`.
     ClosurePack { slot: SlotId, env_ptr: ValueId, call_func: FuncId, needs_adapter: bool },
 
+    // ── Drop Guards ──────────────────────────────────────────────────
+    /// Open a conditional drop guard block.
+    /// Instructions between DropGuardOpen and DropGuardClose are executed only
+    /// if the guard condition is true (bool flag or non-zero memory).
+    DropGuardOpen { kind: DropGuardKind, value: ValueId },
+    /// Close the nearest open drop guard block.
+    DropGuardClose,
+
     // ── Ownership ────────────────────────────────────────────────────
     /// Marks a slot as moved (ownership transferred).  No runtime effect —
     /// pure dataflow annotation consumed by the drop elaboration pass.
@@ -345,7 +390,8 @@ impl Inst {
             Inst::SlotStore { .. } | Inst::Store { .. } | Inst::Memset { .. }
             | Inst::Memcpy { .. } | Inst::BoundsCheck { .. } | Inst::DivCheck { .. }
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
-            | Inst::ClosurePack { .. } | Inst::MoveSlot { .. } | Inst::Nop => None,
+            | Inst::ClosurePack { .. } | Inst::MoveSlot { .. }
+            | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -385,7 +431,8 @@ impl Inst {
 
             Inst::Call { dst, .. }
             | Inst::CallExtern { dst, .. }
-            | Inst::CallPtr { dst, .. } => *dst,
+            | Inst::CallPtr { dst, .. }
+            | Inst::CallClosure { dst, .. } => *dst,
         }
     }
 
@@ -438,6 +485,14 @@ impl Inst {
                 v.extend(args);
                 v
             }
+            Inst::CallClosure { closure, args, .. } => {
+                let mut v = vec![*closure];
+                v.extend(args);
+                v
+            }
+
+            Inst::DropGuardOpen { value, .. } => vec![*value],
+            Inst::DropGuardClose => vec![],
 
             Inst::BoundsCheck { index, len } => vec![*index, *len],
             Inst::DivCheck { divisor } => vec![*divisor],

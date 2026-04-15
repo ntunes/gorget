@@ -1030,8 +1030,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             continue;
         }
         // Skip inline-expanded names
-        if ext.name.starts_with("__callable_") || ext.name.starts_with("__gorget_closure_call_")
-            || ext.name.starts_with("__gorget_drop_if_alive_") {
+        if ext.name.starts_with("__callable_") || ext.name.starts_with("__gorget_closure_call_")  {
+            // These are now CallClosure instructions, but ensure_extern may still register them.
             continue;
         }
         // Skip monomorphized parse methods (handled inline)
@@ -1144,9 +1144,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         continue;
                     }
                     // Skip inline-expanded names — no extern declaration needed.
-                    if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")
-                        || name.starts_with("__gorget_drop_if_alive_")
-                        || name == "__gorget_drop_flag_open" || name == "__gorget_drop_flag_close" {
+                    if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")  {
+                        // These are now CallClosure instructions, but ensure_extern may still register them.
                         continue;
                     }
                     // Skip monomorphized parse methods
@@ -1623,16 +1622,21 @@ fn emit_function(
                         label = format!("dc.{bid}.{counter}.ok");
                         counter += 1;
                     }
+                    // DropGuardOpen (Bool) creates body + join labels.
+                    Inst::DropGuardOpen { kind: DropGuardKind::Bool, .. } => {
+                        df_stack.push(counter);
+                        counter += 1;
+                    }
+                    Inst::DropGuardClose => {
+                        if let Some(uid) = df_stack.pop() {
+                            label = format!("dg.{bid}.{uid}.join");
+                        }
+                    }
+                    Inst::DropGuardOpen { kind: DropGuardKind::NonZero { .. }, .. } => { /* no counter */ }
                     // CallExtern paths that increment trap_counter but DON'T create labels.
                     // MUST mirror every trap_counter += 1 in the emit_inst CallExtern handler.
+                    Inst::CallClosure { .. } => { counter += 1; }
                     Inst::CallExtern { name, args, dst, .. } => {
-                        let is_drop_guard = name.starts_with("__gorget_drop_if_alive_open__")
-                            || name == "__gorget_drop_if_alive_close";
-                        // Drop flag guards (V3) — emit conditional branches.
-                        let is_drop_flag_open = name == "__gorget_drop_flag_open";
-                        let is_drop_flag_close = name == "__gorget_drop_flag_close";
-                        let is_callable = name.starts_with("__callable_");
-                        let is_closure_call = name.starts_with("__gorget_closure_call_");
                         let is_map_get = name == "gorget_map_get" || name == "gorget_map_safe_get";
                         let is_void_ret = matches!(name.as_str(),
                             "gorget_guard_get" | "gorget_shared_get"
@@ -1662,20 +1666,7 @@ fn emit_function(
                         } else { false };
 
                         // Count ALL counter increments to stay in sync with emission
-                        if is_drop_guard { /* no counter */ }
-                        else if is_drop_flag_open {
-                            // Creates body + join labels; counter used as uid.
-                            df_stack.push(counter);
-                            counter += 1;
-                        }
-                        else if is_drop_flag_close {
-                            if let Some(uid) = df_stack.pop() {
-                                label = format!("df.{bid}.{uid}.join");
-                            }
-                        }
-                        else if is_callable && !args.is_empty() { counter += 1; }
-                        else if is_closure_call && !args.is_empty() { counter += 1; }
-                        else if vector_hof_needs_inline && !args.is_empty() {
+                        if vector_hof_needs_inline && !args.is_empty() {
                             label = format!("hof.{bid}.{counter}.done");
                             counter += 1;
                         }
@@ -2446,167 +2437,9 @@ fn emit_inst(
             }
         }
         Inst::CallExtern { dst, name, args, .. } => {
-            // Special case: printf/fprintf with GorgetString arg → extract .data field
-            // Drop-if-alive guards — no-op in LLVM (drops happen unconditionally)
-            if name.starts_with("__gorget_drop_if_alive_open__") || name == "__gorget_drop_if_alive_close" {
-                writeln!(out, "  ; {name} (no-op in LLVM)").unwrap();
-                return;
-            }
+            // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
-            // ── Drop flag guards (V3) ──────────────────────────────────────
-            // __gorget_drop_flag_open(bool_val) → conditional branch: if true, execute drops
-            // __gorget_drop_flag_close → end of conditional drop block
-            if name == "__gorget_drop_flag_open" {
-                let uid = *trap_counter;
-                *trap_counter += 1;
-                let flag_val = args.first().map(|a| a.0).unwrap_or(0);
-                let body_label = format!("df.{block_id}.{uid}.body");
-                let join_label = format!("df.{block_id}.{uid}.join");
-                writeln!(out, "  br i1 %v{flag_val}, label %{body_label}, label %{join_label}").unwrap();
-                writeln!(out, "{body_label}:").unwrap();
-                *current_label = body_label;
-                df_stack.push(uid);
-                return;
-            }
-            if name == "__gorget_drop_flag_close" {
-                if let Some(uid) = df_stack.pop() {
-                    let join_label = format!("df.{block_id}.{uid}.join");
-                    writeln!(out, "  br label %{join_label}").unwrap();
-                    writeln!(out, "{join_label}:").unwrap();
-                    *current_label = join_label;
-                }
-                return;
-            }
-
-            // ── __callable_N[__FUNC] — inline callable parameter dispatch via void*[2] ──
-            // The callable param is a pointer to [fn_ptr, env_ptr].
-            // In LLVM IR: load fn_ptr, load env_ptr, indirect call.
-            if name.starts_with("__callable_") {
-                let id_str = &name["__callable_".len()..];
-                let id_num = id_str.split("__").next().unwrap_or(id_str);
-                if id_num.parse::<u32>().is_ok() && !args.is_empty() {
-                    let uid = *trap_counter;
-                    *trap_counter += 1;
-                    let closure_val = args[0];
-                    let actual_args = &args[1..];
-                    let pfx = format!("callable.{block_id}.{uid}");
-                    // Load fn_ptr from callable[0]
-                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %v{}", closure_val.0).unwrap();
-                    // Load env_ptr from callable[1]
-                    writeln!(out, "  %{pfx}.envgep = getelementptr ptr, ptr %v{}, i32 1", closure_val.0).unwrap();
-                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
-                    // Build arg types + values for indirect call
-                    let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
-                    for a in actual_args {
-                        let pty = val_types.get(a.0 as usize)
-                            .and_then(|t| t.as_ref())
-                            .map(|t| llvm_arg_type(t, snames))
-                            .unwrap_or_else(|| "i64".to_string());
-                        call_arg_strs.push(format!("{pty} %v{}", a.0));
-                    }
-                    let joined_args = call_arg_strs.join(", ");
-                    // Detect sret/small-agg return convention from dst LirType.
-                    // val_types stores large aggregates as PtrTo(sid); map back to Struct(sid).
-                    let dst_lir_ty = dst.and_then(|d| {
-                        val_types.get(d.0 as usize).and_then(|t| t.as_ref()).cloned()
-                    });
-                    let (call_is_sret, call_is_small_agg, call_struct_sid) = match &dst_lir_ty {
-                        Some(LirType::PtrTo(sid)) => {
-                            let as_struct = LirType::Struct(*sid);
-                            (needs_sret(&as_struct, &module.structs),
-                             is_small_aggregate(&as_struct, &module.structs),
-                             Some(*sid))
-                        }
-                        _ => (false, false, None),
-                    };
-                    if let Some(d) = dst {
-                        if call_is_sret {
-                            let sid = call_struct_sid.unwrap();
-                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
-                            // Use %v{d.0} as the sret slot directly — allocate it, then pass as sret arg.
-                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
-                            writeln!(out, "  call void %{pfx}.fnp(ptr sret({struct_llvm}) %v{}, {joined_args})", d.0).unwrap();
-                        } else if call_is_small_agg {
-                            let sid = call_struct_sid.unwrap();
-                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
-                            writeln!(out, "  %{pfx}.ret = call {struct_llvm} %{pfx}.fnp({joined_args})").unwrap();
-                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
-                            writeln!(out, "  store {struct_llvm} %{pfx}.ret, ptr %v{}", d.0).unwrap();
-                        } else {
-                            let ret_type = dst_lir_ty.as_ref()
-                                .map(|t| llvm_arg_type(t, snames))
-                                .unwrap_or_else(|| "i64".to_string());
-                            writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
-                        }
-                    } else {
-                        writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
-                    }
-                    return;
-                }
-            }
-
-            // ── __gorget_closure_call_N — escaped closure dispatch via GorgetClosure struct ──
-            // GorgetClosure = { fn_ptr: ptr, env: ptr }
-            if name.starts_with("__gorget_closure_call_") {
-                let id_str = &name["__gorget_closure_call_".len()..];
-                let id_num = id_str.split("__").next().unwrap_or(id_str);
-                if id_num.parse::<u32>().is_ok() && !args.is_empty() {
-                    let uid = *trap_counter;
-                    *trap_counter += 1;
-                    let closure_val = args[0];
-                    let actual_args = &args[1..];
-                    let pfx = format!("closurecall.{block_id}.{uid}");
-                    // GorgetClosure.fn_ptr is field 0, GorgetClosure.env is field 1
-                    writeln!(out, "  %{pfx}.fpgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 0", closure_val.0).unwrap();
-                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %{pfx}.fpgep").unwrap();
-                    writeln!(out, "  %{pfx}.envgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 1", closure_val.0).unwrap();
-                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
-                    let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
-                    for a in actual_args {
-                        let pty = val_types.get(a.0 as usize)
-                            .and_then(|t| t.as_ref())
-                            .map(|t| llvm_arg_type(t, snames))
-                            .unwrap_or_else(|| "i64".to_string());
-                        call_arg_strs.push(format!("{pty} %v{}", a.0));
-                    }
-                    let joined_args = call_arg_strs.join(", ");
-                    // Detect sret/small-agg return convention from dst LirType.
-                    let dst_lir_ty = dst.and_then(|d| {
-                        val_types.get(d.0 as usize).and_then(|t| t.as_ref()).cloned()
-                    });
-                    let (call_is_sret, call_is_small_agg, call_struct_sid) = match &dst_lir_ty {
-                        Some(LirType::PtrTo(sid)) => {
-                            let as_struct = LirType::Struct(*sid);
-                            (needs_sret(&as_struct, &module.structs),
-                             is_small_aggregate(&as_struct, &module.structs),
-                             Some(*sid))
-                        }
-                        _ => (false, false, None),
-                    };
-                    if let Some(d) = dst {
-                        if call_is_sret {
-                            let sid = call_struct_sid.unwrap();
-                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
-                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
-                            writeln!(out, "  call void %{pfx}.fnp(ptr sret({struct_llvm}) %v{}, {joined_args})", d.0).unwrap();
-                        } else if call_is_small_agg {
-                            let sid = call_struct_sid.unwrap();
-                            let struct_llvm = format!("%{}", snames.get(&sid.0).unwrap_or(&"unknown".to_string()));
-                            writeln!(out, "  %{pfx}.ret = call {struct_llvm} %{pfx}.fnp({joined_args})").unwrap();
-                            writeln!(out, "  %v{} = alloca {struct_llvm}", d.0).unwrap();
-                            writeln!(out, "  store {struct_llvm} %{pfx}.ret, ptr %v{}", d.0).unwrap();
-                        } else {
-                            let ret_type = dst_lir_ty.as_ref()
-                                .map(|t| llvm_arg_type(t, snames))
-                                .unwrap_or_else(|| "i64".to_string());
-                            writeln!(out, "  %v{} = call {ret_type} %{pfx}.fnp({joined_args})", d.0).unwrap();
-                        }
-                    } else {
-                        writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
-                    }
-                    return;
-                }
-            }
+            // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
 
             // ── Newtype constructors ──────────────────────────────
             // If the extern name matches a struct name with exactly 1 field,
@@ -4783,6 +4616,71 @@ fn emit_inst(
 
         // ── MoveSlot (consumed by drop elaboration) ────────────────
         Inst::MoveSlot { .. } => {}
+
+        Inst::CallClosure { dst, kind, closure, args, ret_ty, .. } => {
+            let uid = *trap_counter;
+            *trap_counter += 1;
+            let pfx = format!("cc.{block_id}.{uid}");
+            // Load fn_ptr and env from the closure.
+            match kind {
+                ClosureDispatchKind::CallableParam => {
+                    // void*[2]: fn_ptr at [0], env at [1]
+                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %v{}", closure.0).unwrap();
+                    writeln!(out, "  %{pfx}.envgep = getelementptr ptr, ptr %v{}, i32 1", closure.0).unwrap();
+                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
+                }
+                ClosureDispatchKind::EscapedClosure => {
+                    // GorgetClosure struct: fn_ptr field 0, env field 1
+                    writeln!(out, "  %{pfx}.fpgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 0", closure.0).unwrap();
+                    writeln!(out, "  %{pfx}.fnp = load ptr, ptr %{pfx}.fpgep").unwrap();
+                    writeln!(out, "  %{pfx}.envgep = getelementptr %GorgetClosure, ptr %v{}, i32 0, i32 1", closure.0).unwrap();
+                    writeln!(out, "  %{pfx}.env = load ptr, ptr %{pfx}.envgep").unwrap();
+                }
+            }
+            // Build arg list: env first, then user args.
+            let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
+            for a in args {
+                let pty = val_types.get(a.0 as usize)
+                    .and_then(|t| t.as_ref())
+                    .map(|t| llvm_arg_type(t, snames))
+                    .unwrap_or_else(|| "i64".to_string());
+                call_arg_strs.push(format!("{pty} %v{}", a.0));
+            }
+            let joined_args = call_arg_strs.join(", ");
+            if let Some(d) = dst {
+                let ret_type_str = llvm_arg_type(ret_ty, snames);
+                writeln!(out, "  %v{} = call {ret_type_str} %{pfx}.fnp({joined_args})", d.0).unwrap();
+            } else {
+                writeln!(out, "  call void %{pfx}.fnp({joined_args})").unwrap();
+            }
+        }
+        Inst::DropGuardOpen { kind, value } => {
+            match kind {
+                DropGuardKind::Bool => {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let body_label = format!("dg.{block_id}.{uid}.body");
+                    let join_label = format!("dg.{block_id}.{uid}.join");
+                    writeln!(out, "  br i1 %v{}, label %{body_label}, label %{join_label}", value.0).unwrap();
+                    writeln!(out, "{body_label}:").unwrap();
+                    *current_label = body_label;
+                    df_stack.push(uid);
+                }
+                DropGuardKind::NonZero { .. } => {
+                    // NonZero guards are eliminated by drop_elab (replaced with Bool).
+                    // If one reaches the LLVM backend, emit a no-op comment.
+                    writeln!(out, "  ; drop_guard_open.nonzero (no-op in LLVM)").unwrap();
+                }
+            }
+        }
+        Inst::DropGuardClose => {
+            if let Some(uid) = df_stack.pop() {
+                let join_label = format!("dg.{block_id}.{uid}.join");
+                writeln!(out, "  br label %{join_label}").unwrap();
+                writeln!(out, "{join_label}:").unwrap();
+                *current_label = join_label.clone();
+            }
+        }
 
         // ── Nop ─────────────────────────────────────────────────────
         Inst::Nop => {

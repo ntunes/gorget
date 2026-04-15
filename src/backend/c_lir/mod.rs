@@ -2169,6 +2169,94 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 s = s(*slot), env = v(*env_ptr)).unwrap();
         }
 
+        Inst::CallClosure { dst, kind, closure, args, arg_abis, ret_ty } => {
+            use crate::ir::abi::AbiKind;
+            // Indirect call through a closure: fn_ptr(env, args...).
+            let cv = v(*closure);
+            let (fp, ep) = match kind {
+                ClosureDispatchKind::CallableParam => {
+                    // void*[2]: fn_ptr at [0], env at [1]
+                    (format!("((void**){cv})[0]"), format!("((void**){cv})[1]"))
+                }
+                ClosureDispatchKind::EscapedClosure => {
+                    // GorgetClosure struct: fn_ptr field, env field.
+                    let cv_ty = val_types.get(closure.0 as usize).and_then(|t| t.as_ref());
+                    let is_ptr = !matches!(cv_ty, Some(LirType::Struct(_)));
+                    if is_ptr {
+                        (format!("((GorgetClosure*){cv})->fn_ptr"), format!("((GorgetClosure*){cv})->env"))
+                    } else {
+                        (format!("{cv}.fn_ptr"), format!("{cv}.env"))
+                    }
+                }
+            };
+            let ret_type = c_type_named(ret_ty, sn);
+            // Build parameter types: env (void*) first, then user args.
+            let mut param_types = vec!["void*".to_string()];
+            let mut deref_args: Vec<Option<String>> = Vec::new();
+            for (i, a) in args.iter().enumerate() {
+                let abi = arg_abis.get(i).copied().unwrap_or(AbiKind::Auto);
+                let pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref());
+                // Use ABI tags for dereference decisions when available.
+                let needs_deref = match abi {
+                    AbiKind::ByValue => pointee.map_or(false, |pt| pt.is_aggregate()),
+                    AbiKind::Auto => {
+                        // Legacy fallback: deref non-resource aggregate pointers.
+                        if let Some(pt) = pointee {
+                            if pt.is_aggregate() {
+                                let is_resource = if let LirType::Struct(sid) = pt {
+                                    module.structs.get(sid.0 as usize).map_or(false, |sd| matches!(sd.name.as_str(),
+                                        "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure"))
+                                } else { false };
+                                !is_resource
+                            } else { false }
+                        } else { false }
+                    }
+                    _ => false,
+                };
+                if needs_deref {
+                    if let Some(pt) = pointee {
+                        param_types.push(c_type_named(pt, sn));
+                        deref_args.push(Some(c_type_named(pt, sn)));
+                    } else {
+                        param_types.push("void*".to_string());
+                        deref_args.push(None);
+                    }
+                } else {
+                    let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref())
+                        .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
+                    param_types.push(ty);
+                    deref_args.push(None);
+                }
+            }
+            let cast = format!("{}(*)({})", ret_type, param_types.join(", "));
+            if let Some(d) = dst {
+                write!(out, "{} = ", v(*d)).unwrap();
+            }
+            write!(out, "(({cast})({fp}))({ep}").unwrap();
+            for (i, a) in args.iter().enumerate() {
+                if let Some(ref ty_name) = deref_args[i] {
+                    write!(out, ", *({}*){}", ty_name, v(*a)).unwrap();
+                } else {
+                    write!(out, ", {}", v(*a)).unwrap();
+                }
+            }
+            write!(out, ");").unwrap();
+        }
+        Inst::DropGuardOpen { kind, value } => {
+            match kind {
+                DropGuardKind::Bool => {
+                    write!(out, "{{ if ({}) {{", v(*value)).unwrap();
+                }
+                DropGuardKind::NonZero { size } => {
+                    let addr = v(*value);
+                    write!(out, "{{ char __dia_z[{size}] = {{0}}; if (memcmp({addr}, __dia_z, {size}) != 0) {{").unwrap();
+                }
+            }
+        }
+        Inst::DropGuardClose => {
+            write!(out, "}} }}").unwrap();
+        }
+
         Inst::Nop => {
             write!(out, "/* nop */;").unwrap();
         }

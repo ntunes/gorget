@@ -490,6 +490,14 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
                 sub(a);
             }
         }
+        Inst::CallClosure { closure, args, .. } => {
+            sub(closure);
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::DropGuardOpen { value, .. } => sub(value),
+        Inst::DropGuardClose => {}
         Inst::BoundsCheck { index, len } => {
             sub(index);
             sub(len);

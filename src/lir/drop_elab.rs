@@ -17,7 +17,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use super::{BlockId, Inst, LirFunction, LirModule, SlotId, ValueId};
+use super::{BlockId, DropGuardKind, Inst, LirFunction, LirModule, SlotId, ValueId};
 
 // ── Initialization lattice ───────────────────────────────────────────────────
 
@@ -168,20 +168,8 @@ fn meet_states(a: &SlotStates, b: &SlotStates, n_slots: usize) -> SlotStates {
 
 // ── Guard sequence helpers ────────────────────────────────────────────────────
 
-/// Return `true` if `name` is a `__gorget_drop_if_alive_open__*` call.
-#[inline]
-fn is_guard_open(name: &str) -> bool {
-    name.starts_with("__gorget_drop_if_alive_open__")
-}
-
-/// Return `true` if `name` is the `__gorget_drop_if_alive_close` call.
-#[inline]
-fn is_guard_close(name: &str) -> bool {
-    name == "__gorget_drop_if_alive_close"
-}
-
-/// Find the index of the matching `__gorget_drop_if_alive_close` for the guard
-/// open at `open_idx`, handling nested guard pairs correctly.
+/// Find the index of the matching `DropGuardClose` for the guard open at
+/// `open_idx`, handling nested guard pairs correctly.
 ///
 /// Returns `insts.len()` (past-the-end) if no matching close is found (which
 /// indicates malformed LIR — shouldn't happen in well-formed output).
@@ -189,8 +177,8 @@ fn find_matching_close(insts: &[Inst], open_idx: usize) -> usize {
     let mut depth = 1usize;
     for i in (open_idx + 1)..insts.len() {
         match &insts[i] {
-            Inst::CallExtern { name, .. } if is_guard_open(name) => depth += 1,
-            Inst::CallExtern { name, .. } if is_guard_close(name) => {
+            Inst::DropGuardOpen { .. } => depth += 1,
+            Inst::DropGuardClose => {
                 depth -= 1;
                 if depth == 0 {
                     return i;
@@ -233,13 +221,10 @@ fn elaborate_block(
         apply_inst_effect(inst, &mut current_state, val_to_slot);
 
         // ── Check for a conditional-drop guard open ───────────────────────
-        if let Inst::CallExtern { name, args, .. } = inst {
-            if is_guard_open(name) {
-                // Try to resolve the guarded slot from the first argument.
-                let guarded_slot = args
-                    .first()
-                    .and_then(|v| val_to_slot.get(v))
-                    .copied();
+        if let Inst::DropGuardOpen { kind: DropGuardKind::NonZero { .. }, value } = inst {
+            {
+                // Try to resolve the guarded slot from the guard value.
+                let guarded_slot = val_to_slot.get(value).copied();
 
                 if let Some(slot) = guarded_slot {
                     let close_idx = find_matching_close(insts, i);
@@ -412,9 +397,8 @@ fn insert_drop_flags(
         let mut passthrough_depth: usize = 0;
         for inst in old_insts {
             match &inst {
-                Inst::CallExtern { name, args, .. } if is_guard_open(name) => {
-                    if let Some(&flag_slot) = args.first()
-                        .and_then(|v| val_to_slot.get(v))
+                Inst::DropGuardOpen { kind: DropGuardKind::NonZero { .. }, value } => {
+                    if let Some(&flag_slot) = val_to_slot.get(value)
                         .and_then(|s| slot_to_flag.get(s))
                     {
                         // Load the bool flag and emit a flag-based guard open.
@@ -424,12 +408,9 @@ fn insert_drop_flags(
                             slot: flag_slot,
                             ty: super::LirType::Bool,
                         });
-                        new_insts.push(Inst::CallExtern {
-                            dst: None,
-                            name: "__gorget_drop_flag_open".to_string(),
-                            args: vec![v_flag],
-                            original_name: None,
-                            arg_abis: vec![],
+                        new_insts.push(Inst::DropGuardOpen {
+                            kind: DropGuardKind::Bool,
+                            value: v_flag,
                         });
                         flag_depth += 1;
                         replaced += 1;
@@ -439,17 +420,11 @@ fn insert_drop_flags(
                         new_insts.push(inst);
                     }
                 }
-                Inst::CallExtern { name, .. } if is_guard_close(name) => {
+                Inst::DropGuardClose => {
                     if flag_depth > 0 {
                         // Matches a replaced open — emit flag close.
                         flag_depth -= 1;
-                        new_insts.push(Inst::CallExtern {
-                            dst: None,
-                            name: "__gorget_drop_flag_close".to_string(),
-                            args: vec![],
-                            original_name: None,
-                            arg_abis: vec![],
-                        });
+                        new_insts.push(Inst::DropGuardClose);
                     } else if passthrough_depth > 0 {
                         // Matches a passthrough open — keep original close.
                         passthrough_depth -= 1;

@@ -245,6 +245,25 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write_value_list(f, args)?;
             write!(f, ")")
         }
+        Inst::CallClosure { dst, kind, closure, args, .. } => {
+            if let Some(d) = dst {
+                write!(f, "{d} = ")?;
+            }
+            let k = match kind {
+                ClosureDispatchKind::CallableParam => "callable",
+                ClosureDispatchKind::EscapedClosure => "closure",
+            };
+            write!(f, "call_{k} {closure}(")?;
+            write_value_list(f, args)?;
+            write!(f, ")")
+        }
+
+        // Drop guards
+        Inst::DropGuardOpen { kind, value } => match kind {
+            DropGuardKind::Bool => write!(f, "drop_guard_open.bool {value}"),
+            DropGuardKind::NonZero { size } => write!(f, "drop_guard_open.nonzero {value}, size={size}"),
+        },
+        Inst::DropGuardClose => write!(f, "drop_guard_close"),
 
         // Runtime checks
         Inst::BoundsCheck { index, len } => write!(f, "bounds_check {index}, {len}"),

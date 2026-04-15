@@ -106,11 +106,9 @@ impl<'a> FuncLowering<'a> {
                     let addr = self.lower_place_addr(place, bb);
                     if conditional {
                         let byte_size = self.compute_place_byte_size(place);
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                            dst: None,
-                            name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                            args: vec![addr],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                            kind: DropGuardKind::NonZero { size: byte_size as u32 },
+                            value: addr,
                         });
                     }
                     let addr2 = self.lower_place_addr(place, bb);
@@ -119,12 +117,7 @@ impl<'a> FuncLowering<'a> {
                         original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                     if conditional {
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                            dst: None,
-                            name: "__gorget_drop_if_alive_close".to_string(),
-                            args: vec![],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                     }
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::Nop);
@@ -135,11 +128,9 @@ impl<'a> FuncLowering<'a> {
                 if conditional {
                     let guard_addr = self.lower_place_addr(place, bb);
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                        args: vec![guard_addr],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                        kind: DropGuardKind::NonZero { size: byte_size as u32 },
+                        value: guard_addr,
                     });
                 }
                 let slot = self.local_to_slot[local_idx];
@@ -240,12 +231,7 @@ impl<'a> FuncLowering<'a> {
                     });
                 }
                 if conditional {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: "__gorget_drop_if_alive_close".to_string(),
-                        args: vec![],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                 }
             }
             DropStrategy::Trivial(ref fn_name) => {
@@ -254,11 +240,9 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 if conditional {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                        args: vec![addr],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                        kind: DropGuardKind::NonZero { size: byte_size as u32 },
+                        value: addr,
                     });
                 }
                 let drop_addr = if conditional { self.lower_place_addr(place, bb) } else { addr };
@@ -273,12 +257,7 @@ impl<'a> FuncLowering<'a> {
                     });
                 }
                 if conditional {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: "__gorget_drop_if_alive_close".to_string(),
-                        args: vec![],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                 }
             }
             DropStrategy::Custom(ref fn_name) => {
@@ -287,11 +266,9 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                        args: vec![addr],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                        kind: DropGuardKind::NonZero { size: byte_size as u32 },
+                        value: addr,
                     });
                 }
                 // Use unified __gorget_dtor_Type which calls user fn + field drops.
@@ -320,12 +297,7 @@ impl<'a> FuncLowering<'a> {
                     self.lower_field_drops(place, &type_name, bb);
                 }
                 {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: "__gorget_drop_if_alive_close".to_string(),
-                        args: vec![],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                 }
             }
             DropStrategy::Recursive => {
@@ -333,11 +305,9 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: format!("__gorget_drop_if_alive_open__{byte_size}"),
-                        args: vec![addr],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                        kind: DropGuardKind::NonZero { size: byte_size as u32 },
+                        value: addr,
                     });
                 }
                 // Use unified Type__drop from type_drop_fns when available.
@@ -368,12 +338,7 @@ impl<'a> FuncLowering<'a> {
                     }
                 }
                 {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                        dst: None,
-                        name: "__gorget_drop_if_alive_close".to_string(),
-                        args: vec![],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
-                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                 }
             }
         }

@@ -1924,14 +1924,45 @@ impl<'a> FuncLowering<'a> {
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
         }).unwrap_or(LirType::Void);
-        // __callable_N and __gorget_closure_call_N use function-scoped local IDs.
-        // Different functions can have __callable_3 with different return types.
-        // Make the extern name unique per function to avoid type conflicts.
-        let actual_emit_name = if emit_name.starts_with("__callable_") || emit_name.starts_with("__gorget_closure_call_") {
-            format!("{}__{}", emit_name, self.lir_func.name.replace("::", "__"))
-        } else {
-            emit_name.to_string()
-        };
+        // Closure dispatch: promote to CallClosure instead of CallExtern.
+        if (emit_name.starts_with("__callable_") || emit_name.starts_with("__gorget_closure_call_"))
+            && !lir_args.is_empty()
+        {
+            let kind = if emit_name.starts_with("__callable_") {
+                ClosureDispatchKind::CallableParam
+            } else {
+                ClosureDispatchKind::EscapedClosure
+            };
+            let closure_val = lir_args[0];
+            let user_args = lir_args[1..].to_vec();
+            // Look up ABI tags from the canonical pipeline (ensure_extern populates them).
+            let unique_name = format!("{}__{}", emit_name, self.lir_func.name.replace("::", "__"));
+            self.ensure_extern(&unique_name, &arg_types, &ret_ty);
+            let call_arg_abis = self.lookup_arg_abis(&unique_name);
+            // Skip the closure arg's ABI — only user args need annotation.
+            let user_abis = if call_arg_abis.len() > 1 {
+                call_arg_abis[1..].to_vec()
+            } else {
+                vec![]
+            };
+            let is_void_ret = matches!(ret_ty, LirType::Void);
+            let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
+            self.lir_func.block_mut(bb).insts.push(Inst::CallClosure {
+                dst: result,
+                kind,
+                closure: closure_val,
+                args: user_args,
+                arg_abis: user_abis,
+                ret_ty: ret_ty.clone(),
+            });
+            if let (Some(d), Some(r)) = (*dst, result) {
+                self.store_to_local(d, r, bb);
+            }
+            self.emit_post_call_zeros(args, bb);
+            return;
+        }
+
+        let actual_emit_name = emit_name.to_string();
         self.ensure_extern(&actual_emit_name, &arg_types, &ret_ty);
 
         // Self-cleaning: gorget_array_set calls elem_drop internally.
