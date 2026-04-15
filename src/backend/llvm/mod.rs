@@ -553,6 +553,12 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 if def.name == "TaskGroup" { return 8; }
                 if def.name.starts_with("Task__") { return 16; }
                 if def.name == "File" || def.name == "GorgetFile" { return 16; }
+                // Union-layout enums: LLVM type is { i32, i32, [N x i8] } =
+                // 8 (tag + pad) + N (payload). Matches C ABI union layout.
+                if def.is_union_layout {
+                    let payload = enum_payload_size(def, structs, snames);
+                    return 8 + payload;
+                }
                 if let Some(sz) = def.computed_c_size {
                     return sz;
                 }
@@ -723,10 +729,11 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
     for (i, def) in module.structs.iter().enumerate() {
         let name = &snames[&(i as u32)];
         if def.is_union_layout {
-            // Enum: { i32 tag, [payload_bytes x i8] }
+            // Enum: { i32 tag, i32 pad, [payload_bytes x i8] }
+            // Padding matches C ABI: union payload at 8-byte-aligned offset.
             let payload = enum_payload_size(def, &module.structs, snames);
             if payload > 0 {
-                writeln!(out, "%{name} = type {{ i32, [{payload} x i8] }}").unwrap();
+                writeln!(out, "%{name} = type {{ i32, i32, [{payload} x i8] }}").unwrap();
             } else {
                 writeln!(out, "%{name} = type {{ i32 }}").unwrap();
             }
@@ -2361,12 +2368,13 @@ fn emit_inst(
             let sname = &snames[&struct_id.0];
             let sdef = &module.structs[struct_id.0 as usize];
             if sdef.is_union_layout && *field > 0 {
-                // For union-layout enums: { i32 tag, [N x i8] payload }.
+                // For union-layout enums: { i32 tag, i32 pad, [N x i8] payload }.
                 // All variant fields share the payload as a union. The field name
                 // encodes the variant (e.g., Triangle_0, Triangle_1). The suffix
                 // number is the field's position within that variant.
                 let payload_ptr = format!("fptr.{}.payload", dst.0);
-                writeln!(out, "  %{payload_ptr} = getelementptr %{sname}, ptr %v{}, i32 0, i32 1", base.0).unwrap();
+                // Field 0 = tag, field 1 = padding, field 2 = payload array
+                writeln!(out, "  %{payload_ptr} = getelementptr %{sname}, ptr %v{}, i32 0, i32 2", base.0).unwrap();
                 // Determine the byte offset within the payload from the variant field suffix.
                 // E.g., Triangle_0 → offset 0, Triangle_1 → offset 8.
                 let field_name = &sdef.fields[*field as usize].0;
