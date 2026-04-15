@@ -16,6 +16,7 @@ tests/fixtures/self_host_*/driver
 tests/fixtures/self_host_*/driver.c
 .gorget/
 .claude/
+benchmarks/
 fuzz/artifacts/
 fuzz/corpus/
 fuzz/target/
