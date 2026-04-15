@@ -837,37 +837,23 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let src_type = builder.local_type(place.local);
-                        // Ptr(T) → move or clone the inner T depending on liveness.
+                        // Ptr(T) → clone the inner T (same as non-throws return path).
+                        // NOTE: cannot move through Ptr here — the callee doesn't
+                        // know if the caller still needs the argument after the call.
+                        // Caller-side last-use optimization is Phase 2.
                         // Only applies to types that need cloning (resource types);
                         // primitive Ptr(T) like Ptr(double) has no clone_fn and the
                         // operand passes through untouched for enum_init.
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                let param_name = builder.local_name(place.local).map(|s| s.to_string());
-                                let is_last = param_name.as_ref()
-                                    .map_or(false, |n| ctx.is_last_use_at(n, expr.span));
-                                if is_last {
-                                    // Last use — move through pointer: load the
-                                    // owned value and zero the caller's slot.
-                                    let deref_place = crate::ir::instructions::Place {
-                                        local: place.local,
-                                        projections: vec![crate::ir::instructions::Projection::Deref],
-                                    };
-                                    let tmp = builder.add_local(inner, None);
-                                    builder.assign(crate::ir::instructions::Place::local(tmp), Operand::Copy(deref_place.clone()));
-                                    builder.move_zero(deref_place);
-                                    operand = FunctionBuilder::copy(tmp);
-                                    returned_local = Some(tmp);
-                                } else {
-                                    ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                                    let cloned = builder.call(
-                                        &clone_fn,
-                                        vec![operand.clone()],
-                                        inner,
-                                    );
-                                    operand = FunctionBuilder::copy(cloned);
-                                    returned_local = Some(cloned);
-                                }
+                                ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+                                let cloned = builder.call(
+                                    &clone_fn,
+                                    vec![operand.clone()],
+                                    inner,
+                                );
+                                operand = FunctionBuilder::copy(cloned);
+                                returned_local = Some(cloned);
                             }
                         } else if ctx.type_registry.needs_drop(src_type) {
                             // Owned resource — clone if borrowed/shared
@@ -941,6 +927,9 @@ fn lower_return(
             if !did_clone_return {
                 // Ptr(T) → T auto-clone for return values: if the operand
                 // is Ptr(T) but the return type is T, auto-clone.
+                // NOTE: cannot move through Ptr here — the callee doesn't know
+                // if the caller still needs the argument. Clone is required.
+                // Caller-side last-use optimization is Phase 2.
                 if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     if p.projections.is_empty() {
                         let src_idx = p.local.0 as usize;

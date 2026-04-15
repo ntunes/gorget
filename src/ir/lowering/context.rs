@@ -1293,11 +1293,13 @@ impl<'a> LoweringContext<'a> {
         };
         let local_type = builder.local_type(local);
 
-        // Case 1: Ptr(T) → clone inner
+        // Case 1: Ptr(T) → clone inner.
+        // NOTE: we cannot move through the Ptr here (load + zero caller's slot)
+        // because the callee doesn't know if the caller still needs the argument
+        // after the call. The Ptr is a borrow — the caller owns the data.
+        // Eliminating this clone requires caller-side cooperation (Phase 2:
+        // caller marks the argument as moved after the call when it's last-use).
         if let Some(inner) = self.pointee_type(local_type) {
-            // String Ptr params can be read through without clone unless actually
-            // crossing a boundary that requires an owned copy — since this helper
-            // is only called at real boundaries, always clone borrowed Ptr(T).
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                 self.warn_implicit_clone(span, inner, reason);
                 let cloned = builder.call(
@@ -1334,6 +1336,23 @@ impl<'a> LoweringContext<'a> {
             || self.is_cow_borrow(local);
         if !is_borrow {
             return operand;
+        }
+
+        // Case 2b: last-use bare-param borrow → move instead of clone.
+        // Only safe for bare params (not ref-locals or CoW borrows, which
+        // may genuinely alias another live variable).
+        if self.is_bare_param(local)
+            && !self.is_ref_local(local)
+            && !self.is_cow_borrow(local)
+            && self.drops.is_registered(local)
+        {
+            let param_name = builder.local_name(local).map(|s| s.to_string());
+            let is_last = param_name.as_ref()
+                .map_or(false, |n| self.is_last_use_at(n, span));
+            if is_last {
+                self.drops.unregister(local);
+                return operand;
+            }
         }
 
         if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {

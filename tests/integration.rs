@@ -1255,6 +1255,37 @@ done",
 }
 
 #[test]
+fn move_last_use_struct() {
+    run_gg(
+        "move_last_use_struct.gg",
+        "\
+3
+hello
+3
+hello
+3
+3
+hello
+done",
+    );
+}
+
+#[test]
+fn move_last_use_safety() {
+    run_gg(
+        "move_last_use_safety.gg",
+        "\
+original
+original
+1
+1
+original
+1
+done",
+    );
+}
+
+#[test]
 fn drop_nested_struct_move() {
     run_gg(
         "drop_nested_struct_move.gg",
