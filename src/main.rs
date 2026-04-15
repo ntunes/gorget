@@ -423,12 +423,7 @@ fn try_build_ir(
         let reporter = ErrorReporter::new_multi(file_infos.clone());
         let mut shown = std::collections::HashSet::new();
         let mut entries: Vec<(String, usize, usize, String, &str)> = Vec::new();
-        let mut lib_count = 0usize;
         for warn in &gir_module.implicit_clone_warnings {
-            if !reporter.is_entry_file(warn.span) {
-                lib_count += 1;
-                continue;
-            }
             if !shown.insert(warn.span.start) {
                 continue;
             }
@@ -451,9 +446,6 @@ fn try_build_ir(
         eprintln!("\n=== Clone Report ({} implicit clone{}) ===", entries.len(), if entries.len() == 1 { "" } else { "s" });
         for (file, line, col, type_name, reason) in &entries {
             eprintln!("  {file}:{line}:{col}  {type_name:<16} {reason}");
-        }
-        if lib_count > 0 {
-            eprintln!("  ... and {lib_count} clone(s) in imported libraries (set GORGET_SHOW_LIB_CLONE_WARNINGS=1 to include)");
         }
         eprintln!();
     }

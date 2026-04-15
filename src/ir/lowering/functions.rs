@@ -938,7 +938,6 @@ pub fn lower_generic_function(
             }
             _ => None,
         };
-        eprintln!("[move_override] return_type_is_resource={} returned_param_name={:?}", ctx.type_registry.is_resource_type(return_type), returned_param_name);
         if let Some(name) = returned_param_name {
             for p in &template.params {
                 if !p.node.is_meta_op
