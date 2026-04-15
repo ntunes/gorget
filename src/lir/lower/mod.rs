@@ -12,6 +12,7 @@
 pub mod calls;
 pub(super) mod drops;
 pub(super) mod insts;
+pub(super) mod lifts;
 pub(super) mod operands;
 pub(super) mod types;
 
@@ -1103,15 +1104,19 @@ impl<'a> FuncLowering<'a> {
         for (i, gir_block) in self.gir_func.blocks.iter().enumerate() {
             let lir_bb = self.block_map[i];
 
-            // Lower instructions.
+            // Lower instructions.  `current_bb` tracks the active block — some
+            // instruction expansions (e.g., nullable-void → Option wrapping) split
+            // the block by creating new basic blocks and a Branch terminator, then
+            // return the merge block as the new continuation point.
+            let mut current_bb = lir_bb;
             for inst in &gir_block.instructions {
-                self.lower_instruction(inst, lir_bb);
+                current_bb = self.lower_instruction(inst, current_bb);
             }
 
-            // Lower terminator (operand loads emitted into the same block).
+            // Lower terminator into the current continuation block.
             if let Some(ref term) = gir_block.terminator {
-                let lir_term = self.lower_terminator(term, lir_bb);
-                self.lir_func.block_mut(lir_bb).terminator = lir_term;
+                let lir_term = self.lower_terminator(term, current_bb);
+                self.lir_func.block_mut(current_bb).terminator = lir_term;
             }
             // If no terminator, leave as Unreachable (the default).
         }

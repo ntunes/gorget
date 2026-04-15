@@ -11,7 +11,7 @@
 
 - **LIR value origin metadata — enable Store/SlotStore/Call lifts**: The C backend maintains 5 origin bitmaps (`str_lit_vals`, `null_vals`, `cstr_vals`, `ptr_pointee`, `func_addr_targets`) beyond type info. These track value provenance needed for ~37 emit-decision sites. The type metadata (`func.value_types`) is now shared; origin metadata remains backend-local. Fix: attach origin tags to LIR values (e.g. `StrLit` → string-literal flag, `NullPtr` → null flag, `FuncAddr` → FuncId). Unblocks lifting Store routing (~50 lines), SlotStore string/cstr coercion (~22 lines), and Call/CallPtr ABI coercion (~100 lines). [updated: 2026-04-14]
 
-- **Decompose emit_call_extern.rs (2,282 lines)**: The largest "dumb translator" violation — every runtime function has custom ABI coercion, type casting, and inline expansion in the C backend. Blocked on origin metadata (above). Long-term target: the LIR lowerer should emit correctly-typed CallExtern instructions with explicit coercion instructions; backends just translate CallExtern to function calls without type analysis. [added: 2026-04-14]
+- **Decompose emit_call_extern.rs (~2,100 lines)**: First batch of lifts done (tag checks, type casts, str_push/str_cat dispatch — see DONE.md). Remaining block-splitting lifts (nullable void→Option, nullable cstr→Option, sentinel scalar→Option, last_error→Result) written in `src/lir/lower/lifts.rs` but disabled pending SSA value-numbering fix for mid-block branching. The block-splitting infrastructure (`lower_instruction` returns `BlockId`) is in place. Also blocked: last_error→Result conflicts with C backend _r wrapper function generation. [updated: 2026-04-15]
 
 ## Medium
 

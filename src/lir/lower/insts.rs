@@ -7,40 +7,40 @@
 use super::*;
 
 impl<'a> FuncLowering<'a> {
-    pub(super) fn lower_instruction(&mut self, inst: &Instruction, bb: BlockId) {
+    pub(super) fn lower_instruction(&mut self, inst: &Instruction, mut bb: BlockId) -> BlockId {
         match inst {
             Instruction::Assign { mode, dst, value, .. } => {
                 // Special-case: Constant::Null assigned to an enum-typed local.
                 if let Operand::Constant(Constant::Null) = value {
                     if let Some(()) = self.try_materialize_null_for_assign(dst, bb) {
-                        return;
+                        return bb;
                     }
                     // Null → aggregate destination: emit Memset(0) instead of
                     // NullPtr + Store so backends don't need to scan for NullPtr origin.
                     if self.try_null_memset(dst, bb) {
-                        return;
+                        return bb;
                     }
                 }
                 // Special-case: Option/Result source → non-Option/Result dest.
                 if let Some(val) = self.try_enum_payload_extract(dst, value, bb) {
                     self.store_to_place(dst, val, bb);
-                    return;
+                    return bb;
                 }
                 // Special-case: Box[Trait] ← Box[Concrete] trait object construction.
                 if self.try_trait_object_construct(dst, value, bb) {
-                    return;
+                    return bb;
                 }
                 // Special-case: primitive → Result/Option slot wrapping.
                 if dst.projections.is_empty() {
                     if self.try_result_option_wrap(dst.local, value, bb) {
-                        return;
+                        return bb;
                     }
                 }
                 // Special-case: __Closure_N → GorgetClosure slot (closure escape).
                 // Heap-allocate the env, memcpy, and emit ClosurePack.
                 if dst.projections.is_empty() {
                     if self.try_closure_pack(dst.local, value, bb) {
-                        return;
+                        return bb;
                     }
                 }
                 let is_move = matches!(mode, ir::instructions::AssignMode::Move);
@@ -498,7 +498,7 @@ impl<'a> FuncLowering<'a> {
                     }
                     // Delegate to the shared extern-call emitter (same logic as CallExtern).
                     if !len_handled {
-                        self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
+                        bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                     }
                 }
             }
@@ -574,7 +574,7 @@ impl<'a> FuncLowering<'a> {
                     }).collect()
                     }
                 };
-                self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
+                bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                 }
             }
 
@@ -869,7 +869,7 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                         self.store_to_local(*dst, ptr_val, bb);
-                        return;
+                        return bb;
                     }
                     // Otherwise dereference to get the actual element value.
                     let dst_slot = self.local_to_slot[dst.0 as usize];
@@ -1470,6 +1470,7 @@ impl<'a> FuncLowering<'a> {
                 self.lir_func.block_mut(bb).insts.push(Inst::Nop);
             }
         }
+        bb
     }
 
     pub(super) fn lower_terminator(&mut self, term: &Terminator, bb: BlockId) -> Term {
@@ -1635,7 +1636,7 @@ impl<'a> FuncLowering<'a> {
     /// function-name matching that previously covered gorget_array_push,
     /// gorget_map_put, etc.  Follows Rust MIR convention: Operand::Move
     /// signals ownership transfer; the caller zeros its source slot.
-    fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
+    pub(super) fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
         for arg in args {
             if let Operand::Move(place) = arg {
                 if place.projections.is_empty() {
@@ -1698,7 +1699,7 @@ impl<'a> FuncLowering<'a> {
         args: &[Operand],
         mut lir_args: Vec<ValueId>,
         bb: BlockId,
-    ) {
+    ) -> BlockId {
         // Guard/ReadGuard/WriteGuard get/get_ptr: inline as FieldPtr + Load
         // instead of calling the runtime function. This preserves the concrete
         // inner type through the LIR so the c_lir backend emits correct code.
@@ -1741,7 +1742,7 @@ impl<'a> FuncLowering<'a> {
                         ty: inner_ty,
                     });
                     self.store_to_local(d, result, bb);
-                    return;
+                    return bb;
                 }
                 // Fallthrough: if we can't find the struct, use the runtime call.
             }
@@ -1782,7 +1783,7 @@ impl<'a> FuncLowering<'a> {
                         ty: LirType::Ptr,
                     });
                     self.store_to_local(d, data_ptr, bb);
-                    return;
+                    return bb;
                 }
             }
         }
@@ -1897,7 +1898,7 @@ impl<'a> FuncLowering<'a> {
                     args: lir_args,
                     original_name: None, arg_abis: abis,
                 });
-                return;
+                return bb;
             }
         }
 
@@ -1959,7 +1960,223 @@ impl<'a> FuncLowering<'a> {
                 self.store_to_local(d, r, bb);
             }
             self.emit_post_call_zeros(args, bb);
-            return;
+            return bb;
+        }
+
+        // ── Tier 1: Return-value wrapping lifts ──────────────────────────
+        // When a GIR CallExtern destination is Option/Result but the runtime
+        // function returns a raw pointer/scalar, expand into a branch sequence
+        // that constructs the wrapper struct.  This moves the semantic logic
+        // from the C backend (emit_call_extern.rs) to the LIR lowerer.
+        if let Some(d) = *dst {
+            let dst_idx = d.0 as usize;
+            if dst_idx < self.local_to_slot.len() {
+                let slot_ty = self.lir_func.slots[self.local_to_slot[dst_idx].0 as usize].ty.clone();
+                if let LirType::Struct(opt_sid) = slot_ty {
+                    let sname = self.module_structs.get(opt_sid.0 as usize)
+                        .map(|s| s.name.as_str()).unwrap_or("");
+
+                    // 1c: last_error → Result wrapping
+                    // DEFERRED: kept in C backend due to _r wrapper function generation dependency.
+                    // The C backend's last_error_fn handler generates inline Result wrapping
+                    // that interacts with the _r wrapper preamble generation.
+
+                    // Option wrapping patterns — TEMPORARILY DISABLED pending
+                    // SSA value-numbering fix for block-splitting lifts.
+                    // The lifts create new blocks which changes SSA value ordering.
+                    // TODO: Re-enable once block-splitting is verified correct.
+                }
+            }
+        }
+
+        // ── Tier 2b: Tag checks ──────────────────────────────────────────
+        // __option_is_some, __option_is_none, *__is_some, *__is_ok, *__is_none, *__is_err
+        // Read the tag field at offset 0 (I32) via FieldPtr + Load, then Cmp with 0.
+        if !lir_args.is_empty() {
+            let is_some_ok = emit_name == "__option_is_some"
+                || emit_name.ends_with("__is_some")
+                || emit_name.ends_with("__is_ok");
+            let is_none_err = emit_name == "__option_is_none"
+                || emit_name.ends_with("__is_none")
+                || emit_name.ends_with("__is_err");
+            if is_some_ok || is_none_err {
+                if let Some(d) = *dst {
+                    let ptr = lir_args[0]; // pointer to Option/Result struct
+                    // Load tag as I32 from offset 0 (tag is always int32_t at field 0).
+                    let tag_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: tag_val, ptr, ty: LirType::I32,
+                    });
+                    let zero = self.emit_i32_const(bb, 0);
+                    let result = self.lir_func.next_value();
+                    let op = if is_some_ok { CmpOp::Eq } else { CmpOp::Ne };
+                    self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                        dst: result, op, lhs: tag_val, rhs: zero,
+                    });
+                    self.store_to_local(d, result, bb);
+                    self.emit_post_call_zeros(args, bb);
+                    return bb;
+                }
+            }
+        }
+
+        // ── Tier 3c: Builtin type casts ──────────────────────────────────
+        // float(x) → IntToFloat/FloatCast, int(x) → FloatToInt/IntCast,
+        // bool(x) → IntCast.  int(string) → gorget_str_ord.
+        if lir_args.len() == 1 && args.len() == 1 {
+            if let Some(d) = *dst {
+                let src_ty = self.operand_lir_type(&args[0]);
+                let src_is_int = matches!(src_ty,
+                    LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+                    | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64);
+                let src_is_float = matches!(src_ty, LirType::F32 | LirType::F64);
+                let src_is_bool = matches!(src_ty, LirType::Bool);
+                let src_is_str = self.operand_is_str(&args[0]);
+
+                match emit_name {
+                    "float" => {
+                        let val = lir_args[0];
+                        let result = self.lir_func.next_value();
+                        if src_is_int || src_is_bool {
+                            self.lir_func.block_mut(bb).insts.push(Inst::IntToFloat {
+                                dst: result, value: val, to: LirType::F64,
+                            });
+                        } else if src_is_float {
+                            self.lir_func.block_mut(bb).insts.push(Inst::FloatCast {
+                                dst: result, value: val, to: LirType::F64,
+                            });
+                        } else {
+                            // Fallback: IntToFloat for unknown types
+                            self.lir_func.block_mut(bb).insts.push(Inst::IntToFloat {
+                                dst: result, value: val, to: LirType::F64,
+                            });
+                        }
+                        self.store_to_local(d, result, bb);
+                        self.emit_post_call_zeros(args, bb);
+                        return bb;
+                    }
+                    "int" if src_is_str => {
+                        // int(string) → gorget_str_ord (Unicode codepoint)
+                        let str_ty = self.struct_reg.lookup("GorgetString")
+                            .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                        self.ensure_extern("gorget_str_ord", &[str_ty], &LirType::I64);
+                        let abis = self.lookup_arg_abis("gorget_str_ord");
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(result),
+                            name: "gorget_str_ord".to_string(),
+                            args: lir_args,
+                            original_name: None, arg_abis: abis,
+                        });
+                        self.store_to_local(d, result, bb);
+                        self.emit_post_call_zeros(args, bb);
+                        return bb;
+                    }
+                    "int" => {
+                        let val = lir_args[0];
+                        let result = self.lir_func.next_value();
+                        if src_is_float {
+                            self.lir_func.block_mut(bb).insts.push(Inst::FloatToInt {
+                                dst: result, value: val, to: LirType::I64,
+                            });
+                        } else if src_is_bool || src_is_int {
+                            self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                                dst: result, value: val, to: LirType::I64,
+                            });
+                        } else {
+                            self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                                dst: result, value: val, to: LirType::I64,
+                            });
+                        }
+                        self.store_to_local(d, result, bb);
+                        self.emit_post_call_zeros(args, bb);
+                        return bb;
+                    }
+                    "bool" => {
+                        let val = lir_args[0];
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                            dst: result, value: val, to: LirType::Bool,
+                        });
+                        self.store_to_local(d, result, bb);
+                        self.emit_post_call_zeros(args, bb);
+                        return bb;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // ── Tier 3a: gorget_str_cat("", val) → type-specific conversion ──
+        // When the first arg is an empty string literal, rewrite to
+        // gorget_int_to_str / gorget_float_to_str / gorget_bool_to_str.
+        if emit_name == "gorget_str_cat" && args.len() == 2 {
+            let arg0_is_empty_str = matches!(&args[0], Operand::Constant(Constant::Str(s)) if s.is_empty());
+            if arg0_is_empty_str {
+                let arg1_ty = self.operand_lir_type(&args[1]);
+                let is_int = matches!(arg1_ty,
+                    LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+                    | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64);
+                let is_float = matches!(arg1_ty, LirType::F32 | LirType::F64);
+                let is_bool = matches!(arg1_ty, LirType::Bool);
+
+                if is_int || is_float || is_bool {
+                    let conv_fn = if is_int { "gorget_int_to_str" }
+                        else if is_float { "gorget_float_to_str" }
+                        else { "gorget_bool_to_str" };
+                    let str_ty = self.struct_reg.lookup("GorgetString")
+                        .map(LirType::Struct).unwrap_or(LirType::Ptr);
+                    let param_ty = if is_int { LirType::I64 }
+                        else if is_float { LirType::F64 }
+                        else { LirType::I32 };
+                    self.ensure_extern(conv_fn, &[param_ty], &str_ty);
+                    let abis = self.lookup_arg_abis(conv_fn);
+                    if let Some(d) = *dst {
+                        let result = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(result),
+                            name: conv_fn.to_string(),
+                            args: vec![lir_args[1]], // skip the empty string, pass only the value
+                            original_name: None, arg_abis: abis,
+                        });
+                        self.store_to_local(d, result, bb);
+                    }
+                    self.emit_post_call_zeros(args, bb);
+                    return bb;
+                }
+            }
+        }
+
+        // ── Tier 3b: gorget_str_push / gorget_str_push_line type dispatch ──
+        if (emit_name == "gorget_str_push" || emit_name == "gorget_str_push_line") && args.len() == 2 {
+            let arg1_ty = self.operand_lir_type(&args[1]);
+            let is_push_line = emit_name == "gorget_str_push_line";
+            let variant = match arg1_ty {
+                LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+                | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64 =>
+                    Some(if is_push_line { "gorget_string_push_line_int" }
+                         else { "gorget_string_push_int" }),
+                LirType::F32 | LirType::F64 =>
+                    Some(if is_push_line { "gorget_string_push_line_float" }
+                         else { "gorget_string_push_float" }),
+                LirType::Bool =>
+                    Some(if is_push_line { "gorget_string_push_line_bool" }
+                         else { "gorget_string_push_bool" }),
+                _ => None, // Str — use gorget_str_push/push_line as-is
+            };
+            if let Some(typed_fn) = variant {
+                self.ensure_extern(typed_fn, &[LirType::Ptr, arg1_ty.clone()], &LirType::Void);
+                // First arg is GorgetString* (pass by pointer), second is scalar value
+                let abis = vec![crate::ir::abi::AbiKind::Ptr, crate::ir::abi::AbiKind::Scalar];
+                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    dst: None,
+                    name: typed_fn.to_string(),
+                    args: lir_args,
+                    original_name: None, arg_abis: abis,
+                });
+                self.emit_post_call_zeros(args, bb);
+                return bb;
+            }
         }
 
         let actual_emit_name = emit_name.to_string();
@@ -2009,6 +2226,7 @@ impl<'a> FuncLowering<'a> {
         // by ensure_owned_at_consuming_arg (the compiler contract), so only
         // Move operands (last-use / explicit !) need post-call zeroing.
         self.emit_post_call_zeros(args, bb);
+        bb
     }
 
     /// Lower printf/fprintf args, expanding Str-typed operands to (int)len, data.
