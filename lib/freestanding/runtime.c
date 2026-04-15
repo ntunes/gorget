@@ -6,6 +6,27 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+
+/* ── libc stubs for freestanding ────────────────────────────────── */
+
+/* stderr/stdout — not real file pointers, just markers for fwrite stub */
+static void* stderr = (void*)1;
+
+/* exit() halts the CPU in freestanding */
+_Noreturn static void exit(int code) {
+    (void)code;
+#if defined(__x86_64__) || defined(_M_X64)
+    for (;;) __asm__ volatile("hlt");
+#elif defined(__aarch64__)
+    for (;;) __asm__ volatile("wfi");
+#else
+    for (;;) {}
+#endif
+}
+
+/* Forward declaration — defined later after __gorget_putchar is declared. */
+static int fprintf(void* stream, const char* fmt, ...);
 
 /* ── Compiler builtins (no libc) ────────────────────────────────── */
 
@@ -65,6 +86,15 @@ static void __gorget_puts(const char* s) {
         if (*s == '\n') __gorget_putchar('\r');
         __gorget_putchar(*s++);
     }
+}
+
+/* ── fprintf implementation (deferred until __gorget_puts is available) ── */
+
+static int fprintf(void* stream, const char* fmt, ...) {
+    (void)stream;
+    /* Print the format string literally — covers constant overflow messages. */
+    __gorget_puts(fmt ? fmt : "");
+    return 0;
 }
 
 /* ── Panic ──────────────────────────────────────────────────────── */
@@ -301,6 +331,7 @@ static inline size_t fwrite(const void* ptr, size_t size, size_t nmemb, void* st
 }
 
 static void* stdout = (void*)0;
+static void* stdin = (void*)0;
 
 /* snprintf stub for int_to_str / float_to_str */
 int snprintf(char* buf, size_t n, const char* fmt, ...);
