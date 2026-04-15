@@ -740,6 +740,7 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
 /// (the collection itself) by pointer.  Nearly all gorget_array_*, gorget_map_*,
 /// gorget_set_* methods do, with the exception of constructors (_new).
 /// Returns true if the extern name is an Option/Result unwrap helper.
+#[allow(dead_code)]
 pub(super) fn is_option_result_unwrap(name: &str) -> bool {
     name == "__option_unwrap" || name == "__result_unwrap"
         || name == "__option_unwrap_or" || name == "__result_unwrap_or"
@@ -750,6 +751,7 @@ pub(super) fn is_option_result_unwrap(name: &str) -> bool {
 }
 
 /// Returns true if the extern name is an Option/Result expect helper.
+#[allow(dead_code)]
 pub(super) fn is_option_result_expect(name: &str) -> bool {
     name == "__option_expect" || name == "__result_expect"
         || (name.contains("Option__") && name.ends_with("__expect"))

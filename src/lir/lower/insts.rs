@@ -390,7 +390,13 @@ impl<'a> FuncLowering<'a> {
 
             // -- Calls --
             Instruction::Call { dst, func, args, .. } => {
-                if let Some(fid) = self.func_index.get(func) {
+                // Intercept unwrap/expect pseudo-functions before func_index lookup.
+                if is_unwrap_like_name(func) {
+                    let lir_args: Vec<ValueId> =
+                        args.iter().map(|a| self.lower_operand(a, bb)).collect();
+                    let emit_name = func.clone();
+                    bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
+                } else if let Some(fid) = self.func_index.get(func) {
                     let mut lir_args: Vec<ValueId> =
                         args.iter().map(|a| self.lower_operand(a, bb)).collect();
                     // Closure→callable wrapping: detect __Closure_N args and FuncRef
@@ -504,9 +510,17 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::CallExtern { dst, func, args } => {
+                // Intercept unwrap/expect before func_index — these pseudo-functions
+                // may be in func_index but have no C implementation.
+                if is_unwrap_like_name(func) {
+                    let lir_args: Vec<ValueId> =
+                        args.iter().map(|a| self.lower_operand(a, bb)).collect();
+                    let emit_name = func.clone();
+                    bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
+                }
                 // If the callee is actually a defined function in this module (GIR uses
                 // call_extern for user-defined iterator/trait methods), emit a direct Call.
-                if let Some(fid) = self.func_index.get(func) {
+                else if let Some(fid) = self.func_index.get(func) {
                     let lir_args: Vec<ValueId> =
                         args.iter().map(|a| self.lower_operand(a, bb)).collect();
                     let result = dst.map(|_| self.lir_func.next_value());
@@ -2041,6 +2055,165 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
+        // ── Tier 2a: Option/Result unwrap/expect ─────────────────────────
+        // Extract payload from Option/Result struct: FieldPtr(field=1) + Load.
+        // For unwrap_or: tag check + branch, payload or default.
+        if !lir_args.is_empty() && args.len() >= 1 {
+            let is_unwrap = emit_name == "__option_unwrap" || emit_name == "__result_unwrap"
+                || emit_name == "gorget_option_unwrap"
+                || emit_name == "__result_unwrap_error"
+                || (emit_name.contains("Option__") && emit_name.ends_with("__unwrap"))
+                || (emit_name.contains("Result__") && emit_name.ends_with("__unwrap"));
+            let is_unwrap_or = emit_name == "__option_unwrap_or" || emit_name == "__result_unwrap_or"
+                || (emit_name.contains("Option__") && emit_name.ends_with("__unwrap_or"))
+                || (emit_name.contains("Result__") && emit_name.ends_with("__unwrap_or"));
+            let is_expect = emit_name == "__option_expect" || emit_name == "__result_expect"
+                || (emit_name.contains("Option__") && emit_name.ends_with("__expect"))
+                || (emit_name.contains("Result__") && emit_name.ends_with("__expect"));
+
+            if is_unwrap || is_unwrap_or || is_expect {
+                if let Some(d) = *dst {
+                    // Resolve the Option/Result struct from the arg's type.
+                    let arg_lir_ty = self.operand_lir_type(&args[0]);
+                    let opt_sid = match &arg_lir_ty {
+                        LirType::Struct(sid) | LirType::PtrTo(sid) => Some(*sid),
+                        _ => {
+                            if let Operand::Copy(place) | Operand::Move(place) = &args[0] {
+                                let idx = place.local.0 as usize;
+                                // Strategy 2: slot type
+                                let from_slot = if idx < self.local_to_slot.len() {
+                                    let slot = self.local_to_slot[idx];
+                                    match &self.lir_func.slots[slot.0 as usize].ty {
+                                        LirType::Struct(sid) => Some(*sid),
+                                        _ => None,
+                                    }
+                                } else { None };
+                                // Strategy 3: GIR type name → struct registry
+                                from_slot.or_else(|| {
+                                    if idx < self.gir_func.locals.len() {
+                                        let gir_ty = self.gir_func.locals[idx].type_id;
+                                        if let Some(GirType::Named(name)) = self.gir_types.get(gir_ty) {
+                                            self.struct_reg.lookup(name)
+                                        } else { None }
+                                    } else { None }
+                                })
+                            } else { None }
+                        }
+                    };
+                    // Determine payload field index and type
+                    let is_unwrap_err = emit_name.contains("unwrap_err")
+                        || emit_name.contains("unwrap_error");
+                    let payload_field: u32 = if is_unwrap_err { 2 } else { 1 };
+                    let payload_ty = opt_sid.and_then(|sid| {
+                        self.module_structs.get(sid.0 as usize)
+                            .and_then(|s| s.fields.get(payload_field as usize))
+                            .map(|(_, t)| t.clone())
+                    }).unwrap_or_else(|| {
+                        // Fallback: use destination local's LIR type
+                        let dst_gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        self.map_type(&dst_gir_ty)
+                    });
+                    let arg_ptr = lir_args[0];
+
+                    if let Some(sid) = opt_sid {
+
+                        if is_unwrap_or && lir_args.len() > 1 {
+                            // unwrap_or: tag check + branch
+                            let tag_val = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                                dst: tag_val, ptr: arg_ptr, ty: LirType::I32,
+                            });
+                            let zero = self.emit_i32_const(bb, 0);
+                            let is_some = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                                dst: is_some, op: CmpOp::Eq, lhs: tag_val, rhs: zero,
+                            });
+
+                            // Store default to temp slot for SSA threading
+                            let result_slot = self.lir_func.add_slot(payload_ty.clone(), None);
+                            let default_val = lir_args[1];
+                            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                                slot: result_slot, value: default_val, is_move: false,
+                            });
+
+                            let some_bb = self.lir_func.add_block();
+                            let merge_bb = self.lir_func.add_block();
+
+                            self.lir_func.block_mut(bb).terminator = Term::Branch {
+                                cond: is_some,
+                                then_block: some_bb, then_args: vec![],
+                                else_block: merge_bb, else_args: vec![],
+                            };
+
+                            // Some: extract payload, store to result slot
+                            let fptr = self.lir_func.next_value();
+                            self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
+                                dst: fptr, base: arg_ptr, struct_id: sid, field: payload_field,
+                            });
+                            let payload_val = self.lir_func.next_value();
+                            self.lir_func.block_mut(some_bb).insts.push(Inst::Load {
+                                dst: payload_val, ptr: fptr, ty: payload_ty.clone(),
+                            });
+                            self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+                                slot: result_slot, value: payload_val, is_move: false,
+                            });
+                            self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+
+                            // Merge: load result from slot
+                            let result = self.lir_func.next_value();
+                            self.lir_func.block_mut(merge_bb).insts.push(Inst::SlotLoad {
+                                dst: result, slot: result_slot, ty: payload_ty,
+                            });
+                            self.store_to_local(d, result, merge_bb);
+                            self.emit_post_call_zeros(args, merge_bb);
+                            return merge_bb;
+                        } else {
+                            // Plain unwrap/expect: just extract payload (no tag check)
+                            let fptr = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                dst: fptr, base: arg_ptr, struct_id: sid, field: payload_field,
+                            });
+                            let payload_val = self.lir_func.next_value();
+                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                                dst: payload_val, ptr: fptr, ty: payload_ty,
+                            });
+                            self.store_to_local(d, payload_val, bb);
+                            self.emit_post_call_zeros(args, bb);
+                            return bb;
+                        }
+                    } else {
+                        // Fallback: no StructId known. Load payload via raw pointer
+                        // arithmetic: tag is I32 at offset 0, payload at offset 8
+                        // (4 bytes tag + 4 bytes padding for 8-byte alignment).
+                        let payload_offset = if is_unwrap_err { 16i64 } else { 8i64 };
+                        let offset_val = self.emit_i64_const(bb, payload_offset);
+                        // Cast arg_ptr to i64 for pointer arithmetic
+                        let ptr_as_int = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
+                            dst: ptr_as_int, value: arg_ptr, to: LirType::I64,
+                        });
+                        let payload_addr_int = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Add {
+                            dst: payload_addr_int, ty: LirType::I64,
+                            lhs: ptr_as_int, rhs: offset_val,
+                            overflow: crate::lir::Overflow::Wrap,
+                        });
+                        let payload_addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
+                            dst: payload_addr, value: payload_addr_int, to: LirType::Ptr,
+                        });
+                        let payload_val = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            dst: payload_val, ptr: payload_addr, ty: payload_ty,
+                        });
+                        self.store_to_local(d, payload_val, bb);
+                        self.emit_post_call_zeros(args, bb);
+                        return bb;
+                    }
+                }
+            }
+        }
+
         // ── Tier 2b: Tag checks ──────────────────────────────────────────
         // __option_is_some, __option_is_none, *__is_some, *__is_ok, *__is_none, *__is_err
         // Read the tag field at offset 0 (I32) via FieldPtr + Load, then Cmp with 0.
@@ -2508,4 +2681,16 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+}
+
+/// Check if a GIR function name is an Option/Result unwrap/expect pseudo-function
+/// that should be intercepted before func_index lookup (these have no C implementation).
+fn is_unwrap_like_name(name: &str) -> bool {
+    name == "__option_unwrap" || name == "__result_unwrap"
+        || name == "__option_unwrap_or" || name == "__result_unwrap_or"
+        || name == "__result_unwrap_error"
+        || name == "gorget_option_unwrap"
+        || name == "__option_expect" || name == "__result_expect"
+        || (name.contains("Option__") && (name.ends_with("__unwrap") || name.ends_with("__unwrap_or") || name.ends_with("__expect")))
+        || (name.contains("Result__") && (name.ends_with("__unwrap") || name.ends_with("__unwrap_or") || name.ends_with("__expect")))
 }
