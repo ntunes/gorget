@@ -1294,11 +1294,8 @@ impl<'a> LoweringContext<'a> {
         let local_type = builder.local_type(local);
 
         // Case 1: Ptr(T) → clone inner.
-        // NOTE: we cannot move through the Ptr here (load + zero caller's slot)
-        // because the callee doesn't know if the caller still needs the argument
-        // after the call. The Ptr is a borrow — the caller owns the data.
-        // Eliminating this clone requires caller-side cooperation (Phase 2:
-        // caller marks the argument as moved after the call when it's last-use).
+        // Cannot move through Ptr: the callee doesn't know if the caller still
+        // needs the argument. Caller-side optimization is deferred to Phase 2.
         if let Some(inner) = self.pointee_type(local_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                 self.warn_implicit_clone(span, inner, reason);

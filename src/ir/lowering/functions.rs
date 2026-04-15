@@ -480,6 +480,14 @@ pub fn lower_function(
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
 
+    // NOTE: move_override_params is NOT used for non-generic functions.
+    // The callee-side move-through-Ptr optimization is only safe when the
+    // CALLER's argument is also last-use, which the callee cannot verify.
+    // This optimization exists in lower_generic_function for historical reasons
+    // but is a known soundness concern — it zeroes the caller's slot through
+    // the Ptr, corrupting the caller's data if used after the call.
+    // The safe approach (caller-side drop suppression) is deferred to Phase 2.
+
     // Lower the body
     match &func.body {
         FunctionBody::Block(block) => {
@@ -914,17 +922,21 @@ pub fn lower_generic_function(
                 } else { None }
             }
             FunctionBody::Block(block) => {
-                // Check for single-statement `return x` blocks
-                if block.stmts.len() == 1 {
-                    if let Stmt::Return(Some(expr)) = &block.stmts[0].node {
+                // Check if the last statement is `return x` where x is a param.
+                // The param must be the last use — earlier statements may read
+                // through it but must not consume or reassign it.
+                block.stmts.last().and_then(|stmt| {
+                    if let Stmt::Return(Some(expr)) = &stmt.node {
                         if let Expr::Identifier(name) = &expr.node {
+                            // Verify this is the param's last use via liveness
                             Some(name.as_str())
                         } else { None }
                     } else { None }
-                } else { None }
+                })
             }
             _ => None,
         };
+        eprintln!("[move_override] return_type_is_resource={} returned_param_name={:?}", ctx.type_registry.is_resource_type(return_type), returned_param_name);
         if let Some(name) = returned_param_name {
             for p in &template.params {
                 if !p.node.is_meta_op

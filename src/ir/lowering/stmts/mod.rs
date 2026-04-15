@@ -837,13 +837,9 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let src_type = builder.local_type(place.local);
-                        // Ptr(T) → clone the inner T (same as non-throws return path).
-                        // NOTE: cannot move through Ptr here — the callee doesn't
-                        // know if the caller still needs the argument after the call.
-                        // Caller-side last-use optimization is Phase 2.
-                        // Only applies to types that need cloning (resource types);
-                        // primitive Ptr(T) like Ptr(double) has no clone_fn and the
-                        // operand passes through untouched for enum_init.
+                        // Ptr(T) → clone the inner T.
+                        // Cannot move through Ptr here — the callee doesn't know
+                        // if the caller still needs the argument after the call.
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 ctx.warn_implicit_clone(expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
@@ -927,9 +923,6 @@ fn lower_return(
             if !did_clone_return {
                 // Ptr(T) → T auto-clone for return values: if the operand
                 // is Ptr(T) but the return type is T, auto-clone.
-                // NOTE: cannot move through Ptr here — the callee doesn't know
-                // if the caller still needs the argument. Clone is required.
-                // Caller-side last-use optimization is Phase 2.
                 if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     if p.projections.is_empty() {
                         let src_idx = p.local.0 as usize;
