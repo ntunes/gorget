@@ -11,7 +11,7 @@
 
 - **LIR value origin metadata — enable Store/SlotStore/Call lifts**: The C backend maintains 5 origin bitmaps (`str_lit_vals`, `null_vals`, `cstr_vals`, `ptr_pointee`, `func_addr_targets`) beyond type info. These track value provenance needed for ~37 emit-decision sites. The type metadata (`func.value_types`) is now shared; origin metadata remains backend-local. Fix: attach origin tags to LIR values (e.g. `StrLit` → string-literal flag, `NullPtr` → null flag, `FuncAddr` → FuncId). Unblocks lifting Store routing (~50 lines), SlotStore string/cstr coercion (~22 lines), and Call/CallPtr ABI coercion (~100 lines). [updated: 2026-04-14]
 
-- **Decompose emit_call_extern.rs (~2,100 lines)**: First batch of lifts done (tag checks, type casts, str_push/str_cat dispatch — see DONE.md). Remaining block-splitting lifts (nullable void→Option, cstr→Option, sentinel→Option, last_error→Result) written in `src/lir/lower/lifts.rs` but disabled — lifts write to slot via FieldPtr+Store in branch blocks, but the C backend assigns default-initialized (0/NULL) values to later-block variables. Fix: emit complete struct via single SlotStore, or fix C backend slot tracking across split blocks. Infrastructure in place. [updated: 2026-04-15]
+- **Decompose emit_call_extern.rs (~1,850 lines)**: Tier 1-3 lifts complete — ~490 lines of inline expansion removed. Remaining: HOF inlining (map/filter/each/fold ~590 lines), printf rewriting (~130 lines), out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-04-15]
 
 ## Medium
 
