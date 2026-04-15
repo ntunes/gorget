@@ -88,6 +88,37 @@ qemu-system-aarch64 \
 OVMF/AAVMF firmware is included with QEMU (`brew install qemu`) or
 available from the [EDK2 releases](https://github.com/tianocore/edk2/releases).
 
+**Creating a bootable disk image:**
+
+The build produces an `esp/` directory and a `.efi` binary next to the source
+file. For a single-file bootable image (easier for UTM, portable to USB
+drives), use `mtools` from the directory containing the `.efi`:
+
+```bash
+# Install mtools (one-time)
+brew install mtools    # macOS
+apt install mtools     # Linux
+
+# From the directory containing your .efi (e.g., demo/)
+cd demo/
+dd if=/dev/zero of=mandelbrot.img bs=1M count=33
+mformat -i mandelbrot.img -F ::
+mmd -i mandelbrot.img ::/EFI ::/EFI/BOOT
+mcopy -i mandelbrot.img mandelbrot.efi ::/EFI/BOOT/BOOTX64.EFI   # or BOOTAA64.EFI
+```
+
+Then boot from the image directly:
+
+```bash
+qemu-system-x86_64 -bios OVMF.fd -drive format=raw,file=demo/mandelbrot.img -m 128M
+```
+
+For UTM's preferred qcow2 format:
+
+```bash
+qemu-img convert -f raw -O qcow2 demo/mandelbrot.img demo/mandelbrot.qcow2
+```
+
 ## Framebuffer API (`gg.fb`)
 
 The `gg.fb` module provides pixel-level access to the UEFI framebuffer.
