@@ -49,8 +49,9 @@
   - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch (phi i64 vs i32), 1x conv_stdlib ptr vs i64, 1x shared_iterator_invalidation ptr vs GorgetArray, 1x print_trait_object struct init, 1x string_enum_variants i8 vs i64, 1x sqlite undefined ref
   - Remaining CRASH (40): 13x p2p (signal 11), 3x httpserver, 2x crypto, 3x drop/box (signal 6 — double free from ptr-slot free(stack_addr)), 2x leak (signal 6), toml_stringify, serializable, deserializable, socket_connect, sync_condvar, thread_mutex, test_hashset_all, test_set_string, etc.
   - Remaining FAIL (36): ~7x json/xml/serialize (int values read as 0 from enum payload — ptr-slot memcpy overflow), ~5x leak/stress_alloc (leaked=true), ~3x drop ordering, ~3x result combinators, ~3x process/socket, ~2x ecs (field reads 0), ~2x coroutine, ~11x others
-  - Root cause identified for remaining crashes/fails: **Ptr-typed LIR slots holding struct data** — `alloca ptr` (8 bytes) receives `memcpy(32+ bytes)`, overflowing stack. C backend is unaffected because C stack variables have implicit sizing. Fix needs to be in LIR slot typing or LIR lowering, not the backend.
-  - Double-free crashes (drop_raii, box_heap): `free(slot_addr)` frees the stack address instead of the heap pointer inside the slot. Needs `load ptr, ptr %slot` before `free`. Same ptr-slot issue.
+  - **Root cause: struct inter-field alignment mismatch** — non-union structs containing aggregate fields (e.g., `Option__Json = {i32, Json}`) get different layout in C vs LLVM. C pads i32 tag to 8 before Json (which has 8-byte alignment from its union), giving offset 8. LLVM puts Json at offset 4 (because `%Json = {i32, i32, [N x i8]}` has apparent alignment 4). Fix needs `computed_c_align` on StructDef so the LLVM backend can insert correct padding. Naive "all aggregates align to 8" breaks traits/vtables.
+  - **Double-free crashes** (drop_raii, box_heap): `free(slot_addr)` frees the stack address instead of the heap pointer. Ptr-typed slots need `load ptr` before `free`.
+  - **Ptr-typed LIR slots holding struct data**: GIR types `Ptr(Named("X"))` → `alloca ptr` (8 bytes) but receives struct memcpy. Fix in GIR: locals that hold copies should be typed as the struct, not as Ptr.
 
 ## Low
 
