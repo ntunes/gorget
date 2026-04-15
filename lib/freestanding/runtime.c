@@ -8,6 +8,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 
+/* MSVC/PE toolchain: the compiler references _fltused when floating-point
+ * code is present. In freestanding there's no CRT to provide it. */
+int _fltused = 0;
+
 /* ── libc stubs for freestanding ────────────────────────────────── */
 
 /* stderr/stdout — not real file pointers, just markers for fwrite stub */
