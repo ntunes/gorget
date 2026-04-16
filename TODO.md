@@ -40,18 +40,13 @@
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
-- **LLVM backend test results (2026-04-16, 815 tested / 913 total)**:
-  - PASS: 731 (89.7% of tested); up from 669 (80.5%) start of 2026-04-14
-  - FAIL: 39 (output mismatch — see categories below)
-  - CRASH: 36 (segfault/abort/timeout)
-  - BUILD_FAIL: 9 (LLC type mismatch / forward-ref / missing symbols)
-  - SKIP: 108 (C backend also fails — error programs, benches, etc.)
-  - Fixes applied 2026-04-16: computed_c_align on StructDef + c_alignof_lir_type(), inter-field padding in LLVM struct emission, byte-offset GEP for FieldPtr, Box free loads as LirType::Ptr
+- **LLVM backend test results (2026-04-16)**:
+  - Fixes applied 2026-04-16: computed_c_align on StructDef + c_alignof_lir_type(), inter-field padding in LLVM struct emission, byte-offset GEP for FieldPtr, Box free loads as LirType::Ptr, **Option/Result combinator inline handlers** (map/filter/and_then/or_else/or/flatten/unwrap_or_else/flat_map/map_err — previously fell through to non-existent extern call → garbage/0)
+  - Full test run: 728 PASS / 815 (89.3%), 32 FAIL (down from 39), 36 CRASH, ~9 BUILD_FAIL (10 more transient from artifact pollution). Combinator fix: 6/7 affected tests now PASS (test_option_all, test_option_chaining, option_result_combinators, test_result_all, test_result_advanced, coroutine_result_combinators). 1 has pre-existing linker error (test_result_chaining — missing Result__drop symbol).
+  - **Parsed array int-as-0** (still open): `json_parse("[7]")` → `"[0]"` but manual `Json.Int(7)` push → `"[7]"`. Not a struct-size or array-push issue — plain array-of-160-byte-enum tests pass. Specific to JSON parsing flow (multi-level sret chain). Also found: C backend sets `elem_drop`/`elem_clone` on collection constructors but LLVM backend doesn't — separate issue, doesn't cause the 0-read.
   - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, 1x conv_stdlib, 1x shared_iterator_invalidation, 1x print_trait_object, 1x string_enum_variants, 1x sqlite
-  - Remaining CRASH (36): 13x p2p (signal 11), 5x httpserver, 2x crypto, 2x leak (signal 6), others (sync_condvar, thread_mutex, test_hashset_all, test_set_string, serializable, deserializable, socket_connect, stress_shared, string_deep_callstack, coroutine_option_combinators)
-  - Remaining FAIL (39): ~8x option/result combinators (or_else/map return wrong values — closure dispatch returning garbage/0), ~4x json/xml (parsed array elements read as 0 — root cause unclear, manual push works), ~5x leak/stress_alloc, ~3x drop ordering, ~3x process, ~3x httpserver, ~13x others
-  - **Combinator bug**: Option.or_else/map/and_then return 0 or garbage. The inline CallExtern handler for combinators likely has wrong offset/type when extracting values from closure results. Affects ~8 FAIL tests.
-  - **Parsed array int-as-0**: json_parse("[7]") → "[0]" but manual Json.Int(7) push → "[7]" works. Traced through parse_number/parse_array/json_stringify — all offsets match (160 bytes, offset 8). Root cause still unknown.
+  - Remaining CRASH (36): 13x p2p (signal 11), 5x httpserver, 2x crypto, 2x leak (signal 6), others
+  - **LLVM elem_drop/elem_clone gap**: Collection constructors (`gorget_array_new`) don't set `elem_drop`/`elem_clone` function pointers in LLVM backend, unlike C backend. Causes incorrect cleanup/clone behavior for resource-typed collection elements. Needs same inline post-construction injection as C backend's `emit_call_extern.rs:1629`.
 
 ## Low
 

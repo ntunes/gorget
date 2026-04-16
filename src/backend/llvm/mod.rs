@@ -147,6 +147,63 @@ fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
     Some((elem, method))
 }
 
+/// Parse an Option/Result combinator name like `Option__int64_t__map` → ("Option__int64_t", "map").
+/// Returns None if the name is not a recognised Option/Result combinator.
+fn parse_option_result_combinator(name: &str) -> Option<(&str, &str)> {
+    const OPT_COMB: &[&str] = &[
+        "map", "filter", "and_then", "or_else", "unwrap_or_else", "flat_map", "or", "flatten", "zip",
+    ];
+    const RES_COMB: &[&str] = &[
+        "map", "map_err", "and_then", "or_else", "unwrap_err", "unwrap_error",
+    ];
+    if name.starts_with("Option__") {
+        let rest = name.strip_prefix("Option__")?;
+        let sep = rest.rfind("__")?;
+        let method = &rest[sep + 2..];
+        if OPT_COMB.contains(&method) || RES_COMB.contains(&method) {
+            return Some((&name[..name.len() - method.len() - 2], method));
+        }
+    }
+    if name.starts_with("Result__") {
+        let rest = name.strip_prefix("Result__")?;
+        let sep = rest.rfind("__")?;
+        let method = &rest[sep + 2..];
+        if RES_COMB.contains(&method) || OPT_COMB.contains(&method) {
+            return Some((&name[..name.len() - method.len() - 2], method));
+        }
+    }
+    None
+}
+
+/// Resolve the StructId for a type prefix (e.g., "Option__int64_t") → StructId.
+fn find_struct_by_prefix(prefix: &str, module: &LirModule) -> Option<StructId> {
+    module.structs.iter().enumerate()
+        .find(|(_, d)| d.name == prefix)
+        .map(|(i, _)| StructId(i as u32))
+}
+
+/// Convert a LirType to the monomorphized C name used in struct names (e.g., I64→"int64_t").
+fn lir_type_to_monomorphized(ty: &LirType, structs: &[StructDef]) -> String {
+    match ty {
+        LirType::I8 => "int8_t".to_string(),
+        LirType::I16 => "int16_t".to_string(),
+        LirType::I32 => "int32_t".to_string(),
+        LirType::I64 => "int64_t".to_string(),
+        LirType::U8 => "uint8_t".to_string(),
+        LirType::U16 => "uint16_t".to_string(),
+        LirType::U32 => "uint32_t".to_string(),
+        LirType::U64 => "uint64_t".to_string(),
+        LirType::F32 => "float".to_string(),
+        LirType::F64 => "double".to_string(),
+        LirType::Bool => "bool".to_string(),
+        LirType::Ptr | LirType::PtrTo(_) => "ptr".to_string(),
+        LirType::Struct(sid) => structs.get(sid.0 as usize)
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| format!("struct_{}", sid.0)),
+        LirType::Void => "void".to_string(),
+    }
+}
+
 /// Map a C element type name (from Vector__<elem>__method) to an LLVM type string and size.
 fn elem_c_to_llvm(elem: &str, module: &LirModule, snames: &HashMap<u32, String>) -> (String, usize) {
     match elem {
@@ -1045,6 +1102,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             // These are now CallClosure instructions, but ensure_extern may still register them.
             continue;
         }
+        // Skip Option/Result combinator methods (inlined at each call site)
+        if parse_option_result_combinator(&ext.name).is_some() {
+            continue;
+        }
         // Skip monomorphized parse methods (handled inline)
         if ext.name.ends_with("__parse") && (ext.name.starts_with("int") || ext.name.starts_with("uint")
             || ext.name == "double__parse" || ext.name == "float__parse" || ext.name == "bool__parse") {
@@ -1157,6 +1218,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     // Skip inline-expanded names — no extern declaration needed.
                     if name.starts_with("__callable_") || name.starts_with("__gorget_closure_call_")  {
                         // These are now CallClosure instructions, but ensure_extern may still register them.
+                        continue;
+                    }
+                    // Skip Option/Result combinator methods (inlined at each call site)
+                    if parse_option_result_combinator(&name).is_some() {
                         continue;
                     }
                     // Skip monomorphized parse methods
@@ -1376,6 +1441,8 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
 
     writeln!(out, "; -- intrinsics --").unwrap();
     writeln!(out, "declare void @llvm.trap() noreturn nounwind").unwrap();
+    writeln!(out, "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)").unwrap();
+    writeln!(out, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)").unwrap();
     if need_sadd_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64, i64)").unwrap(); }
     if need_ssub_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.ssub.with.overflow.i64(i64, i64)").unwrap(); }
     if need_smul_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.smul.with.overflow.i64(i64, i64)").unwrap(); }
@@ -1514,6 +1581,43 @@ fn emit_function(
                     }
                 }
                 _ => {}
+            }
+        }
+    }
+
+    // Fix Option/Result combinator return types: these produce alloca'd structs (PtrTo).
+    for block in &func.blocks {
+        for inst in &block.insts {
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                if let Some((type_prefix, method)) = parse_option_result_combinator(name) {
+                    // Result type is the Option/Result struct
+                    let result_sid = match method {
+                        "flatten" => {
+                            // flatten result is the inner Option type (payload of outer)
+                            find_struct_by_prefix(type_prefix, module).and_then(|sid| {
+                                let sdef = &module.structs[sid.0 as usize];
+                                sdef.fields.get(1).and_then(|(_, t)| match t {
+                                    LirType::Struct(inner) => Some(*inner),
+                                    _ => None,
+                                })
+                            }).or_else(|| find_struct_by_prefix(type_prefix, module))
+                        }
+                        "unwrap_or_else" => {
+                            // unwrap_or_else returns the payload, not the Option — use arg type
+                            find_struct_by_prefix(type_prefix, module).and_then(|sid| {
+                                let sdef = &module.structs[sid.0 as usize];
+                                sdef.fields.get(1).and_then(|(_, t)| match t {
+                                    LirType::Struct(inner) => Some(*inner),
+                                    _ => None,
+                                })
+                            })
+                        }
+                        _ => find_struct_by_prefix(type_prefix, module),
+                    };
+                    if let Some(sid) = result_sid {
+                        val_types[d.0 as usize] = Some(LirType::PtrTo(sid));
+                    }
+                }
             }
         }
     }
@@ -1701,8 +1805,25 @@ fn emit_function(
                             }
                         } else { false };
 
+                        // Detect Option/Result combinator calls that generate branches
+                        let is_opt_combinator = parse_option_result_combinator(name).is_some()
+                            && dst.is_some() && !args.is_empty();
+                        let opt_combinator_has_branch = if is_opt_combinator {
+                            let (_, method) = parse_option_result_combinator(name).unwrap();
+                            // These methods need if/then/else branches:
+                            matches!(method, "map" | "filter" | "and_then" | "or_else"
+                                | "map_err" | "flat_map" | "unwrap_or_else" | "flatten")
+                        } else { false };
+
                         // Count ALL counter increments to stay in sync with emission
-                        if vector_hof_needs_inline && !args.is_empty() {
+                        if is_opt_combinator {
+                            if opt_combinator_has_branch {
+                                // Branch-based combinators: emit labels and change exit label
+                                label = format!("comb.{bid}.{counter}.done");
+                            }
+                            counter += 1;
+                        }
+                        else if vector_hof_needs_inline && !args.is_empty() {
                             label = format!("hof.{bid}.{counter}.done");
                             counter += 1;
                         }
@@ -4011,6 +4132,477 @@ fn emit_inst(
                     } else {
                         writeln!(out, "  %{payload_val} = load {payload_ty}, ptr %{payload_ptr}").unwrap();
                         writeln!(out, "  %v{} = select i1 %{cmp}, {payload_ty} %{payload_val}, {payload_ty} %v{}", d.0, args[1].0).unwrap();
+                    }
+                }
+                return;
+            }
+
+            // ── Option/Result combinator inline expansion ──
+            // map, filter, and_then, or_else, or, flatten, unwrap_or_else, flat_map, map_err
+            if let Some((type_prefix, method)) = parse_option_result_combinator(name) {
+                if let Some(d) = dst {
+                    let uid = *trap_counter;
+                    *trap_counter += 1;
+                    let pfx = format!("comb.{block_id}.{uid}");
+
+                    // Resolve source Option/Result struct
+                    let src_sid = find_struct_by_prefix(type_prefix, module);
+                    let src_sdef = src_sid.map(|s| &module.structs[s.0 as usize]);
+
+                    // Get payload type from field 1 (ok/Some) and field 2 (err/None) if present
+                    let payload_ty = src_sdef.and_then(|d| d.fields.get(1))
+                        .map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
+                    let payload_llvm = llvm_type_full(&payload_ty, snames);
+                    let payload_off = lir_payload_offset(&payload_ty);
+                    let _payload_is_agg = payload_llvm.starts_with('%');
+
+                    let err_ty = src_sdef.and_then(|d| d.fields.get(2))
+                        .map(|(_, t)| t.clone());
+                    let _err_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames))
+                        .unwrap_or_else(|| "i64".to_string());
+                    let err_off = err_ty.as_ref().map(|_t| {
+                        let ok_size = sizeof_lir_type(&payload_ty, &module.structs, snames);
+                        let raw = 8 + ok_size; // tag(4) + pad(4) + ok payload
+                        (raw + 7) & !7 // align to 8
+                    }).unwrap_or(8);
+
+                    // Resolve closure (args[1]) if method needs one
+                    let needs_closure = matches!(method, "map" | "filter" | "and_then"
+                        | "or_else" | "unwrap_or_else" | "flat_map" | "map_err");
+                    let closure_info = if needs_closure && args.len() >= 2 {
+                        resolve_closure_call_fn(args[1], val_types, module)
+                    } else { None };
+
+                    // Determine the result struct size for alloca.
+                    // For most combinators, result type == source type.
+                    // For map/map_err, it may differ (cross-type).
+                    let result_sid = match method {
+                        "map" => {
+                            // Result type wraps the closure's return type
+                            closure_info.as_ref().and_then(|(_, ret_ty, _)| {
+                                // Build target name: Option__<ret_monomorphized> or Result__<ok_ret>__<err>
+                                let _ret_llvm = llvm_type_full(ret_ty, snames);
+                                let ret_mono = lir_type_to_monomorphized(ret_ty, &module.structs);
+                                let target = if name.starts_with("Result__") {
+                                    // Keep err type from source
+                                    let err_mono = src_sdef.and_then(|d| d.fields.get(2))
+                                        .map(|(_, t)| lir_type_to_monomorphized(t, &module.structs))
+                                        .unwrap_or_else(|| "int64_t".to_string());
+                                    format!("Result__{ret_mono}__{err_mono}")
+                                } else {
+                                    format!("Option__{ret_mono}")
+                                };
+                                find_struct_by_prefix(&target, module)
+                                    .or(src_sid) // fallback to source type for same-type map
+                            }).or(src_sid)
+                        }
+                        "flatten" => {
+                            // Flatten: result is the inner Option/Result (payload type)
+                            match &payload_ty {
+                                LirType::Struct(inner_sid) => Some(*inner_sid),
+                                _ => src_sid,
+                            }
+                        }
+                        _ => src_sid,
+                    };
+                    let result_size = result_sid.map(|s| {
+                        sizeof_lir_type(&LirType::Struct(s), &module.structs, snames)
+                    }).unwrap_or(16);
+                    let _result_llvm = result_sid.map(|s| llvm_type_full(&LirType::Struct(s), snames))
+                        .unwrap_or_else(|| "%Option__int64_t".to_string());
+
+                    // Result payload type (may differ from source for cross-type map)
+                    let result_payload_ty = result_sid.and_then(|s| module.structs[s.0 as usize].fields.get(1))
+                        .map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
+                    let _result_payload_llvm = llvm_type_full(&result_payload_ty, snames);
+                    let result_payload_off = lir_payload_offset(&result_payload_ty);
+
+                    // Alloca result
+                    writeln!(out, "  %v{} = alloca i8, i64 {result_size}", d.0).unwrap();
+
+                    match method {
+                        "or" => {
+                            // or(self, other): if self is Some/Ok, return self; else return other.
+                            // args[0] = self ptr, args[1] = other ptr/value
+                            writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
+                            writeln!(out, "  %{pfx}.tag = load i32, ptr %{pfx}.tagp").unwrap();
+                            writeln!(out, "  %{pfx}.is_some = icmp eq i32 %{pfx}.tag, 0").unwrap();
+                            // Select source: if Some → self, else → other
+                            let other_ptr = if args.len() > 1 {
+                                format!("%v{}", args[1].0)
+                            } else {
+                                format!("%v{}", args[0].0) // shouldn't happen
+                            };
+                            writeln!(out, "  %{pfx}.src = select i1 %{pfx}.is_some, ptr %v{}, ptr {other_ptr}", args[0].0).unwrap();
+                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr %{pfx}.src, i64 {result_size}, i1 false)", d.0).unwrap();
+                        }
+                        "flatten" => {
+                            // flatten(self): if self is Some(inner), return inner; else return None/Error
+                            // The payload IS the inner Option/Result struct.
+                            writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
+                            writeln!(out, "  %{pfx}.tag = load i32, ptr %{pfx}.tagp").unwrap();
+                            writeln!(out, "  %{pfx}.is_some = icmp eq i32 %{pfx}.tag, 0").unwrap();
+                            // If Some, copy the inner Option from payload offset
+                            writeln!(out, "  %{pfx}.inner = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
+                            // If None, store tag=1 (None) into result
+                            // Use a branch to handle this
+                            let then_l = format!("{pfx}.some");
+                            let else_l = format!("{pfx}.none");
+                            let done_l = format!("{pfx}.done");
+                            writeln!(out, "  br i1 %{pfx}.is_some, label %{then_l}, label %{else_l}").unwrap();
+                            writeln!(out, "{then_l}:").unwrap();
+                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr %{pfx}.inner, i64 {result_size}, i1 false)", d.0).unwrap();
+                            writeln!(out, "  br label %{done_l}").unwrap();
+                            writeln!(out, "{else_l}:").unwrap();
+                            // Zero the result and set tag = 1
+                            writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                            writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                            writeln!(out, "  br label %{done_l}").unwrap();
+                            writeln!(out, "{done_l}:").unwrap();
+                            *current_label = done_l;
+                        }
+                        "map" | "filter" | "and_then" | "or_else" | "flat_map"
+                        | "unwrap_or_else" | "map_err" => {
+                            // All branch-based combinators:
+                            // 1. Load tag
+                            // 2. Branch on tag
+                            // 3. Call closure in appropriate branch
+                            // 4. Store result
+                            writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
+                            writeln!(out, "  %{pfx}.tag = load i32, ptr %{pfx}.tagp").unwrap();
+                            writeln!(out, "  %{pfx}.is_some = icmp eq i32 %{pfx}.tag, 0").unwrap();
+
+                            let then_l = format!("{pfx}.then");
+                            let else_l = format!("{pfx}.else");
+                            let done_l = format!("{pfx}.done");
+                            writeln!(out, "  br i1 %{pfx}.is_some, label %{then_l}, label %{else_l}").unwrap();
+
+                            if let Some((ref call_fn, ref ret_ty, ref params_are_ptr)) = closure_info {
+                                let ret_llvm_ty = llvm_type_full(ret_ty, snames);
+                                let ret_is_agg = ret_llvm_ty.starts_with('%');
+                                let ret_sret = ret_is_agg && !is_small_aggregate(ret_ty, &module.structs);
+                                let ret_small_agg = ret_is_agg && is_small_aggregate(ret_ty, &module.structs);
+                                let param_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
+
+                                // Helper closure: emit a closure call with one argument at a given pointer.
+                                // Returns the name of the value/alloca holding the result.
+                                let emit_closure_call = |out: &mut String, label: &str, arg_ptr: &str| -> String {
+                                    if ret_sret {
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        if param_by_ptr {
+                                            writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm_ty}) %{pfx}.{label}.tmp, ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.arg = load {payload_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm_ty}) %{pfx}.{label}.tmp, ptr %v{}, {payload_llvm} %{pfx}.{label}.arg)", args[1].0).unwrap();
+                                        }
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else if ret_small_agg {
+                                        if param_by_ptr {
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.arg = load {payload_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, {payload_llvm} %{pfx}.{label}.arg)", args[1].0).unwrap();
+                                        }
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        writeln!(out, "  store {ret_llvm_ty} %{pfx}.{label}.rv, ptr %{pfx}.{label}.tmp").unwrap();
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else {
+                                        if param_by_ptr {
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.arg = load {payload_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, {payload_llvm} %{pfx}.{label}.arg)", args[1].0).unwrap();
+                                        }
+                                        format!("%{pfx}.{label}.rv")
+                                    }
+                                };
+
+                                // Helper closure: emit a closure call with err payload.
+                                let emit_err_closure_call = |out: &mut String, label: &str, arg_ptr: &str| -> String {
+                                    let err_param_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames))
+                                        .unwrap_or_else(|| "i64".to_string());
+                                    let err_param_is_agg = err_param_llvm.starts_with('%');
+                                    let err_param_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
+                                    if ret_sret {
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        if err_param_by_ptr || err_param_is_agg {
+                                            writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm_ty}) %{pfx}.{label}.tmp, ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.earg = load {err_param_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm_ty}) %{pfx}.{label}.tmp, ptr %v{}, {err_param_llvm} %{pfx}.{label}.earg)", args[1].0).unwrap();
+                                        }
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else if ret_small_agg {
+                                        if err_param_by_ptr || err_param_is_agg {
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.earg = load {err_param_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, {err_param_llvm} %{pfx}.{label}.earg)", args[1].0).unwrap();
+                                        }
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        writeln!(out, "  store {ret_llvm_ty} %{pfx}.{label}.rv, ptr %{pfx}.{label}.tmp").unwrap();
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else {
+                                        if err_param_by_ptr || err_param_is_agg {
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, ptr {arg_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.{label}.earg = load {err_param_llvm}, ptr {arg_ptr}").unwrap();
+                                            writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{}, {err_param_llvm} %{pfx}.{label}.earg)", args[1].0).unwrap();
+                                        }
+                                        format!("%{pfx}.{label}.rv")
+                                    }
+                                };
+
+                                // Helper closure: emit a closure call with no payload arg (Option or_else with no err).
+                                let emit_closure_call_no_arg = |out: &mut String, label: &str| -> String {
+                                    if ret_sret {
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        writeln!(out, "  call void @{call_fn}(ptr sret({ret_llvm_ty}) %{pfx}.{label}.tmp, ptr %v{})", args[1].0).unwrap();
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else if ret_small_agg {
+                                        writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{})", args[1].0).unwrap();
+                                        writeln!(out, "  %{pfx}.{label}.tmp = alloca {ret_llvm_ty}").unwrap();
+                                        writeln!(out, "  store {ret_llvm_ty} %{pfx}.{label}.rv, ptr %{pfx}.{label}.tmp").unwrap();
+                                        format!("%{pfx}.{label}.tmp")
+                                    } else {
+                                        writeln!(out, "  %{pfx}.{label}.rv = call {ret_llvm_ty} @{call_fn}(ptr %v{})", args[1].0).unwrap();
+                                        format!("%{pfx}.{label}.rv")
+                                    }
+                                };
+
+                                match method {
+                                    "map" => {
+                                        // Some branch: call closure on payload, wrap result
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        let ok_ptr = format!("%{pfx}.ok_ptr");
+                                        writeln!(out, "  {ok_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
+                                        let call_result = emit_closure_call(out, "map", &ok_ptr);
+                                        // Store tag=0 and payload into result
+                                        writeln!(out, "  store i32 0, ptr %v{}", d.0).unwrap();
+                                        let rp = format!("%{pfx}.rpay");
+                                        writeln!(out, "  {rp} = getelementptr i8, ptr %v{}, i64 {result_payload_off}", d.0).unwrap();
+                                        if ret_is_agg {
+                                            let ret_size = sizeof_lir_type(ret_ty, &module.structs, snames);
+                                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr {rp}, ptr {call_result}, i64 {ret_size}, i1 false)").unwrap();
+                                        } else {
+                                            writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr {rp}").unwrap();
+                                        }
+                                        // Copy error payload for Result types
+                                        if name.starts_with("Result__") {
+                                            // Not needed — on the Some/Ok branch there's no error to copy
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // None branch: tag=1, copy error for Result
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                            // Copy error payload from source
+                                            let src_err = format!("%{pfx}.src_err");
+                                            let dst_err = format!("%{pfx}.dst_err");
+                                            // Compute result error offset (may differ from source)
+                                            let result_err_off = result_sid.and_then(|s| {
+                                                let rdef = &module.structs[s.0 as usize];
+                                                rdef.fields.get(1).map(|(_, rpay)| {
+                                                    let rpay_size = sizeof_lir_type(rpay, &module.structs, snames);
+                                                    let raw = 8 + rpay_size;
+                                                    (raw + 7) & !7
+                                                })
+                                            }).unwrap_or(err_off);
+                                            let err_size = err_ty.as_ref().map(|t| sizeof_lir_type(t, &module.structs, snames)).unwrap_or(8);
+                                            writeln!(out, "  {src_err} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
+                                            writeln!(out, "  {dst_err} = getelementptr i8, ptr %v{}, i64 {result_err_off}", d.0).unwrap();
+                                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr {dst_err}, ptr {src_err}, i64 {err_size}, i1 false)").unwrap();
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    "filter" => {
+                                        // Some branch: call predicate closure on payload
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        let ok_ptr = format!("%{pfx}.ok_ptr");
+                                        writeln!(out, "  {ok_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
+                                        // Predicate returns bool (i1)
+                                        if param_by_ptr {
+                                            writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr {ok_ptr})", args[1].0).unwrap();
+                                        } else {
+                                            writeln!(out, "  %{pfx}.farg = load {payload_llvm}, ptr {ok_ptr}").unwrap();
+                                            writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {payload_llvm} %{pfx}.farg)", args[1].0).unwrap();
+                                        }
+                                        // If predicate true: copy source to result; else: tag=1 (None)
+                                        let keep_l = format!("{pfx}.keep");
+                                        let drop_l = format!("{pfx}.drop");
+                                        writeln!(out, "  br i1 %{pfx}.pred, label %{keep_l}, label %{drop_l}").unwrap();
+                                        writeln!(out, "{keep_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr %v{}, i64 {result_size}, i1 false)", d.0, args[0].0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+                                        writeln!(out, "{drop_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // None branch: tag=1
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    "and_then" | "flat_map" => {
+                                        // Some branch: call closure on payload, result IS the full Option/Result
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        let ok_ptr = format!("%{pfx}.ok_ptr");
+                                        writeln!(out, "  {ok_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
+                                        let call_result = emit_closure_call(out, "at", &ok_ptr);
+                                        // Copy closure result to dest (it's already a full Option/Result)
+                                        writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {call_result}, i64 {result_size}, i1 false)", d.0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // None/Error branch: propagate None/Error
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                            let err_size = err_ty.as_ref().map(|t| sizeof_lir_type(t, &module.structs, snames)).unwrap_or(8);
+                                            let result_err_off = result_sid.and_then(|s| {
+                                                let rdef = &module.structs[s.0 as usize];
+                                                rdef.fields.get(1).map(|(_, rpay)| {
+                                                    let rpay_size = sizeof_lir_type(rpay, &module.structs, snames);
+                                                    let raw = 8 + rpay_size;
+                                                    (raw + 7) & !7
+                                                })
+                                            }).unwrap_or(err_off);
+                                            writeln!(out, "  %{pfx}.src_err2 = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
+                                            writeln!(out, "  %{pfx}.dst_err2 = getelementptr i8, ptr %v{}, i64 {result_err_off}", d.0).unwrap();
+                                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %{pfx}.dst_err2, ptr %{pfx}.src_err2, i64 {err_size}, i1 false)").unwrap();
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    "or_else" => {
+                                        // Some/Ok branch: copy self to result
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr %v{}, i64 {result_size}, i1 false)", d.0, args[0].0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // None/Error branch: call closure
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                            // Result or_else: pass error payload to closure
+                                            let err_ptr_name = format!("%{pfx}.err_ptr");
+                                            writeln!(out, "  {err_ptr_name} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
+                                            let call_result = emit_err_closure_call(out, "oe", &err_ptr_name);
+                                            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {call_result}, i64 {result_size}, i1 false)", d.0).unwrap();
+                                        } else {
+                                            // Option or_else: closure takes no arg
+                                            let call_result = emit_closure_call_no_arg(out, "oe");
+                                            if ret_is_agg {
+                                                writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {call_result}, i64 {result_size}, i1 false)", d.0).unwrap();
+                                            } else {
+                                                // Scalar — must construct Option struct
+                                                writeln!(out, "  store i32 0, ptr %v{}", d.0).unwrap();
+                                                let rp = format!("%{pfx}.oe_rpay");
+                                                writeln!(out, "  {rp} = getelementptr i8, ptr %v{}, i64 {result_payload_off}", d.0).unwrap();
+                                                writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr {rp}").unwrap();
+                                            }
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    "unwrap_or_else" => {
+                                        // Some/Ok branch: load payload
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        let ok_ptr = format!("%{pfx}.ok_ptr");
+                                        writeln!(out, "  {ok_ptr} = getelementptr i8, ptr %v{}, i64 {payload_off}", args[0].0).unwrap();
+                                        // Copy payload to result (unwrap_or_else returns the payload, not Option)
+                                        let pay_size = sizeof_lir_type(&payload_ty, &module.structs, snames);
+                                        writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {ok_ptr}, i64 {pay_size}, i1 false)", d.0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // None/Error branch: call closure
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                            let err_ptr_name = format!("%{pfx}.err_ptr2");
+                                            writeln!(out, "  {err_ptr_name} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
+                                            let call_result = emit_err_closure_call(out, "uoe", &err_ptr_name);
+                                            if ret_is_agg {
+                                                writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {call_result}, i64 {pay_size}, i1 false)", d.0).unwrap();
+                                            } else {
+                                                writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr %v{}", d.0).unwrap();
+                                            }
+                                        } else {
+                                            let call_result = emit_closure_call_no_arg(out, "uoe");
+                                            if ret_is_agg {
+                                                writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr {call_result}, i64 {pay_size}, i1 false)", d.0).unwrap();
+                                            } else {
+                                                writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr %v{}", d.0).unwrap();
+                                            }
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    "map_err" => {
+                                        // Ok branch: copy self to result
+                                        writeln!(out, "{then_l}:").unwrap();
+                                        writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %v{}, ptr %v{}, i64 {result_size}, i1 false)", d.0, args[0].0).unwrap();
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        // Error branch: call closure on error, wrap in new Result
+                                        writeln!(out, "{else_l}:").unwrap();
+                                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                                        if err_ty.is_some() {
+                                            let err_ptr_name = format!("%{pfx}.me_err_ptr");
+                                            writeln!(out, "  {err_ptr_name} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
+                                            let call_result = emit_err_closure_call(out, "me", &err_ptr_name);
+                                            let result_err_off = result_sid.and_then(|s| {
+                                                let rdef = &module.structs[s.0 as usize];
+                                                rdef.fields.get(1).map(|(_, rpay)| {
+                                                    let rpay_size = sizeof_lir_type(rpay, &module.structs, snames);
+                                                    let raw = 8 + rpay_size;
+                                                    (raw + 7) & !7
+                                                })
+                                            }).unwrap_or(err_off);
+                                            let new_err_size = sizeof_lir_type(ret_ty, &module.structs, snames);
+                                            writeln!(out, "  %{pfx}.me_dst = getelementptr i8, ptr %v{}, i64 {result_err_off}", d.0).unwrap();
+                                            if ret_is_agg {
+                                                writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %{pfx}.me_dst, ptr {call_result}, i64 {new_err_size}, i1 false)").unwrap();
+                                            } else {
+                                                writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr %{pfx}.me_dst").unwrap();
+                                            }
+                                        }
+                                        writeln!(out, "  br label %{done_l}").unwrap();
+
+                                        writeln!(out, "{done_l}:").unwrap();
+                                        *current_label = done_l;
+                                    }
+                                    _ => unreachable!("unhandled combinator method: {method}"),
+                                }
+                            } else {
+                                // Closure not resolved — emit a warning and zero the result
+                                writeln!(out, "{then_l}:").unwrap();
+                                writeln!(out, "  ; WARNING: could not resolve closure for combinator {name}").unwrap();
+                                writeln!(out, "  br label %{done_l}").unwrap();
+                                writeln!(out, "{else_l}:").unwrap();
+                                writeln!(out, "  br label %{done_l}").unwrap();
+                                writeln!(out, "{done_l}:").unwrap();
+                                *current_label = done_l;
+                                writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                            }
+                        }
+                        _ => {
+                            writeln!(out, "  ; TODO: combinator {method} for {name}").unwrap();
+                            writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
+                        }
                     }
                 }
                 return;
