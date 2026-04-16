@@ -3024,7 +3024,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_pass_by_ptr {
+                                if elem_by_ptr {
                                     writeln!(out, "  call void @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -3050,7 +3050,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_pass_by_ptr {
+                                if elem_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -3255,7 +3255,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_pass_by_ptr {
+                                if elem_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
@@ -3289,7 +3289,7 @@ fn emit_inst(
                                 writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
                                 writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
                                 writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_pass_by_ptr {
+                                if elem_by_ptr {
                                     writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
                                 } else {
                                     writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
