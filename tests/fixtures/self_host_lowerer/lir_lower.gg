@@ -658,6 +658,19 @@ String map_runtime_name(String name):
             return "gorget_array_swap"
         elif method == "index_of":
             return "gorget_array_index_of"
+        # Option/Result methods on scalar-prefixed types
+        elif method == "is_none" or method == "is_some":
+            return "__option_" + method
+        elif method == "is_ok" or method == "is_error" or method == "is_err":
+            return "__result_" + method
+        elif method == "unwrap" or method == "expect":
+            return "__option_" + method
+        elif method == "unwrap_error" or method == "unwrap_err":
+            return "__result_unwrap_error"
+        elif method == "map" or method == "filter" or method == "and_then" or method == "or_else":
+            return "__option_" + method
+        elif method == "or":
+            return "__option_or"
 
     # Option combinator methods: Some__map, Some__filter, etc.
     if name.starts_with("Some__") or name.starts_with("None__"):
