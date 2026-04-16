@@ -577,6 +577,26 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             SpannedExpr callee = *callee_box
             match callee.expr:
                 case EIdentifier(fname):
+                    # Check if fname is a local variable (callable parameter or closure).
+                    # If so, dispatch through closure protocol instead of direct call.
+                    # Skip if fname is a known function (fn_sigs) or redirect target.
+                    if ctx.named_locals.contains(fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
+                        int callable_local = ctx.named_locals.get(fname).unwrap()
+                        # Lower args
+                        Vector[Operand] cl_args = []
+                        cl_args.push(OpCopy(callable_local))  # closure/callable as first arg
+                        int cai = 0
+                        while cai < args.len():
+                            SpannedExpr carg = args.get(cai).unwrap()
+                            int cval = lower_expr(&ctx, carg, &gmod)
+                            cl_args.push(OpCopy(cval))
+                            cai += 1
+                        # Emit as __callable_N (codegen handles this as void*[2] dispatch)
+                        int arity = args.len()
+                        String cl_call = "__callable_" + int_to_str(arity)
+                        int cl_dst = add_local(&ctx, I64_TYPE, NO_NAME)
+                        emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
+                        return cl_dst
                     return lower_call(&ctx, &fname, &args, &targs, &gmod)
                 case EFieldAccess(_, method_name):
                     # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
