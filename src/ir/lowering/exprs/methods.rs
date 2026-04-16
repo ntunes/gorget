@@ -1071,7 +1071,15 @@ pub(super) fn lower_method_call(
             return recv;
         }
 
-        let mangled = format!("{type_name}__{method_name}");
+        // Route overloaded methods to distinct runtime functions based on arg count.
+        // split(sep) → GorgetString__split (2-arg), split(sep, limit) → GorgetString__splitn (3-arg)
+        // replace(old, new) → GorgetString__replace, replace(old, new, limit) → GorgetString__replacen
+        let effective_method = match (type_name.as_str(), method_name, args.len()) {
+            ("GorgetString", "split", 2) => "splitn",
+            ("GorgetString", "replace", 3) => "replacen",
+            _ => method_name,
+        };
+        let mangled = format!("{type_name}__{effective_method}");
 
         // Save receiver local for !self post-call MoveZero (before recv is consumed)
         let recv_local_for_move_zero = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {

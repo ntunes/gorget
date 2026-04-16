@@ -18,7 +18,7 @@ void main():
     int i = 0
     while i < keys.len():
         String key = keys[i]
-        if groups.has(key):
+        if groups.contains(key):
             Vector[int] existing = groups.get(key).unwrap()
             existing.push(i)
             groups.set(key, existing)

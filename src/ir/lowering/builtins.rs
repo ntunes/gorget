@@ -273,8 +273,6 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_map_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: key_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "contains", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "has", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_param, return_type: ret_bool },
-        BuiltinMethodDecl { name: "contains_key", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_param, return_type: ret_bool },
-        BuiltinMethodDecl { name: "has_key", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_map_len"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "is_empty", runtime_callee: Some("gorget_map_is_empty"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_map_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: no_params, return_type: ret_void },

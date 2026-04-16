@@ -188,6 +188,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_str_removeprefix" | "gorget_str_removesuffix" => sig(vec![s(), s()], s(), _s2()),
         "gorget_str_to_upper" | "gorget_str_to_lower" => sig(vec![s()], g(), _s1()),
         "gorget_str_replace" => sig(vec![s(), s(), s()], g(), _s3()),
+        "gorget_str_replacen" => sig(vec![s(), s(), s(), LirType::I64], g(), vec![GorgetString, GorgetString, GorgetString, Scalar]),
         "gorget_str_repeat" => sig(vec![s(), LirType::I64], g(), _si()),
         "gorget_str_pad_left" | "gorget_str_pad_right" => sig(vec![s(), LirType::I64, s()], g(), _ssi()),
         "gorget_str_is_alpha" | "gorget_str_is_digit" | "gorget_str_is_alphanumeric"
@@ -196,6 +197,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
             sig(vec![s()], LirType::Bool, _s1())
         }
         "gorget_str_split" => sig(vec![s(), s()], arr_ty(), _s2()),
+        "gorget_str_splitn" => sig(vec![s(), s(), LirType::I64], arr_ty(), vec![GorgetString, GorgetString, Scalar]),
+        "gorget_str_lines" => sig(vec![s()], arr_ty(), _s1()),
         "gorget_str_join" => sig(vec![s(), arr_ty()], g(), vec![GorgetString, ByValue]),
         "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_chars" => {
             sig(vec![s()], arr_ty(), _s1())
@@ -593,8 +596,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             | "update" | "get_or" | "get_or_put" => return None,
             // Dict.new() needs gorget_dict_new (ordered); all other methods use gorget_map_*
             "new" if name.starts_with("Dict__") => return Some("gorget_dict_new".into()),
-            "has" => return Some("gorget_map_contains".into()),
             "set" => return Some("gorget_map_put".into()),
+            "has" | "has_key" | "contains_key" => return Some("gorget_map_contains".into()),
             _ => return Some(format!("gorget_map_{method}")),
         }
     }
@@ -605,10 +608,10 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         let method = name.rsplit("__").next()?;
         match method {
             "filter" | "fold" | "each" | "any" | "all" | "map"
-            | "is_subset" | "is_superset"
+            | "is_subset" | "is_superset" | "is_disjoint"
             | "union" | "intersection" | "difference" | "symmetric_difference" => return None,
-            "has" => return Some("gorget_set_contains".into()),
             "insert" => return Some("gorget_set_add".into()),
+            "has" => return Some("gorget_set_contains".into()),
             // Set.new() needs gorget_ordered_set_new (ordered); HashSet uses unordered.
             "new" if name.starts_with("Set__") => return Some("gorget_ordered_set_new".into()),
             "new_str" if name.starts_with("Set__") => return Some("gorget_ordered_set_new_str".into()),
@@ -622,6 +625,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         // Fixup: these GIR method names don't match runtime function names.
         return Some(match mapped.as_str() {
             "gorget_str_substring" => "gorget_str_slice".into(),
+            "gorget_str_trim_left" => "gorget_str_lstrip".into(),
+            "gorget_str_trim_right" => "gorget_str_rstrip".into(),
             _ => mapped,
         });
     }

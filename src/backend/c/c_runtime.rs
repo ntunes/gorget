@@ -2476,6 +2476,34 @@ static inline GorgetString gorget_str_replace(Str s, Str old, Str new_s) {
     return (Str){ .data = out, .cap = cap, .len = (size_t)(dst - out), .alloc = al };
 }
 
+// Forward declaration for Str-aware append (defined below in string builder section)
+static inline void gorget_string_append_str(GorgetString* s, Str rhs);
+
+// replace with limit: 0 = all, >0 = at most N replacements
+static inline GorgetString gorget_str_replacen(Str s, Str old, Str new_s, int64_t limit) {
+    if (old.len == 0 || limit <= 0) return gorget_str_replace(s, old, new_s);
+    // Build result incrementally with limited replacements
+    GorgetString result = gorget_string_with_capacity(s.len + 16);
+    const char* p = (const char*)s.data;
+    size_t remaining = s.len;
+    int64_t replaced = 0;
+    while (remaining >= old.len && replaced < limit) {
+        const char* found = gorget_memmem(p, remaining, (const char*)old.data, old.len);
+        if (!found) break;
+        size_t chunk = (size_t)(found - p);
+        Str before = { .data = p, .cap = 0, .len = chunk, .alloc = NULL };
+        gorget_string_append_str(&result, before);
+        gorget_string_append_str(&result, new_s);
+        size_t skip = chunk + old.len;
+        p += skip;
+        remaining -= skip;
+        replaced++;
+    }
+    Str rest = { .data = p, .cap = 0, .len = remaining, .alloc = NULL };
+    gorget_string_append_str(&result, rest);
+    return result;
+}
+
 static inline GorgetString gorget_str_repeat(Str s, int64_t n) {
     GorgetAllocator* al = __gorget_current_alloc;
     if (n <= 0 || s.len == 0) return GORGET_EMPTY_STR;
@@ -5080,7 +5108,7 @@ static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t sta
     return result;
 }
 
-static inline GorgetArray gorget_str_split(Str s, Str delim) {
+static inline GorgetArray gorget_str_split_impl(Str s, Str delim, int64_t limit) {
     GorgetArray arr = gorget_array_new(sizeof(Str));
     // Elements are owned Strings — set drop/clone so the array manages them.
     arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
@@ -5089,18 +5117,32 @@ static inline GorgetArray gorget_str_split(Str s, Str delim) {
     if (delim.len == 0) {
         // Split into individual codepoints
         size_t pos = 0;
+        int64_t count = 0;
         while (pos < s.len) {
+            if (limit > 0 && count >= limit - 1) {
+                Str sv = gorget_str_own_region(sd + pos, s.len - pos);
+                gorget_array_push(&arr, &sv);
+                break;
+            }
             size_t cp_len = (size_t)gorget_utf8_codepoint_len((unsigned char)sd[pos]);
             Str sv = gorget_str_own_region(sd + pos, cp_len);
             gorget_array_push(&arr, &sv);
             pos += cp_len;
+            count++;
         }
         return arr;
     }
     const char* dd = (const char*)delim.data;
     const char* p = sd;
     size_t remaining = s.len;
+    int64_t count = 0;
     while (1) {
+        if (limit > 0 && count >= limit - 1) {
+            // Last part: take everything remaining
+            Str sv = gorget_str_own_region(p, remaining);
+            gorget_array_push(&arr, &sv);
+            break;
+        }
         const char* found = gorget_memmem(p, remaining, dd, delim.len);
         if (!found) {
             Str sv = gorget_str_own_region(p, remaining);
@@ -5113,6 +5155,43 @@ static inline GorgetArray gorget_str_split(Str s, Str delim) {
         size_t skip = chunk + delim.len;
         p += skip;
         remaining -= skip;
+        count++;
+    }
+    return arr;
+}
+
+// 2-arg version (backward compat): split all
+static inline GorgetArray gorget_str_split(Str s, Str delim) {
+    return gorget_str_split_impl(s, delim, 0);
+}
+
+// 3-arg version: split with limit
+static inline GorgetArray gorget_str_splitn(Str s, Str delim, int64_t limit) {
+    return gorget_str_split_impl(s, delim, limit);
+}
+
+static inline GorgetArray gorget_str_lines(Str s) {
+    GorgetArray arr = gorget_array_new(sizeof(Str));
+    arr.elem_drop = (__gorget_drop_fn)gorget_string_free;
+    arr.elem_clone = (__gorget_drop_fn)gorget_string_clone_inplace;
+    const char* sd = (const char*)s.data;
+    const char* p = sd;
+    size_t remaining = s.len;
+    while (remaining > 0) {
+        // Find next \n or \r
+        size_t i = 0;
+        while (i < remaining && p[i] != '\n' && p[i] != '\r') i++;
+        Str sv = gorget_str_own_region(p, i);
+        gorget_array_push(&arr, &sv);
+        if (i >= remaining) break;
+        // Skip the line ending: \r\n (2 chars) or \n or \r (1 char)
+        if (p[i] == '\r' && i + 1 < remaining && p[i + 1] == '\n') {
+            i += 2;
+        } else {
+            i += 1;
+        }
+        p += i;
+        remaining -= i;
     }
     return arr;
 }

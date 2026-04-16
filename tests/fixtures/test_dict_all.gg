@@ -36,8 +36,8 @@ void main():
     print(f"{d.contains("z")}")
 
     # ===== has (alias for contains) =====
-    print(f"{d.has("b")}")
-    print(f"{d.has("missing")}")
+    print(f"{d.contains("b")}")
+    print(f"{d.contains("missing")}")
 
     # ===== remove (returns bool) =====
     bool rem1 = d.remove("b")

@@ -4333,6 +4333,25 @@ impl<'m> Interpreter<'m> {
                 };
                 return Ok(Some(Value::Bool(result)));
             }
+            if name.ends_with("__symmetric_difference") || name == "gorget_set_symmetric_difference" {
+                let a = self.get_dict_from_value(&args.get(0).cloned().unwrap_or(Value::Null));
+                let b = self.get_dict_from_value(&args.get(1).cloned().unwrap_or(Value::Null));
+                let result = super::value::SimDict::new("Set__symmetric_difference");
+                if let (Some(a), Some(b)) = (&a, &b) {
+                    for k in a.keys() { if !b.contains(&k) { result.set(k, Value::Unit); } }
+                    for k in b.keys() { if !a.contains(&k) { result.set(k, Value::Unit); } }
+                }
+                return Ok(Some(Value::Dict(result)));
+            }
+            if name.ends_with("__is_disjoint") || name == "gorget_set_is_disjoint" {
+                let a = self.get_dict_from_value(&args.get(0).cloned().unwrap_or(Value::Null));
+                let b = self.get_dict_from_value(&args.get(1).cloned().unwrap_or(Value::Null));
+                let result = match (a, b) {
+                    (Some(a), Some(b)) => !a.keys().iter().any(|k| b.contains(k)),
+                    _ => true,
+                };
+                return Ok(Some(Value::Bool(result)));
+            }
             if name.ends_with("__clear") || name == "gorget_set_clear" {
                 let set_arg = args.get(0).cloned().unwrap_or(Value::Null);
                 if let Some(d) = self.get_dict_from_value(&set_arg) { d.clear(); }

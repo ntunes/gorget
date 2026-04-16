@@ -2,6 +2,9 @@
 
 ## High
 
+- **Stdlib narrow waist — Phase 1 remainder**: DONE: String mutation methods (push/clear/capacity), Set.symmetric_difference/is_disjoint, String.lines(), trim_left/trim_right aliases, split(sep, limit), replace(old, new, limit), Dict.has/has_key/contains_key removed (fixtures updated). REMAINING: String.find(pattern, from, reverse), cap param on constructors, Dict.remove→Option[V], sort(by)/sorted(by) optional comparator. See `docs/internals/stdlib-design.md`. [updated: 2026-04-16]
+
+- **Stdlib narrow waist — Phase 2 (Iterator equip + HOFs)**: Define Iterator[T] equip with derived methods (eager initially). Add Vector convenience wrappers. New methods: `flat_map`, `filter_map`, `min`, `max`, `sum`, `partition`, `group_by`, `take`, `drop`, `zip`, `join` on Vector. Add `swap_remove`, `retain`, `fill`, `swap`. See `docs/internals/stdlib-design.md`. [added: 2026-04-16]
 
 - **Cloneable trait + runtime clone counters**: `--show-clones` is comprehensive (all 22 implicit clone sites report with span, type, and reason; output sorted by source location). Remaining: `Cloneable` trait for generic bounds (`T: Cloneable`). Runtime clone counters (`gg run --clone-stats`) via existing alloc-report infrastructure. [updated: 2026-04-10]
 
@@ -14,6 +17,12 @@
 - **Decompose emit_call_extern.rs (~1,850 lines)**: Tier 1-3 lifts complete — ~490 lines of inline expansion removed. Remaining: HOF inlining (map/filter/each/fold ~590 lines), printf rewriting (~130 lines), out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-04-15]
 
 ## Medium
+
+- **Stdlib narrow waist — Phase 3 (Writer/Reader traits)**: Define Writer and Reader traits. Implement Writer on String, File, Socket, stdout, stderr. Implement Reader on File, Socket, stdin. Refactor `print()` to use Displayable. See `docs/internals/stdlib-design.md`. [added: 2026-04-16]
+
+- **Stdlib narrow waist — Phase 4 (Lazy iterators)**: Compiler support for iterator state machine structs. Convert Iterator adapter methods from eager to lazy. Add `collect()` terminal. No API change — call sites remain identical. See `docs/internals/stdlib-design.md`. [added: 2026-04-16]
+
+- **Stdlib narrow waist — Phase 5 (Documentation updates)**: Update language-design.md §4.4.1 (Writer/Reader -er examples), language-reference.md §15.2 (method signatures), book/05-collections.md (new methods), book/appendix-traits.md (Writer, Reader, convention), book/19-stdlib.md (std/xtd layering). See `docs/internals/stdlib-design.md`. [added: 2026-04-16]
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 5 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks). Struct init was already covered. Enum variant init fixed (was missing `clone_multi_use_resource_args` at the `methods.rs` and `calls.rs` call sites — caused double-free on resource-typed fields in loops). [updated: 2026-04-16]
 

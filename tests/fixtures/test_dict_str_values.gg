@@ -24,8 +24,8 @@ void main():
     # ===== 4. Contains / has =====
     print(f"{d.contains("city")}")
     print(f"{d.contains("zzz")}")
-    print(f"{d.has("lang")}")
-    print(f"{d.has("missing")}")
+    print(f"{d.contains("lang")}")
+    print(f"{d.contains("missing")}")
 
     # ===== 5. Remove =====
     bool r1 = d.remove("city")

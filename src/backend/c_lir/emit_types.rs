@@ -15,7 +15,7 @@ pub(super) const DICT_INLINE_METHODS: &[&str] = &[
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
     "filter", "fold", "each", "any", "all", "map", "is_subset", "is_superset",
-    "union", "intersection", "difference", "symmetric_difference",
+    "union", "intersection", "difference", "symmetric_difference", "is_disjoint",
 ];
 
 /// Parse a monomorphized name like `Dict__Str__int64_t__filter` into
@@ -631,6 +631,17 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
+            writeln!(out, "}}").unwrap();
+        }
+        "is_disjoint" => {
+            // is_disjoint(other): true if no element in self is in other
+            writeln!(out, "static inline bool {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
+            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
+            writeln!(out, "    {iter_loop}").unwrap();
+            writeln!(out, "        {elem_read}").unwrap();
+            writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) return false;").unwrap();
+            writeln!(out, "    }}").unwrap();
+            writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         _ => {

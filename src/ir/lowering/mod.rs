@@ -1354,8 +1354,10 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     ctx.fn_sigs.insert("GorgetString__codepoints".to_string(), (str_self.clone(), vec_i64_type));
     ctx.fn_sigs.insert("GorgetString__chars".to_string(), (str_self.clone(), vec_str_type));
     ctx.fn_sigs.insert("GorgetString__split".to_string(), (str_str.clone(), vec_str_type));
+    ctx.fn_sigs.insert("GorgetString__splitn".to_string(), (vec![owned_string_type, owned_string_type, I64_TYPE], vec_str_type));
+    ctx.fn_sigs.insert("GorgetString__lines".to_string(), (str_self.clone(), vec_str_type));
     // Methods returning Str
-    for m in &["trim", "strip", "lstrip", "rstrip", "removeprefix", "removesuffix"] {
+    for m in &["trim", "strip", "lstrip", "rstrip", "trim_left", "trim_right", "removeprefix", "removesuffix"] {
         ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_string_type));
     }
     ctx.fn_sigs.insert("GorgetString__byte_slice".to_string(), (vec![owned_string_type, I64_TYPE, I64_TYPE], owned_string_type));
@@ -1366,6 +1368,7 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
         ctx.fn_sigs.insert(format!("GorgetString__{m}"), (str_self.clone(), owned_string_type));
     }
     ctx.fn_sigs.insert("GorgetString__replace".to_string(), (vec![owned_string_type, owned_string_type, owned_string_type], owned_string_type));
+    ctx.fn_sigs.insert("GorgetString__replacen".to_string(), (vec![owned_string_type, owned_string_type, owned_string_type, I64_TYPE], owned_string_type));
     ctx.fn_sigs.insert("GorgetString__repeat".to_string(), (vec![owned_string_type, I64_TYPE], owned_string_type));
     ctx.fn_sigs.insert("GorgetString__pad_left".to_string(), (vec![owned_string_type, I64_TYPE, owned_string_type], owned_string_type));
     ctx.fn_sigs.insert("GorgetString__pad_right".to_string(), (vec![owned_string_type, I64_TYPE, owned_string_type], owned_string_type));

@@ -362,7 +362,7 @@ equip DataFrame:
         return self.columns.get(name).unwrap()
 
     bool has_column(self, String name):
-        return self.columns.has(name)
+        return self.columns.contains(name)
 
     Vector[String] column_names(self):
         return vec_str_copy(self.col_names)
@@ -829,7 +829,7 @@ equip DataFrame:
         int i = 0
         while i < self.num_rows:
             String sv = col.value_as_str(i)
-            if count_map.has(sv):
+            if count_map.contains(sv):
                 count_map.set(sv, count_map.get(sv).unwrap() + 1)
             else:
                 count_map.set(sv, 1)
@@ -1141,7 +1141,7 @@ GroupBy df_group_by(DataFrame df, String col):
     int i = 0
     while i < df.num_rows:
         String key = col_data.value_as_str(i)
-        if groups.has(key):
+        if groups.contains(key):
             Vector[int] existing = groups.get(key).unwrap()
             existing.push(i)
             groups.set(key, existing)
@@ -1262,7 +1262,7 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, String on):
     int i = 0
     while i < right.num_rows:
         String key = rc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             right_idx.get(key).unwrap().push(i)
         else:
             Vector[int] rows = Vector[int]()
@@ -1275,7 +1275,7 @@ DataFrame df_inner_join(DataFrame left, DataFrame right, String on):
     i = 0
     while i < left.num_rows:
         String key = lc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
@@ -1550,7 +1550,7 @@ equip DataFrame:
         int i = 0
         while i < self.num_rows:
             String sv = col.value_as_str(i)
-            if not seen.has(sv):
+            if not seen.contains(sv):
                 seen.set(sv, true)
                 keep_idxs.push(i)
             i = i + 1
@@ -1570,7 +1570,7 @@ equip DataFrame:
         int i = 0
         while i < self.num_rows:
             String sv = col.value_as_str(i)
-            if not seen.has(sv):
+            if not seen.contains(sv):
                 seen.set(sv, true)
             i = i + 1
         return seen.keys().len()
@@ -1966,7 +1966,7 @@ DataFrame df_left_join(DataFrame left, DataFrame right, String on):
     int i = 0
     while i < right.num_rows:
         String key = rc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             right_idx.get(key).unwrap().push(i)
         else:
             Vector[int] rows = Vector[int]()
@@ -1979,7 +1979,7 @@ DataFrame df_left_join(DataFrame left, DataFrame right, String on):
     i = 0
     while i < left.num_rows:
         String key = lc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
@@ -2023,7 +2023,7 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, String on):
     int i = 0
     while i < right.num_rows:
         String key = rc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             right_idx.get(key).unwrap().push(i)
         else:
             Vector[int] rows = Vector[int]()
@@ -2037,7 +2037,7 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, String on):
     i = 0
     while i < left.num_rows:
         String key = lc.value_as_str(i)
-        if right_idx.has(key):
+        if right_idx.contains(key):
             Vector[int] rs = vec_int_copy(right_idx.get(key).unwrap())
             int j = 0
             while j < rs.len():
@@ -2053,7 +2053,7 @@ DataFrame df_outer_join(DataFrame left, DataFrame right, String on):
     # Add unmatched right rows
     i = 0
     while i < right.num_rows:
-        if not right_matched.has(int_to_str(i)):
+        if not right_matched.contains(int_to_str(i)):
             left_rows.push(-1)
             right_rows.push(i)
         i = i + 1
@@ -2127,7 +2127,7 @@ MultiGroupBy df_group_by_multi(DataFrame df, Vector[String] cols):
                 key = key + "~"
             key = key + col.value_as_str(i)
             ci = ci + 1
-        if groups.has(key):
+        if groups.contains(key):
             groups.get(key).unwrap().push(i)
         else:
             Vector[int] new_group = Vector[int]()

@@ -897,6 +897,18 @@ pub fn call_extern(
             Ok(Value::String(SimString::from_string(s.as_str().replace(from.as_str(), to.as_str()))))
         }
 
+        "gorget_str_replacen" => {
+            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let from = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let to = args.get(2).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let limit = args.get(3).map(|v| v.as_i64()).unwrap_or(0);
+            if limit > 0 {
+                Ok(Value::String(SimString::from_string(s.as_str().replacen(from.as_str(), to.as_str(), limit as usize))))
+            } else {
+                Ok(Value::String(SimString::from_string(s.as_str().replace(from.as_str(), to.as_str()))))
+            }
+        }
+
         "gorget_str_repeat" => {
             let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let n = args.get(1).map(|v| v.as_i64() as usize).unwrap_or(0);
@@ -966,13 +978,55 @@ pub fn call_extern(
             let delim = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let arr = SimArray::new("Vector__Str");
             if delim.as_str().is_empty() {
-                // Split into individual codepoints
                 for ch in s.as_str().chars() {
                     arr.push(Value::Str(SimStr::from_string(ch.to_string())));
                 }
             } else {
                 for part in s.as_str().split(delim.as_str()) {
                     arr.push(Value::Str(SimStr::from_string(part.to_string())));
+                }
+            }
+            Ok(Value::Array(arr))
+        }
+
+        "gorget_str_splitn" => {
+            // gorget_str_splitn(Str s, Str delim, int64_t limit) → GorgetArray of Str
+            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let delim = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let limit = args.get(2).map(|v| v.as_i64()).unwrap_or(0);
+            let arr = SimArray::new("Vector__Str");
+            if limit > 0 {
+                for part in s.as_str().splitn(limit as usize, delim.as_str()) {
+                    arr.push(Value::Str(SimStr::from_string(part.to_string())));
+                }
+            } else {
+                for part in s.as_str().split(delim.as_str()) {
+                    arr.push(Value::Str(SimStr::from_string(part.to_string())));
+                }
+            }
+            Ok(Value::Array(arr))
+        }
+
+        "gorget_str_lines" => {
+            // gorget_str_lines(Str s) → GorgetArray of Str (split on \n, \r\n, \r)
+            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let arr = SimArray::new("Vector__Str");
+            let text = s.as_str();
+            let mut start = 0;
+            let bytes = text.as_bytes();
+            let len = bytes.len();
+            while start <= len {
+                let mut end = start;
+                while end < len && bytes[end] != b'\n' && bytes[end] != b'\r' {
+                    end += 1;
+                }
+                arr.push(Value::Str(SimStr::from_string(text[start..end].to_string())));
+                if end >= len { break; }
+                // Skip line ending: \r\n (2) or \n or \r (1)
+                if bytes[end] == b'\r' && end + 1 < len && bytes[end + 1] == b'\n' {
+                    start = end + 2;
+                } else {
+                    start = end + 1;
                 }
             }
             Ok(Value::Array(arr))

@@ -3305,7 +3305,7 @@ impl<'a> TypeChecker<'a> {
                 _ => None,
             },
             "Dict" | "HashMap" => match method {
-                "put" | "update" | "set" => Some(self.types.void_id),
+                "put" | "set" | "update" => Some(self.types.void_id),
                 "get" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         let ref_val = self.types.insert(ResolvedType::Ref(val_type()));
@@ -3315,7 +3315,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "get_or" | "get_or_put" => Some(val_type()),
-                "contains" | "has" => Some(self.types.bool_id),
+                "contains" | "has" | "has_key" | "contains_key" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
@@ -3349,12 +3349,12 @@ impl<'a> TypeChecker<'a> {
             },
             "Set" | "HashSet" => match method {
                 "add" => Some(self.types.void_id),
-                "contains" | "is_subset" | "is_superset" => Some(self.types.bool_id),
+                "contains" | "is_subset" | "is_superset" | "is_disjoint" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
-                "union" | "intersection" | "difference" => Some(receiver_type),
+                "union" | "intersection" | "difference" | "symmetric_difference" => Some(receiver_type),
                 _ => None,
             },
             "uint8" => match method {
@@ -3380,8 +3380,8 @@ impl<'a> TypeChecker<'a> {
                 }
                 "contains" | "starts_with" | "ends_with" | "is_empty" => Some(self.types.bool_id),
                 // View returns — no allocation, return str (Str)
-                "trim" | "strip" | "lstrip" | "rstrip" | "removeprefix" | "removesuffix" | "byte_slice"
-                | "substring"
+                "trim" | "strip" | "lstrip" | "rstrip" | "trim_left" | "trim_right"
+                | "removeprefix" | "removesuffix" | "byte_slice" | "substring"
                     => Some(self.types.string_id),
                 // Allocating returns — return String (GorgetString)
                 "to_upper" | "to_lower" | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
@@ -3393,7 +3393,10 @@ impl<'a> TypeChecker<'a> {
                 "is_alpha" | "is_digit" | "is_alphanumeric" | "is_whitespace"
                 | "is_upper" | "is_lower" | "is_hex_digit" | "is_ascii"
                     => Some(self.types.bool_id),
-                "split" => {
+                // Mutation methods (String builder)
+                "push" | "push_char" | "push_line" | "clear" => Some(self.types.void_id),
+                "capacity" => Some(self.types.int_id),
+                "split" | "lines" => {
                     // Return Vector[str]
                     if let Some(vec_def_id) = self.scopes.lookup("Vector") {
                         Some(self.types.intern_generic(vec_def_id, vec![self.types.string_id]))
