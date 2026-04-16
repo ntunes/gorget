@@ -48,7 +48,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     str_fields.push(StructField("cap", LT_I64))
     str_fields.push(StructField("len", LT_I64))
     str_fields.push(StructField("alloc", LT_PTR))
-    int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32))
+    int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32, -1))
     sr_register(&sr, "GorgetString", str_id)
     sr_register(&sr, "Str", str_id)
 
@@ -58,28 +58,28 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     arr_fields.push(StructField("cap", LT_I64))
     arr_fields.push(StructField("len", LT_I64))
     arr_fields.push(StructField("elem_size", LT_I64))
-    int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64))
+    int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64, -1))
     sr_register(&sr, "GorgetArray", arr_id)
 
     # GorgetClosure: {fn_ptr: Ptr, env: Ptr}
     Vector[StructField] cls_fields = []
     cls_fields.push(StructField("fn_ptr", LT_PTR))
     cls_fields.push(StructField("env", LT_PTR))
-    int cls_id = lir_mod_add_struct(&m, LirStructDef("GorgetClosure", cls_fields, 0, false, 16))
+    int cls_id = lir_mod_add_struct(&m, LirStructDef("GorgetClosure", cls_fields, 0, false, 16, -1))
     sr_register(&sr, "GorgetClosure", cls_id)
 
     # TraitObj: {data: Ptr, vtable: Ptr}
     Vector[StructField] trait_fields = []
     trait_fields.push(StructField("data", LT_PTR))
     trait_fields.push(StructField("vtable", LT_PTR))
-    int trait_id = lir_mod_add_struct(&m, LirStructDef("TraitObj", trait_fields, 0, false, 16))
+    int trait_id = lir_mod_add_struct(&m, LirStructDef("TraitObj", trait_fields, 0, false, 16, -1))
     sr_register(&sr, "TraitObj", trait_id)
 
     # TaskHandle: {task_ptr: Ptr, drop_fn: Ptr}
     Vector[StructField] task_fields = []
     task_fields.push(StructField("task_ptr", LT_PTR))
     task_fields.push(StructField("drop_fn", LT_PTR))
-    int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16))
+    int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1))
     sr_register(&sr, "TaskHandle", task_id)
 
     # GorgetMap: 13 fields, 152 bytes
@@ -97,7 +97,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     map_fields.push(StructField("tombstones", LT_I64))
     map_fields.push(StructField("hash_fn", LT_PTR))
     map_fields.push(StructField("eq_fn", LT_PTR))
-    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 152))
+    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 152, -1))
     sr_register(&sr, "GorgetMap", map_id)
 
     # GorgetSet: same layout as GorgetMap
@@ -115,7 +115,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     set_fields.push(StructField("tombstones", LT_I64))
     set_fields.push(StructField("hash_fn", LT_PTR))
     set_fields.push(StructField("eq_fn", LT_PTR))
-    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 152))
+    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 152, -1))
     sr_register(&sr, "GorgetSet", set_id)
 
     # GorgetRange: {start: I64, end: I64, step: I64}
@@ -123,7 +123,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     range_fields.push(StructField("start", LT_I64))
     range_fields.push(StructField("end", LT_I64))
     range_fields.push(StructField("step", LT_I64))
-    int range_id = lir_mod_add_struct(&m, LirStructDef("GorgetRange", range_fields, 0, false, 24))
+    int range_id = lir_mod_add_struct(&m, LirStructDef("GorgetRange", range_fields, 0, false, 24, -1))
     sr_register(&sr, "GorgetRange", range_id)
 
 # ── Type mapping: GIR type ID → LIR type ───────────────────
@@ -290,7 +290,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         Vector[StructField] box_fields = []
                         box_fields.push(StructField("_0", LT_PTR))
                         String box_name = name.clone()
-                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8))
+                        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8, -1))
                         sr_register(&sr, name, box_id)
                     elif is_guard_struct_type(name):
                         # Guard types: {owner: Ptr, ptr: Ptr}
@@ -298,13 +298,13 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         guard_fields.push(StructField("owner", LT_PTR))
                         guard_fields.push(StructField("ptr", LT_PTR))
                         String guard_name = name.clone()
-                        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16))
+                        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16, -1))
                         sr_register(&sr, name, guard_id)
                     else:
                         # Create placeholder (will be filled in Pass 2)
                         Vector[StructField] empty_fields = []
                         String ph_name = name.clone()
-                        int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1))
+                        int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
                         sr_register(&sr, name, sid)
             else:
                 pass
@@ -318,7 +318,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         if sr_lookup(&sr, tname) < 0:
             Vector[StructField] empty_fields = []
             String ph_name = tname.clone()
-            int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1))
+            int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
             sr_register(&sr, tname, sid)
         tki_pre += 1
 
@@ -359,7 +359,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 ek = 2
             elif tinfo.variants.len() > 0:
                 ek = 3
-            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, -1)
+            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, -1, -1)
             m.structs.set(sid, new_sdef)
         else:
             # Struct: map fields
@@ -370,7 +370,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 int fty = resolve_field_lir_type(finfo.type_name, &sr)
                 sfields.push(StructField(finfo.name, fty))
                 sfi += 1
-            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, -1)
+            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, -1, -1)
             m.structs.set(sid, new_sdef)
         tki += 1
 
@@ -540,9 +540,11 @@ String map_runtime_name(String name):
     # Scalar-prefixed methods (self-host GIR uses T__method not Vector__T__method)
     if is_scalar_type_prefix(name):
         String method = extract_method_name(name)
-        String arr = map_array_method(method)
-        if arr != "":
-            return arr
+        # Skip `new` and `get` — different arg counts in scalar-prefix context
+        if method != "new" and method != "get":
+            String arr = map_array_method(method)
+            if arr != "":
+                return arr
         # Option/Result methods on scalar-prefixed types
         return map_option_result_method(method)
 
