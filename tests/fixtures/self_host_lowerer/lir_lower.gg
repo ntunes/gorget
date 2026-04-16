@@ -850,7 +850,56 @@ bool is_string_keyed(String name):
 
 # Check if a specific arg index of a runtime function needs pointer passing.
 bool needs_ptr_arg(String fn_name, int arg_idx):
-    # gorget_array_push(void* arr, void* elem) — arg 1 by ptr
+    # Collection methods: arg 0 (self) is always passed by pointer for mutating methods.
+    if arg_idx == 0:
+        if fn_name == "gorget_array_push" or fn_name == "gorget_array_set":
+            return true
+        if fn_name == "gorget_array_insert" or fn_name == "gorget_array_remove_opt":
+            return true
+        if fn_name == "gorget_array_clear" or fn_name == "gorget_array_reverse":
+            return true
+        if fn_name == "gorget_array_sort" or fn_name == "gorget_array_extend":
+            return true
+        if fn_name == "gorget_array_free":
+            return true
+        if fn_name == "gorget_map_put" or fn_name == "gorget_map_remove":
+            return true
+        if fn_name == "gorget_map_clear" or fn_name == "gorget_map_free":
+            return true
+        if fn_name == "gorget_set_add" or fn_name == "gorget_set_remove":
+            return true
+        if fn_name == "gorget_set_clear" or fn_name == "gorget_set_free":
+            return true
+        if fn_name == "gorget_channel_send" or fn_name == "gorget_channel_close":
+            return true
+        if fn_name == "gorget_channel_recv" or fn_name == "gorget_channel_try_recv":
+            return true
+        # Read-only methods also take self by const pointer
+        if fn_name == "gorget_array_safe_get" or fn_name == "gorget_array_len":
+            return true
+        if fn_name == "gorget_array_is_empty" or fn_name == "gorget_array_contains":
+            return true
+        if fn_name == "gorget_array_safe_last" or fn_name == "gorget_array_safe_first":
+            return true
+        if fn_name == "gorget_array_safe_pop" or fn_name == "gorget_array_index_of":
+            return true
+        if fn_name == "gorget_array_clone" or fn_name == "gorget_array_slice":
+            return true
+        if fn_name == "gorget_map_get" or fn_name == "gorget_map_len":
+            return true
+        if fn_name == "gorget_map_contains" or fn_name == "gorget_map_is_empty":
+            return true
+        if fn_name == "gorget_map_keys" or fn_name == "gorget_map_values":
+            return true
+        if fn_name == "gorget_map_clone":
+            return true
+        if fn_name == "gorget_set_contains" or fn_name == "gorget_set_len":
+            return true
+        if fn_name == "gorget_set_clone" or fn_name == "gorget_set_is_empty":
+            return true
+        if fn_name == "gorget_str_codepoint_count":
+            return true
+    # Element args passed by pointer
     if fn_name == "gorget_array_push" and arg_idx == 1:
         return true
     if fn_name == "gorget_array_set" and arg_idx == 2:
@@ -862,6 +911,8 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     if fn_name == "gorget_array_contains" and arg_idx == 1:
         return true
     if fn_name == "gorget_set_add" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_channel_send" and arg_idx == 1:
         return true
     return false
 
@@ -1124,7 +1175,18 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                             sblk2.insts.push(IIConst(vs, LT_I64, val_size))
                             f.blocks.set(bb, sblk2)
                             lir_args.push(vs)
+                    elif func_name.starts_with("Set__") or func_name.starts_with("HashSet__"):
+                        # Set: _str variant takes 0 args, non-str takes 1 (elem_size)
+                        if not is_string_keyed(func_name):
+                            int elem_size = collection_elem_size(func_name, &sr)
+                            int size_val = lir_fn_next_value(&f)
+                            LirBlock sblk = f.blocks.get(bb).unwrap()
+                            sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
+                            f.blocks.set(bb, sblk)
+                            lir_args.push(size_val)
+                        # else: _str variant, no args needed
                     else:
+                        # Vector, Deque, Channel, Shared: 1 arg (elem_size)
                         int elem_size = collection_elem_size(func_name, &sr)
                         int size_val = lir_fn_next_value(&f)
                         LirBlock sblk = f.blocks.get(bb).unwrap()
@@ -1176,7 +1238,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             String call_name = func_name
             if mapped != "":
                 call_name = mapped
-            # Post-mapping fixups: append elem_size for functions that need it.
+            # Post-mapping fixups: append extra args for functions that need them.
             if call_name == "gorget_array_contains":
                 int es = extract_elem_size_from_name(func_name, &sr)
                 int esv = lir_fn_next_value(&f)
@@ -1184,9 +1246,22 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 esblk.insts.push(IIConst(esv, LT_I64, es))
                 f.blocks.set(bb, esblk)
                 lir_args.push(esv)
+            # gorget_channel_recv(ch, &out): needs output slot address as 2nd arg.
+            # gorget_channel_recv_timeout(ch, &out, timeout_ms): needs output + timeout.
+            if call_name == "gorget_channel_recv" or call_name == "gorget_channel_try_recv":
+                if dst_local >= 0:
+                    int out_slot = local_to_slot.get(dst_local).unwrap()
+                    int out_addr = lir_fn_next_value(&f)
+                    LirBlock rblk = f.blocks.get(bb).unwrap()
+                    rblk.insts.push(ISlotAddr(out_addr, out_slot))
+                    f.blocks.set(bb, rblk)
+                    lir_args.push(out_addr)
             int dst = -1
             if dst_local >= 0:
-                dst = lir_fn_next_value(&f)
+                # For channel recv, the result is written to the slot directly via &out.
+                # Don't create a value destination — the call returns void.
+                if call_name != "gorget_channel_recv" and call_name != "gorget_channel_try_recv":
+                    dst = lir_fn_next_value(&f)
             Vector[int] empty_abis = []
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
