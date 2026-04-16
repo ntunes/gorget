@@ -429,7 +429,7 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         }
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
-        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => {
             // StrLit returns ptr to GorgetString alloca — find GorgetString struct id
             let gs_id = module.structs.iter().position(|s| s.name == "GorgetString")
@@ -956,6 +956,13 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
     writeln!(out, "declare i1 @gorget_str_eq(ptr, ptr)").unwrap();
     writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
+    // Runtime clone_inplace/materialize_inplace wrappers — used as function pointers for
+    // collection elem_clone/elem_materialize fields (set by LIR lowerer).
+    writeln!(out, "declare void @gorget_array_clone_inplace(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_map_clone_inplace(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_set_clone_inplace(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_string_clone_inplace(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_string_materialize_inplace(ptr)").unwrap();
     // Collection constructors and HOF helpers — always declare so inline HOF expansion works
     // even when the function is not in module.externs (e.g. flat_map inlining needs extend).
     let hof_decls: &[(&str, &str)] = &[
@@ -1510,6 +1517,47 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
             writeln!(out, "  ret {ret_llvm} %a.r").unwrap();
         }
         writeln!(out, "}}").unwrap();
+    }
+    writeln!(out).unwrap();
+
+    // Generate __clone_inplace wrappers for user struct/enum types referenced
+    // by NamedFuncAddr instructions. These call T__clone(sret, p) and memcpy
+    // the result back to p, matching the elem_clone calling convention.
+    let mut clone_inplace_seen = std::collections::HashSet::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::NamedFuncAddr { name, .. } = inst {
+                    if name.ends_with("__clone_inplace") && !name.starts_with("gorget_") {
+                        clone_inplace_seen.insert(name.clone());
+                    }
+                }
+            }
+        }
+    }
+    for name in &clone_inplace_seen {
+        let clone_fn = name.strip_suffix("_inplace").unwrap_or(name);
+        // Find the struct for this clone function to determine the type
+        let type_name = clone_fn.strip_suffix("__clone").unwrap_or(clone_fn);
+        let struct_sid = module.structs.iter().enumerate()
+            .find(|(_, s)| s.name == type_name)
+            .map(|(i, _)| StructId(i as u32));
+        if let Some(sid) = struct_sid {
+            let ty = llvm_type_full(&LirType::Struct(sid), snames);
+            let sz = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+            let safe_name = c_func_name(name);
+            let safe_clone = c_func_name(clone_fn);
+            writeln!(out, "define linkonce_odr void @{safe_name}(ptr %p) {{").unwrap();
+            writeln!(out, "  %tmp = alloca {ty}").unwrap();
+            writeln!(out, "  call void @{safe_clone}(ptr sret({ty}) %tmp, ptr %p)").unwrap();
+            writeln!(out, "  call void @llvm.memcpy.p0.p0.i64(ptr %p, ptr %tmp, i64 {sz}, i1 false)").unwrap();
+            writeln!(out, "  ret void").unwrap();
+            writeln!(out, "}}").unwrap();
+        } else {
+            // Unknown type — emit a declare as fallback
+            let safe_name = c_func_name(name);
+            writeln!(out, "declare void @{safe_name}(ptr)").unwrap();
+        }
     }
     writeln!(out).unwrap();
 }
@@ -2092,6 +2140,10 @@ fn emit_inst(
             writeln!(out, "  store ptr null, ptr %{fa}.1").unwrap();
             writeln!(out, "  %v{} = bitcast ptr %{fa} to ptr", dst.0).unwrap();
         }
+        Inst::NamedFuncAddr { dst, name } => {
+            let cname = c_func_name(name);
+            writeln!(out, "  %v{} = bitcast ptr @{cname} to ptr", dst.0).unwrap();
+        }
         Inst::GlobalAddr { dst, global } => {
             writeln!(out, "  %v{} = bitcast ptr @__lir_g{} to ptr", dst.0, global.0).unwrap();
         }
@@ -2642,7 +2694,7 @@ fn emit_inst(
                 writeln!(out, "  call {ret_ty} @{}({})", call_name, arg_strs.join(", ")).unwrap();
             }
         }
-        Inst::CallExtern { dst, name, args, .. } => {
+        Inst::CallExtern { dst, name, args, original_name, .. } => {
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──

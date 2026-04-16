@@ -1246,7 +1246,8 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::ClosurePack { env_ptr, .. } => { *env_ptr = next(&uses, &mut idx); }
         Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => {}
         Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
-        | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
+        | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. }
+        | Inst::GlobalAddr { .. }
         | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
         | Inst::Nop | Inst::InlineC { .. } => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }

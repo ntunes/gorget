@@ -155,6 +155,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::BoolConst { dst, value } => write!(f, "{dst}: bool = bconst {value}"),
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
+        Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),
         Inst::GlobalAddr { dst, global } => write!(f, "{dst}: ptr = global_addr {global}"),
         Inst::StrLit { dst, value } => write!(f, "{dst}: struct.Str = str_lit {value:?}"),
         Inst::ParamRef { dst, index, ty } => write!(f, "{dst}: {ty} = param {index}"),

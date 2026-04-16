@@ -1718,6 +1718,10 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{{ static void* __fa_{}[] = {{ (void*){}, NULL }}; {} = (void*)__fa_{}; }}",
                 dst.0, adapt_name, v(*dst), dst.0).unwrap();
         }
+        Inst::NamedFuncAddr { dst, name } => {
+            let cname = c_func_name(name);
+            write!(out, "{} = (void*){cname};", v(*dst)).unwrap();
+        }
         Inst::GlobalAddr { dst, global } => {
             write!(out, "{} = &__lir_g{};", v(*dst), global.0).unwrap();
         }

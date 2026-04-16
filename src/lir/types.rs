@@ -209,7 +209,7 @@ fn infer_inst_type(
         }
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
-        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => {
             module.structs.iter().enumerate()
                 .find(|(_, s)| s.name == "GorgetString")

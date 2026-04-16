@@ -1650,6 +1650,119 @@ impl<'a> FuncLowering<'a> {
     /// function-name matching that previously covered gorget_array_push,
     /// gorget_map_put, etc.  Follows Rust MIR convention: Operand::Move
     /// signals ownership transfer; the caller zeros its source slot.
+    /// Determine elem_drop/elem_clone/elem_materialize function names for a
+    /// collection constructor call based on the monomorphized original_name.
+    /// Returns (field_offset, function_name) pairs to store.
+    pub(super) fn infer_collection_elem_fns(
+        &self,
+        emit_name: &str,
+        original_name: &str,
+    ) -> Vec<(usize, String)> {
+        let mut stores: Vec<(usize, String)> = Vec::new();
+
+        // ── Vector/Array constructors ──
+        let is_array_ctor = emit_name.starts_with("gorget_array_new")
+            || emit_name == "gorget_array_with_capacity";
+        let is_vector_orig = original_name.starts_with("Vector__")
+            || original_name.starts_with("Deque__");
+
+        if is_array_ctor && is_vector_orig {
+            let raw_elem = original_name.strip_prefix("Vector__")
+                .or_else(|| original_name.strip_prefix("Deque__"))
+                .unwrap_or("");
+            let elem_type = raw_elem.strip_suffix("__new")
+                .or_else(|| raw_elem.strip_suffix("__with_capacity"))
+                .unwrap_or(raw_elem);
+
+            // GorgetArray offsets: elem_drop=40, elem_clone=48, elem_materialize=56
+            if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type) {
+                stores.push((40, drop_fn));
+            } else if self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type)
+            {
+                stores.push((40, format!("{elem_type}__drop")));
+            }
+            if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type) {
+                stores.push((48, clone_fn));
+            } else if self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type)
+            {
+                stores.push((48, format!("{elem_type}__clone_inplace")));
+            }
+            if elem_type == "GorgetString" {
+                stores.push((56, "gorget_string_materialize_inplace".into()));
+            }
+        }
+
+        // ── Dict/Map constructors ──
+        let is_map_ctor = emit_name.starts_with("gorget_dict_new")
+            || emit_name.starts_with("gorget_map_new");
+        let is_dict_orig = original_name.starts_with("Dict__")
+            || original_name.starts_with("HashMap__");
+
+        if is_map_ctor && is_dict_orig {
+            let prefix = if original_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = original_name.strip_prefix(prefix) {
+                let rest_stripped = rest.strip_suffix("__new_str")
+                    .or_else(|| rest.strip_suffix("__new"))
+                    .unwrap_or(rest);
+                if let Some(pos) = rest_stripped.find("__") {
+                    let val_type = &rest_stripped[pos + 2..];
+                    // GorgetMap offsets: val_drop=104, val_clone=112, val_materialize=152
+                    if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type) {
+                        stores.push((104, drop_fn));
+                    } else if self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type)
+                    {
+                        stores.push((104, format!("{val_type}__drop")));
+                    }
+                    if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type) {
+                        stores.push((112, clone_fn));
+                    } else if self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type)
+                    {
+                        stores.push((112, format!("{val_type}__clone_inplace")));
+                    }
+                    if val_type == "GorgetString" {
+                        stores.push((152, "gorget_string_materialize_inplace".into()));
+                    }
+                }
+            }
+        }
+
+        stores
+    }
+
+    /// Emit NamedFuncAddr + byte-offset Store instructions to set function
+    /// pointers (elem_drop, elem_clone, etc.) on a freshly constructed collection.
+    pub(super) fn emit_collection_fn_ptr_stores(
+        &mut self,
+        collection_val: ValueId,
+        stores: &[(usize, String)],
+        bb: BlockId,
+    ) {
+        for (offset, fn_name) in stores {
+            let fn_ptr = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::NamedFuncAddr {
+                dst: fn_ptr,
+                name: fn_name.clone(),
+            });
+            // Use ElemPtr with elem_size=1 to compute byte offset.
+            let idx_val = self.emit_i64_const(bb, *offset as i64);
+            let field_ptr = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                dst: field_ptr,
+                base: collection_val,
+                index: idx_val,
+                elem_size: 1,
+            });
+            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                ptr: field_ptr,
+                value: fn_ptr,
+            });
+        }
+    }
+
     pub(super) fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
         for arg in args {
             if let Operand::Move(place) = arg {
@@ -2434,6 +2547,10 @@ impl<'a> FuncLowering<'a> {
         let call_arg_abis = self.lookup_arg_abis(&actual_emit_name);
 
 
+        // Capture collection element info before moving into CallExtern.
+        let collection_elem_fns = self.infer_collection_elem_fns(
+            &actual_emit_name, &effective_original_name);
+
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
@@ -2443,6 +2560,21 @@ impl<'a> FuncLowering<'a> {
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);
+        }
+
+        // Set elem_drop/elem_clone/elem_materialize on collection constructors.
+        // Must use the slot address (not the return value) since the value
+        // has been stored to the local slot by store_to_local above.
+        if !collection_elem_fns.is_empty() {
+            if let Some(d) = dst {
+                let slot = self.local_to_slot[d.0 as usize];
+                let slot_addr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                    dst: slot_addr,
+                    slot,
+                });
+                self.emit_collection_fn_ptr_stores(slot_addr, &collection_elem_fns, bb);
+            }
         }
 
         // Generic post-call zeroing for Move operands.  Consuming args

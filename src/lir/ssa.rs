@@ -551,6 +551,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::BoolConst { .. }
         | Inst::NullPtr { .. }
         | Inst::FuncAddr { .. }
+        | Inst::NamedFuncAddr { .. }
         | Inst::GlobalAddr { .. }
         | Inst::StrLit { .. }
         | Inst::ParamRef { .. }

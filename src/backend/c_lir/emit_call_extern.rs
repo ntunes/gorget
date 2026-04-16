@@ -1626,77 +1626,9 @@ pub(super) fn emit_call_extern(
                 }
             }
 
-            // Set elem_drop/val_drop on collection constructors.
-            // Uses original_name to determine element type from the monomorphized name.
-            if let Some(orig) = original_name.as_ref() {
-                if let Some(d) = dst {
-                    let dv = format!("__v{}", d.0);
-                    // Vector/Array constructor: set elem_drop
-                    if (name.starts_with("gorget_array_new") || name == "gorget_array_with_capacity")
-                        && (orig.starts_with("Vector__") || orig.starts_with("Deque__"))
-                    {
-                        let raw_elem = orig.strip_prefix("Vector__")
-                            .or_else(|| orig.strip_prefix("Deque__"))
-                            .unwrap_or("");
-                        // Strip method suffix (__new, __with_capacity, etc.):
-                        // "Tracked__new" → "Tracked", "Vector__int64_t__new" → "Vector__int64_t"
-                        let elem_type = raw_elem.strip_suffix("__new")
-                            .or_else(|| raw_elem.strip_suffix("__with_capacity"))
-                            .unwrap_or(raw_elem);
-                        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
-                        } else if module.recursive_drop_structs.contains_key(elem_type)
-                            || module.recursive_drop_enums.contains_key(elem_type)
-                        {
-                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
-                        }
-                        if let Some(clone_fn) = elem_clone_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){clone_fn};").unwrap();
-                        } else if module.recursive_drop_structs.contains_key(elem_type)
-                            || module.recursive_drop_enums.contains_key(elem_type)
-                        {
-                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
-                        }
-                        if let Some(mat_fn) = elem_materialize_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_materialize = (__gorget_drop_fn){mat_fn};").unwrap();
-                        }
-                    }
-                    // Dict/HashMap constructor: set val_drop + val_clone
-                    if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
-                        && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))
-                    {
-                        let prefix = if orig.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
-                        if let Some(rest) = orig.strip_prefix(prefix) {
-                            // Strip constructor suffixes like __new, __new_str
-                            let rest_stripped = rest.strip_suffix("__new_str")
-                                .or_else(|| rest.strip_suffix("__new"))
-                                .unwrap_or(rest);
-                            if let Some(pos) = rest_stripped.find("__") {
-                                let val_type = &rest_stripped[pos + 2..];
-                                if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
-                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
-                                } else if module.recursive_drop_structs.contains_key(val_type)
-                                    || module.recursive_drop_enums.contains_key(val_type)
-                                {
-                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){val_type}__drop;").unwrap();
-                                }
-                                if let Some(clone_fn) = elem_clone_fn_for_c_type(val_type) {
-                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){clone_fn};").unwrap();
-                                } else if module.recursive_drop_structs.contains_key(val_type)
-                                    || module.recursive_drop_enums.contains_key(val_type)
-                                {
-                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){val_type}__clone_inplace;").unwrap();
-                                }
-                                // CoW materialize on insert — only strings need this
-                                // (clones cap==0 literals so the dict owns the backing).
-                                if val_type == "GorgetString" {
-                                    write!(out, " {dv}.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // elem_drop/val_drop on collection constructors is now set by the
+            // LIR lowerer via NamedFuncAddr + byte-offset Store instructions.
+            // Both backends emit these as regular stores — no backend-specific logic needed.
 
             // Ownership transfer after consuming runtime calls is now always
             // emitted as a GIR `MoveZero` instruction at the lowering layer

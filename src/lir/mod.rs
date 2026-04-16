@@ -257,6 +257,9 @@ pub enum Inst {
     BoolConst { dst: ValueId, value: bool },
     NullPtr { dst: ValueId },
     FuncAddr { dst: ValueId, func: FuncId },
+    /// Address of a function by name (module or extern). Produces a Ptr.
+    /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
+    NamedFuncAddr { dst: ValueId, name: String },
     GlobalAddr { dst: ValueId, global: GlobalId },
     /// String literal → materialized as Str struct (data ptr + len).
     StrLit { dst: ValueId, value: String },
@@ -401,6 +404,7 @@ impl Inst {
             | Inst::BoolConst { dst, .. }
             | Inst::NullPtr { dst }
             | Inst::FuncAddr { dst, .. }
+            | Inst::NamedFuncAddr { dst, .. }
             | Inst::GlobalAddr { dst, .. }
             | Inst::StrLit { dst, .. }
             | Inst::ParamRef { dst, .. }
@@ -443,7 +447,8 @@ impl Inst {
             Inst::ClosurePack { env_ptr, .. } => vec![*env_ptr],
             Inst::SlotLoad { .. } | Inst::SlotAddr { .. } => vec![],
             Inst::IConst { .. } | Inst::FConst { .. } | Inst::BoolConst { .. }
-            | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::GlobalAddr { .. }
+            | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. }
+            | Inst::GlobalAddr { .. }
             | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
             | Inst::Nop | Inst::InlineC { .. } => vec![],
 

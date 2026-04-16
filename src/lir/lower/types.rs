@@ -79,6 +79,37 @@ pub(super) fn set_elem_type_from_monomorphized(name: &str) -> Option<String> {
     Some(rest.to_string())
 }
 
+/// Determine the elem_drop function name for a collection element type.
+/// Returns None for trivially-droppable types (int, float, bool, ptr).
+pub(super) fn elem_drop_fn_for_type(elem_type: &str) -> Option<String> {
+    if elem_type.starts_with("GorgetArray") || elem_type.starts_with("Vector__") {
+        Some("gorget_array_free".into())
+    } else if elem_type.starts_with("GorgetMap") || elem_type.starts_with("Dict__") || elem_type.starts_with("HashMap__") {
+        Some("gorget_map_free".into())
+    } else if elem_type.starts_with("GorgetSet") || elem_type.starts_with("Set__") || elem_type.starts_with("HashSet__") {
+        Some("gorget_set_free".into())
+    } else if elem_type == "GorgetString" {
+        Some("gorget_string_free".into())
+    } else {
+        None
+    }
+}
+
+/// Determine the elem_clone function name for a collection element type.
+pub(super) fn elem_clone_fn_for_type(elem_type: &str) -> Option<String> {
+    if elem_type.starts_with("GorgetArray") || elem_type.starts_with("Vector__") {
+        Some("gorget_array_clone_inplace".into())
+    } else if elem_type.starts_with("GorgetMap") || elem_type.starts_with("Dict__") || elem_type.starts_with("HashMap__") {
+        Some("gorget_map_clone_inplace".into())
+    } else if elem_type.starts_with("GorgetSet") || elem_type.starts_with("Set__") || elem_type.starts_with("HashSet__") {
+        Some("gorget_set_clone_inplace".into())
+    } else if elem_type == "GorgetString" {
+        Some("gorget_string_clone_inplace".into())
+    } else {
+        None
+    }
+}
+
 /// Return the sizeof of an LIR type in bytes (best-effort for 64-bit targets).
 pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
     match ty {
