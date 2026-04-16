@@ -642,7 +642,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
                 return dst
             # String concatenation: + on string operands → gorget_str_cat(Str, Str)
-            if op == "+" and is_string_local(lhs, &ctx, &gmod):
+            if op == "+" and (is_string_local(lhs, &ctx, &gmod) or is_string_local(rhs, &ctx, &gmod)):
                 int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
                 int dst = add_local(&ctx, gs_tid, NO_NAME)
                 Vector[Operand] concat_args = []

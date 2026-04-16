@@ -932,7 +932,17 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if fn_name == "gorget_array_contains" and arg_idx == 1:
         return true
+    if fn_name == "gorget_map_get" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_map_contains" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_map_remove" and arg_idx == 1:
+        return true
     if fn_name == "gorget_set_add" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_set_contains" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_set_remove" and arg_idx == 1:
         return true
     if fn_name == "gorget_channel_send" and arg_idx == 1:
         return true

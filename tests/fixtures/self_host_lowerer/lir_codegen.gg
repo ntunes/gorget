@@ -990,6 +990,8 @@ bool is_struct_constructor(String name, LirModule &m):
         return false
     if name.starts_with("Box__") or name.starts_with("Task__"):
         return false
+    if name == "TaskGroup" or name == "AtomicInt" or name == "AtomicBool":
+        return false
     if name == "printf" or name == "fprintf":
         return false
     # Check if there's a struct with this name in the module
@@ -1468,17 +1470,17 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                     # Aggregate comparison — use memcmp fallback for eq/ne,
                     # gorget_str_eq for known Str types.
                     if op == CMP_EQ:
-                        return v(dst) + " = gorget_str_eq(&" + v(lhs) + ", &" + v(rhs) + ");"
+                        return v(dst) + " = gorget_str_eq(" + v(lhs) + ", " + v(rhs) + ");"
                     elif op == CMP_NE:
-                        return v(dst) + " = !gorget_str_eq(&" + v(lhs) + ", &" + v(rhs) + ");"
+                        return v(dst) + " = !gorget_str_eq(" + v(lhs) + ", " + v(rhs) + ");"
                     elif op == CMP_LT:
-                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") < 0;"
+                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") < 0;"
                     elif op == CMP_LE:
-                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") <= 0;"
+                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") <= 0;"
                     elif op == CMP_GT:
-                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") > 0;"
+                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") > 0;"
                     elif op == CMP_GE:
-                        return v(dst) + " = gorget_str_cmp(&" + v(lhs) + ", &" + v(rhs) + ") >= 0;"
+                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") >= 0;"
             String cop = cmp_op_str(op)
             return v(dst) + " = " + v(lhs) + " " + cop + " " + v(rhs) + ";"
 
