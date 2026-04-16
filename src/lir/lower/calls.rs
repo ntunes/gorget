@@ -402,7 +402,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_atomic_bool_compare_exchange" => sig(vec![LirType::Ptr, LirType::Bool, LirType::Bool], LirType::Bool, vec![Opaque, Scalar, Scalar]),
         "gorget_atomic_bool_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Opaque]),
         // Process
-        "gorget_process_spawn" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Auto, Auto]),
+        "gorget_process_spawn" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![CStr, Ptr]),
         "gorget_process_wait" | "gorget_process_pid" => sig(vec![LirType::Ptr], LirType::I64, vec![Opaque]),
         "gorget_process_kill" | "gorget_process_close_stdin" => sig(vec![LirType::Ptr], LirType::Void, vec![Opaque]),
         // gorget_process_write_stdin(proc*, const char*) — Str param needs CStr extraction
@@ -422,6 +422,17 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_parse_float" => sig(vec![LirType::Ptr], LirType::F64, vec![CStr]),
 
         // Bytes (Vector[uint8]) operations
+        // Regex — several functions take const char* subject/pattern strings
+        "gorget_regex_compile" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![CStr, CStr]),
+        "gorget_regex_find" | "gorget_regex_find_at" => {
+            sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, CStr, Scalar])
+        }
+        "gorget_regex_is_match" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, CStr]),
+        "gorget_regex_find_all" => sig(vec![LirType::Ptr, LirType::Ptr], arr_ty(), vec![Ptr, CStr]),
+        "gorget_regex_replace" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], s(), vec![Ptr, CStr, CStr]),
+        "gorget_regex_split" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], arr_ty(), vec![Ptr, CStr, Scalar]),
+        "gorget_regex_fullmatch" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, CStr]),
+
         // gorget_bytes_from_str/hex(const char*) — may receive Str reference
         "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![CStr]),
         "gorget_bytes_to_str" | "gorget_bytes_to_hex" => sig(vec![LirType::Ptr], s(), vec![Ptr]),
