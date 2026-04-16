@@ -347,6 +347,25 @@ String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
     return "int64_t"
 
 # Infer the return type of a method call.
+# Resolve a field type name from GirFieldInfo to a GIR type ID.
+int resolve_field_gir_type(String type_name, GirModule &gmod):
+    match type_name:
+        case "int" | "int64_t":
+            return I64_TYPE
+        case "float" | "double":
+            return F64_TYPE
+        case "bool":
+            return BOOL_TYPE
+        case "String" | "GorgetString" | "Str":
+            return lookup_or_register_named(&gmod, "GorgetString")
+        case "int32_t" | "i32":
+            return I32_TYPE
+        case "int8_t" | "i8" | "byte" | "uint8_t":
+            return I8_TYPE
+        else:
+            # Named type (user struct, collection, etc.)
+            return lookup_or_register_named(&gmod, type_name)
+
 int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
     # Void-returning methods
     if method == "push" or method == "set" or method == "put" or method == "remove":
@@ -718,8 +737,49 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
             return mdst
         case EFieldAccess(base_box, field_name):
-            # Field access: lower base, return unit placeholder
-            lower_expr(&ctx, *base_box, &gmod)
+            int base = lower_expr(&ctx, *base_box, &gmod)
+            # Resolve the base's struct type to find the field
+            int base_tid = ctx.locals.get(base).unwrap().type_id
+            String base_type_name = type_id_to_name(base_tid, &gmod)
+            # Unwrap Ptr/MutPtr to get the inner type name
+            int inner_tid = base_tid
+            if base_tid >= 0 and base_tid < gmod.type_table.len():
+                GirType bt = gmod.type_table.get(base_tid).unwrap()
+                match bt:
+                    case GtPtr(inner):
+                        base_type_name = type_id_to_name(inner, &gmod)
+                        inner_tid = inner
+                    case GtMutPtr(inner):
+                        base_type_name = type_id_to_name(inner, &gmod)
+                        inner_tid = inner
+                    else:
+                        pass
+            # Look up field info from type_infos
+            if gmod.type_infos.contains(base_type_name):
+                GirTypeInfo info = gmod.type_infos.get(base_type_name).unwrap()
+                int fi = 0
+                while fi < info.fields.len():
+                    GirFieldInfo finfo = info.fields.get(fi).unwrap()
+                    if finfo.name == field_name:
+                        int field_type = resolve_field_gir_type(finfo.type_name, &gmod)
+                        int fdst = add_local(&ctx, field_type, NO_NAME)
+                        # Emit field read as: __field_read(base_ptr, field_index)
+                        # base must be passed as a pointer — if already Ptr, use directly;
+                        # otherwise borrow the local.
+                        String field_fn = "__field_read_" + base_type_name + "_" + field_name
+                        bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+                        Vector[Operand] field_args = []
+                        if base_is_ptr:
+                            field_args.push(OpCopy(base))
+                        else:
+                            field_args.push(OpMove(base))  # will be SlotAddr via needs_ptr_arg
+                        field_args.push(OpConstI64(fi))
+                        # Register the field function signature so param types are known
+                        gmod.fn_sigs.put(field_fn, field_type)
+                        emit(&ctx, GICallExtern(fdst, field_fn, field_args))
+                        return fdst
+                    fi += 1
+            # Fallback: return I64 placeholder for unknown fields
             int fdst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
@@ -1224,7 +1284,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 else:
                     self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
-            int self_lid = add_local(&ctx, self_tid, NO_NAME)
+            int self_lid = add_local(&ctx, self_tid, Some("self"))
+            ctx.named_locals.put("self", self_lid)
 
         # _2.._N = explicit params (skip self — already added above)
         int pi = 0

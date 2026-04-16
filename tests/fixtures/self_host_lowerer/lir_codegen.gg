@@ -1119,6 +1119,25 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_VOID
         case ICallExtern(dst, name, _, _, _):
             if dst >= 0:
+                # Field reads: __field_read_TYPE_FIELD → look up field type from struct def.
+                if name.starts_with("__field_read_"):
+                    String rest = name.slice(13, name.len())
+                    int sep = find_substr(rest, "_")
+                    if sep > 0:
+                        String struct_name = rest.slice(0, sep)
+                        String field = rest.slice(sep + 1, rest.len())
+                        int sti = 0
+                        while sti < m.structs.len():
+                            LirStructDef sdef = m.structs.get(sti).unwrap()
+                            if sdef.name == struct_name:
+                                int fi = 0
+                                while fi < sdef.fields.len():
+                                    StructField sf = sdef.fields.get(fi).unwrap()
+                                    if sf.name == field:
+                                        return sf.ty
+                                    fi += 1
+                            sti += 1
+                    return LT_I64
                 # Builtin type casts.
                 if name == "float":
                     return LT_F64
@@ -1899,6 +1918,31 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     # Payload follows at offset 4+ (accessed via struct field names).
     if name.starts_with("__option_") or name.starts_with("__result_"):
         return emit_option_result_combinator(dst, name, &args, &sn, &val_types, &m)
+
+    # ── Field read: __field_read_TYPE_FIELD(base, field_index) ──
+    if name.starts_with("__field_read_"):
+        if dst >= 0 and args.len() >= 2:
+            int base_val = args.get(0).unwrap()
+            # Extract struct type name and field name from the function name
+            # __field_read_Holder_name → struct="Holder", field="name"
+            String rest = name.slice(13, name.len())
+            int sep = find_substr(rest, "_")
+            if sep > 0:
+                String struct_name = rest.slice(0, sep)
+                String field = rest.slice(sep + 1, rest.len())
+                String c_struct = find_c_struct_name(struct_name, &m, &sn)
+                String c_field = c_field_name(field)
+                # Check if base is a pointer (Ptr type) or value type
+                int base_ty = -1
+                if val_types.contains(base_val):
+                    base_ty = val_types.get(base_val).unwrap()
+                if base_ty == LT_PTR or base_ty >= LT_PTR_TO_BASE:
+                    # Pointer to struct → arrow access
+                    return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
+                else:
+                    # Value → dot access (shouldn't happen often)
+                    return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
+        return "/* bad field read */;"
 
     # DropIfAlive guard.
     if name.starts_with("__gorget_drop_if_alive_open__"):

@@ -853,6 +853,9 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     # Callable/closure dispatch: arg 0 (the callable) must be a pointer (void**)
     if arg_idx == 0 and (fn_name.starts_with("__callable_") or fn_name.starts_with("__gorget_closure_call_")):
         return true
+    # Field reads: arg 0 (the struct) must be a pointer
+    if arg_idx == 0 and fn_name.starts_with("__field_read_"):
+        return true
     # Collection methods: arg 0 (self) is always passed by pointer for mutating methods.
     if arg_idx == 0:
         if fn_name == "gorget_array_push" or fn_name == "gorget_array_set":
