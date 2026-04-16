@@ -2,7 +2,7 @@
 
 ## High
 
-- **Stdlib narrow waist — Phase 1 remainder**: DONE: String mutation methods (push/clear/capacity), Set.symmetric_difference/is_disjoint, String.lines(), trim_left/trim_right aliases, split(sep, limit), replace(old, new, limit), Dict.has/has_key/contains_key removed (fixtures updated). REMAINING: String.find(pattern, from, reverse), cap param on constructors, Dict.remove→Option[V], sort(by)/sorted(by) optional comparator. See `docs/internals/stdlib-design.md`. [updated: 2026-04-16]
+- **Stdlib narrow waist — Phase 1 remainder**: 9/11 done. REMAINING: Dict.remove→Option[V] (needs gorget_map_remove_opt, typecheck/builtins change), sort(by)/sorted(by) optional comparator (needs qsort_r with closures). See `docs/internals/stdlib-design.md`. [updated: 2026-04-16]
 
 - **Stdlib narrow waist — Phase 2 (Iterator equip + HOFs)**: Define Iterator[T] equip with derived methods (eager initially). Add Vector convenience wrappers. New methods: `flat_map`, `filter_map`, `min`, `max`, `sum`, `partition`, `group_by`, `take`, `drop`, `zip`, `join` on Vector. Add `swap_remove`, `retain`, `fill`, `swap`. See `docs/internals/stdlib-design.md`. [added: 2026-04-16]
 
