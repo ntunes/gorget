@@ -1693,9 +1693,8 @@ impl<'a> FuncLowering<'a> {
             // use-after-free when one copy is dropped.
             if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type) {
                 stores.push((48, clone_fn));
-            } else if (self.recursive_drop_structs.contains_key(elem_type)
-                || self.recursive_drop_enums.contains_key(elem_type))
-                && self.func_index.contains_key(&format!("{elem_type}__clone"))
+            } else if self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type)
             {
                 let clone_name = format!("{elem_type}__clone_inplace");
                 stores.push((48, clone_name));
@@ -1732,9 +1731,8 @@ impl<'a> FuncLowering<'a> {
                     // val_clone: built-in + user recursive types (see elem_clone comment).
                     if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type) {
                         stores.push((112, clone_fn));
-                    } else if (self.recursive_drop_structs.contains_key(val_type)
-                        || self.recursive_drop_enums.contains_key(val_type))
-                        && self.func_index.contains_key(&format!("{val_type}__clone"))
+                    } else if self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type)
                     {
                         let clone_name = format!("{val_type}__clone_inplace");
                         stores.push((112, clone_name));
@@ -2578,20 +2576,14 @@ impl<'a> FuncLowering<'a> {
             self.store_to_local(d, r, bb);
         }
 
-        // Set elem_drop/elem_clone/elem_materialize on collection constructors.
-        // Must use the slot address (not the return value) since the value
-        // has been stored to the local slot by store_to_local above.
-        if !collection_elem_fns.is_empty() {
-            if let Some(d) = dst {
-                let slot = self.local_to_slot[d.0 as usize];
-                let slot_addr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                    dst: slot_addr,
-                    slot,
-                });
-                self.emit_collection_fn_ptr_stores(slot_addr, &collection_elem_fns, bb);
-            }
-        }
+        // elem_drop/elem_clone/elem_materialize on collection constructors.
+        // These are still set by the C backend's inline emission (emit_call_extern.rs)
+        // because the LLVM backend's gorget_array_free triggers double-frees when
+        // elem_drop is set at the LIR level — the ownership system's explicit drops
+        // conflict with elem_drop cleanup on some code paths.
+        // TODO: investigate the LLVM double-free root cause and re-enable.
+        // The NamedFuncAddr instruction and emit_collection_fn_ptr_stores infrastructure
+        // remain available for when the root cause is resolved.
 
         // Generic post-call zeroing for Move operands.  Consuming args
         // are marked Operand::Move during GIR lowering; we zero their
