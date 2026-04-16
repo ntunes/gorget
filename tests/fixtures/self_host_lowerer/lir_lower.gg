@@ -915,6 +915,19 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     return false
 
+# Check if a GIR type ID represents a pointer type (Ptr or MutPtr).
+bool is_ptr_type(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return false
+    GirType ty = gmod.type_table.get(tid).unwrap()
+    match ty:
+        case GtPtr(_):
+            return true
+        case GtMutPtr(_):
+            return true
+        else:
+            return false
+
 # Check if a function name starts with a scalar type prefix (e.g. int64_t__push).
 # These come from the self-host GIR where T__method is used instead of Vector__T__method.
 bool is_scalar_type_prefix(String name):
@@ -1119,13 +1132,42 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             f.blocks.set(bb, blk2)
 
         case GICall(dst_local, func_name, args):
-            # Lower call arguments
+            # Lower call arguments — check function param types for Ptr(T) params.
+            # User functions with resource-type bare params receive Ptr(T),
+            # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
+            Vector[int] fn_param_tys = get_fn_param_types(func_name, &gmod)
             Vector[int] lir_args = []
             int ai = 0
             while ai < args.len():
                 Operand arg = args.get(ai).unwrap()
-                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
-                lir_args.push(arg_val)
+                # Check if this param is a pointer type in the function signature
+                bool pass_by_ptr = false
+                if ai < fn_param_tys.len():
+                    int pty = fn_param_tys.get(ai).unwrap()
+                    if is_ptr_type(pty, &gmod):
+                        pass_by_ptr = true
+                if pass_by_ptr:
+                    match arg:
+                        case OpCopy(local_id):
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int addr = lir_fn_next_value(&f)
+                            LirBlock ablk = f.blocks.get(bb).unwrap()
+                            ablk.insts.push(ISlotAddr(addr, slot))
+                            f.blocks.set(bb, ablk)
+                            lir_args.push(addr)
+                        case OpMove(local_id):
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int addr = lir_fn_next_value(&f)
+                            LirBlock ablk = f.blocks.get(bb).unwrap()
+                            ablk.insts.push(ISlotAddr(addr, slot))
+                            f.blocks.set(bb, ablk)
+                            lir_args.push(addr)
+                        else:
+                            int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                            lir_args.push(arg_val)
+                else:
+                    int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                    lir_args.push(arg_val)
                 ai += 1
 
             # Check if it's a known function
