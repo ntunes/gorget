@@ -246,6 +246,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_array_remove" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
         "gorget_array_remove_opt" => sig(vec![LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, Scalar]),
         "gorget_array_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
+        "gorget_array_capacity" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
         // gorget_array_contains(arr*, elem*, elem_size)
         "gorget_array_contains" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Bool, vec![Ptr, VoidElem, Scalar]),
         "gorget_array_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
@@ -580,6 +581,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         match method {
             "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
             | "each" | "find" | "find_index" | "sorted" | "sort" | "sorted_by" | "sort_by"
+            | "sorted_by_key" | "sort_by_key"
+            | "windows" | "chunks"
             | "unique" | "count" => return None,
             // Vector.get() returns Option[T] — use safe (non-panicking) get.
             "get" => return Some("gorget_array_safe_get".into()),

@@ -1,0 +1,46 @@
+# Test Vector.sort_by_key and Vector.sorted_by_key.
+from std.conv import int_to_str
+from std.collections import Vector
+
+struct Person:
+    String name
+    int age
+
+void main():
+    # sort_by_key with int key: sort people by age
+    Vector[Person] people = Vector[Person]()
+    people.push(Person("Alice", 30))
+    people.push(Person("Bob", 25))
+    people.push(Person("Carol", 35))
+    people.push(Person("Dave", 28))
+    people.sort_by_key((Person p): p.age)
+    for i in 0 .. people.len():
+        auto p = people.get(i).unwrap()
+        print(p.name)
+
+    print("---")
+
+    # sorted_by_key with string key: sort by name, new vector
+    Vector[Person] orig = Vector[Person]()
+    orig.push(Person("Charlie", 1))
+    orig.push(Person("Alice", 2))
+    orig.push(Person("Bob", 3))
+    Vector[Person] by_name = orig.sorted_by_key((Person p): p.name)
+    for i in 0 .. by_name.len():
+        auto p = by_name.get(i).unwrap()
+        print(p.name)
+
+    print("---")
+
+    # sort_by_key with int key (reverse by negating)
+    Vector[int] nums = Vector[int]()
+    nums.push(3)
+    nums.push(1)
+    nums.push(4)
+    nums.push(1)
+    nums.push(5)
+    nums.sort_by_key((int x): -x)
+    for i in 0 .. nums.len():
+        print(int_to_str(nums.get(i).unwrap()))
+
+    print("done")

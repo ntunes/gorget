@@ -3293,7 +3293,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "set" => Some(self.types.void_id),
-                "len" => Some(self.types.int_id),
+                "len" | "capacity" => Some(self.types.int_id),
                 "index_of" => {
                     if let Some(option_def_id) = self.scopes.lookup("Option") {
                         Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
@@ -3301,9 +3301,18 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.int_id)
                     }
                 }
-                "clear" | "reserve" | "sort" | "sort_by" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
+                "clear" | "reserve" | "sort" | "sort_by" | "sort_by_key" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
-                "sorted" | "sorted_by" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
+                "sorted" | "sorted_by" | "sorted_by_key" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
+                "windows" | "chunks" => {
+                    // Returns Vector[Vector[T]] — eager materialization.
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        let inner = self.types.intern_generic(vec_def_id, vec![elem_type()]);
+                        Some(self.types.intern_generic(vec_def_id, vec![inner]))
+                    } else {
+                        Some(receiver_type)
+                    }
+                }
                 "binary_search" => Some(self.types.int_id),
                 _ => None,
             },

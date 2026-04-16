@@ -1,0 +1,53 @@
+# Test Vector.windows(n) and Vector.chunks(n).
+from std.conv import int_to_str
+from std.collections import Vector
+
+void main():
+    # windows(2) on [1, 2, 3, 4] → [[1,2], [2,3], [3,4]]
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    v.push(4)
+    Vector[Vector[int]] ws = v.windows(2)
+    print(int_to_str(ws.len()))       # 3
+    for i in 0 .. ws.len():
+        auto w = ws.get(i).unwrap()
+        print(int_to_str(w.get(0).unwrap()) + "," + int_to_str(w.get(1).unwrap()))
+
+    print("---")
+
+    # chunks(2) on [1, 2, 3, 4, 5] → [[1,2], [3,4], [5]]
+    Vector[int] v2 = Vector[int]()
+    v2.push(1)
+    v2.push(2)
+    v2.push(3)
+    v2.push(4)
+    v2.push(5)
+    Vector[Vector[int]] cs = v2.chunks(2)
+    print(int_to_str(cs.len()))       # 3
+    for i in 0 .. cs.len():
+        auto c = cs.get(i).unwrap()
+        print(int_to_str(c.len()))
+
+    print("---")
+
+    # windows(n) where n > len → empty result
+    Vector[int] short = Vector[int]()
+    short.push(1)
+    short.push(2)
+    Vector[Vector[int]] empty_ws = short.windows(5)
+    print(int_to_str(empty_ws.len()))  # 0
+
+    # chunks(n=3) on [1,2,3,4,5,6] → two full chunks
+    Vector[int] even = Vector[int]()
+    even.push(1)
+    even.push(2)
+    even.push(3)
+    even.push(4)
+    even.push(5)
+    even.push(6)
+    Vector[Vector[int]] ecs = even.chunks(3)
+    print(int_to_str(ecs.len()))      # 2
+
+    print("done")

@@ -2589,7 +2589,10 @@ fn vector_capacity() {
 2
 2
 20
-30",
+30
+0
+true
+true",
     );
 }
 
@@ -4483,6 +4486,50 @@ fn vector_sort() {
 5
 8
 5",
+    );
+}
+
+#[test]
+fn vector_windows_chunks() {
+    run_gg(
+        "vector_windows_chunks.gg",
+        "\
+3
+1,2
+2,3
+3,4
+---
+3
+2
+2
+1
+---
+0
+2
+done",
+    );
+}
+
+#[test]
+fn vector_sort_by_key() {
+    run_gg(
+        "vector_sort_by_key.gg",
+        "\
+Bob
+Dave
+Alice
+Carol
+---
+Alice
+Bob
+Charlie
+---
+5
+4
+3
+1
+1
+done",
     );
 }
 

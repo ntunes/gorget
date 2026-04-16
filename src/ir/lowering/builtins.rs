@@ -226,12 +226,28 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_array_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "sorted", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "sorted_by", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
+        BuiltinMethodDecl { name: "sorted_by_key", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "reversed", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "unique", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "slice", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: two_ints, return_type: ret_self },
+        // windows(n) / chunks(n) → Vector[Vector[T]]. Eager materialization;
+        // lazy iterator version lands in Phase 2.
+        BuiltinMethodDecl { name: "windows", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: int_param, return_type: |_a, ctx| {
+            let vec_name = format!("Vector__Vector__{}", ctx.elem_name);
+            (ctx.lookup_type_by_name)(&vec_name)
+                .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
+                .unwrap_or(UNIT_TYPE)
+        }},
+        BuiltinMethodDecl { name: "chunks", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: int_param, return_type: |_a, ctx| {
+            let vec_name = format!("Vector__Vector__{}", ctx.elem_name);
+            (ctx.lookup_type_by_name)(&vec_name)
+                .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
+                .unwrap_or(UNIT_TYPE)
+        }},
         // Higher-order (inline codegen — keep monomorphized names)
         BuiltinMethodDecl { name: "sort", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "sort_by", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "sort_by_key", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "flat_map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },

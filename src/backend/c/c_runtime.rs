@@ -4857,6 +4857,10 @@ static inline size_t gorget_array_len(const GorgetArray* arr) {
     return arr->len;
 }
 
+static inline size_t gorget_array_capacity(const GorgetArray* arr) {
+    return arr->cap;
+}
+
 // Ownership boundary: materialize all view elements to owned copies.
 // Called at return boundaries so the caller gets independently-owned data.
 // No-op for arrays without elem_materialize (trivial element types).

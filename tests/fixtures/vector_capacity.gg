@@ -26,3 +26,11 @@ void main():
     print(s.len())
     print(s[0])
     print(s[1])
+
+    # capacity() method — returns current allocation size
+    Vector[int] empty = Vector[int]()
+    print(empty.capacity())             # 0 (no allocation)
+    empty.push(1)
+    print(empty.capacity() >= 1 as int) # 1
+    Vector[int] prealloc = Vector[int](cap=100)
+    print(prealloc.capacity() >= 100 as int)  # 1

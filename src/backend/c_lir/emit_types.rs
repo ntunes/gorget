@@ -7,6 +7,8 @@ use super::*;
 pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
     "filter", "map", "flat_map", "fold", "reduce", "any", "all",
     "each", "find", "find_index", "sorted", "sort", "sorted_by", "sort_by",
+    "sorted_by_key", "sort_by_key",
+    "windows", "chunks",
     "unique", "count",
 ];
 
@@ -149,8 +151,8 @@ fn resolve_fold_acc_type(call_fn: &str, module: &LirModule, sn: &HashMap<u32, St
 
 pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) {
     // Skip closure-dependent helpers when we can't resolve the closure call function.
-    // Methods that don't use closures (sort, sorted, unique, count) always emit.
-    let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count");
+    // Methods that don't use closures (sort, sorted, unique, count, windows, chunks) always emit.
+    let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count" | "windows" | "chunks");
     if !closure_free && call_fn.contains("UNKNOWN_CLOSURE_CALL") {
         return;
     }
@@ -289,6 +291,55 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
                 writeln!(out, "}}").unwrap();
             }
         }
+        "sort_by_key" | "sorted_by_key" => {
+            // Key-function sort: closure is K(T); comparator extracts keys from
+            // both elements and compares using type-specific key comparator.
+            // TLS stores the active closure for the qsort callback to access.
+            let key_c = closure_call_return_type(module, call_fn, sn).unwrap_or_else(|| "int64_t".into());
+            let needs_ref0 = needs_ref.first().copied().unwrap_or(false);
+            let a_arg = if needs_ref0 { format!("(const {elem_c}*)__pa") } else { format!("*(const {elem_c}*)__pa") };
+            let b_arg = if needs_ref0 { format!("(const {elem_c}*)__pb") } else { format!("*(const {elem_c}*)__pb") };
+            let tls_sym = format!("__tls_{full_name}");
+            let cmp_sym = format!("__cmp_{full_name}");
+            // Compare two keys inline — type-specific.
+            let key_cmp = match key_c.as_str() {
+                "int64_t" | "int32_t" | "int16_t" | "int8_t"
+                | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" =>
+                    "(int)((__ka > __kb) - (__ka < __kb))".to_string(),
+                "double" | "float" =>
+                    "(__ka < __kb) ? -1 : (__ka > __kb) ? 1 : 0".to_string(),
+                "Str" | "GorgetString" =>
+                    "gorget_str_cmp(__ka, __kb)".to_string(),
+                "bool" | "_Bool" =>
+                    "(int)((__ka > __kb) - (__ka < __kb))".to_string(),
+                _ => {
+                    // Fallback: byte-compare via memcmp (works for POD).
+                    format!("memcmp(&__ka, &__kb, sizeof({key_c}))")
+                }
+            };
+            writeln!(out, "static _Thread_local const void* {tls_sym};").unwrap();
+            writeln!(out, "static int {cmp_sym}(const void* __pa, const void* __pb) {{").unwrap();
+            writeln!(out, "    {key_c} __ka = {call_fn}({tls_sym}, {a_arg});").unwrap();
+            writeln!(out, "    {key_c} __kb = {call_fn}({tls_sym}, {b_arg});").unwrap();
+            writeln!(out, "    return {key_cmp};").unwrap();
+            writeln!(out, "}}").unwrap();
+            if method == "sort_by_key" {
+                writeln!(out, "static inline void {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
+                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
+                writeln!(out, "    GorgetArray* __a = (GorgetArray*)__arr_ptr;").unwrap();
+                writeln!(out, "    qsort(__a->data, __a->len, __a->elem_size, {cmp_sym});").unwrap();
+                writeln!(out, "    {tls_sym} = __prev;").unwrap();
+                writeln!(out, "}}").unwrap();
+            } else {
+                writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
+                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
+                writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
+                writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp_sym});").unwrap();
+                writeln!(out, "    {tls_sym} = __prev;").unwrap();
+                writeln!(out, "    return __result;").unwrap();
+                writeln!(out, "}}").unwrap();
+            }
+        }
         "unique" => {
             // unique() → clone + sort + dedup with type-specific compare
             let cmp = compare_fn_for_elem(elem_c);
@@ -296,6 +347,48 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
             writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp});").unwrap();
             writeln!(out, "    gorget_array_dedup(&__result);").unwrap();
+            writeln!(out, "    return __result;").unwrap();
+            writeln!(out, "}}").unwrap();
+        }
+        "windows" => {
+            // windows(n) → Vector[Vector[T]] of sliding slices of size n.
+            // Each window shares elements with neighbors — for resource T, elements
+            // are bit-copied (no clone); Phase 2 lazy iterators will handle resource
+            // types properly via borrowing. Phase 1.5 is correct for POD types.
+            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, int64_t __n) {{").unwrap();
+            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
+            writeln!(out, "    GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free);").unwrap();
+            writeln!(out, "    if (__n <= 0 || (size_t)__n > __src.len) return __result;").unwrap();
+            writeln!(out, "    for (size_t __i = 0; __i + (size_t)__n <= __src.len; __i++) {{").unwrap();
+            writeln!(out, "        GorgetArray __w = gorget_array_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "        for (size_t __j = __i; __j < __i + (size_t)__n; __j++) {{").unwrap();
+            writeln!(out, "            {elem_c} __e = GORGET_ARRAY_AT({elem_c}, __src, __j);").unwrap();
+            writeln!(out, "            gorget_array_push(&__w, &__e);").unwrap();
+            writeln!(out, "        }}").unwrap();
+            writeln!(out, "        gorget_array_push(&__result, &__w);").unwrap();
+            writeln!(out, "    }}").unwrap();
+            writeln!(out, "    return __result;").unwrap();
+            writeln!(out, "}}").unwrap();
+        }
+        "chunks" => {
+            // chunks(n) → Vector[Vector[T]] of non-overlapping slices of size n.
+            // Last chunk may be shorter. For resource T, elements are bit-copied
+            // (transferred once since chunks are disjoint). Phase 2 lazy version
+            // will handle borrowing.
+            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, int64_t __n) {{").unwrap();
+            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
+            writeln!(out, "    GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free);").unwrap();
+            writeln!(out, "    if (__n <= 0) return __result;").unwrap();
+            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i += (size_t)__n) {{").unwrap();
+            writeln!(out, "        GorgetArray __c = gorget_array_new(sizeof({elem_c}));").unwrap();
+            writeln!(out, "        size_t __end = __i + (size_t)__n;").unwrap();
+            writeln!(out, "        if (__end > __src.len) __end = __src.len;").unwrap();
+            writeln!(out, "        for (size_t __j = __i; __j < __end; __j++) {{").unwrap();
+            writeln!(out, "            {elem_c} __e = GORGET_ARRAY_AT({elem_c}, __src, __j);").unwrap();
+            writeln!(out, "            gorget_array_push(&__c, &__e);").unwrap();
+            writeln!(out, "        }}").unwrap();
+            writeln!(out, "        gorget_array_push(&__result, &__c);").unwrap();
+            writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
         }

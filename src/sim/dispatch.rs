@@ -3827,6 +3827,129 @@ impl<'m> Interpreter<'m> {
             return Ok(Some(Value::Unit));
         }
 
+        // Vector__T__windows(Ptr(arr), int n) → Vector[Vector[T]] of sliding slices
+        if is_array_call(name) && name.ends_with("__windows") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let n = args.get(1).map(|v| v.as_i64()).unwrap_or(0) as usize;
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            let result = super::value::SimArray::new(name.trim_end_matches("__windows"));
+            if n > 0 && n <= items.len() {
+                for i in 0..=(items.len() - n) {
+                    let win = super::value::SimArray::new("Vector__window");
+                    for j in i..(i + n) {
+                        win.push(items[j].clone());
+                    }
+                    result.push(Value::Array(win));
+                }
+            }
+            return Ok(Some(Value::Array(result)));
+        }
+
+        // Vector__T__chunks(Ptr(arr), int n) → Vector[Vector[T]] of non-overlapping slices
+        if is_array_call(name) && name.ends_with("__chunks") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let n = args.get(1).map(|v| v.as_i64()).unwrap_or(0) as usize;
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            let result = super::value::SimArray::new(name.trim_end_matches("__chunks"));
+            if n > 0 {
+                let mut i = 0;
+                while i < items.len() {
+                    let chunk = super::value::SimArray::new("Vector__chunk");
+                    let end = std::cmp::min(i + n, items.len());
+                    for j in i..end {
+                        chunk.push(items[j].clone());
+                    }
+                    result.push(Value::Array(chunk));
+                    i += n;
+                }
+            }
+            return Ok(Some(Value::Array(result)));
+        }
+
+        // Vector__T__sort_by_key(MutPtr(arr), closure(T) → K) — in-place sort by key
+        if is_array_call(name) && name.ends_with("__sort_by_key") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let closure = args.get(1).cloned().unwrap_or(Value::Unit);
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            // Pre-compute keys once (insertion sort compares keys, not elements).
+            let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(items.len());
+            for v in items {
+                let k = self.call_closure_value(closure.clone(), vec![v.clone()], depth + 1)?;
+                pairs.push((k, v));
+            }
+            // Insertion sort by key.
+            for i in 1..pairs.len() {
+                let cur = pairs[i].clone();
+                let mut j = i;
+                while j > 0 {
+                    let a = &cur.0;
+                    let b = &pairs[j - 1].0;
+                    let ord = if a.is_integer() && b.is_integer() {
+                        a.as_i64().cmp(&b.as_i64())
+                    } else if a.is_float() || b.is_float() {
+                        a.as_f64().partial_cmp(&b.as_f64()).unwrap_or(std::cmp::Ordering::Equal)
+                    } else if a.is_string() && b.is_string() {
+                        a.as_str_content().cmp(b.as_str_content())
+                    } else {
+                        std::cmp::Ordering::Equal
+                    };
+                    if ord == std::cmp::Ordering::Less {
+                        pairs[j] = pairs[j - 1].clone();
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                pairs[j] = cur;
+            }
+            let sorted: Vec<Value> = pairs.into_iter().map(|(_, v)| v).collect();
+            if let Some(arr) = self.get_array_from_value(&arr_arg) {
+                *arr.data.borrow_mut() = sorted;
+            }
+            return Ok(Some(Value::Unit));
+        }
+
+        // Vector__T__sorted_by_key(MutPtr(arr), closure(T) → K) — new sorted copy by key
+        if is_array_call(name) && name.ends_with("__sorted_by_key") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let closure = args.get(1).cloned().unwrap_or(Value::Unit);
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            let mut pairs: Vec<(Value, Value)> = Vec::with_capacity(items.len());
+            for v in items {
+                let k = self.call_closure_value(closure.clone(), vec![v.clone()], depth + 1)?;
+                pairs.push((k, v));
+            }
+            for i in 1..pairs.len() {
+                let cur = pairs[i].clone();
+                let mut j = i;
+                while j > 0 {
+                    let a = &cur.0;
+                    let b = &pairs[j - 1].0;
+                    let ord = if a.is_integer() && b.is_integer() {
+                        a.as_i64().cmp(&b.as_i64())
+                    } else if a.is_float() || b.is_float() {
+                        a.as_f64().partial_cmp(&b.as_f64()).unwrap_or(std::cmp::Ordering::Equal)
+                    } else if a.is_string() && b.is_string() {
+                        a.as_str_content().cmp(b.as_str_content())
+                    } else {
+                        std::cmp::Ordering::Equal
+                    };
+                    if ord == std::cmp::Ordering::Less {
+                        pairs[j] = pairs[j - 1].clone();
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                pairs[j] = cur;
+            }
+            let result = super::value::SimArray::new(name.trim_end_matches("__sorted_by_key"));
+            for (_, v) in pairs {
+                result.push(v);
+            }
+            return Ok(Some(Value::Array(result)));
+        }
+
         // Vector__T__sort_by(MutPtr(arr), closure(a, b) → int) — in-place sort with closure comparator
         if is_array_call(name) && name.ends_with("__sort_by") {
             let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
