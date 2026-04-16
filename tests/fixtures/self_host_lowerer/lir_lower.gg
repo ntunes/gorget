@@ -408,46 +408,8 @@ String map_runtime_name(String name):
 
     # Vector methods
     if name.starts_with("Vector__") and name.contains("__"):
-        # Extract method name after the last "__"
         String method = extract_method_name(name)
-        if method == "new":
-            return "gorget_array_new"
-        elif method == "push":
-            return "gorget_array_push"
-        elif method == "pop":
-            return "gorget_array_safe_pop"
-        elif method == "get":
-            return "gorget_array_safe_get"
-        elif method == "set":
-            return "gorget_array_set"
-        elif method == "len":
-            return "gorget_array_len"
-        elif method == "remove":
-            return "gorget_array_remove_opt"
-        elif method == "insert":
-            return "gorget_array_insert"
-        elif method == "clone":
-            return "gorget_array_clone"
-        elif method == "clear":
-            return "gorget_array_clear"
-        elif method == "extend":
-            return "gorget_array_extend"
-        elif method == "contains":
-            return "gorget_array_contains"
-        elif method == "reverse":
-            return "gorget_array_reverse"
-        elif method == "slice":
-            return "gorget_array_slice"
-        elif method == "last":
-            return "gorget_array_safe_last"
-        elif method == "first":
-            return "gorget_array_safe_first"
-        elif method == "is_empty":
-            return "gorget_array_is_empty"
-        elif method == "capacity":
-            return "gorget_array_capacity"
-        elif method == "swap":
-            return "gorget_array_swap"
+        return map_array_method(method)
 
     # Dict/HashMap methods
     if name.starts_with("Dict__") or name.starts_with("HashMap__"):
@@ -461,30 +423,7 @@ String map_runtime_name(String name):
             if is_dict:
                 return "gorget_dict_new"
             return "gorget_map_new"
-        elif method == "put" or method == "set":
-            return "gorget_map_put"
-        elif method == "get":
-            return "gorget_map_get"
-        elif method == "contains" or method == "has":
-            return "gorget_map_contains"
-        elif method == "remove":
-            return "gorget_map_remove"
-        elif method == "len":
-            return "gorget_map_len"
-        elif method == "keys":
-            return "gorget_map_keys"
-        elif method == "values":
-            return "gorget_map_values"
-        elif method == "clone":
-            return "gorget_map_clone"
-        elif method == "clear":
-            return "gorget_map_clear"
-        elif method == "is_empty":
-            return "gorget_map_is_empty"
-        elif method == "items":
-            return "gorget_map_items"
-        elif method == "update":
-            return "gorget_map_update"
+        return map_dict_method(method)
 
     # Set methods
     if name.starts_with("Set__") or name.starts_with("HashSet__"):
@@ -497,244 +436,323 @@ String map_runtime_name(String name):
             if name.starts_with("Set__"):
                 return "gorget_ordered_set_new"
             return "gorget_set_new"
-        elif method == "add" or method == "insert":
-            return "gorget_set_add"
-        elif method == "contains" or method == "has":
-            return "gorget_set_contains"
-        elif method == "remove":
-            return "gorget_set_remove"
-        elif method == "len":
-            return "gorget_set_len"
-        elif method == "clone":
-            return "gorget_set_clone"
-        elif method == "clear":
-            return "gorget_set_clear"
-        elif method == "is_empty":
-            return "gorget_set_is_empty"
-        elif method == "union":
-            return "gorget_set_union"
-        elif method == "intersection":
-            return "gorget_set_intersection"
-        elif method == "difference":
-            return "gorget_set_difference"
-        elif method == "is_subset":
-            return "gorget_set_is_subset"
-        elif method == "is_superset":
-            return "gorget_set_is_superset"
+        return map_set_method(method)
 
     # String methods
     if name.starts_with("GorgetString__") or name.starts_with("String__") or name.starts_with("Str__"):
         String method = extract_method_name(name)
-        if method == "push":
-            return "gorget_string_push"
-        return "gorget_str_" + method
+        match method:
+            case "push":
+                return "gorget_string_push"
+            else:
+                return "gorget_str_" + method
 
-    # Heap methods
+    # Prefix → runtime prefix (simple 1:1 mappings)
     if name.starts_with("Heap__"):
-        String method = extract_method_name(name)
-        return "gorget_heap_" + method
+        return "gorget_heap_" + extract_method_name(name)
+    if name.starts_with("Mutex__"):
+        return "gorget_mutex_" + extract_method_name(name)
+    if name.starts_with("RWLock__"):
+        return "gorget_rwlock_" + extract_method_name(name)
+    if name.starts_with("ReadGuard__"):
+        return "gorget_read_guard_" + extract_method_name(name)
+    if name.starts_with("WriteGuard__"):
+        return "gorget_write_guard_" + extract_method_name(name)
+    if name.starts_with("Weak__"):
+        return "gorget_weak_" + extract_method_name(name)
+    if name.starts_with("AtomicInt__"):
+        return "gorget_atomic_int_" + extract_method_name(name)
+    if name.starts_with("AtomicBool__"):
+        return "gorget_atomic_bool_" + extract_method_name(name)
+    if name.starts_with("Semaphore__"):
+        return "gorget_semaphore_" + extract_method_name(name)
+    if name.starts_with("Barrier__"):
+        return "gorget_barrier_" + extract_method_name(name)
+    if name.starts_with("OnceFlag__"):
+        return "gorget_once_flag_" + extract_method_name(name)
+    if name.starts_with("WaitGroup__"):
+        return "gorget_wait_group_" + extract_method_name(name)
+    if name.starts_with("TaskGroup__"):
+        return "gorget_task_group_" + extract_method_name(name)
 
-    # Guard methods
+    # Guard: drop → release
     if name.starts_with("Guard__"):
         String method = extract_method_name(name)
-        if method == "drop":
-            return "gorget_guard_release"
-        return "gorget_guard_" + method
+        match method:
+            case "drop":
+                return "gorget_guard_release"
+            else:
+                return "gorget_guard_" + method
 
-    # Mutex methods
-    if name.starts_with("Mutex__"):
-        String method = extract_method_name(name)
-        return "gorget_mutex_" + method
-
-    # RWLock methods
-    if name.starts_with("RWLock__"):
-        String method = extract_method_name(name)
-        return "gorget_rwlock_" + method
-
-    # ReadGuard/WriteGuard methods
-    if name.starts_with("ReadGuard__"):
-        String method = extract_method_name(name)
-        return "gorget_read_guard_" + method
-    if name.starts_with("WriteGuard__"):
-        String method = extract_method_name(name)
-        return "gorget_write_guard_" + method
-
-    # Channel methods
+    # Channel methods (some need special mapping)
     if name.starts_with("Channel__"):
         String method = extract_method_name(name)
-        if method == "send":
-            return "gorget_channel_send"
-        elif method == "recv":
-            return "gorget_channel_recv"
-        elif method == "close":
-            return "gorget_channel_close"
-        elif method == "try_recv":
-            return "gorget_channel_try_recv"
-        elif method == "try_send":
-            return "gorget_channel_try_send"
-        elif method == "clone":
-            return "gorget_channel_clone"
-        elif method == "new":
-            return "gorget_channel_new"
-        elif method == "free" or method == "drop":
-            return "gorget_channel_free"
-        return "gorget_channel_" + method
+        match method:
+            case "send":
+                return "gorget_channel_send"
+            case "recv":
+                return "gorget_channel_recv"
+            case "close":
+                return "gorget_channel_close"
+            case "try_recv":
+                return "gorget_channel_try_recv"
+            case "try_send":
+                return "gorget_channel_try_send"
+            case "clone":
+                return "gorget_channel_clone"
+            case "new":
+                return "gorget_channel_new"
+            case "free":
+                return "gorget_channel_free"
+            case "drop":
+                return "gorget_channel_free"
+            else:
+                return "gorget_channel_" + method
 
-    # Shared methods
+    # Shared methods (some need special mapping)
     if name.starts_with("Shared__"):
         String method = extract_method_name(name)
-        if method == "get" or method == "read":
-            return "gorget_shared_get"
-        elif method == "set" or method == "write":
-            return "gorget_shared_set"
-        elif method == "clone":
-            return "gorget_shared_clone"
-        elif method == "new":
-            return "gorget_shared_new"
-        elif method == "free" or method == "drop":
-            return "gorget_shared_free"
-        return "gorget_shared_" + method
-
-    # Weak methods
-    if name.starts_with("Weak__"):
-        String method = extract_method_name(name)
-        return "gorget_weak_" + method
+        match method:
+            case "get":
+                return "gorget_shared_get"
+            case "read":
+                return "gorget_shared_get"
+            case "set":
+                return "gorget_shared_set"
+            case "write":
+                return "gorget_shared_set"
+            case "clone":
+                return "gorget_shared_clone"
+            case "new":
+                return "gorget_shared_new"
+            case "free":
+                return "gorget_shared_free"
+            case "drop":
+                return "gorget_shared_free"
+            else:
+                return "gorget_shared_" + method
 
     # Box methods
     if name.starts_with("Box__"):
         String method = extract_method_name(name)
-        if method == "new":
-            return "gorget_box_new"
-        elif method == "get":
-            return "gorget_box_get"
-        elif method == "free" or method == "drop":
-            return "gorget_box_free"
-        return "gorget_box_" + method
+        match method:
+            case "new":
+                return "gorget_box_new"
+            case "get":
+                return "gorget_box_get"
+            case "free":
+                return "gorget_box_free"
+            case "drop":
+                return "gorget_box_free"
+            else:
+                return "gorget_box_" + method
 
-    # Scalar-prefixed collection methods (from self-host GIR):
-    # int64_t__push, double__get, GorgetString__push, etc.
-    # The self-host GIR lowerer uses T__method instead of Vector__T__method.
+    # Scalar-prefixed methods (self-host GIR uses T__method not Vector__T__method)
     if is_scalar_type_prefix(name):
         String method = extract_method_name(name)
-        if method == "push":
-            return "gorget_array_push"
-        elif method == "get":
-            return "gorget_array_safe_get"
-        elif method == "set":
-            return "gorget_array_set"
-        elif method == "pop":
-            return "gorget_array_safe_pop"
-        elif method == "len":
-            return "gorget_array_len"
-        elif method == "remove":
-            return "gorget_array_remove_opt"
-        elif method == "insert":
-            return "gorget_array_insert"
-        elif method == "clone":
-            return "gorget_array_clone"
-        elif method == "contains":
-            return "gorget_array_contains"
-        elif method == "clear":
-            return "gorget_array_clear"
-        elif method == "extend":
-            return "gorget_array_extend"
-        elif method == "reverse":
-            return "gorget_array_reverse"
-        elif method == "sort":
-            return "gorget_array_sort"
-        elif method == "slice":
-            return "gorget_array_slice"
-        elif method == "first":
-            return "gorget_array_safe_first"
-        elif method == "last":
-            return "gorget_array_safe_last"
-        elif method == "is_empty":
-            return "gorget_array_is_empty"
-        elif method == "new":
-            return "gorget_array_new"
-        elif method == "free":
-            return "gorget_array_free"
-        elif method == "swap":
-            return "gorget_array_swap"
-        elif method == "index_of":
-            return "gorget_array_index_of"
+        String arr = map_array_method(method)
+        if arr != "":
+            return arr
         # Option/Result methods on scalar-prefixed types
-        elif method == "is_none" or method == "is_some":
-            return "__option_" + method
-        elif method == "is_ok" or method == "is_error" or method == "is_err":
-            return "__result_" + method
-        elif method == "unwrap" or method == "expect":
-            return "__option_" + method
-        elif method == "unwrap_error" or method == "unwrap_err":
-            return "__result_unwrap_error"
-        elif method == "map" or method == "filter" or method == "and_then" or method == "or_else":
-            return "__option_" + method
-        elif method == "or":
-            return "__option_or"
+        return map_option_result_method(method)
 
-    # Option combinator methods: Some__map, Some__filter, etc.
+    # Option/Result variant methods: Some__map, Ok__map, Error__unwrap_error, etc.
     if name.starts_with("Some__") or name.starts_with("None__"):
-        String method = extract_method_name(name)
-        return "__option_" + method
+        return "__option_" + extract_method_name(name)
     if name.starts_with("Ok__") or name.starts_with("Error__") or name.starts_with("Err__"):
-        String method = extract_method_name(name)
-        return "__result_" + method
-
-    # AtomicInt / AtomicBool methods
-    if name.starts_with("AtomicInt__"):
-        String method = extract_method_name(name)
-        return "gorget_atomic_int_" + method
-    if name.starts_with("AtomicBool__"):
-        String method = extract_method_name(name)
-        return "gorget_atomic_bool_" + method
-
-    # Semaphore/Barrier/OnceFlag/WaitGroup methods
-    if name.starts_with("Semaphore__"):
-        String method = extract_method_name(name)
-        return "gorget_semaphore_" + method
-    if name.starts_with("Barrier__"):
-        String method = extract_method_name(name)
-        return "gorget_barrier_" + method
-    if name.starts_with("OnceFlag__"):
-        String method = extract_method_name(name)
-        return "gorget_once_flag_" + method
-    if name.starts_with("WaitGroup__"):
-        String method = extract_method_name(name)
-        return "gorget_wait_group_" + method
-
-    # TaskGroup methods
-    if name.starts_with("TaskGroup__"):
-        String method = extract_method_name(name)
-        return "gorget_task_group_" + method
+        return "__result_" + extract_method_name(name)
 
     # Standalone function mappings
-    if name == "int_to_str":
-        return "gorget_int_to_str"
-    if name == "float_to_str":
-        return "gorget_float_to_str"
-    if name == "bool_to_str":
-        return "gorget_bool_to_str"
-    if name == "char_to_str":
-        return "gorget_char_to_str"
-    if name == "str_to_int" or name == "parse_int":
-        return "gorget_parse_int"
-    if name == "str_to_float" or name == "parse_float":
-        return "gorget_parse_float"
-    if name == "read_file":
-        return "gorget_read_file"
-    if name == "read_line":
-        return "gorget_read_line"
-    if name == "print_err":
-        return "gorget_print_err"
-    if name == "args":
-        return "gorget_args"
-    if name == "async_sleep" or name == "sleep_ms":
-        return "gorget_async_sleep"
-    if name == "time_now" or name == "monotonic_ns":
-        return "gorget_monotonic_ns"
+    match name:
+        case "int_to_str":
+            return "gorget_int_to_str"
+        case "float_to_str":
+            return "gorget_float_to_str"
+        case "bool_to_str":
+            return "gorget_bool_to_str"
+        case "char_to_str":
+            return "gorget_char_to_str"
+        case "parse_int":
+            return "gorget_parse_int"
+        case "str_to_int":
+            return "gorget_parse_int"
+        case "parse_float":
+            return "gorget_parse_float"
+        case "str_to_float":
+            return "gorget_parse_float"
+        case "read_file":
+            return "gorget_read_file"
+        case "read_line":
+            return "gorget_read_line"
+        case "print_err":
+            return "gorget_print_err"
+        case "args":
+            return "gorget_args"
+        case "async_sleep":
+            return "gorget_async_sleep"
+        case "sleep_ms":
+            return "gorget_async_sleep"
+        case "time_now":
+            return "gorget_monotonic_ns"
+        case "monotonic_ns":
+            return "gorget_monotonic_ns"
+        else:
+            pass
 
     # No mapping
     return ""
+
+# Map a Vector/Array method name to the runtime function name.
+String map_array_method(String method):
+    match method:
+        case "new":
+            return "gorget_array_new"
+        case "push":
+            return "gorget_array_push"
+        case "pop":
+            return "gorget_array_safe_pop"
+        case "get":
+            return "gorget_array_safe_get"
+        case "set":
+            return "gorget_array_set"
+        case "len":
+            return "gorget_array_len"
+        case "remove":
+            return "gorget_array_remove_opt"
+        case "insert":
+            return "gorget_array_insert"
+        case "clone":
+            return "gorget_array_clone"
+        case "clear":
+            return "gorget_array_clear"
+        case "extend":
+            return "gorget_array_extend"
+        case "contains":
+            return "gorget_array_contains"
+        case "reverse":
+            return "gorget_array_reverse"
+        case "slice":
+            return "gorget_array_slice"
+        case "sort":
+            return "gorget_array_sort"
+        case "last":
+            return "gorget_array_safe_last"
+        case "first":
+            return "gorget_array_safe_first"
+        case "is_empty":
+            return "gorget_array_is_empty"
+        case "capacity":
+            return "gorget_array_capacity"
+        case "swap":
+            return "gorget_array_swap"
+        case "index_of":
+            return "gorget_array_index_of"
+        case "free":
+            return "gorget_array_free"
+        else:
+            return ""
+
+# Map a Dict/Map method name to the runtime function name.
+String map_dict_method(String method):
+    match method:
+        case "put":
+            return "gorget_map_put"
+        case "set":
+            return "gorget_map_put"
+        case "get":
+            return "gorget_map_get"
+        case "contains":
+            return "gorget_map_contains"
+        case "has":
+            return "gorget_map_contains"
+        case "remove":
+            return "gorget_map_remove"
+        case "len":
+            return "gorget_map_len"
+        case "keys":
+            return "gorget_map_keys"
+        case "values":
+            return "gorget_map_values"
+        case "clone":
+            return "gorget_map_clone"
+        case "clear":
+            return "gorget_map_clear"
+        case "is_empty":
+            return "gorget_map_is_empty"
+        case "items":
+            return "gorget_map_items"
+        case "update":
+            return "gorget_map_update"
+        else:
+            return ""
+
+# Map a Set method name to the runtime function name.
+String map_set_method(String method):
+    match method:
+        case "add":
+            return "gorget_set_add"
+        case "insert":
+            return "gorget_set_add"
+        case "contains":
+            return "gorget_set_contains"
+        case "has":
+            return "gorget_set_contains"
+        case "remove":
+            return "gorget_set_remove"
+        case "len":
+            return "gorget_set_len"
+        case "clone":
+            return "gorget_set_clone"
+        case "clear":
+            return "gorget_set_clear"
+        case "is_empty":
+            return "gorget_set_is_empty"
+        case "union":
+            return "gorget_set_union"
+        case "intersection":
+            return "gorget_set_intersection"
+        case "difference":
+            return "gorget_set_difference"
+        case "is_subset":
+            return "gorget_set_is_subset"
+        case "is_superset":
+            return "gorget_set_is_superset"
+        else:
+            return ""
+
+# Map an Option/Result method name to its combinator function.
+String map_option_result_method(String method):
+    match method:
+        case "is_none":
+            return "__option_is_none"
+        case "is_some":
+            return "__option_is_some"
+        case "is_ok":
+            return "__result_is_ok"
+        case "is_error":
+            return "__result_is_error"
+        case "is_err":
+            return "__result_is_err"
+        case "unwrap":
+            return "__option_unwrap"
+        case "expect":
+            return "__option_expect"
+        case "unwrap_error":
+            return "__result_unwrap_error"
+        case "unwrap_err":
+            return "__result_unwrap_error"
+        case "map":
+            return "__option_map"
+        case "filter":
+            return "__option_filter"
+        case "and_then":
+            return "__option_and_then"
+        case "or_else":
+            return "__option_or_else"
+        case "or":
+            return "__option_or"
+        else:
+            return ""
 
 # Check if a name is a bare collection constructor (no method suffix).
 # E.g., "Vector__int64_t" is a constructor, "Vector__int64_t__push" is a method.
