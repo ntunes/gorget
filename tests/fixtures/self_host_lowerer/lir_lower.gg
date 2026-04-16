@@ -1313,21 +1313,49 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     rblk.insts.push(ISlotAddr(out_addr, out_slot))
                     f.blocks.set(bb, rblk)
                     lir_args.push(out_addr)
-            int dst = -1
-            if dst_local >= 0:
-                # For channel recv, the result is written to the slot directly via &out.
-                # Don't create a value destination — the call returns void.
-                if call_name != "gorget_channel_recv" and call_name != "gorget_channel_try_recv":
-                    dst = lir_fn_next_value(&f)
-            Vector[int] empty_abis = []
-            LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
-            f.blocks.set(bb, blk)
-            if dst >= 0 and dst_local >= 0:
-                int dst_slot = local_to_slot.get(dst_local).unwrap()
-                LirBlock blk2 = f.blocks.get(bb).unwrap()
-                blk2.insts.push(ISlotStore(dst_slot, dst, false))
-                f.blocks.set(bb, blk2)
+            # Callable dispatch: emit ICallClosure with correct return type
+            if call_name.starts_with("__callable_") or call_name.starts_with("__gorget_closure_call_"):
+                int cl_dst = -1
+                if dst_local >= 0:
+                    cl_dst = lir_fn_next_value(&f)
+                # Determine return type from the destination local's type
+                int cl_ret = LT_I64
+                if dst_local >= 0:
+                    int dst_slot = local_to_slot.get(dst_local).unwrap()
+                    cl_ret = f.slots.get(dst_slot).unwrap().ty
+                # First arg is the callable, rest are call args
+                int cl_closure = lir_args.get(0).unwrap()
+                Vector[int] cl_call_args = []
+                int cli = 1
+                while cli < lir_args.len():
+                    cl_call_args.push(lir_args.get(cli).unwrap())
+                    cli += 1
+                Vector[int] cl_abis = []
+                LirBlock cblk = f.blocks.get(bb).unwrap()
+                # kind=0 means CallableParam (void*[2] protocol)
+                cblk.insts.push(ICallClosure(cl_dst, 0, cl_closure, cl_call_args, cl_abis, cl_ret))
+                f.blocks.set(bb, cblk)
+                if cl_dst >= 0 and dst_local >= 0:
+                    int cl_dst_slot = local_to_slot.get(dst_local).unwrap()
+                    LirBlock cblk2 = f.blocks.get(bb).unwrap()
+                    cblk2.insts.push(ISlotStore(cl_dst_slot, cl_dst, false))
+                    f.blocks.set(bb, cblk2)
+            else:
+                int dst = -1
+                if dst_local >= 0:
+                    # For channel recv, the result is written to the slot directly via &out.
+                    # Don't create a value destination — the call returns void.
+                    if call_name != "gorget_channel_recv" and call_name != "gorget_channel_try_recv":
+                        dst = lir_fn_next_value(&f)
+                Vector[int] empty_abis = []
+                LirBlock blk = f.blocks.get(bb).unwrap()
+                blk.insts.push(ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
+                f.blocks.set(bb, blk)
+                if dst >= 0 and dst_local >= 0:
+                    int dst_slot = local_to_slot.get(dst_local).unwrap()
+                    LirBlock blk2 = f.blocks.get(bb).unwrap()
+                    blk2.insts.push(ISlotStore(dst_slot, dst, false))
+                    f.blocks.set(bb, blk2)
 
         case GIDrop(local_id):
             # Emit drop as extern call: Type__drop(&place)

@@ -216,8 +216,25 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             int t = prim_name_to_type(name)
             if t >= 0:
                 return t
-            # Callable types → unit (opaque in GIR)
+            # Callable types: Callable[T(int)] → FnPtr([int], T) for type inference.
+            # The actual ABI is Ptr (void*), but we record the function type
+            # so callable dispatch can infer return types.
             if name == "Callable" or name == "MutCallable" or name == "ConsumeCallable":
+                if targs.len() == 1:
+                    # Single type arg is a function type: T(int, int)
+                    SpannedType fn_arg = targs.get(0).unwrap()
+                    match fn_arg.ty:
+                        case TFunction(ret_box, fn_params, _):
+                            Vector[int] param_tids = []
+                            int fpi = 0
+                            while fpi < fn_params.len():
+                                param_tids.push(map_ast_type(fn_params.get(fpi).unwrap(), &gmod))
+                                fpi += 1
+                            int ret_tid = map_ast_type(*ret_box, &gmod)
+                            int fn_tid = register_type(&gmod, GtFnPtr(param_tids, ret_tid))
+                            return register_ptr(&gmod, fn_tid)
+                        else:
+                            pass
                 return UNIT_TYPE
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
@@ -618,7 +635,34 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
                         String cl_call = "__callable_" + int_to_str(arity)
-                        int cl_dst = add_local(&ctx, I64_TYPE, NO_NAME)
+                        # Infer return type from the callable's type (function pointer return type)
+                        int cl_ret_type = I64_TYPE
+                        int callable_tid = ctx.locals.get(callable_local).unwrap().type_id
+                        if callable_tid >= 0 and callable_tid < gmod.type_table.len():
+                            GirType ct = gmod.type_table.get(callable_tid).unwrap()
+                            match ct:
+                                case GtFnPtr(_, ret_tid):
+                                    cl_ret_type = ret_tid
+                                case GtPtr(inner_tid):
+                                    # Callable params are Ptr(FnPtr(...)) — unwrap
+                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
+                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
+                                        match inner_ct:
+                                            case GtFnPtr(_, ret_tid2):
+                                                cl_ret_type = ret_tid2
+                                            else:
+                                                pass
+                                case GtMutPtr(inner_tid):
+                                    if inner_tid >= 0 and inner_tid < gmod.type_table.len():
+                                        GirType inner_ct = gmod.type_table.get(inner_tid).unwrap()
+                                        match inner_ct:
+                                            case GtFnPtr(_, ret_tid2):
+                                                cl_ret_type = ret_tid2
+                                            else:
+                                                pass
+                                else:
+                                    pass
+                        int cl_dst = add_local(&ctx, cl_ret_type, NO_NAME)
                         emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
                         return cl_dst
                     return lower_call(&ctx, &fname, &args, &targs, &gmod)
