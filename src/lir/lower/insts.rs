@@ -1675,15 +1675,29 @@ impl<'a> FuncLowering<'a> {
                 .unwrap_or(raw_elem);
 
             // GorgetArray offsets: elem_drop=40, elem_clone=48, elem_materialize=56
-            // Only set elem_drop/elem_clone for built-in resource types
-            // (collections and strings). User struct/enum drops are handled by
-            // the ownership system's explicit drop calls — setting elem_drop for
-            // them would cause double-frees.
+            // elem_drop: built-in resource types AND user types with drop.
+            // When the collection itself is freed (gorget_array_free), elem_drop
+            // fires for each element. The ownership system handles individual
+            // element drops (via IndexLoad MoveZero), not batch cleanup.
             if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type) {
                 stores.push((40, drop_fn));
+            } else if self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type)
+            {
+                let drop_name = format!("{elem_type}__drop");
+                stores.push((40, drop_name));
             }
+            // elem_clone: built-in resource types AND user types with resource
+            // fields. Without elem_clone, gorget_array_clone does a shallow
+            // memcpy of elements, creating shared String pointers that
+            // use-after-free when one copy is dropped.
             if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type) {
                 stores.push((48, clone_fn));
+            } else if self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type)
+            {
+                let clone_name = format!("{elem_type}__clone_inplace");
+                stores.push((48, clone_name));
             }
             if elem_type == "GorgetString" {
                 stores.push((56, "gorget_string_materialize_inplace".into()));
@@ -1705,12 +1719,23 @@ impl<'a> FuncLowering<'a> {
                 if let Some(pos) = rest_stripped.find("__") {
                     let val_type = &rest_stripped[pos + 2..];
                     // GorgetMap offsets: val_drop=104, val_clone=112, val_materialize=136
-                    // Only set for built-in resource types — see comment above.
+                    // val_drop: built-in + user recursive types (see elem_drop comment).
                     if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type) {
                         stores.push((104, drop_fn));
+                    } else if self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type)
+                    {
+                        let drop_name = format!("{val_type}__drop");
+                        stores.push((104, drop_name));
                     }
+                    // val_clone: built-in + user recursive types (see elem_clone comment).
                     if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type) {
                         stores.push((112, clone_fn));
+                    } else if self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type)
+                    {
+                        let clone_name = format!("{val_type}__clone_inplace");
+                        stores.push((112, clone_name));
                     }
                     if val_type == "GorgetString" {
                         stores.push((136, "gorget_string_materialize_inplace".into()));
