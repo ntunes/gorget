@@ -444,6 +444,14 @@ String map_runtime_name(String name):
         match method:
             case "push":
                 return "gorget_string_push"
+            case "len":
+                return "gorget_str_codepoint_count"
+            case "byte_len":
+                return "gorget_str_byte_len"
+            case "clone":
+                return "gorget_string_clone_to_owned"
+            case "free":
+                return "gorget_string_free"
             else:
                 return "gorget_str_" + method
 
