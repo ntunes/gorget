@@ -40,13 +40,13 @@
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
-- **LLVM backend test results (2026-04-16)**:
-  - Fixes applied 2026-04-16: computed_c_align on StructDef + c_alignof_lir_type(), inter-field padding in LLVM struct emission, byte-offset GEP for FieldPtr, Box free loads as LirType::Ptr, **Option/Result combinator inline handlers** (map/filter/and_then/or_else/or/flatten/unwrap_or_else/flat_map/map_err — previously fell through to non-existent extern call → garbage/0)
-  - Full test run: 728 PASS / 815 (89.3%), 32 FAIL (down from 39), 36 CRASH, ~9 BUILD_FAIL (10 more transient from artifact pollution). Combinator fix: 6/7 affected tests now PASS (test_option_all, test_option_chaining, option_result_combinators, test_result_all, test_result_advanced, coroutine_result_combinators). 1 has pre-existing linker error (test_result_chaining — missing Result__drop symbol).
-  - **Parsed array int-as-0**: FIXED — root cause was CStr null-termination. View strings passed to `gorget_parse_int` via raw `.data` pointer were not null-terminated, causing `strtoll` to fail on trailing chars. Fix: `gorget_str_to_cstr()` for all CStr params. Fixes json_parse, json_pretty, json_edge_cases, xml_parse (~4 FAIL tests).
-  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, 1x conv_stdlib, 1x shared_iterator_invalidation, 1x print_trait_object, 1x string_enum_variants, 1x sqlite
-  - Remaining CRASH (36): 13x p2p (signal 11), 5x httpserver, 2x crypto, 2x leak (signal 6), others
-  - **elem_drop/elem_clone**: FIXED — lifted from C backend to LIR lowerer via `Inst::NamedFuncAddr` + byte-offset stores. Only built-in resource types get elem_drop (user types handled by ownership system).
+- **LLVM backend test results (2026-04-16, post-session)**:
+  - **743 PASS / 815 (91.2%)**, 27 FAIL, 36 CRASH, 9 BUILD_FAIL, 109 SKIP. Up from 731 (89.7%) — **+12 net PASS, FAIL 39→27, 0 regressions**.
+  - Fixes: (1) Option/Result combinator inline handlers (~7 tests), (2) CStr null-termination via gorget_str_to_cstr (~4 tests), (3) NamedFuncAddr LIR instruction + runtime free/clone declarations
+  - **elem_drop/elem_clone**: LIR-level stores caused double-frees in LLVM backend — reverted to C-backend-only injection. Root cause: ownership system's explicit drops conflict with elem_drop collection-level cleanup on some code paths. `Inst::NamedFuncAddr` remains in LIR for other uses.
+  - **Next high-impact: Dict/Set HOF inlining** (~6 FAIL): The C backend inlines fold/filter/each at each call site with the correct closure; LLVM calls a compiled helper that hardcodes `Closure_0__call`. Proper fix: lift to LIR.
+  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, conv_stdlib, shared_iterator_invalidation, print_trait_object, string_enum_variants, sqlite
+  - Remaining CRASH (36): 13x p2p, 5x httpserver, 2x crypto, 2x leak, others
 
 ## Low
 
