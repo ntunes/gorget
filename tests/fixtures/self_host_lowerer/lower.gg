@@ -387,6 +387,8 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # String-returning methods
     if method == "slice" or method == "trim" or method == "upper" or method == "lower":
         return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "to_lower" or method == "to_upper":
+        return lookup_or_register_named(&gmod, "GorgetString")
     if method == "replace" or method == "repeat" or method == "join":
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "strip" or method == "lstrip" or method == "rstrip":
@@ -401,6 +403,29 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "format":
         return lookup_or_register_named(&gmod, "GorgetString")
+    # Collection-returning methods
+    if method == "split" or method == "lines" or method == "chars" or method == "bytes":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "sorted" or method == "reversed" or method == "unique":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "enumerate" or method == "take" or method == "skip":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "keys" or method == "values" or method == "items":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "chunks" or method == "zip":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "filter_by":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    # Float-returning methods
+    if method == "sum" or method == "avg" or method == "min" or method == "max":
+        return I64_TYPE  # could be float, but I64 is safe default
+    if method == "abs" or method == "sqrt" or method == "ceil" or method == "floor":
+        return F64_TYPE
+    if method == "round":
+        return F64_TYPE
+    # Hash/count
+    if method == "hash" or method == "count" or method == "index_of":
+        return I64_TYPE
     # get/unwrap/pop/last/first: return the element type inferred from receiver
     if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first":
         String recv_name = ""
@@ -1413,7 +1438,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod):
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
                 return UNIT_TYPE
             # Known string-returning methods
-            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "as_str" or mname == "display" or mname == "describe":
+            if mname == "upper" or mname == "lower" or mname == "trim" or mname == "strip" or mname == "replace" or mname == "slice" or mname == "join" or mname == "repeat" or mname == "to_string" or mname == "reverse" or mname == "format" or mname == "as_str" or mname == "display" or mname == "describe" or mname == "to_lower" or mname == "to_upper" or mname == "removeprefix" or mname == "removesuffix" or mname == "center" or mname == "ljust" or mname == "rjust" or mname == "zfill":
                 return STRING_MARKER
             # Known int-returning methods
             if mname == "len" or mname == "find" or mname == "count" or mname == "hash" or mname == "index_of":
