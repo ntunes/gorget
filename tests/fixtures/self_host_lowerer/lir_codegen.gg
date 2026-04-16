@@ -1119,6 +1119,9 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_VOID
         case ICallExtern(dst, name, _, _, _):
             if dst >= 0:
+                # Closure construction: __make_closure_N → GorgetClosure struct type
+                if name.starts_with("__make_closure_"):
+                    return find_struct_type("GorgetClosure", &m)
                 # Field reads: __field_read_TYPE_FIELD → look up field type from struct def.
                 if name.starts_with("__field_read_"):
                     String rest = name.slice(13, name.len())
@@ -1918,6 +1921,16 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     # Payload follows at offset 4+ (accessed via struct field names).
     if name.starts_with("__option_") or name.starts_with("__result_"):
         return emit_option_result_combinator(dst, name, &args, &sn, &val_types, &m)
+
+    # ── Closure construction: __make_closure_N() → (GorgetClosure){fn, NULL} ──
+    if name.starts_with("__make_closure_"):
+        if dst >= 0:
+            String cid_str = name.slice(15, name.len())
+            String call_fn = "__Closure_" + cid_str + "__call"
+            # Use __call directly — its signature (void* self, ...) is compatible
+            # with the callable dispatch protocol (fn_ptr(env, args...)).
+            return v(dst) + " = (GorgetClosure){.fn_ptr = (void*)" + call_fn + ", .env = NULL};"
+        return ";"
 
     # ── Field read: __field_read_TYPE_FIELD(base, field_index) ──
     if name.starts_with("__field_read_"):

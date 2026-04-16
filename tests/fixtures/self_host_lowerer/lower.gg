@@ -23,6 +23,7 @@ struct LowerCtx:
     Vector[Terminator] block_terms
     int current_block
     Dict[String, int] named_locals
+    int next_closure_id
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -365,6 +366,15 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
         else:
             # Named type (user struct, collection, etc.)
             return lookup_or_register_named(&gmod, type_name)
+
+# Get and increment the module-level closure ID counter.
+# Uses named_types["__closure_counter"] as storage.
+int gmod_next_closure_id(GirModule &gmod):
+    int cid = 0
+    if gmod.named_types.contains("__closure_counter"):
+        cid = gmod.named_types.get("__closure_counter").unwrap()
+    gmod.named_types.put("__closure_counter", cid + 1)
+    return cid
 
 int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
     # Void-returning methods
@@ -865,9 +875,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
         case EClosure(cparams, cbody):
-            # Closures are opaque in GIR — return unit placeholder
-            int cdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(cdst, OpConstUnit()))
+            # Create closure value. __Closure_N was registered by scan phase.
+            # Find the matching __Closure_N__call in gmod.functions by searching
+            # from the current module_closure_id.
+            int cid = gmod_next_closure_id(&gmod)
+            String closure_name = "__Closure_" + int_to_str(cid)
+            # The closure value at the GIR level is a GorgetClosure struct
+            # (not __Closure_N which is the captured-vars struct).
+            int closure_tid = lookup_or_register_named(&gmod, "GorgetClosure")
+            # Emit __make_closure_N() — codegen expands to GorgetClosure init
+            String make_fn = "__make_closure_" + int_to_str(cid)
+            int cdst = add_local(&ctx, closure_tid, NO_NAME)
+            Vector[Operand] make_args = []
+            gmod.fn_sigs.put(make_fn, closure_tid)
+            emit(&ctx, GICallExtern(cdst, make_fn, make_args))
             return cdst
         case EAs(inner_box, _):
             return lower_expr(&ctx, *inner_box, &gmod)
@@ -1139,7 +1160,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Instruction] init_insts = []
     Vector[Vector[Instruction]] block_insts = [!init_insts]
     Vector[Terminator] block_terms = [GTNone()]
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {})
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0)
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -1262,7 +1283,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         bool is_main = false
         int ret_type = map_fn_return_type(mdef.return_type, &gmod)
 
-        LowerCtx ctx = LowerCtx([], [], [], 0, {})
+        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -2955,7 +2976,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         dci += 1
                     if not is_skipped:
                         String test_fn_name = "__test_" + int_to_str(test_idx)
-                        LowerCtx tctx = LowerCtx([], [], [], 0, {})
+                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
