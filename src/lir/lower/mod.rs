@@ -14,7 +14,7 @@ pub(super) mod drops;
 pub(super) mod insts;
 pub(super) mod lifts;
 pub(super) mod operands;
-pub(super) mod types;
+pub mod types;
 
 // Re-export functions from sub-modules so they're accessible within this module.
 // Re-export the public entry point so it remains at `lir::lower::lower_module`.
@@ -604,7 +604,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![("_0".into(), LirType::Ptr)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -622,7 +622,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -635,7 +635,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -768,7 +768,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -792,7 +792,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -808,7 +808,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                               });
                 self.struct_reg.register(name, sid);
             }

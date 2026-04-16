@@ -238,6 +238,37 @@ pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
     }
 }
 
+/// Compute the C alignment of an LirType (in bytes).
+/// Scalars align to their natural size (capped at 8). Aggregates align to
+/// the max of their field alignments. Used by the LLVM backend to insert
+/// inter-field padding matching the C ABI.
+pub fn c_alignof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
+    match ty {
+        LirType::I8 | LirType::U8 | LirType::Bool => 1,
+        LirType::I16 | LirType::U16 => 2,
+        LirType::I32 | LirType::U32 | LirType::F32 => 4,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+        LirType::Struct(sid) => {
+            if let Some(sd) = structs.get(sid.0 as usize) {
+                if let Some(a) = sd.computed_c_align {
+                    return a;
+                }
+                // Union-layout enums always align to 8 (payload contains i64/ptr)
+                if sd.is_union_layout { return 8; }
+                // Recursive: max of field alignments
+                sd.fields.iter()
+                    .map(|(_, fty)| c_alignof_lir_type(fty, structs))
+                    .max()
+                    .unwrap_or(1)
+                    .min(8)
+            } else {
+                8
+            }
+        }
+        LirType::Void => 1,
+    }
+}
+
 /// Compute the size of a tuple from its mangled field types.
 /// `Tuple__int64_t__Str` → fields are [int64_t, Str] → 8 + 32 = 40.
 /// Fields are split on `__` but multi-word types like `int64_t` contain `_`

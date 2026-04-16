@@ -59,7 +59,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(32),
+            computed_c_size: Some(32), computed_c_align: Some(8),
         },
         // GorgetArray — dynamic array (Vector[T] backing).
         // C layout: { data, cap, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize } — 8 × 8 = 64 bytes.
@@ -75,7 +75,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(64),
+            computed_c_size: Some(64), computed_c_align: Some(8),
         },
         // Closure — function pointer + environment. 2 × 8 = 16 bytes.
         StructDef {
@@ -86,7 +86,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(16),
+            computed_c_size: Some(16), computed_c_align: Some(8),
         },
         // Trait object — data pointer + vtable pointer. 2 × 8 = 16 bytes.
         StructDef {
@@ -97,7 +97,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(16),
+            computed_c_size: Some(16), computed_c_align: Some(8),
         },
         // Task handle — task pointer + drop function. 2 × 8 = 16 bytes.
         StructDef {
@@ -108,7 +108,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(16),
+            computed_c_size: Some(16), computed_c_align: Some(8),
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
         // C layout: 20 fields × 8 = 160 bytes. cap at offset +8 matches the
@@ -133,7 +133,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(152),
+            computed_c_size: Some(152), computed_c_align: Some(8),
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
         // Same C layout as GorgetMap: 160 bytes.
@@ -156,7 +156,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(152),
+            computed_c_size: Some(152), computed_c_align: Some(8),
         },
         // GorgetRange — range iterator. 3 × 8 = 24 bytes.
         StructDef {
@@ -168,7 +168,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                       },
     ]
 }

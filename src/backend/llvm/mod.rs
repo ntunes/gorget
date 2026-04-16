@@ -562,16 +562,17 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 if let Some(sz) = def.computed_c_size {
                     return sz;
                 }
-                // Rough estimate: sum of field sizes with alignment
+                // Sum fields with C alignment rules
                 let mut total = 0usize;
                 for (_, fty) in &def.fields {
                     let fsz = sizeof_lir_type(fty, structs, snames);
-                    let align = fsz.min(8);
+                    let align = crate::lir::lower::types::c_alignof_lir_type(fty, structs);
                     total = (total + align - 1) & !(align - 1);
                     total += fsz;
                 }
-                // Align total to 8
-                (total + 7) & !7
+                // Align total to struct's own alignment
+                let struct_align = def.computed_c_align.unwrap_or(8);
+                (total + struct_align - 1) & !(struct_align - 1)
             } else {
                 8
             }
@@ -754,28 +755,31 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 writeln!(out, "%{name} = type {{ i8 }}").unwrap();
             }
         } else {
-            let mut fields: Vec<String> = def.fields.iter()
-                .map(|(_, fty)| {
-                    if *fty == LirType::Void { "i8".to_string() }
-                    else { llvm_type_full(fty, snames) }
-                })
-                .collect();
-            // If computed_c_size is larger than the LLVM struct size, add padding bytes
-            // to match the C ABI size. This happens for runtime structs like
-            // GorgetArray (4 LIR fields = 32B, C has 7 fields = 56B).
-            if let Some(c_size) = def.computed_c_size {
-                // Calculate aligned size matching LLVM's layout rules
-                let mut llvm_size = 0usize;
-                for (_, fty) in &def.fields {
-                    let fsz = sizeof_lir_type(fty, &module.structs, snames);
-                    let align = fsz.min(8).max(1);
-                    llvm_size = (llvm_size + align - 1) & !(align - 1);
-                    llvm_size += fsz;
+            // Emit struct fields with explicit inter-field padding to match C ABI.
+            // C inserts padding between fields for alignment; LLVM named structs
+            // may not when aggregate fields have lower apparent alignment than their
+            // C alignment (e.g., %Json = {i32, i32, [N x i8]} has LLVM align 4
+            // but C align 8 due to int64_t inside the union).
+            let mut fields: Vec<String> = Vec::new();
+            let mut offset = 0usize;
+            for (_, fty) in &def.fields {
+                let field_llvm = if *fty == LirType::Void { "i8".to_string() }
+                    else { llvm_type_full(fty, snames) };
+                let fsz = sizeof_lir_type(fty, &module.structs, snames);
+                let c_align = crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs);
+                let aligned_offset = (offset + c_align - 1) & !(c_align - 1);
+                if aligned_offset > offset {
+                    let pad = aligned_offset - offset;
+                    fields.push(format!("[{pad} x i8]"));
+                    offset = aligned_offset;
                 }
-                // Align total to 8 bytes (struct alignment)
-                llvm_size = (llvm_size + 7) & !7;
-                if c_size > llvm_size {
-                    let pad = c_size - llvm_size;
+                fields.push(field_llvm);
+                offset += fsz;
+            }
+            // Trailing padding to match C size (for runtime structs with hidden fields)
+            if let Some(c_size) = def.computed_c_size {
+                if c_size > offset {
+                    let pad = c_size - offset;
                     fields.push(format!("[{pad} x i8]"));
                 }
             }
@@ -2419,8 +2423,35 @@ fn emit_inst(
                     byte_offset = (byte_offset + target_align - 1) & !(target_align - 1);
                     writeln!(out, "  %v{} = getelementptr i8, ptr %{payload_ptr}, i64 {byte_offset}", dst.0).unwrap();
                 }
+            } else if (*field as usize) < sdef.fields.len() {
+                // Compute byte offset accounting for C alignment padding.
+                // Can't use LLVM struct GEP indices because the LLVM struct
+                // may have extra padding fields inserted by emit_struct_types.
+                let mut byte_offset = 0usize;
+                for fi in 0..(*field as usize) {
+                    let fty = &sdef.fields[fi].1;
+                    let fsz = sizeof_lir_type(fty, &module.structs, snames);
+                    let fa = crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs);
+                    byte_offset = (byte_offset + fa - 1) & !(fa - 1);
+                    byte_offset += fsz;
+                }
+                // Align to target field's alignment
+                let target_fty = &sdef.fields[*field as usize].1;
+                let target_align = crate::lir::lower::types::c_alignof_lir_type(target_fty, &module.structs);
+                byte_offset = (byte_offset + target_align - 1) & !(target_align - 1);
+                if byte_offset == 0 {
+                    writeln!(out, "  %v{} = bitcast ptr %v{} to ptr", dst.0, base.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 {byte_offset}", dst.0, base.0).unwrap();
+                }
             } else {
-                writeln!(out, "  %v{} = getelementptr %{sname}, ptr %v{}, i32 0, i32 {field}", dst.0, base.0).unwrap();
+                // Opaque or empty struct — field index is a raw byte offset
+                let byte_offset = (*field as usize) * 8;
+                if byte_offset == 0 {
+                    writeln!(out, "  %v{} = bitcast ptr %v{} to ptr", dst.0, base.0).unwrap();
+                } else {
+                    writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i64 {byte_offset}", dst.0, base.0).unwrap();
+                }
             }
         }
         Inst::ElemPtr { dst, base, index, elem_size } => {

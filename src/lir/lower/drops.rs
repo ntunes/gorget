@@ -218,10 +218,13 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                     }
-                    // Then free the allocation
+                    // Then free the allocation.
+                    // Load as Ptr (not the struct type) so the LLVM backend emits
+                    // `load ptr` (yielding the heap pointer) instead of GEP (which
+                    // would give the slot's stack address). Box is typedef'd as void*.
                     let val = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
-                        dst: val, slot, ty: slot_ty,
+                        dst: val, slot, ty: LirType::Ptr,
                     });
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None,

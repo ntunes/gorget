@@ -2507,7 +2507,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
         });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

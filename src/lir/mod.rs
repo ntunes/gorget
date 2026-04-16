@@ -720,16 +720,19 @@ pub struct StructDef {
     /// Cached C sizeof for this struct (in bytes). Computed after type lowering
     /// via `compute_struct_sizes()`. Avoids repeated string-based size lookups.
     pub computed_c_size: Option<usize>,
+    /// Cached C alignment for this struct (in bytes). Max of field alignments,
+    /// capped at 8. Used by the LLVM backend for inter-field padding.
+    pub computed_c_align: Option<usize>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {
@@ -966,7 +969,9 @@ impl LirModule {
                 // c_sizeof_struct_def reads other structs' sizes from their fields,
                 // not from computed_c_size, so this always works.
                 let size = lower::types::c_sizeof_struct_def(&self.structs[i], &self.structs);
+                let align = lower::types::c_alignof_lir_type(&LirType::Struct(StructId(i as u32)), &self.structs);
                 self.structs[i].computed_c_size = Some(size);
+                self.structs[i].computed_c_align = Some(align);
                 progress = true;
             }
             if !progress { break; }
@@ -1122,7 +1127,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None,
+            computed_c_size: None, computed_c_align: None,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

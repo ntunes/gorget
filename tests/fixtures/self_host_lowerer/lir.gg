@@ -291,6 +291,7 @@ struct LirStructDef:
     int enum_kind               # EK_* constant
     bool is_union_layout
     int computed_c_size         # -1 if not yet computed
+    int computed_c_align        # -1 if not yet computed
 
 # ── Globals ─────────────────────────────────────────────────────
 
