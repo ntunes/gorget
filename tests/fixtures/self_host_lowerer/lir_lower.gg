@@ -379,15 +379,27 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
 String map_runtime_name(String name):
     # Collection constructors (bare name, no method suffix).
     # Vector__int64_t() → gorget_array_new(sizeof(int64_t))
-    # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V))
-    # Set__T() → gorget_ordered_set_new(sizeof(T))
+    # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V)) or gorget_dict_new_str(sizeof(V))
+    # Set__T() → gorget_ordered_set_new(sizeof(T)) or gorget_ordered_set_new_str(0)
     if is_collection_constructor(name):
         if name.starts_with("Vector__") or name.starts_with("Deque__"):
             return "gorget_array_new"
-        elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        elif name.starts_with("Dict__"):
+            if is_string_keyed(name):
+                return "gorget_dict_new_str"
             return "gorget_dict_new"
-        elif name.starts_with("Set__") or name.starts_with("HashSet__"):
+        elif name.starts_with("HashMap__"):
+            if is_string_keyed(name):
+                return "gorget_map_new_str"
+            return "gorget_map_new"
+        elif name.starts_with("Set__"):
+            if is_string_keyed(name):
+                return "gorget_ordered_set_new_str"
             return "gorget_ordered_set_new"
+        elif name.starts_with("HashSet__"):
+            if is_string_keyed(name):
+                return "gorget_set_new_str"
+            return "gorget_set_new"
         elif name.starts_with("Channel__"):
             return "gorget_channel_new"
         elif name.starts_with("Shared__"):
@@ -441,7 +453,14 @@ String map_runtime_name(String name):
     if name.starts_with("Dict__") or name.starts_with("HashMap__"):
         String method = extract_method_name(name)
         if method == "new":
-            return "gorget_dict_new"
+            bool is_dict = name.starts_with("Dict__")
+            if is_string_keyed(name):
+                if is_dict:
+                    return "gorget_dict_new_str"
+                return "gorget_map_new_str"
+            if is_dict:
+                return "gorget_dict_new"
+            return "gorget_map_new"
         elif method == "put" or method == "set":
             return "gorget_map_put"
         elif method == "get":
@@ -465,7 +484,13 @@ String map_runtime_name(String name):
     if name.starts_with("Set__") or name.starts_with("HashSet__"):
         String method = extract_method_name(name)
         if method == "new":
-            return "gorget_ordered_set_new"
+            if is_string_keyed(name):
+                if name.starts_with("Set__"):
+                    return "gorget_ordered_set_new_str"
+                return "gorget_set_new_str"
+            if name.starts_with("Set__"):
+                return "gorget_ordered_set_new"
+            return "gorget_set_new"
         elif method == "add" or method == "insert":
             return "gorget_set_add"
         elif method == "contains" or method == "has":
@@ -478,8 +503,10 @@ String map_runtime_name(String name):
             return "gorget_set_clone"
 
     # String methods
-    if name.starts_with("GorgetString__"):
+    if name.starts_with("GorgetString__") or name.starts_with("String__") or name.starts_with("Str__"):
         String method = extract_method_name(name)
+        if method == "push":
+            return "gorget_string_push"
         return "gorget_str_" + method
 
     # Heap methods
@@ -498,6 +525,139 @@ String map_runtime_name(String name):
     if name.starts_with("Mutex__"):
         String method = extract_method_name(name)
         return "gorget_mutex_" + method
+
+    # RWLock methods
+    if name.starts_with("RWLock__"):
+        String method = extract_method_name(name)
+        return "gorget_rwlock_" + method
+
+    # ReadGuard/WriteGuard methods
+    if name.starts_with("ReadGuard__"):
+        String method = extract_method_name(name)
+        return "gorget_read_guard_" + method
+    if name.starts_with("WriteGuard__"):
+        String method = extract_method_name(name)
+        return "gorget_write_guard_" + method
+
+    # Channel methods
+    if name.starts_with("Channel__"):
+        String method = extract_method_name(name)
+        if method == "send":
+            return "gorget_channel_send"
+        elif method == "recv":
+            return "gorget_channel_recv"
+        elif method == "close":
+            return "gorget_channel_close"
+        elif method == "try_recv":
+            return "gorget_channel_try_recv"
+        elif method == "try_send":
+            return "gorget_channel_try_send"
+        elif method == "clone":
+            return "gorget_channel_clone"
+        elif method == "new":
+            return "gorget_channel_new"
+        elif method == "free" or method == "drop":
+            return "gorget_channel_free"
+        return "gorget_channel_" + method
+
+    # Shared methods
+    if name.starts_with("Shared__"):
+        String method = extract_method_name(name)
+        if method == "get" or method == "read":
+            return "gorget_shared_get"
+        elif method == "set" or method == "write":
+            return "gorget_shared_set"
+        elif method == "clone":
+            return "gorget_shared_clone"
+        elif method == "new":
+            return "gorget_shared_new"
+        elif method == "free" or method == "drop":
+            return "gorget_shared_free"
+        return "gorget_shared_" + method
+
+    # Weak methods
+    if name.starts_with("Weak__"):
+        String method = extract_method_name(name)
+        return "gorget_weak_" + method
+
+    # Box methods
+    if name.starts_with("Box__"):
+        String method = extract_method_name(name)
+        if method == "new":
+            return "gorget_box_new"
+        elif method == "get":
+            return "gorget_box_get"
+        elif method == "free" or method == "drop":
+            return "gorget_box_free"
+        return "gorget_box_" + method
+
+    # Scalar-prefixed collection methods (from self-host GIR):
+    # int64_t__push, double__get, GorgetString__push, etc.
+    # The self-host GIR lowerer uses T__method instead of Vector__T__method.
+    if is_scalar_type_prefix(name):
+        String method = extract_method_name(name)
+        if method == "push":
+            return "gorget_array_push"
+        elif method == "get":
+            return "gorget_array_safe_get"
+        elif method == "set":
+            return "gorget_array_set"
+        elif method == "pop":
+            return "gorget_array_safe_pop"
+        elif method == "len":
+            return "gorget_array_len"
+        elif method == "remove":
+            return "gorget_array_remove_opt"
+        elif method == "insert":
+            return "gorget_array_insert"
+        elif method == "clone":
+            return "gorget_array_clone"
+        elif method == "contains":
+            return "gorget_array_contains"
+        elif method == "clear":
+            return "gorget_array_clear"
+        elif method == "extend":
+            return "gorget_array_extend"
+        elif method == "reverse":
+            return "gorget_array_reverse"
+        elif method == "sort":
+            return "gorget_array_sort"
+        elif method == "slice":
+            return "gorget_array_slice"
+        elif method == "first":
+            return "gorget_array_safe_first"
+        elif method == "last":
+            return "gorget_array_safe_last"
+        elif method == "is_empty":
+            return "gorget_array_is_empty"
+        elif method == "new":
+            return "gorget_array_new"
+        elif method == "free":
+            return "gorget_array_free"
+        elif method == "swap":
+            return "gorget_array_swap"
+        elif method == "index_of":
+            return "gorget_array_index_of"
+
+    # Standalone function mappings
+    if name == "int_to_str":
+        return "gorget_int_to_str"
+    if name == "float_to_str":
+        return "gorget_float_to_str"
+    if name == "bool_to_str":
+        return "gorget_bool_to_str"
+    if name == "char_to_str":
+        return "gorget_char_to_str"
+    if name == "str_to_int" or name == "parse_int":
+        return "gorget_parse_int"
+    if name == "str_to_float" or name == "parse_float":
+        return "gorget_parse_float"
+    if name == "read_file":
+        return "gorget_read_file"
+    if name == "read_line":
+        return "gorget_read_line"
+    if name == "print_err":
+        return "gorget_print_err"
 
     # No mapping
     return ""
@@ -522,23 +682,8 @@ bool is_collection_constructor(String name):
             return true
     return false
 
-# Get the element size for a collection constructor.
-int collection_elem_size(String name, StructRegistry &sr):
-    # Extract element type from name like "Vector__int64_t" or "Vector__GorgetString"
-    String elem = ""
-    if name.starts_with("Vector__"):
-        elem = name.slice(8, name.len())
-    elif name.starts_with("Deque__"):
-        elem = name.slice(7, name.len())
-    elif name.starts_with("Set__"):
-        elem = name.slice(5, name.len())
-    elif name.starts_with("HashSet__"):
-        elem = name.slice(9, name.len())
-    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        # Dict needs key_size, val_size — for now just pass key_size
-        return 8
-    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return 8
+# Get the element size for a type name.
+int type_elem_size(String elem, StructRegistry &sr):
     if elem == "int64_t" or elem == "double":
         return 8
     elif elem == "int32_t" or elem == "float":
@@ -554,6 +699,94 @@ int collection_elem_size(String name, StructRegistry &sr):
     if sid >= 0:
         return 8  # TODO: compute actual struct size
     return 8
+
+# Get the element size for a collection constructor.
+int collection_elem_size(String name, StructRegistry &sr):
+    # Extract element type from name like "Vector__int64_t" or "Vector__GorgetString"
+    String elem = ""
+    if name.starts_with("Vector__"):
+        elem = name.slice(8, name.len())
+    elif name.starts_with("Deque__"):
+        elem = name.slice(7, name.len())
+    elif name.starts_with("Set__"):
+        elem = name.slice(5, name.len())
+    elif name.starts_with("HashSet__"):
+        elem = name.slice(9, name.len())
+    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        # Dict needs key_size, val_size — handled separately
+        return 8
+    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return 8
+    return type_elem_size(elem, &sr)
+
+# Extract key type name from Dict__K__V or HashMap__K__V.
+String dict_key_type(String name):
+    String rest = ""
+    if name.starts_with("Dict__"):
+        rest = name.slice(6, name.len())
+    elif name.starts_with("HashMap__"):
+        rest = name.slice(9, name.len())
+    else:
+        return ""
+    # rest = "K__V" or "K__V__method" — find first "__"
+    int i = 0
+    while i < rest.len() - 1:
+        String c1 = rest.slice(i, i + 1)
+        String c2 = rest.slice(i + 1, i + 2)
+        if c1 == "_" and c2 == "_":
+            return rest.slice(0, i)
+        i += 1
+    return rest
+
+# Extract value type name from Dict__K__V or HashMap__K__V.
+String dict_val_type(String name):
+    String key = dict_key_type(name)
+    if key == "":
+        return ""
+    String prefix = ""
+    if name.starts_with("Dict__"):
+        prefix = "Dict__"
+    elif name.starts_with("HashMap__"):
+        prefix = "HashMap__"
+    # rest after prefix + key + "__"
+    int start = prefix.len() + key.len() + 2
+    if start >= name.len():
+        return ""
+    String rest = name.slice(start, name.len())
+    # rest might be "V" or "V__method" — find first "__" for method separator
+    int i = 0
+    while i < rest.len() - 1:
+        String c1 = rest.slice(i, i + 1)
+        String c2 = rest.slice(i + 1, i + 2)
+        if c1 == "_" and c2 == "_":
+            return rest.slice(0, i)
+        i += 1
+    return rest
+
+# Check if dict/set has string keys.
+bool is_string_keyed(String name):
+    String key = dict_key_type(name)
+    if key == "GorgetString" or key == "Str":
+        return true
+    # For Set__GorgetString, the "key" is the element type
+    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+        String elem = ""
+        if name.starts_with("Set__"):
+            elem = name.slice(5, name.len())
+        elif name.starts_with("HashSet__"):
+            elem = name.slice(9, name.len())
+        # Strip method suffix
+        int i = 0
+        while i < elem.len() - 1:
+            String c1 = elem.slice(i, i + 1)
+            String c2 = elem.slice(i + 1, i + 2)
+            if c1 == "_" and c2 == "_":
+                elem = elem.slice(0, i)
+                break
+            i += 1
+        if elem == "GorgetString" or elem == "Str":
+            return true
+    return false
 
 # Check if a specific arg index of a runtime function needs pointer passing.
 bool needs_ptr_arg(String fn_name, int arg_idx):
@@ -571,6 +804,56 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
     if fn_name == "gorget_set_add" and arg_idx == 1:
         return true
     return false
+
+# Check if a function name starts with a scalar type prefix (e.g. int64_t__push).
+# These come from the self-host GIR where T__method is used instead of Vector__T__method.
+bool is_scalar_type_prefix(String name):
+    if name.starts_with("int64_t__") or name.starts_with("int32_t__"):
+        return true
+    if name.starts_with("int16_t__") or name.starts_with("int8_t__"):
+        return true
+    if name.starts_with("uint64_t__") or name.starts_with("uint32_t__"):
+        return true
+    if name.starts_with("uint16_t__") or name.starts_with("uint8_t__"):
+        return true
+    if name.starts_with("double__") or name.starts_with("float__"):
+        return true
+    if name.starts_with("bool__"):
+        return true
+    return false
+
+# Extract elem_size from a monomorphized name for functions needing it.
+# E.g. "Vector__int64_t__contains" → 8, "Vector__GorgetString__contains" → 32
+int extract_elem_size_from_name(String name, StructRegistry &sr):
+    String elem = ""
+    if name.starts_with("Vector__"):
+        # Strip "Vector__" prefix and method suffix
+        String rest = name.slice(8, name.len())
+        int i = 0
+        while i < rest.len() - 1:
+            String c1 = rest.slice(i, i + 1)
+            String c2 = rest.slice(i + 1, i + 2)
+            if c1 == "_" and c2 == "_":
+                elem = rest.slice(0, i)
+                break
+            i += 1
+        if elem == "":
+            elem = rest
+    elif name.starts_with("Set__"):
+        String rest = name.slice(5, name.len())
+        int i = 0
+        while i < rest.len() - 1:
+            String c1 = rest.slice(i, i + 1)
+            String c2 = rest.slice(i + 1, i + 2)
+            if c1 == "_" and c2 == "_":
+                elem = rest.slice(0, i)
+                break
+            i += 1
+        if elem == "":
+            elem = rest
+    if elem != "":
+        return type_elem_size(elem, &sr)
+    return 8
 
 String extract_method_name(String name):
     # Find the last "__" and return everything after it
@@ -754,14 +1037,40 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 String call_name = func_name
                 if mapped != "":
                     call_name = mapped
-                # Collection constructors need element size argument
+                # Collection constructors need element size argument(s)
                 if is_collection_constructor(func_name):
-                    int elem_size = collection_elem_size(func_name, &sr)
-                    int size_val = lir_fn_next_value(&f)
-                    LirBlock sblk = f.blocks.get(bb).unwrap()
-                    sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
-                    f.blocks.set(bb, sblk)
-                    lir_args.push(size_val)
+                    if func_name.starts_with("Dict__") or func_name.starts_with("HashMap__"):
+                        # Dict/Map: need key_size + val_size, or just val_size for _str variant
+                        String key_ty = dict_key_type(func_name)
+                        String val_ty = dict_val_type(func_name)
+                        if is_string_keyed(func_name):
+                            # _str variant: only val_size
+                            int val_size = type_elem_size(val_ty, &sr)
+                            int vs = lir_fn_next_value(&f)
+                            LirBlock sblk = f.blocks.get(bb).unwrap()
+                            sblk.insts.push(IIConst(vs, LT_I64, val_size))
+                            f.blocks.set(bb, sblk)
+                            lir_args.push(vs)
+                        else:
+                            int key_size = type_elem_size(key_ty, &sr)
+                            int val_size = type_elem_size(val_ty, &sr)
+                            int ks = lir_fn_next_value(&f)
+                            LirBlock sblk = f.blocks.get(bb).unwrap()
+                            sblk.insts.push(IIConst(ks, LT_I64, key_size))
+                            f.blocks.set(bb, sblk)
+                            lir_args.push(ks)
+                            int vs = lir_fn_next_value(&f)
+                            LirBlock sblk2 = f.blocks.get(bb).unwrap()
+                            sblk2.insts.push(IIConst(vs, LT_I64, val_size))
+                            f.blocks.set(bb, sblk2)
+                            lir_args.push(vs)
+                    else:
+                        int elem_size = collection_elem_size(func_name, &sr)
+                        int size_val = lir_fn_next_value(&f)
+                        LirBlock sblk = f.blocks.get(bb).unwrap()
+                        sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
+                        f.blocks.set(bb, sblk)
+                        lir_args.push(size_val)
                 int dst = -1
                 if dst_local >= 0:
                     dst = lir_fn_next_value(&f)
@@ -807,6 +1116,14 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             String call_name = func_name
             if mapped != "":
                 call_name = mapped
+            # Post-mapping fixups: append elem_size for functions that need it.
+            if call_name == "gorget_array_contains":
+                int es = extract_elem_size_from_name(func_name, &sr)
+                int esv = lir_fn_next_value(&f)
+                LirBlock esblk = f.blocks.get(bb).unwrap()
+                esblk.insts.push(IIConst(esv, LT_I64, es))
+                f.blocks.set(bb, esblk)
+                lir_args.push(esv)
             int dst = -1
             if dst_local >= 0:
                 dst = lir_fn_next_value(&f)

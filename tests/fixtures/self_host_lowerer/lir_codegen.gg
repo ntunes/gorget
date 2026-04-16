@@ -1682,21 +1682,16 @@ String map_mono_to_runtime(String name, LirModule &m):
     # Check for double underscores in method (skip things like Channel__int64_t__close)
     if find_substr(method, "__") >= 0:
         return name
-    # Map known Vector methods (only ones with matching arg counts/types).
-    # Avoid mapping `get` — mono version has variable arg counts.
-    # Avoid mapping `new` — mono version passes different args.
+    # Map known Vector methods — conservative subset that matches arg counts.
+    # The self-host LIR lowerer (lir_lower.gg) handles Vector__T__method mapping.
+    # This codegen fallback catches cases where scalar-prefix names
+    # (e.g. int64_t__push from GIR) slip through unhandled by the lowerer.
     if method == "push" or method == "len" or method == "pop":
         return "gorget_array_" + method
     if method == "is_empty" or method == "clear" or method == "free":
         return "gorget_array_" + method
-    if method == "set" or method == "insert" or method == "remove":
+    if method == "sort" or method == "reverse":
         return "gorget_array_" + method
-    if method == "extend" or method == "contains":
-        return "gorget_array_" + method
-    if method == "sort" or method == "reverse" or method == "slice":
-        return "gorget_array_" + method
-    if method == "index_of":
-        return "gorget_array_index_of"
     if method == "clone":
         return "gorget_array_clone"
     return name
