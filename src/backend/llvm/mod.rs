@@ -956,8 +956,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
     writeln!(out, "declare i1 @gorget_str_eq(ptr, ptr)").unwrap();
     writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
-    // Runtime clone_inplace/materialize_inplace wrappers — used as function pointers for
-    // collection elem_clone/elem_materialize fields (set by LIR lowerer).
+    // Runtime collection free/clone_inplace/materialize_inplace — always declared because
+    // NamedFuncAddr instructions reference them for elem_drop/elem_clone fields.
+    writeln!(out, "declare void @gorget_string_free(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_array_free(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_map_free(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_set_free(ptr)").unwrap();
     writeln!(out, "declare void @gorget_array_clone_inplace(ptr)").unwrap();
     writeln!(out, "declare void @gorget_map_clone_inplace(ptr)").unwrap();
     writeln!(out, "declare void @gorget_set_clone_inplace(ptr)").unwrap();
@@ -1077,6 +1081,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         "gorget_string_push_line_float", "gorget_string_push_line_bool", "gorget_string_push_line",
         "exit", "gorget_task_group_submit_raw", "gorget_try_parse_int", "gorget_try_parse_float",
         "gorget_str_to_cstr", "gorget_string_clone_to_owned",
+        // Runtime free/clone/materialize — declared in preamble for NamedFuncAddr references
+        "gorget_string_free", "gorget_array_free", "gorget_map_free", "gorget_set_free",
+        "gorget_array_clone_inplace", "gorget_map_clone_inplace", "gorget_set_clone_inplace",
+        "gorget_string_clone_inplace", "gorget_string_materialize_inplace",
     ] {
         seen.insert(name.to_string());
     }
