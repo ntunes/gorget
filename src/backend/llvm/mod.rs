@@ -5082,9 +5082,10 @@ fn emit_inst(
                         // Large aggregate (>16 bytes): pass pointer (indirect C ABI).
                         format!("ptr %v{}", a.0)
                     } else if is_str_to_cstr {
-                        // GorgetString → const char*: load .data pointer from field 0
+                        // GorgetString → const char*: use gorget_str_to_cstr for null-termination safety.
+                        // View strings (cap==0) may not be null-terminated at the correct position.
                         let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
-                        spill_lines.push(format!("  %{cstr_name} = load ptr, ptr %v{}", a.0));
+                        spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{})", a.0));
                         format!("ptr %{cstr_name}")
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer

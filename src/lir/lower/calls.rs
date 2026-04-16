@@ -417,6 +417,10 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
             sig(vec![], LirType::Void, vec![])
         }
 
+        // Parse int/float — take null-terminated C strings
+        "gorget_parse_int" => sig(vec![LirType::Ptr], LirType::I64, vec![CStr]),
+        "gorget_parse_float" => sig(vec![LirType::Ptr], LirType::F64, vec![CStr]),
+
         // Bytes (Vector[uint8]) operations
         // gorget_bytes_from_str/hex(const char*) — may receive Str reference
         "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![CStr]),
