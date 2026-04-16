@@ -731,18 +731,24 @@ pub(super) fn lower_call(
 
         // Check if this is an enum variant constructor
         if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
-            let field_operands: Vec<Operand> = args.iter()
+            let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
+            let mut field_operands: Vec<Operand> = args.iter()
                 .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                 .collect();
+            // Clone multi-use resource args that can't be safely moved into the enum variant.
+            super::clone_multi_use_resource_args(ctx, builder, &mut field_operands, &ast_args);
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
             return FunctionBuilder::copy(dst);
         }
         // Also check base name for non-generic enum variants
         if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
-            let field_operands: Vec<Operand> = args.iter()
+            let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
+            let mut field_operands: Vec<Operand> = args.iter()
                 .map(|arg| lower_expr(ctx, builder, &arg.node.value))
                 .collect();
+            // Clone multi-use resource args for enum variant init.
+            super::clone_multi_use_resource_args(ctx, builder, &mut field_operands, &ast_args);
             let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
             let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
             return FunctionBuilder::copy(dst);

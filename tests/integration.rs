@@ -312,6 +312,17 @@ done",
 }
 
 #[test]
+fn enum_variant_clone_loop() {
+    run_gg(
+        "enum_variant_clone_loop.gg",
+        "\
+x
+xx
+xxx",
+    );
+}
+
+#[test]
 fn dot_shorthand() {
     run_gg(
         "dot_shorthand.gg",

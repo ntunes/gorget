@@ -136,6 +136,9 @@ pub(super) fn lower_method_call(
                 if let Some(type_def) = ctx.type_registry.get_type_def(c_type_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
                         if e.variants.iter().any(|v| v.name == method_name) {
+                            let mut lowered_args = lowered_args;
+                            let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
+                            super::clone_multi_use_resource_args(ctx, builder, &mut lowered_args, &ast_args);
                             let type_id = ctx.type_mapper.lookup_named(name).unwrap_or(UNIT_TYPE);
                             let dst = ctx.emit_enum_init_owned(builder, name, method_name, type_id, lowered_args);
                             return FunctionBuilder::copy(dst);

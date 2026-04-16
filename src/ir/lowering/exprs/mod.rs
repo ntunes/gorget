@@ -1338,18 +1338,23 @@ fn lower_struct_literal(
 
     // Check if this is an enum variant constructor
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
-        let field_operands: Vec<Operand> = args.iter()
+        let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
+        // Clone multi-use resource args (loop-carried locals, field accesses, etc.)
+        // that can't be safely moved into the enum variant.
+        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
         let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
         return FunctionBuilder::copy(dst);
     }
     // Also check the base name for non-generic enum variants
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
-        let field_operands: Vec<Operand> = args.iter()
+        let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
+        // Clone multi-use resource args for enum variant init.
+        clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
         let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
         return FunctionBuilder::copy(dst);
