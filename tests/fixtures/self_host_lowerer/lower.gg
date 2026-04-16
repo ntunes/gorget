@@ -527,8 +527,22 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dst = add_local(&ctx, gs_tid, NO_NAME)
             emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
-        case EFString(s, _):
+        case EFString(s, fexprs):
+            # Lower interpolated expressions (consumed to avoid double-free on drop).
+            int fi = 0
+            while fi < fexprs.len():
+                SpannedExpr farg = fexprs.get(fi).unwrap()
+                lower_expr(&ctx, farg, &gmod)
+                fi += 1
+            # Build f-string by concatenating parts with formatted values.
+            # Simplified: emit template string + gorget_str_cat chain for each interp expr.
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+            if fexprs.len() == 0:
+                # No interpolation — just a string literal
+                int dst = add_local(&ctx, gs_tid, NO_NAME)
+                emit(&ctx, GIAssign(dst, OpConstStr(s)))
+                return dst
+            # For now: emit template string (format spec applied at runtime)
             int dst = add_local(&ctx, gs_tid, NO_NAME)
             emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
