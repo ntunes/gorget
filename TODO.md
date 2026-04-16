@@ -57,7 +57,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host LIR backend**: ~5,100 lines across 4 files. 238/923 fixtures compile through self-host LIR codegen pipeline (up from 0). Option/Result HOF combinators inlined (map/filter/and_then/or_else/or/flatten/map_err + is_some/is_none/unwrap/expect). Callable parameter dispatch via __callable_N. Remaining blockers: (1) ~150 link-only failures — domain-specific modules (dataframe/p2p/xml/tensor) not resolved (~80), 22 `main` not emitted (driver crashes), user functions missing (~30), (2) ~50 type mismatch compile errors, (3) 184 driver crashes on complex fixtures. C runtime embedding still manual. [updated: 2026-04-16]
+- **Self-host LIR backend**: ~5,200 lines across 4 files. 280/924 fixtures compile through self-host LIR codegen pipeline (up from 0). 0 crashes (f-string lexer double-free fixed in compiler — enum variant init ownership boundary). Remaining ~554 failures: ~187 link-only (domain modules, unresolved library functions), ~60 type mismatch compile errors, ~90 arg-count mismatches (gorget_array_set/channel_recv wrong arg count from self-host GIR). C runtime embedding still manual. [updated: 2026-04-16]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
