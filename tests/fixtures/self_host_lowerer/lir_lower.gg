@@ -561,6 +561,20 @@ String map_runtime_name(String name):
         return "__option_" + extract_method_name(name)
     if name.starts_with("Ok__") or name.starts_with("Error__") or name.starts_with("Err__"):
         return "__result_" + extract_method_name(name)
+    # Option__T__method / Result__T__E__method → __option_method / __result_method
+    if name.starts_with("Option__"):
+        String method = extract_method_name(name)
+        String opt_res = map_option_result_method(method)
+        if opt_res != "":
+            return opt_res
+    if name.starts_with("Result__"):
+        String method = extract_method_name(name)
+        String res_res = map_option_result_method(method)
+        if res_res != "":
+            # Result methods use __result_ prefix
+            if res_res.starts_with("__option_"):
+                return "__result_" + res_res.slice(9, res_res.len())
+            return res_res
 
     # Standalone function mappings
     match name:
@@ -855,6 +869,9 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     # Field reads: arg 0 (the struct) must be a pointer
     if arg_idx == 0 and fn_name.starts_with("__field_read_"):
+        return true
+    # Option/Result combinators: arg 1 (the closure) must be a pointer
+    if arg_idx == 1 and (fn_name.starts_with("__option_") or fn_name.starts_with("__result_")):
         return true
     # Collection methods: arg 0 (self) is always passed by pointer for mutating methods.
     if arg_idx == 0:
@@ -1569,7 +1586,13 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
                 GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
                 String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types)
                 if drop_fn != "":
-                    variant_drops.push(EnumVariantDrop(vi, vinfo.name, finfo.name, drop_fn, finfo.type_name))
+                    # Field name in the C struct is VariantName_N (e.g., Literal_0)
+                    # finfo.name is "_N" (e.g., "_0"), so strip the leading underscore
+                    String field_idx = finfo.name
+                    if field_idx.starts_with("_"):
+                        field_idx = field_idx.slice(1, field_idx.len())
+                    String c_field = vinfo.name + "_" + field_idx
+                    variant_drops.push(EnumVariantDrop(vi, vinfo.name, c_field, drop_fn, finfo.type_name))
                 vfi += 1
             vi += 1
         if variant_drops.len() > 0:
