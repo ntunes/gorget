@@ -43,10 +43,10 @@
 - **LLVM backend test results (2026-04-16)**:
   - Fixes applied 2026-04-16: computed_c_align on StructDef + c_alignof_lir_type(), inter-field padding in LLVM struct emission, byte-offset GEP for FieldPtr, Box free loads as LirType::Ptr, **Option/Result combinator inline handlers** (map/filter/and_then/or_else/or/flatten/unwrap_or_else/flat_map/map_err — previously fell through to non-existent extern call → garbage/0)
   - Full test run: 728 PASS / 815 (89.3%), 32 FAIL (down from 39), 36 CRASH, ~9 BUILD_FAIL (10 more transient from artifact pollution). Combinator fix: 6/7 affected tests now PASS (test_option_all, test_option_chaining, option_result_combinators, test_result_all, test_result_advanced, coroutine_result_combinators). 1 has pre-existing linker error (test_result_chaining — missing Result__drop symbol).
-  - **Parsed array int-as-0** (still open): `json_parse("[7]")` → `"[0]"` but manual `Json.Int(7)` push → `"[7]"`. Not a struct-size or array-push issue — plain array-of-160-byte-enum tests pass. Specific to JSON parsing flow (multi-level sret chain). Also found: C backend sets `elem_drop`/`elem_clone` on collection constructors but LLVM backend doesn't — separate issue, doesn't cause the 0-read.
+  - **Parsed array int-as-0**: FIXED — root cause was CStr null-termination. View strings passed to `gorget_parse_int` via raw `.data` pointer were not null-terminated, causing `strtoll` to fail on trailing chars. Fix: `gorget_str_to_cstr()` for all CStr params. Fixes json_parse, json_pretty, json_edge_cases, xml_parse (~4 FAIL tests).
   - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, 1x conv_stdlib, 1x shared_iterator_invalidation, 1x print_trait_object, 1x string_enum_variants, 1x sqlite
   - Remaining CRASH (36): 13x p2p (signal 11), 5x httpserver, 2x crypto, 2x leak (signal 6), others
-  - **LLVM elem_drop/elem_clone gap**: Collection constructors (`gorget_array_new`) don't set `elem_drop`/`elem_clone` function pointers in LLVM backend, unlike C backend. Causes incorrect cleanup/clone behavior for resource-typed collection elements. Needs same inline post-construction injection as C backend's `emit_call_extern.rs:1629`.
+  - **elem_drop/elem_clone**: FIXED — lifted from C backend to LIR lowerer via `Inst::NamedFuncAddr` + byte-offset stores. Only built-in resource types get elem_drop (user types handled by ownership system).
 
 ## Low
 
