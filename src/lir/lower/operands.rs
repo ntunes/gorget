@@ -250,7 +250,7 @@ impl<'a> FuncLowering<'a> {
                     let method = &name[pos + 2..];
                     matches!(method, "filter" | "map" | "flat_map" | "fold" | "reduce"
                         | "any" | "all" | "each" | "find" | "find_index"
-                        | "sorted" | "sort" | "unique" | "count"
+                        | "sorted" | "sort" | "sorted_by" | "sort_by" | "unique" | "count"
                         | "update" | "union" | "intersection" | "difference"
                         | "symmetric_difference")
                 });

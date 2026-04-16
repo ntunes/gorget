@@ -17,10 +17,10 @@ void main():
     Option[String] missing = d.get(99)
     print(missing.is_none())  # true
 
-    # remove
-    bool removed = d.remove(2)
-    print(removed)        # true
-    print(d.len())        # 2
+    # remove (returns Option[V])
+    Option[String] removed = d.remove(2)
+    print(removed.unwrap())   # two
+    print(d.len())            # 2
 
     # get_or
     String v1 = d.get_or(1, "default")

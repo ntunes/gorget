@@ -267,6 +267,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         // gorget_map_get(map*, key*) → void*
         "gorget_map_get" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, VoidElem]),
         "gorget_map_remove" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
+        "gorget_map_remove_opt" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, VoidElem]),
         "gorget_map_contains" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
         "gorget_map_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
         "gorget_map_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
@@ -578,7 +579,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         }
         match method {
             "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
-            | "each" | "find" | "find_index" | "sorted" | "sort" | "unique" | "count" => return None,
+            | "each" | "find" | "find_index" | "sorted" | "sort" | "sorted_by" | "sort_by"
+            | "unique" | "count" => return None,
             // Vector.get() returns Option[T] — use safe (non-panicking) get.
             "get" => return Some("gorget_array_safe_get".into()),
             // Vector.pop() returns Option[T] — use safe (non-panicking) pop.
@@ -601,6 +603,8 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             "new" if name.starts_with("Dict__") => return Some("gorget_dict_new".into()),
             "set" => return Some("gorget_map_put".into()),
             "has" | "has_key" | "contains_key" => return Some("gorget_map_contains".into()),
+            // Dict.remove(key) returns Option[V !] — use the opt variant (returns void*).
+            "remove" => return Some("gorget_map_remove_opt".into()),
             _ => return Some(format!("gorget_map_{method}")),
         }
     }

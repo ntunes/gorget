@@ -3827,6 +3827,36 @@ impl<'m> Interpreter<'m> {
             return Ok(Some(Value::Unit));
         }
 
+        // Vector__T__sort_by(MutPtr(arr), closure(a, b) → int) — in-place sort with closure comparator
+        if is_array_call(name) && name.ends_with("__sort_by") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let closure = args.get(1).cloned().unwrap_or(Value::Unit);
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            let mut sorted = items.clone();
+            // Simple insertion sort using closure comparator. Avoids holding a
+            // sim-internal borrow across call_closure_value.
+            for i in 1..sorted.len() {
+                let cur = sorted[i].clone();
+                let mut j = i;
+                while j > 0 {
+                    let r = self.call_closure_value(closure.clone(), vec![cur.clone(), sorted[j - 1].clone()], depth + 1)?;
+                    if r.as_i64() < 0 {
+                        sorted[j] = sorted[j - 1].clone();
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                sorted[j] = cur;
+            }
+            if let Some(arr) = self.get_array_from_value(&arr_arg) {
+                let data = arr.data.borrow_mut();
+                drop(data);
+                *arr.data.borrow_mut() = sorted;
+            }
+            return Ok(Some(Value::Unit));
+        }
+
         // Vector__T__sort (in-place sort by value)
         if is_array_call(name) && name.ends_with("__sort") {
             let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
@@ -3844,6 +3874,33 @@ impl<'m> Interpreter<'m> {
                 });
             }
             return Ok(Some(Value::Unit));
+        }
+
+        // Vector__T__sorted_by(MutPtr(arr), closure(a, b) → int) — new sorted copy with closure
+        if is_array_call(name) && name.ends_with("__sorted_by") {
+            let arr_arg = args.get(0).cloned().unwrap_or(Value::Null);
+            let closure = args.get(1).cloned().unwrap_or(Value::Unit);
+            let items = self.get_array_from_value(&arr_arg).map(|a| a.to_vec()).unwrap_or_default();
+            let mut sorted = items;
+            for i in 1..sorted.len() {
+                let cur = sorted[i].clone();
+                let mut j = i;
+                while j > 0 {
+                    let r = self.call_closure_value(closure.clone(), vec![cur.clone(), sorted[j - 1].clone()], depth + 1)?;
+                    if r.as_i64() < 0 {
+                        sorted[j] = sorted[j - 1].clone();
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                }
+                sorted[j] = cur;
+            }
+            let result = super::value::SimArray::new(name.trim_end_matches("__sorted_by"));
+            for v in sorted {
+                result.push(v);
+            }
+            return Ok(Some(Value::Array(result)));
         }
 
         // Vector__T__sorted → new sorted copy
@@ -4054,14 +4111,29 @@ impl<'m> Interpreter<'m> {
                 return Ok(Some(Value::Bool(found)));
             }
 
-            // Dict__K__V__remove
+            // Dict__K__V__remove(MutPtr(dict), key) → Option[V !]
+            // Returns Some(removed value) or None.
             if name.ends_with("__remove") || name.ends_with("__delete") {
                 let dict_arg = args.get(0).cloned().unwrap_or(Value::Null);
                 let key = args.get(1).cloned().unwrap_or(Value::Unit);
-                if let Some(d) = self.get_dict_from_value(&dict_arg) {
-                    d.remove(&key);
-                }
-                return Ok(Some(Value::Unit));
+                let type_suffix = if let Some(rest) = name.strip_prefix("Dict__")
+                    .or_else(|| name.strip_prefix("HashMap__"))
+                {
+                    // rest is like "Str__int64_t__remove" — take the val_name slice.
+                    let trimmed = rest.strip_suffix("__remove").or_else(|| rest.strip_suffix("__delete")).unwrap_or(rest);
+                    trimmed.find("__").map(|pos| trimmed[pos + 2..].to_string()).unwrap_or_else(|| "int64_t".to_string())
+                } else { "int64_t".to_string() };
+                let result = match self.get_dict_from_value(&dict_arg).and_then(|d| d.remove(&key)) {
+                    Some(v) => Value::Enum {
+                        type_name: format!("Option__{type_suffix}"),
+                        tag: 0, variant: "Some".to_string(), fields: vec![v],
+                    },
+                    None => Value::Enum {
+                        type_name: format!("Option__{type_suffix}"),
+                        tag: 1, variant: "None".to_string(), fields: vec![],
+                    },
+                };
+                return Ok(Some(result));
             }
 
             // Dict__K__V__len

@@ -696,7 +696,7 @@ pub(super) fn emit_call_extern(
             };
 
             if let Some((elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                if dst.is_some() || method == "find" || method == "each" || method == "sort" {
+                if dst.is_some() || method == "find" || method == "each" || method == "sort" || method == "sort_by" {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
                         .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
@@ -836,6 +836,22 @@ pub(super) fn emit_call_extern(
                             let cmp = compare_fn_for_elem(&elem_c);
                             write!(out, "{{ GorgetArray* __a = (GorgetArray*){arr_arg}; \
                                 qsort(__a->data, __a->len, __a->elem_size, {cmp}); }}").unwrap();
+                        }
+                        "sort_by" | "sorted_by" => {
+                            // Delegate to the helper emitted by emit_vector_helper.
+                            // The helper takes the closure as const void* and stores a
+                            // pointer in TLS (save/restored across calls). Pass either
+                            // the closure pointer directly or the address of the struct.
+                            let closure_pass = if closure_is_ptr {
+                                fn_arg.clone()
+                            } else {
+                                format!("&{fn_arg}")
+                            };
+                            if method == "sort_by" {
+                                write!(out, "{emit_name}({arr_arg}, {closure_pass});").unwrap();
+                            } else {
+                                write!(out, "{dv} = {emit_name}({arr_arg}, {closure_pass});").unwrap();
+                            }
                         }
                         "unique" => {
                             let cmp = compare_fn_for_elem(&elem_c);

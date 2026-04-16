@@ -27,11 +27,11 @@ void main():
     print(f"{d.contains("lang")}")
     print(f"{d.contains("missing")}")
 
-    # ===== 5. Remove =====
-    bool r1 = d.remove("city")
-    print(f"{r1}")
-    bool r2 = d.remove("nonexistent")
-    print(f"{r2}")
+    # ===== 5. Remove (returns Option[V]) =====
+    Option[String] r1 = d.remove("city")
+    print(f"{r1.unwrap()}")
+    Option[String] r2 = d.remove("nonexistent")
+    print(f"{r2.is_none()}")
     print(f"{d.len()}")
     print(f"{d.get("city").is_none()}")
 

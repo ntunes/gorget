@@ -1,4 +1,4 @@
-# Test Dict.remove() returns bool and correctly removes entries.
+# Test Dict.remove() returns Option[V] and correctly removes entries.
 from std.conv import int_to_str
 
 void main():
@@ -7,9 +7,9 @@ void main():
     d.put("b", 2)
     d.put("c", 3)
     print(int_to_str(d.len()))
-    bool removed = d.remove("b")
-    print(int_to_str(removed as int))
+    Option[int] removed = d.remove("b")
+    print(int_to_str(removed.unwrap()))
     print(int_to_str(d.len()))
-    bool not_found = d.remove("z")
-    print(int_to_str(not_found as int))
+    Option[int] not_found = d.remove("z")
+    print(int_to_str(not_found.is_some() as int))
     print(int_to_str(d.len()))

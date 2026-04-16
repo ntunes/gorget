@@ -5674,6 +5674,48 @@ static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
     return false;
 }
 
+// Remove the entry at `key` and return a pointer to a thread-local copy of the
+// removed value. Returns NULL when the key is absent. The caller owns the
+// returned value: the map drops its key (but NOT its value — ownership transfers
+// to the caller). Pointer validity: until the next gorget_map_remove_opt call
+// on this thread.
+static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
+    static _Thread_local char __map_remove_buf[4096];
+    static _Thread_local char* __map_remove_heap = NULL;
+    static _Thread_local size_t __map_remove_heap_cap = 0;
+    if (m->cap == 0) return NULL;
+    uint64_t h = __GORGET_MAP_HASH(m, key);
+    size_t idx = (size_t)(h % m->cap);
+    for (size_t __probes = 0; __probes < m->cap; __probes++) {
+        if (m->states[idx] == 0) return NULL;
+        if (m->states[idx] == 1 && __GORGET_MAP_EQ(m, idx, key)) {
+            char* buf;
+            if (m->val_size <= sizeof(__map_remove_buf)) {
+                buf = __map_remove_buf;
+            } else {
+                if (m->val_size > __map_remove_heap_cap) {
+                    free(__map_remove_heap);
+                    __map_remove_heap = (char*)malloc(m->val_size);
+                    __map_remove_heap_cap = m->val_size;
+                }
+                buf = __map_remove_heap;
+            }
+            if (m->val_size > 0 && m->values) {
+                memcpy(buf, (char*)m->values + idx * m->val_size, m->val_size);
+            }
+            // Drop the key; transfer value ownership to caller (no val_drop).
+            if (m->key_drop && m->keys)
+                m->key_drop((char*)m->keys + idx * m->key_size);
+            m->states[idx] = 2;  // tombstone
+            m->count--;
+            m->tombstones++;
+            return m->val_size > 0 ? (void*)buf : (void*)1;
+        }
+        idx = (idx + 1) % m->cap;
+    }
+    return NULL;
+}
+
 static inline void gorget_map_clear(GorgetMap* m) {
     if (m->states) memset(m->states, 0, m->cap);
     m->count = 0;

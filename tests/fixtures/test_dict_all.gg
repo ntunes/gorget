@@ -39,11 +39,11 @@ void main():
     print(f"{d.contains("b")}")
     print(f"{d.contains("missing")}")
 
-    # ===== remove (returns bool) =====
-    bool rem1 = d.remove("b")
-    print(f"{rem1}")
-    bool rem2 = d.remove("nonexistent")
-    print(f"{rem2}")
+    # ===== remove (returns Option[V]) =====
+    Option[int] rem1 = d.remove("b")
+    print(f"{rem1.unwrap()}")
+    Option[int] rem2 = d.remove("nonexistent")
+    print(f"{rem2.is_none()}")
     print(f"{d.len()}")
     # Confirm removed key is gone
     print(f"{d.get("b").is_none()}")

@@ -1074,11 +1074,14 @@ pub(super) fn lower_method_call(
         // Route overloaded methods to distinct runtime functions based on arg count.
         // split(sep) → GorgetString__split (2-arg), split(sep, limit) → GorgetString__splitn (3-arg)
         // replace(old, new) → GorgetString__replace, replace(old, new, limit) → GorgetString__replacen
+        // sort()/sorted() → default compare, sort(by)/sorted(by) → closure compare
         let effective_method = match (type_name.as_str(), method_name, args.len()) {
             ("GorgetString", "split", 2) => "splitn",
             ("GorgetString", "replace", 3) => "replacen",
             ("GorgetString", "find", 2) => "find_from",
             ("GorgetString", "find", 3) => "find_ext",
+            (tn, "sort", 1) if tn.starts_with("Vector__") || tn.starts_with("Deque__") => "sort_by",
+            (tn, "sorted", 1) if tn.starts_with("Vector__") || tn.starts_with("Deque__") => "sorted_by",
             _ => method_name,
         };
         let mangled = format!("{type_name}__{effective_method}");
@@ -1462,8 +1465,19 @@ pub(super) fn lower_method_call(
                     } else { ret }
                 } else { ret }
             } else if method_name == "remove"
-                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
-                    || type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
+                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
+            {
+                // Dict/HashMap.remove(key) → Option[V !]
+                let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+                if let Some(rest) = type_name.strip_prefix(prefix) {
+                    if let Some(pos) = rest.find("__") {
+                        let val_name = &rest[pos + 2..];
+                        let option_name = format!("Option__{val_name}");
+                        ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
+                    } else { ret }
+                } else { ret }
+            } else if method_name == "remove"
+                && (type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
             {
                 BOOL_TYPE
             } else if is_sentinel_wrapped {

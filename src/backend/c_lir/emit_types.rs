@@ -6,7 +6,8 @@ use super::*;
 /// Higher-order collection methods that the old C backend generates inline.
 pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
     "filter", "map", "flat_map", "fold", "reduce", "any", "all",
-    "each", "find", "find_index", "sorted", "sort", "unique", "count",
+    "each", "find", "find_index", "sorted", "sort", "sorted_by", "sort_by",
+    "unique", "count",
 ];
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
@@ -255,6 +256,38 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    GorgetArray* __a = (GorgetArray*)__arr_ptr;").unwrap();
             writeln!(out, "    qsort(__a->data, __a->len, __a->elem_size, {cmp});").unwrap();
             writeln!(out, "}}").unwrap();
+        }
+        "sort_by" | "sorted_by" => {
+            // Closure-based sort: use thread-local closure pointer + static comparator.
+            // The TLS is saved/restored to support nested sort_by calls.
+            // We pass the closure as `const void*` to avoid struct-size mismatches
+            // (stateless closures are 1-byte placeholders; captured ones vary).
+            let needs_ref0 = needs_ref.first().copied().unwrap_or(false);
+            let needs_ref1 = needs_ref.get(1).copied().unwrap_or(false);
+            let a_arg = if needs_ref0 { format!("(const {elem_c}*)__pa") } else { format!("*(const {elem_c}*)__pa") };
+            let b_arg = if needs_ref1 { format!("(const {elem_c}*)__pb") } else { format!("*(const {elem_c}*)__pb") };
+            let tls_sym = format!("__tls_{full_name}");
+            let cmp_sym = format!("__cmp_{full_name}");
+            writeln!(out, "static _Thread_local const void* {tls_sym};").unwrap();
+            writeln!(out, "static int {cmp_sym}(const void* __pa, const void* __pb) {{").unwrap();
+            writeln!(out, "    return (int){call_fn}({tls_sym}, {a_arg}, {b_arg});").unwrap();
+            writeln!(out, "}}").unwrap();
+            if method == "sort_by" {
+                writeln!(out, "static inline void {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
+                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
+                writeln!(out, "    GorgetArray* __a = (GorgetArray*)__arr_ptr;").unwrap();
+                writeln!(out, "    qsort(__a->data, __a->len, __a->elem_size, {cmp_sym});").unwrap();
+                writeln!(out, "    {tls_sym} = __prev;").unwrap();
+                writeln!(out, "}}").unwrap();
+            } else {
+                writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
+                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
+                writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
+                writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp_sym});").unwrap();
+                writeln!(out, "    {tls_sym} = __prev;").unwrap();
+                writeln!(out, "    return __result;").unwrap();
+                writeln!(out, "}}").unwrap();
+            }
         }
         "unique" => {
             // unique() → clone + sort + dedup with type-specific compare

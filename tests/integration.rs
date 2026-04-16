@@ -1987,7 +1987,7 @@ fn dict_remove() {
         "dict_remove.gg",
         "\
 3
-1
+2
 2
 0
 2",
@@ -4483,6 +4483,38 @@ fn vector_sort() {
 5
 8
 5",
+    );
+}
+
+#[test]
+fn vector_sort_by() {
+    run_gg(
+        "vector_sort_by.gg",
+        "\
+9
+6
+5
+4
+3
+2
+1
+1
+---
+3
+5
+10
+20
+---
+10
+5
+20
+3
+---
+bee
+cat
+elephant
+alligator
+done",
     );
 }
 
@@ -11812,8 +11844,8 @@ true
 false
 true
 false
+2
 true
-false
 2
 true
 false
@@ -11876,8 +11908,8 @@ true
 false
 true
 false
+2
 true
-false
 2
 true
 false
@@ -12863,7 +12895,7 @@ alice
 bob
 true
 false
-true
+bob
 2
 true
 true
@@ -12893,7 +12925,7 @@ true
 1
 30
 1
-true
+7
 0
 true
 true
@@ -12915,7 +12947,7 @@ true
 false
 one
 true
-true
+two
 2
 one
 default
@@ -12940,8 +12972,8 @@ true
 false
 true
 false
+Boston
 true
-false
 2
 true
 0
@@ -12977,7 +13009,7 @@ fn coroutine_dict_set() {
 3
 true
 false
-true
+20
 2
 1
 40

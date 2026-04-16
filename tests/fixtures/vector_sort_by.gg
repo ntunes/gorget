@@ -1,0 +1,50 @@
+# Test Vector.sort(by) and Vector.sorted(by) with optional comparator closures.
+from std.conv import int_to_str
+from std.collections import Vector
+
+void main():
+    # sort(by) — in-place with reverse comparator
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(1)
+    v.push(4)
+    v.push(1)
+    v.push(5)
+    v.push(9)
+    v.push(2)
+    v.push(6)
+    v.sort((int a, int b): b - a)    # descending
+    for i in 0 .. v.len():
+        print(int_to_str(v.get(i).unwrap()))
+
+    print("---")
+
+    # sorted(by) — returns a new vector, source unchanged
+    Vector[int] orig = Vector[int]()
+    orig.push(10)
+    orig.push(5)
+    orig.push(20)
+    orig.push(3)
+    Vector[int] asc = orig.sorted((int a, int b): a - b)
+    for i in 0 .. asc.len():
+        print(int_to_str(asc.get(i).unwrap()))
+
+    print("---")
+
+    # source unchanged
+    for i in 0 .. orig.len():
+        print(int_to_str(orig.get(i).unwrap()))
+
+    print("---")
+
+    # sort(by) with String — sort by length
+    Vector[String] words = Vector[String]()
+    words.push("elephant")
+    words.push("bee")
+    words.push("cat")
+    words.push("alligator")
+    words.sort((String a, String b): a.len() - b.len())
+    for i in 0 .. words.len():
+        print(words.get(i).unwrap())
+
+    print("done")

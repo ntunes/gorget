@@ -17,9 +17,9 @@ async int test_dict():
     print(d.contains("b"))
     print(d.contains("z"))
 
-    # --- remove ---
-    bool rem = d.remove("b")
-    print(rem)
+    # --- remove (returns Option[V]) ---
+    Option[int] rem = d.remove("b")
+    print(rem.unwrap())
     print(d.len())
 
     # --- filter (higher-order on Dict) ---

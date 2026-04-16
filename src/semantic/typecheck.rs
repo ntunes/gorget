@@ -3301,9 +3301,9 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.int_id)
                     }
                 }
-                "clear" | "reserve" | "sort" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
+                "clear" | "reserve" | "sort" | "sort_by" | "reverse" | "insert" | "extend" => Some(self.types.void_id),
                 "is_empty" | "contains" | "any" | "all" => Some(self.types.bool_id),
-                "sorted" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
+                "sorted" | "sorted_by" | "reversed" | "unique" | "slice" | "enumerate" => Some(receiver_type),
                 "binary_search" => Some(self.types.int_id),
                 _ => None,
             },
@@ -3320,7 +3320,15 @@ impl<'a> TypeChecker<'a> {
                 "get_or" | "get_or_put" => Some(val_type()),
                 "contains" | "has" | "has_key" | "contains_key" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
-                "remove" => Some(self.types.bool_id),
+                "remove" => {
+                    // Dict.remove(key) → Option[V !] — returns removed value, None if absent.
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        let owned_val = self.types.insert(ResolvedType::Owned(val_type()));
+                        Some(self.types.intern_generic(option_def_id, vec![owned_val]))
+                    } else {
+                        Some(val_type())
+                    }
+                }
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
                 "keys" => {

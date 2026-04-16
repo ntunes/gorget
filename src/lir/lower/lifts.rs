@@ -18,7 +18,7 @@ pub(super) fn is_collection_void_return_lir(name: &str) -> bool {
     matches!(name,
         "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
         | "gorget_array_safe_pop" | "gorget_array_remove_opt"
-        | "gorget_map_get"
+        | "gorget_map_get" | "gorget_map_remove_opt"
         | "gorget_heap_pop" | "gorget_heap_peek"
         | "gorget_shared_get" | "gorget_shared_get_ptr"
         | "gorget_channel_recv"
@@ -65,7 +65,7 @@ pub(super) fn last_error_fn_lir(name: &str) -> Option<&'static str> {
 fn is_consuming_method(name: &str) -> bool {
     matches!(name,
         "gorget_array_safe_pop" | "gorget_array_remove_opt"
-        | "gorget_map_remove" | "gorget_set_remove"
+        | "gorget_map_remove" | "gorget_map_remove_opt" | "gorget_set_remove"
     )
 }
 
@@ -168,13 +168,8 @@ impl<'a> FuncLowering<'a> {
         } else if payload_ty.is_aggregate() {
             let sz = c_sizeof_lir_type(&payload_ty, self.module_structs) as i64;
             let sz_val = self.emit_i64_const(some_bb, sz);
-            self.ensure_extern("memcpy", &[LirType::Ptr, LirType::Ptr, LirType::I64], &LirType::Ptr);
-            let abis = self.lookup_arg_abis("memcpy");
-            self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
-                dst: None,
-                name: "memcpy".to_string(),
-                args: vec![payload_ptr, raw_in_some, sz_val],
-                original_name: None, arg_abis: abis,
+            self.lir_func.block_mut(some_bb).insts.push(Inst::Memcpy {
+                dst_ptr: payload_ptr, src_ptr: raw_in_some, size: sz_val,
             });
         } else {
             let loaded = self.lir_func.next_value();

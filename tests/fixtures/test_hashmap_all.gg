@@ -31,11 +31,11 @@ void main():
     print(f"{m.contains("a")}")
     print(f"{m.contains("z")}")
 
-    # ===== remove =====
-    bool rem1 = m.remove("b")
-    print(f"{rem1}")
-    bool rem2 = m.remove("nonexistent")
-    print(f"{rem2}")
+    # ===== remove (returns Option[V]) =====
+    Option[int] rem1 = m.remove("b")
+    print(f"{rem1.unwrap()}")
+    Option[int] rem2 = m.remove("nonexistent")
+    print(f"{rem2.is_none()}")
     print(f"{m.len()}")
     print(f"{m.get("b").is_none()}")
     print(f"{m.contains("b")}")

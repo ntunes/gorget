@@ -723,7 +723,7 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
         "gorget_array_binary_search" => &[1],
         "gorget_array_extend" => &[1],
         "gorget_map_put" => &[1, 2],
-        "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" => &[1],
+        "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" | "gorget_map_remove_opt" => &[1],
         "gorget_set_add" | "gorget_set_contains" | "gorget_set_remove" => &[1],
         "gorget_heap_push" => &[1],
         // Dict/Set iteration output-parameter: arg 2 is void* out buffer
