@@ -1055,6 +1055,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     }
     // gorget_string_clone_to_owned: used by gorget_str_str inline expansion
     writeln!(out, "declare void @gorget_string_clone_to_owned(ptr sret(%GorgetString), ptr)").unwrap();
+    // gorget_string_copy_cow: CoW-aware copy used by non-move SlotStore of Ptr → String slot.
+    // Views (cap=0) are struct-copied (zero alloc); owned strings (cap>0) are deep-cloned.
+    // Mirrors the C backend's Copy-semantic SlotStore path at src/backend/c_lir/mod.rs.
+    writeln!(out, "declare void @gorget_string_copy_cow(ptr sret(%GorgetString), ptr)").unwrap();
     // Runtime constructors — used for static global initialization
     // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs
     // or already declared above in hof_decls.
@@ -1579,10 +1583,11 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     }
     writeln!(out).unwrap();
 
-    // Generate __clone_inplace wrappers for user struct/enum types referenced
-    // by NamedFuncAddr instructions. These call T__clone(sret, p) and memcpy
-    // the result back to p, matching the elem_clone calling convention.
+    // Scan NamedFuncAddr instructions for user-type function references. These
+    // need declarations (or definitions for __clone_inplace wrappers) since
+    // NamedFuncAddr just emits `bitcast ptr @NAME to ptr` without declaring.
     let mut clone_inplace_seen = std::collections::HashSet::new();
+    let mut named_addr_fns = std::collections::HashSet::new();
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
@@ -1590,8 +1595,34 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
                     if name.ends_with("__clone_inplace") && !name.starts_with("gorget_") {
                         clone_inplace_seen.insert(name.clone());
                     }
+                    named_addr_fns.insert(name.clone());
                 }
             }
+        }
+    }
+    // Emit declarations for NamedFuncAddr targets not defined locally.
+    // The wrapper generator below handles `__clone_inplace`; here we cover
+    // `T__drop` (elem_drop on user types, resolved at link time from C runtime).
+    // Compute the set of function names already referenced via CallExtern —
+    // those get declarations emitted by the CallExtern scan loop further down
+    // (seen set). NamedFuncAddr uses must share declarations with CallExtern
+    // to avoid duplicate `declare`s.
+    let call_extern_names: std::collections::HashSet<String> = module.functions.iter()
+        .flat_map(|f| f.blocks.iter().flat_map(|b| b.insts.iter()))
+        .filter_map(|i| match i {
+            Inst::CallExtern { name, .. } => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    for name in &named_addr_fns {
+        if name.starts_with("gorget_") { continue; }
+        if name.ends_with("__clone_inplace") { continue; } // wrapper below
+        let defined = module.functions.iter().any(|f| f.name == *name)
+            || module.externs.iter().any(|e| e.name == *name)
+            || call_extern_names.contains(name);
+        if !defined {
+            let safe = c_func_name(name);
+            writeln!(out, "declare void @{safe}(ptr)").unwrap();
         }
     }
     for name in &clone_inplace_seen {
@@ -1606,6 +1637,15 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
             let sz = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
             let safe_name = c_func_name(name);
             let safe_clone = c_func_name(clone_fn);
+            // Declare T__clone if not already defined in this module. The wrapper
+            // references it, so we need the declaration for LLVM/llc to resolve.
+            // T__clone is defined in the C runtime amalgamation (via CliArg__clone
+            // etc. in c_runtime.rs) and resolved at link time.
+            let clone_declared = module.functions.iter().any(|f| f.name == clone_fn)
+                || module.externs.iter().any(|e| e.name == clone_fn);
+            if !clone_declared {
+                writeln!(out, "declare void @{safe_clone}(ptr sret({ty}), ptr)").unwrap();
+            }
             writeln!(out, "define linkonce_odr void @{safe_name}(ptr %p) {{").unwrap();
             writeln!(out, "  %tmp = alloca {ty}").unwrap();
             writeln!(out, "  call void @{safe_clone}(ptr sret({ty}) %tmp, ptr %p)").unwrap();
@@ -2088,7 +2128,7 @@ fn emit_inst(
 ) {
     match inst {
         // ── Slot Access ─────────────────────────────────────────────
-        Inst::SlotStore { slot, value, .. } => {
+        Inst::SlotStore { slot, value, is_move } => {
             let slot_ty = &func.slots[slot.0 as usize].ty;
             if *slot_ty == LirType::Void {
                 // Void slots are used for closure env pointers — store the pointer.
@@ -2125,7 +2165,24 @@ fn emit_inst(
                 let value_is_null = func.blocks.iter().any(|b| {
                     b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == value.0))
                 });
-                if is_ptr_val {
+                // CoW-aware string Copy: when storing a Ptr into a String slot with Copy
+                // semantics (is_move=false), deep-clone through gorget_string_copy_cow.
+                // Views (cap=0) become 32-byte struct copies; owned strings are deep-cloned.
+                // Mirrors the C backend's path in src/backend/c_lir/mod.rs — without this,
+                // shallow memcpy aliases the source buffer and elem_drop/explicit drops
+                // conflict into double-frees. Only fires when val_ty is explicitly Ptr
+                // (matching C's `matches!(val_ty, Some(LirType::Ptr))`) — values with no
+                // type info may be aggregate returns that need plain memcpy transfer.
+                let slot_is_string = matches!(slot_ty, LirType::Struct(sid)
+                    if snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str"));
+                let val_ty_is_ptr = matches!(val_ty, Some(LirType::Ptr));
+                let value_is_strlit = func.blocks.iter().any(|b| {
+                    b.insts.iter().any(|i| matches!(i, Inst::StrLit { dst, .. } if dst.0 == value.0))
+                });
+                if val_ty_is_ptr && slot_is_string && !*is_move && !value_is_null && !value_is_strlit {
+                    writeln!(out, "  call void @gorget_string_copy_cow(ptr sret(%GorgetString) %s{}, ptr %v{})",
+                        slot.0, value.0).unwrap();
+                } else if is_ptr_val {
                     // Value is a pointer — memcpy from it (or memset if null)
                     let sz = sizeof_lir_type(slot_ty, &module.structs, snames);
                     if value_is_null {

@@ -41,12 +41,11 @@
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
 - **LLVM backend test results (2026-04-16, post-session)**:
-  - **743 PASS / 815 (91.2%)**, 27 FAIL, 36 CRASH, 9 BUILD_FAIL, 109 SKIP. Up from 731 (89.7%) — **+12 net PASS, FAIL 39→27, 0 regressions**.
-  - Fixes: (1) Option/Result combinator inline handlers (~7 tests), (2) CStr null-termination via gorget_str_to_cstr (~4 tests), (3) NamedFuncAddr LIR instruction + runtime free/clone declarations
-  - **elem_drop/elem_clone**: LIR-level stores caused double-frees in LLVM backend — reverted to C-backend-only injection. Root cause: ownership system's explicit drops conflict with elem_drop collection-level cleanup on some code paths. `Inst::NamedFuncAddr` remains in LIR for other uses.
-  - **Next high-impact: Dict/Set HOF inlining** (~6 FAIL): The C backend inlines fold/filter/each at each call site with the correct closure; LLVM calls a compiled helper that hardcodes `Closure_0__call`. Proper fix: lift to LIR.
+  - **738 PASS / 814 (90.7%)**, 29 FAIL, 38 CRASH, 9 BUILD_FAIL (after elem_drop re-enable). Up from 710 PASS baseline — **+28 net PASS, -10 FAIL, +3 CRASH**.
+  - Fixes: (1) Option/Result combinator inline handlers, (2) CStr null-termination, (3) **LIR elem_drop/elem_clone stores re-enabled** + LLVM SlotStore String CoW clone + NamedFuncAddr declaration generation.
+  - **elem_drop root cause (resolved)**: LLVM's SlotStore did plain memcpy for all aggregate stores regardless of `is_move`. C backend emits `gorget_string_copy_cow` on non-move Ptr→String stores (src/backend/c_lir/mod.rs:1629). Fix: mirror that CoW clone in LLVM backend src/backend/llvm/mod.rs SlotStore handler + declare `T__clone`/`T__drop` for NamedFuncAddr user-type references.
+  - **Remaining 4 dataframe_* CRASH**: Still double-free somewhere in xtd.dataframe with elem_drop active — deferred (likely nested Vector[Vector[Column]] or Union-typed payload issue).
   - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, conv_stdlib, shared_iterator_invalidation, print_trait_object, string_enum_variants, sqlite
-  - Remaining CRASH (36): 13x p2p, 5x httpserver, 2x crypto, 2x leak, others
 
 ## Low
 
