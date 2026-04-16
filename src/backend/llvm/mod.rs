@@ -1126,6 +1126,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         "gorget_string_free", "gorget_array_free", "gorget_map_free", "gorget_set_free",
         "gorget_array_clone_inplace", "gorget_map_clone_inplace", "gorget_set_clone_inplace",
         "gorget_string_clone_inplace", "gorget_string_materialize_inplace",
+        // HOF helpers declared in preamble
+        "gorget_map_put_cloned", "gorget_set_add",
     ] {
         seen.insert(name.to_string());
     }
