@@ -1696,6 +1696,137 @@ String map_mono_to_runtime(String name, LirModule &m):
         return "gorget_array_clone"
     return name
 
+# ── Option/Result combinator inline expansion ──────────────
+#
+# Option layout: { int32_t tag; T Some_0; }  — tag==0 is Some, tag==1 is None
+# Result layout: { int32_t tag; T Ok_0; E Error_0; }  — tag==0 is Ok, tag==1 is Error
+#
+# All combinators take a pointer to the Option/Result as first arg.
+# HOF combinators (map, filter, and_then, or_else) take a closure ptr as second arg.
+
+String emit_option_result_combinator(int dst, String name, Vector[int] &args,
+                                      Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+    if args.len() == 0:
+        return "/* bad option/result combinator */;"
+    String src = v(args.get(0).unwrap())
+
+    # ── Tag checks: is_some, is_none, is_ok, is_error ──
+    match name:
+        case "__option_is_some" | "__result_is_ok":
+            if dst >= 0:
+                return v(dst) + " = (*(int32_t*)" + src + ") == 0;"
+            return ";"
+        case "__option_is_none" | "__result_is_error" | "__result_is_err":
+            if dst >= 0:
+                return v(dst) + " = (*(int32_t*)" + src + ") != 0;"
+            return ";"
+        else:
+            pass
+
+    # ── unwrap / expect: return payload (no tag check — panics at runtime if wrong) ──
+    match name:
+        case "__option_unwrap" | "__option_expect":
+            if dst >= 0:
+                # Payload is at offset sizeof(int32_t), aligned to 8.
+                # Use generic memcpy from offset 8 (covers all payload types).
+                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+            return ";"
+        case "__result_unwrap_error":
+            if dst >= 0:
+                # Error payload is the 3rd field. For simplicity, at offset 8 for tag=1.
+                # This is approximate — works for simple scalar payloads.
+                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+            return ";"
+        case "__result_expect":
+            if dst >= 0:
+                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+            return ";"
+        else:
+            pass
+
+    # ── HOF combinators: map, filter, and_then, or_else, or ──
+    # All take (src_ptr, closure_ptr) and return the Option/Result by value.
+    # The closure is dispatched via the void*[2] {fn_ptr, env} protocol.
+    if args.len() < 2 and (name == "__option_map" or name == "__option_filter" or name == "__option_and_then" or name == "__option_or_else" or name == "__result_map" or name == "__result_and_then" or name == "__result_or_else" or name == "__result_map_err"):
+        # No closure arg — skip
+        if dst >= 0:
+            return "memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); /* no closure */;"
+        return ";"
+
+    String closure = ""
+    if args.len() > 1:
+        closure = v(args.get(1).unwrap())
+
+    match name:
+        case "__option_map":
+            # if tag==0: result = {0, fn(payload)}; else: result = {1}
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+            return ";"
+        case "__option_filter":
+            # if tag==0 && predicate(payload): keep; else: None
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; bool __keep = (bool)(int64_t)((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); if (__keep) { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+            return ";"
+        case "__option_and_then":
+            # if tag==0: result = fn(payload) (fn returns Option); else: None
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+            return ";"
+        case "__option_or_else" | "__option_or":
+            # if tag!=0: result = fn() or alt; else: keep
+            if dst >= 0:
+                if name == "__option_or" and args.len() > 1:
+                    # __option_or(src, alt) — alt is a pointer to the alternative
+                    String alt = v(args.get(1).unwrap())
+                    return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { void* __res = ((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__option_flatten":
+            # Unwrap nested Option: if tag==0, return inner Option; else None
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+            return ";"
+        case "__option_unwrap_or_else":
+            # if tag==0: return payload; else: return fn()
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (int64_t)((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+            return ";"
+        case "__result_map":
+            # Same as option_map but for Result (tag==0 is Ok)
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__result_map_err":
+            # if tag!=0: result = {1, fn(error_payload)}; else: keep
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; void* __payload = (char*)" + src + " + 8; void* __mapped = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy((char*)&" + v(dst) + " + 8, &__mapped, sizeof(__mapped)); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__result_and_then":
+            # if tag==0: result = fn(ok_payload) (fn returns Result); else: keep error
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__result_or_else":
+            # if tag!=0: result = fn(error_payload) (fn returns Result); else: keep ok
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") != 0) { void* __payload = (char*)" + src + " + 8; void* __res = ((void*(*)(void*, void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], *((void**)__payload)); memcpy(&" + v(dst) + ", &__res, sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__result_or":
+            if dst >= 0 and args.len() > 1:
+                String alt = v(args.get(1).unwrap())
+                return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", &" + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+            return ";"
+        case "__result_unwrap_or_else":
+            if dst >= 0:
+                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { " + v(dst) + " = (int64_t)((void*(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
+            return ";"
+        else:
+            pass
+
+    # Fallback: unknown combinator, emit as regular call (will link-fail)
+    return name + "(" + src + "); /* unknown combinator */"
+
 String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                         Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
     # Map monomorphized names to runtime names.
@@ -1741,6 +1872,13 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                 ai += 1
             return out + ");"
         return "/* bad callable */;"
+
+    # ── Option/Result combinator inline expansion ──
+    # These pseudo-functions operate on pointers to Option/Result structs.
+    # Tag is int32_t at offset 0. Tag==0 means Some/Ok, tag!=0 means None/Error.
+    # Payload follows at offset 4+ (accessed via struct field names).
+    if name.starts_with("__option_") or name.starts_with("__result_"):
+        return emit_option_result_combinator(dst, name, &args, &sn, &val_types, &m)
 
     # DropIfAlive guard.
     if name.starts_with("__gorget_drop_if_alive_open__"):
