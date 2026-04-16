@@ -52,7 +52,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host LIR backend**: ~5,500 lines across 4 files. 312/924 fixtures compile through self-host LIR codegen pipeline (up from 0). 0 crashes. User function Ptr(T) params now passed by SlotAddr, collection self-by-pointer, channel recv fixup, set constructor args, OpMove→SlotLoad. Remaining ~522 failures: ~170 link-only (domain modules, library imports), ~50 type mismatches (deeper GIR type tracking). [updated: 2026-04-16]
+- **Self-host LIR backend**: ~5,600 lines across 4 files. 319/924 fixtures compile (up from 0). 0 crashes. Ptr(T) param passing for both user functions and struct methods via GIR param type checking. Remaining ~515 failures: ~179 link-only (domain modules, library imports), ~50 type mismatches (GIR locals typed as I64 instead of struct type — needs `guess_return_type` fixes for struct constructors, field access, method calls). [updated: 2026-04-16]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
