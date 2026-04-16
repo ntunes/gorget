@@ -897,8 +897,7 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_set_clone" or fn_name == "gorget_set_is_empty":
             return true
-        if fn_name == "gorget_str_codepoint_count":
-            return true
+        # Note: gorget_str_codepoint_count takes Str by value, NOT by pointer.
     # Element args passed by pointer
     if fn_name == "gorget_array_push" and arg_idx == 1:
         return true
