@@ -40,18 +40,18 @@
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
 
-- **LLVM backend test results (2026-04-15, 815 tested / 913 total)**:
-  - PASS: 730 (89.6% of tested); up from 669 (80.5%) start of 2026-04-14
-  - FAIL: 36 (output mismatch — see categories below)
-  - CRASH: 40 (segfault/abort/timeout)
+- **LLVM backend test results (2026-04-16, 815 tested / 913 total)**:
+  - PASS: 731 (89.7% of tested); up from 669 (80.5%) start of 2026-04-14
+  - FAIL: 39 (output mismatch — see categories below)
+  - CRASH: 36 (segfault/abort/timeout)
   - BUILD_FAIL: 9 (LLC type mismatch / forward-ref / missing symbols)
   - SKIP: 108 (C backend also fails — error programs, benches, etc.)
-  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch (phi i64 vs i32), 1x conv_stdlib ptr vs i64, 1x shared_iterator_invalidation ptr vs GorgetArray, 1x print_trait_object struct init, 1x string_enum_variants i8 vs i64, 1x sqlite undefined ref
-  - Remaining CRASH (40): 13x p2p (signal 11), 3x httpserver, 2x crypto, 3x drop/box (signal 6 — double free from ptr-slot free(stack_addr)), 2x leak (signal 6), toml_stringify, serializable, deserializable, socket_connect, sync_condvar, thread_mutex, test_hashset_all, test_set_string, etc.
-  - Remaining FAIL (36): ~7x json/xml/serialize (int values read as 0 from enum payload — ptr-slot memcpy overflow), ~5x leak/stress_alloc (leaked=true), ~3x drop ordering, ~3x result combinators, ~3x process/socket, ~2x ecs (field reads 0), ~2x coroutine, ~11x others
-  - **Root cause: struct inter-field alignment mismatch** — non-union structs containing aggregate fields (e.g., `Option__Json = {i32, Json}`) get different layout in C vs LLVM. C pads i32 tag to 8 before Json (which has 8-byte alignment from its union), giving offset 8. LLVM puts Json at offset 4 (because `%Json = {i32, i32, [N x i8]}` has apparent alignment 4). Fix needs `computed_c_align` on StructDef so the LLVM backend can insert correct padding. Naive "all aggregates align to 8" breaks traits/vtables.
-  - **Double-free crashes** (drop_raii, box_heap): `free(slot_addr)` frees the stack address instead of the heap pointer. Ptr-typed slots need `load ptr` before `free`.
-  - **Ptr-typed LIR slots holding struct data**: GIR types `Ptr(Named("X"))` → `alloca ptr` (8 bytes) but receives struct memcpy. Fix in GIR: locals that hold copies should be typed as the struct, not as Ptr.
+  - Fixes applied 2026-04-16: computed_c_align on StructDef + c_alignof_lir_type(), inter-field padding in LLVM struct emission, byte-offset GEP for FieldPtr, Box free loads as LirType::Ptr
+  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, 1x conv_stdlib, 1x shared_iterator_invalidation, 1x print_trait_object, 1x string_enum_variants, 1x sqlite
+  - Remaining CRASH (36): 13x p2p (signal 11), 5x httpserver, 2x crypto, 2x leak (signal 6), others (sync_condvar, thread_mutex, test_hashset_all, test_set_string, serializable, deserializable, socket_connect, stress_shared, string_deep_callstack, coroutine_option_combinators)
+  - Remaining FAIL (39): ~8x option/result combinators (or_else/map return wrong values — closure dispatch returning garbage/0), ~4x json/xml (parsed array elements read as 0 — root cause unclear, manual push works), ~5x leak/stress_alloc, ~3x drop ordering, ~3x process, ~3x httpserver, ~13x others
+  - **Combinator bug**: Option.or_else/map/and_then return 0 or garbage. The inline CallExtern handler for combinators likely has wrong offset/type when extracting values from closure results. Affects ~8 FAIL tests.
+  - **Parsed array int-as-0**: json_parse("[7]") → "[0]" but manual Json.Int(7) push → "[7]" works. Traced through parse_number/parse_array/json_stringify — all offsets match (160 bytes, offset 8). Root cause still unknown.
 
 ## Low
 
