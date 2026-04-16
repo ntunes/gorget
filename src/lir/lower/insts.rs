@@ -2576,14 +2576,20 @@ impl<'a> FuncLowering<'a> {
             self.store_to_local(d, r, bb);
         }
 
-        // elem_drop/elem_clone/elem_materialize on collection constructors.
-        // These are still set by the C backend's inline emission (emit_call_extern.rs)
-        // because the LLVM backend's gorget_array_free triggers double-frees when
-        // elem_drop is set at the LIR level — the ownership system's explicit drops
-        // conflict with elem_drop cleanup on some code paths.
-        // TODO: investigate the LLVM double-free root cause and re-enable.
-        // The NamedFuncAddr instruction and emit_collection_fn_ptr_stores infrastructure
-        // remain available for when the root cause is resolved.
+        // Set elem_drop/elem_clone/elem_materialize on collection constructors.
+        // Must use the slot address (not the return value) since the value
+        // has been stored to the local slot by store_to_local above.
+        if !collection_elem_fns.is_empty() {
+            if let Some(d) = dst {
+                let slot = self.local_to_slot[d.0 as usize];
+                let slot_addr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                    dst: slot_addr,
+                    slot,
+                });
+                self.emit_collection_fn_ptr_stores(slot_addr, &collection_elem_fns, bb);
+            }
+        }
 
         // Generic post-call zeroing for Move operands.  Consuming args
         // are marked Operand::Move during GIR lowering; we zero their
