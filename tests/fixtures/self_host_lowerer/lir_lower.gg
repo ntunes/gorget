@@ -479,6 +479,12 @@ String map_runtime_name(String name):
             return "gorget_map_clone"
         elif method == "clear":
             return "gorget_map_clear"
+        elif method == "is_empty":
+            return "gorget_map_is_empty"
+        elif method == "items":
+            return "gorget_map_items"
+        elif method == "update":
+            return "gorget_map_update"
 
     # Set methods
     if name.starts_with("Set__") or name.starts_with("HashSet__"):
@@ -501,6 +507,20 @@ String map_runtime_name(String name):
             return "gorget_set_len"
         elif method == "clone":
             return "gorget_set_clone"
+        elif method == "clear":
+            return "gorget_set_clear"
+        elif method == "is_empty":
+            return "gorget_set_is_empty"
+        elif method == "union":
+            return "gorget_set_union"
+        elif method == "intersection":
+            return "gorget_set_intersection"
+        elif method == "difference":
+            return "gorget_set_difference"
+        elif method == "is_subset":
+            return "gorget_set_is_subset"
+        elif method == "is_superset":
+            return "gorget_set_is_superset"
 
     # String methods
     if name.starts_with("GorgetString__") or name.starts_with("String__") or name.starts_with("Str__"):
@@ -639,6 +659,41 @@ String map_runtime_name(String name):
         elif method == "index_of":
             return "gorget_array_index_of"
 
+    # Option combinator methods: Some__map, Some__filter, etc.
+    if name.starts_with("Some__") or name.starts_with("None__"):
+        String method = extract_method_name(name)
+        return "__option_" + method
+    if name.starts_with("Ok__") or name.starts_with("Error__") or name.starts_with("Err__"):
+        String method = extract_method_name(name)
+        return "__result_" + method
+
+    # AtomicInt / AtomicBool methods
+    if name.starts_with("AtomicInt__"):
+        String method = extract_method_name(name)
+        return "gorget_atomic_int_" + method
+    if name.starts_with("AtomicBool__"):
+        String method = extract_method_name(name)
+        return "gorget_atomic_bool_" + method
+
+    # Semaphore/Barrier/OnceFlag/WaitGroup methods
+    if name.starts_with("Semaphore__"):
+        String method = extract_method_name(name)
+        return "gorget_semaphore_" + method
+    if name.starts_with("Barrier__"):
+        String method = extract_method_name(name)
+        return "gorget_barrier_" + method
+    if name.starts_with("OnceFlag__"):
+        String method = extract_method_name(name)
+        return "gorget_once_flag_" + method
+    if name.starts_with("WaitGroup__"):
+        String method = extract_method_name(name)
+        return "gorget_wait_group_" + method
+
+    # TaskGroup methods
+    if name.starts_with("TaskGroup__"):
+        String method = extract_method_name(name)
+        return "gorget_task_group_" + method
+
     # Standalone function mappings
     if name == "int_to_str":
         return "gorget_int_to_str"
@@ -658,6 +713,12 @@ String map_runtime_name(String name):
         return "gorget_read_line"
     if name == "print_err":
         return "gorget_print_err"
+    if name == "args":
+        return "gorget_args"
+    if name == "async_sleep" or name == "sleep_ms":
+        return "gorget_async_sleep"
+    if name == "time_now" or name == "monotonic_ns":
+        return "gorget_monotonic_ns"
 
     # No mapping
     return ""
