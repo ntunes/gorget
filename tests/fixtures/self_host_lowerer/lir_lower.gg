@@ -1256,13 +1256,18 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             String effective_name = func_name
             if mapped_early != "":
                 effective_name = mapped_early
+            # Look up function param types for Ptr(T) detection (user struct methods)
+            Vector[int] ext_param_tys = get_fn_param_types(func_name, &gmod)
             Vector[int] lir_args = []
             int ai = 0
             while ai < args.len():
                 Operand arg = args.get(ai).unwrap()
-                # For runtime functions that take element by pointer (push, put, set, insert),
-                # non-first scalar args need to be passed via SlotAddr.
+                # Check runtime ptr-passing table OR function param type
                 bool need_ptr = needs_ptr_arg(effective_name, ai)
+                if not need_ptr and ai < ext_param_tys.len():
+                    int pty = ext_param_tys.get(ai).unwrap()
+                    if is_ptr_type(pty, &gmod):
+                        need_ptr = true
                 if need_ptr:
                     match arg:
                         case OpCopy(local_id):
