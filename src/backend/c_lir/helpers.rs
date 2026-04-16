@@ -1754,6 +1754,7 @@ pub(super) fn runtime_fn_return_struct(name: &str) -> Option<&'static str> {
         | "gorget_str_cat" | "gorget_string_format"
         | "gorget_string_format_alloc" => Some("GorgetString"),
         "gorget_file_open" => Some("GorgetFile"),
+        "gorget_regex_compile" => Some("Regex"),
         _ => None,
     }
 }
