@@ -1693,8 +1693,9 @@ impl<'a> FuncLowering<'a> {
             // use-after-free when one copy is dropped.
             if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type) {
                 stores.push((48, clone_fn));
-            } else if self.recursive_drop_structs.contains_key(elem_type)
-                || self.recursive_drop_enums.contains_key(elem_type)
+            } else if (self.recursive_drop_structs.contains_key(elem_type)
+                || self.recursive_drop_enums.contains_key(elem_type))
+                && self.func_index.contains_key(&format!("{elem_type}__clone"))
             {
                 let clone_name = format!("{elem_type}__clone_inplace");
                 stores.push((48, clone_name));
@@ -1731,8 +1732,9 @@ impl<'a> FuncLowering<'a> {
                     // val_clone: built-in + user recursive types (see elem_clone comment).
                     if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type) {
                         stores.push((112, clone_fn));
-                    } else if self.recursive_drop_structs.contains_key(val_type)
-                        || self.recursive_drop_enums.contains_key(val_type)
+                    } else if (self.recursive_drop_structs.contains_key(val_type)
+                        || self.recursive_drop_enums.contains_key(val_type))
+                        && self.func_index.contains_key(&format!("{val_type}__clone"))
                     {
                         let clone_name = format!("{val_type}__clone_inplace");
                         stores.push((112, clone_name));
