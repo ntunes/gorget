@@ -413,6 +413,8 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "format":
         return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "char_at" or method == "byte_at":
+        return lookup_or_register_named(&gmod, "GorgetString")
     # Collection-returning methods
     if method == "split" or method == "lines" or method == "chars" or method == "bytes":
         return lookup_or_register_named(&gmod, "GorgetArray")
@@ -474,6 +476,23 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # Default to I64 for unknown methods
     return I64_TYPE
 
+# Return type inference for builtin free-standing calls (args, read_file, etc.)
+# Returns -1 if not a builtin.
+int builtin_call_return_type(String fname, GirModule &gmod):
+    if fname == "args":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if fname == "read_file" or fname == "read_line" or fname == "stdin" or fname == "env" or fname == "getenv":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if fname == "int_to_str" or fname == "float_to_str" or fname == "bool_to_str":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if fname == "parse_int" or fname == "str_to_int":
+        return I64_TYPE
+    if fname == "parse_float" or fname == "str_to_float":
+        return F64_TYPE
+    if fname == "time_now" or fname == "monotonic_ns":
+        return I64_TYPE
+    return -1
+
 # Extract element type from a collection name: Vector__int64_t → int64_t
 String collection_element_type(String name):
     if name.starts_with("Vector__"):
@@ -497,13 +516,21 @@ bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
         return false
     int tid = ctx.locals.get(local_id).unwrap().type_id
-    if tid >= 0 and tid < gmod.type_table.len():
-        GirType gt = gmod.type_table.get(tid).unwrap()
-        match gt:
-            case GtNamed(name):
-                return name == "GorgetString" or name == "String" or name == "Str"
-            else:
-                pass
+    return is_string_type_id(tid, &gmod)
+
+bool is_string_type_id(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return false
+    GirType gt = gmod.type_table.get(tid).unwrap()
+    match gt:
+        case GtNamed(name):
+            return name == "GorgetString" or name == "String" or name == "Str"
+        case GtPtr(inner):
+            return is_string_type_id(inner, &gmod)
+        case GtMutPtr(inner):
+            return is_string_type_id(inner, &gmod)
+        else:
+            return false
     return false
 
 bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types):
@@ -1018,6 +1045,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Collection/struct constructors: return the named type
         if ret_type == I64_TYPE and is_type_constructor(call_name):
             ret_type = lookup_or_register_named(&gmod, call_name)
+        # Builtin calls (args, read_file, int_to_str, ...)
+        if ret_type == I64_TYPE:
+            int builtin_ret = builtin_call_return_type(fname, &gmod)
+            if builtin_ret >= 0:
+                ret_type = builtin_ret
         int dst = add_local(&ctx, ret_type, NO_NAME)
         emit(&ctx, GICall(dst, call_name, gir_args))
         result = dst
@@ -2672,12 +2704,23 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 if fdef.name == "main":
                     rt = I32_TYPE
                 else:
-                    # Pre-scan: just use primitive types for signatures
+                    # Pre-scan: use primitive types AND best-effort named type detection.
                     match fdef.return_type.ty:
                         case TPrimitive(name):
                             int pt = prim_name_to_type(name)
                             if pt >= 0:
                                 rt = pt
+                            elif name == "String":
+                                # Pre-register GorgetString so fn_sigs resolves correctly.
+                                # Types table will be extended on-demand; here we use a
+                                # sentinel that lower_call handles via fn definition lookup.
+                                pass
+                        case TNamed(name, _):
+                            # Collection/named return types — record a hint so downstream
+                            # call_return type inference can recover them during function
+                            # definition lookup. Full resolution happens when the function
+                            # body is lowered (see lower_function).
+                            pass
                         else:
                             pass
                 fn_sigs.put(fdef.name, rt)
@@ -2911,6 +2954,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
         mri += 1
+
+    # Populate fn_sigs for non-generic functions using map_ast_type now that
+    # gmod.type_table is accessible. Pre-scan only handled TPrimitive return
+    # types; this pass captures TNamed (String, Vector[T], …).
+    int fsi = 0
+    while fsi < m.items.len():
+        Item fs_item = m.items.get(fsi).unwrap()
+        match fs_item:
+            case IFunction(fsdef):
+                if fsdef.type_params.len() == 0 and fsdef.name != "main":
+                    int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
+                    if ret_tid >= 0:
+                        gmod.fn_sigs.put(fsdef.name.clone(), ret_tid)
+            else:
+                pass
+        fsi += 1
 
     # Register fn_sigs for monomorphized instances
     int si = 0

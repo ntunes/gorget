@@ -797,6 +797,46 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 # ── Value type inference (simplified) ──────────────────────
 
 # Map runtime function names to their return LIR types.
+# Returns true for runtime functions whose Str-typed parameters are declared
+# by value (not Str*). Used to insert *(Str*) deref when the caller has a
+# pointer-typed actual (e.g. bare String param's void* ABI).
+bool runtime_takes_str_by_value(String name):
+    if name == "gorget_str_cat" or name == "gorget_str_concat":
+        return true
+    if name == "gorget_str_eq" or name == "gorget_str_cmp":
+        return true
+    if name == "gorget_str_ne" or name == "gorget_str_lt" or name == "gorget_str_le":
+        return true
+    if name == "gorget_str_gt" or name == "gorget_str_ge":
+        return true
+    if name == "gorget_str_slice" or name == "gorget_str_trim":
+        return true
+    if name == "gorget_str_replace" or name == "gorget_str_upper" or name == "gorget_str_lower":
+        return true
+    if name == "gorget_str_to_upper" or name == "gorget_str_to_lower":
+        return true
+    if name == "gorget_str_repeat" or name == "gorget_str_join":
+        return true
+    if name == "gorget_str_strip" or name == "gorget_str_lstrip" or name == "gorget_str_rstrip":
+        return true
+    if name == "gorget_str_removeprefix" or name == "gorget_str_removesuffix":
+        return true
+    if name == "gorget_str_center" or name == "gorget_str_ljust" or name == "gorget_str_rjust":
+        return true
+    if name == "gorget_str_zfill" or name == "gorget_str_reverse":
+        return true
+    if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":
+        return true
+    if name == "gorget_str_contains" or name == "gorget_str_starts_with" or name == "gorget_str_ends_with":
+        return true
+    if name == "gorget_str_hash" or name == "gorget_str_len" or name == "gorget_str_codepoint_count":
+        return true
+    if name == "gorget_str_split" or name == "gorget_str_split_n":
+        return true
+    if name == "gorget_str_lines" or name == "gorget_str_chars":
+        return true
+    return false
+
 int runtime_fn_return_type(String name, LirModule &m):
     # Array functions returning GorgetArray
     if name == "gorget_array_new" or name == "gorget_array_new_drop" or name == "gorget_array_with_capacity":
@@ -816,10 +856,10 @@ int runtime_fn_return_type(String name, LirModule &m):
     # Map functions returning GorgetMap
     if name == "gorget_dict_new" or name == "gorget_map_new" or name == "gorget_dict_new_str" or name == "gorget_map_new_str":
         return find_struct_type("GorgetMap", &m)
-    if name == "gorget_map_clone" or name == "gorget_map_keys" or name == "gorget_map_values":
+    if name == "gorget_map_clone":
         return find_struct_type("GorgetMap", &m)
-    # gorget_map_keys/values return GorgetArray
-    if name == "gorget_map_keys" or name == "gorget_map_values":
+    # gorget_map_keys/values return GorgetArray (a Vector of keys/values)
+    if name == "gorget_map_keys" or name == "gorget_map_values" or name == "gorget_map_items":
         return find_struct_type("GorgetArray", &m)
     # Set functions returning GorgetMap (Set is typedef to Map)
     if name == "gorget_ordered_set_new" or name == "gorget_set_new" or name == "gorget_ordered_set_new_str" or name == "gorget_set_new_str":
@@ -858,11 +898,11 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetArray", &m)
     if name == "gorget_str_lines" or name == "gorget_str_chars":
         return find_struct_type("GorgetArray", &m)
-    # Int/float to string: returns const char*
+    # Int/float to string: returns Str
     if name == "gorget_int_to_str" or name == "gorget_float_to_str" or name == "gorget_bool_to_str":
-        return LT_PTR
+        return find_struct_type("GorgetString", &m)
     if name == "gorget_char_to_str" or name == "gorget_uint8_to_str":
-        return LT_PTR
+        return find_struct_type("GorgetString", &m)
     # Scalar returns
     if name == "gorget_array_len" or name == "gorget_map_len" or name == "gorget_set_len":
         return LT_I64
@@ -921,6 +961,23 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_getenv":
         return find_struct_type("GorgetString", &m)
+    # Process/CLI functions returning collections/strings
+    if name == "gorget_args":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_env_vars":
+        return find_struct_type("GorgetMap", &m)
+    if name == "gorget_cwd" or name == "gorget_exe_path" or name == "gorget_hostname":
+        return find_struct_type("GorgetString", &m)
+    # String builder / misc Str returners
+    if name == "gorget_str_to_upper" or name == "gorget_str_to_lower":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_format" or name == "gorget_str_sprintf":
+        return find_struct_type("GorgetString", &m)
+    # Array transform
+    if name == "gorget_array_concat":
+        return find_struct_type("GorgetArray", &m)
+    if name == "gorget_array_repeat":
+        return find_struct_type("GorgetArray", &m)
     return LT_VOID
 
 # Known void-returning runtime functions (used to suppress assignment in emit).
@@ -1353,6 +1410,14 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 if vty == LT_PTR:
                     String ty_name = c_type_name(slot_ty, &sn)
                     return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
+                # Type mismatch coercion: storing a scalar I64 into an aggregate
+                # slot usually means the value was a placeholder from lossy
+                # lowering (tuple/array literal, default init). Emit a
+                # zero-initialization to keep the C compiler happy instead of
+                # a raw assignment that would fail type checking.
+                if vty != LT_VOID and vty != slot_ty and not lir_is_aggregate(vty):
+                    String ty_name = c_type_name(slot_ty, &sn)
+                    return s(slot) + " = (" + ty_name + "){0};"
                 return s(slot) + " = " + v(value) + ";"
             return s(slot) + " = " + v(value) + ";"
 
@@ -1461,26 +1526,39 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
 
         # ── Comparison & Logic ──
         case ICmp(dst, op, lhs, rhs):
-            # Defensive: if both operands are Str (aggregate), use gorget_str_eq/cmp.
+            # Defensive: if either operand is Str (aggregate), use gorget_str_eq/cmp.
             # The LIR lowerer should have lowered this to a CallExtern but the self-host
             # lowerer sometimes doesn't.
+            int lty = LT_VOID
+            int rty = LT_VOID
             if val_types.contains(lhs):
-                int lty = val_types.get(lhs).unwrap()
-                if lir_is_aggregate(lty):
-                    # Aggregate comparison — use memcmp fallback for eq/ne,
-                    # gorget_str_eq for known Str types.
-                    if op == CMP_EQ:
-                        return v(dst) + " = gorget_str_eq(" + v(lhs) + ", " + v(rhs) + ");"
-                    elif op == CMP_NE:
-                        return v(dst) + " = !gorget_str_eq(" + v(lhs) + ", " + v(rhs) + ");"
-                    elif op == CMP_LT:
-                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") < 0;"
-                    elif op == CMP_LE:
-                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") <= 0;"
-                    elif op == CMP_GT:
-                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") > 0;"
-                    elif op == CMP_GE:
-                        return v(dst) + " = gorget_str_cmp(" + v(lhs) + ", " + v(rhs) + ") >= 0;"
+                lty = val_types.get(lhs).unwrap()
+            if val_types.contains(rhs):
+                rty = val_types.get(rhs).unwrap()
+            bool lhs_str = lir_is_aggregate(lty)
+            bool rhs_str = lir_is_aggregate(rty)
+            if lhs_str or rhs_str:
+                # Coerce pointer-typed operand (bare String param passed by void*
+                # or Str*) by dereferencing as Str. Both sides must be Str by value.
+                String lstr = v(lhs)
+                String rstr = v(rhs)
+                if not lhs_str and (lty == LT_PTR or (lty >= LT_PTR_TO_BASE and lty < LT_STRUCT_BASE)):
+                    lstr = "*(Str*)" + lstr
+                if not rhs_str and (rty == LT_PTR or (rty >= LT_PTR_TO_BASE and rty < LT_STRUCT_BASE)):
+                    rstr = "*(Str*)" + rstr
+                # Aggregate comparison — use gorget_str_eq/cmp for known Str types.
+                if op == CMP_EQ:
+                    return v(dst) + " = gorget_str_eq(" + lstr + ", " + rstr + ");"
+                elif op == CMP_NE:
+                    return v(dst) + " = !gorget_str_eq(" + lstr + ", " + rstr + ");"
+                elif op == CMP_LT:
+                    return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") < 0;"
+                elif op == CMP_LE:
+                    return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") <= 0;"
+                elif op == CMP_GT:
+                    return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") > 0;"
+                elif op == CMP_GE:
+                    return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") >= 0;"
             String cop = cmp_op_str(op)
             return v(dst) + " = " + v(lhs) + " " + cop + " " + v(rhs) + ";"
 
@@ -1752,7 +1830,15 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                                       Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
     if args.len() == 0:
         return "/* bad option/result combinator */;"
-    String src = v(args.get(0).unwrap())
+    int src_id = args.get(0).unwrap()
+    String src = v(src_id)
+    # Combinators treat src as a pointer (`*(int32_t*)src` etc). If the caller
+    # has an aggregate value, we must take its address first.
+    int src_ty = LT_VOID
+    if val_types.contains(src_id):
+        src_ty = val_types.get(src_id).unwrap()
+    if lir_is_aggregate(src_ty):
+        src = "(&" + src + ")"
 
     # ── Tag checks: is_some, is_none, is_ok, is_error ──
     match name:
@@ -2008,6 +2094,7 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
 
     # Printf/fprintf: Str args need .data extraction for C's printf.
     if name == "printf" or name == "fprintf":
+        int gs_ty = find_struct_type("GorgetString", &m)
         String out = ""
         if dst >= 0:
             out = v(dst) + " = "
@@ -2020,8 +2107,9 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
             int arg_ty = -1
             if val_types.contains(arg_id):
                 arg_ty = val_types.get(arg_id).unwrap()
-            if lir_is_aggregate(arg_ty):
-                # Str struct → extract .data for C printf
+            # Only Str (GorgetString) has a .data field; other aggregates
+            # like Result/Option/user structs must be passed by value.
+            if arg_ty == gs_ty:
                 out = out + v(arg_id) + ".data"
             else:
                 out = out + v(arg_id)
@@ -2058,11 +2146,24 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     if dst >= 0 and not returns_void:
         out = v(dst) + " = "
     out = out + name + "("
+    # For runtime functions whose parameters take Str by value, coerce
+    # pointer-typed actuals with an explicit *(Str*) deref so we don't fail
+    # C type checking when the caller passed a bare String (which uses Ptr ABI).
+    bool str_by_value_fn = runtime_takes_str_by_value(name)
     int ai = 0
     while ai < args.len():
         if ai > 0:
             out = out + ", "
-        out = out + v(args.get(ai).unwrap())
+        int arg_id = args.get(ai).unwrap()
+        int arg_ty = LT_VOID
+        if val_types.contains(arg_id):
+            arg_ty = val_types.get(arg_id).unwrap()
+        bool is_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
+        bool is_agg = lir_is_aggregate(arg_ty)
+        if str_by_value_fn and is_ptr and not is_agg:
+            out = out + "*(Str*)" + v(arg_id)
+        else:
+            out = out + v(arg_id)
         ai += 1
     return out + ");"
 

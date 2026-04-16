@@ -377,6 +377,25 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
 # ── Runtime function name mapping ───────────────────────────
 
 String map_runtime_name(String name):
+    # Bare type constructors for opaque pointer types: TaskGroup() → gorget_task_group_new().
+    # These have no generic args (pointer typedefs, not generics).
+    match name:
+        case "TaskGroup":
+            return "gorget_task_group_new"
+        case "AtomicInt":
+            return "gorget_atomic_int_new"
+        case "AtomicBool":
+            return "gorget_atomic_bool_new"
+        case "Barrier":
+            return "gorget_barrier_new"
+        case "WaitGroup":
+            return "gorget_wait_group_new"
+        case "OnceFlag":
+            return "gorget_once_flag_new"
+        case "Semaphore":
+            return "gorget_semaphore_new"
+        else:
+            pass
     # Collection constructors (bare name, no method suffix).
     # Vector__int64_t() → gorget_array_new(sizeof(int64_t))
     # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V)) or gorget_dict_new_str(sizeof(V))
@@ -602,6 +621,14 @@ String map_runtime_name(String name):
             return "gorget_async_sleep"
         case "time_now" | "monotonic_ns":
             return "gorget_monotonic_ns"
+        case "time":
+            return "gorget_time"
+        case "time_ms":
+            return "gorget_time_ms"
+        case "format_time":
+            return "gorget_format_time"
+        case "parse_time":
+            return "gorget_parse_time"
         else:
             pass
 
