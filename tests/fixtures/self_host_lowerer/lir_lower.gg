@@ -502,9 +502,7 @@ String map_runtime_name(String name):
                 return "gorget_channel_clone"
             case "new":
                 return "gorget_channel_new"
-            case "free":
-                return "gorget_channel_free"
-            case "drop":
+            case "free" | "drop":
                 return "gorget_channel_free"
             else:
                 return "gorget_channel_" + method
@@ -513,21 +511,15 @@ String map_runtime_name(String name):
     if name.starts_with("Shared__"):
         String method = extract_method_name(name)
         match method:
-            case "get":
+            case "get" | "read":
                 return "gorget_shared_get"
-            case "read":
-                return "gorget_shared_get"
-            case "set":
-                return "gorget_shared_set"
-            case "write":
+            case "set" | "write":
                 return "gorget_shared_set"
             case "clone":
                 return "gorget_shared_clone"
             case "new":
                 return "gorget_shared_new"
-            case "free":
-                return "gorget_shared_free"
-            case "drop":
+            case "free" | "drop":
                 return "gorget_shared_free"
             else:
                 return "gorget_shared_" + method
@@ -540,9 +532,7 @@ String map_runtime_name(String name):
                 return "gorget_box_new"
             case "get":
                 return "gorget_box_get"
-            case "free":
-                return "gorget_box_free"
-            case "drop":
+            case "free" | "drop":
                 return "gorget_box_free"
             else:
                 return "gorget_box_" + method
@@ -572,13 +562,9 @@ String map_runtime_name(String name):
             return "gorget_bool_to_str"
         case "char_to_str":
             return "gorget_char_to_str"
-        case "parse_int":
+        case "parse_int" | "str_to_int":
             return "gorget_parse_int"
-        case "str_to_int":
-            return "gorget_parse_int"
-        case "parse_float":
-            return "gorget_parse_float"
-        case "str_to_float":
+        case "parse_float" | "str_to_float":
             return "gorget_parse_float"
         case "read_file":
             return "gorget_read_file"
@@ -588,13 +574,9 @@ String map_runtime_name(String name):
             return "gorget_print_err"
         case "args":
             return "gorget_args"
-        case "async_sleep":
+        case "async_sleep" | "sleep_ms":
             return "gorget_async_sleep"
-        case "sleep_ms":
-            return "gorget_async_sleep"
-        case "time_now":
-            return "gorget_monotonic_ns"
-        case "monotonic_ns":
+        case "time_now" | "monotonic_ns":
             return "gorget_monotonic_ns"
         else:
             pass
@@ -655,15 +637,11 @@ String map_array_method(String method):
 # Map a Dict/Map method name to the runtime function name.
 String map_dict_method(String method):
     match method:
-        case "put":
-            return "gorget_map_put"
-        case "set":
+        case "put" | "set":
             return "gorget_map_put"
         case "get":
             return "gorget_map_get"
-        case "contains":
-            return "gorget_map_contains"
-        case "has":
+        case "contains" | "has":
             return "gorget_map_contains"
         case "remove":
             return "gorget_map_remove"
@@ -689,13 +667,9 @@ String map_dict_method(String method):
 # Map a Set method name to the runtime function name.
 String map_set_method(String method):
     match method:
-        case "add":
+        case "add" | "insert":
             return "gorget_set_add"
-        case "insert":
-            return "gorget_set_add"
-        case "contains":
-            return "gorget_set_contains"
-        case "has":
+        case "contains" | "has":
             return "gorget_set_contains"
         case "remove":
             return "gorget_set_remove"
@@ -723,34 +697,18 @@ String map_set_method(String method):
 # Map an Option/Result method name to its combinator function.
 String map_option_result_method(String method):
     match method:
-        case "is_none":
-            return "__option_is_none"
-        case "is_some":
-            return "__option_is_some"
+        case "is_none" | "is_some":
+            return "__option_" + method
+        case "unwrap" | "expect":
+            return "__option_" + method
+        case "map" | "filter" | "and_then" | "or_else" | "or":
+            return "__option_" + method
         case "is_ok":
             return "__result_is_ok"
-        case "is_error":
+        case "is_error" | "is_err":
             return "__result_is_error"
-        case "is_err":
-            return "__result_is_err"
-        case "unwrap":
-            return "__option_unwrap"
-        case "expect":
-            return "__option_expect"
-        case "unwrap_error":
+        case "unwrap_error" | "unwrap_err":
             return "__result_unwrap_error"
-        case "unwrap_err":
-            return "__result_unwrap_error"
-        case "map":
-            return "__option_map"
-        case "filter":
-            return "__option_filter"
-        case "and_then":
-            return "__option_and_then"
-        case "or_else":
-            return "__option_or_else"
-        case "or":
-            return "__option_or"
         else:
             return ""
 
