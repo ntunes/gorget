@@ -83,9 +83,9 @@ fn expand_derives_in_items(items: &mut Vec<Spanned<Item>>, errors: &mut Vec<Sema
 }
 
 const DERIVABLE_STRUCT_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom", "FromRow"];
+    &["Equatable", "Displayable", "Debuggable", "Cloneable", "Hashable", "Serializable", "Default", "Deserializable", "From", "TryFrom", "FromRow"];
 const DERIVABLE_ENUM_TRAITS: &[&str] =
-    &["Equatable", "Displayable", "Cloneable", "Hashable", "Serializable", "Deserializable", "Ordinal"];
+    &["Equatable", "Displayable", "Debuggable", "Cloneable", "Hashable", "Serializable", "Deserializable", "Ordinal"];
 
 fn collect_struct_derives(
     s: &StructDef,
@@ -150,7 +150,7 @@ const FIELD_REQUIRING_TRAITS: &[&str] = &["Hashable", "Equatable", "Cloneable"];
 /// Primitive types that satisfy common traits implicitly.
 fn primitive_satisfies(type_name: &str, trait_name: &str) -> bool {
     match trait_name {
-        "Equatable" | "Cloneable" | "Displayable" => {
+        "Equatable" | "Cloneable" | "Displayable" | "Debuggable" => {
             // All primitives satisfy these
             matches!(type_name, "int" | "int8" | "int16" | "int32" | "int64"
                 | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
@@ -313,6 +313,7 @@ fn generate_struct_derive(
     match trait_name {
         "Equatable" => generate_struct_equatable(type_name, gs, fields),
         "Displayable" => generate_struct_displayable(type_name, gs, fields),
+        "Debuggable" => generate_struct_debuggable(type_name, gs, fields),
         "Cloneable" => generate_struct_cloneable(type_name, gs, fields),
         "Hashable" => generate_struct_hashable(type_name, gs, fields),
         "Serializable" => generate_struct_serializable(type_name, gs, fields),
@@ -359,6 +360,27 @@ fn generate_struct_displayable(type_name: &str, gs: &str, fields: &[(&str, &str)
 
     format!(
         "equip {gp}{type_name}{gs} with Displayable:\n    String display(self):\n{body}\n"
+    )
+}
+
+fn generate_struct_debuggable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    let gp = equip_generic_prefix(gs);
+    let body = if fields.is_empty() {
+        format!("        return \"{type_name}\"")
+    } else {
+        let parts: Vec<String> = fields
+            .iter()
+            .map(|(name, _)| format!("{name}: {{self.{name}.debug()}}"))
+            .collect();
+        // `{{` and `}}` produce literal `{` and `}` in f-strings.
+        format!(
+            "        return f\"{type_name} {{{{ {} }}}}\"",
+            parts.join(", ")
+        )
+    };
+
+    format!(
+        "equip {gp}{type_name}{gs} with Debuggable:\n    String debug(self):\n{body}\n"
     )
 }
 
@@ -846,6 +868,7 @@ fn generate_enum_derive(type_name: &str, gs: &str, trait_name: &str, e: &EnumDef
     match trait_name {
         "Equatable" => generate_enum_equatable(type_name, gs, e),
         "Displayable" => generate_enum_displayable(type_name, gs, e),
+        "Debuggable" => generate_enum_debuggable(type_name, gs, e),
         "Cloneable" => generate_enum_cloneable(type_name, gs, e),
         "Hashable" => generate_enum_hashable(type_name, gs, e),
         "Serializable" => generate_enum_serializable(type_name, gs, e),
@@ -983,6 +1006,47 @@ fn generate_enum_displayable(type_name: &str, gs: &str, e: &EnumDef) -> String {
     format!(
         "equip {gp}{type_name}{gs} with Displayable:\n\
          \x20   String display(self):\n\
+         \x20       match self:\n\
+         {arms}"
+    )
+}
+
+fn generate_enum_debuggable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    let gp = equip_generic_prefix(gs);
+    let pfx = variant_prefix(type_name, e);
+    let mut arms = String::new();
+
+    for variant in &e.variants {
+        let vname = &variant.node.name.node;
+        let field_count = match &variant.node.fields {
+            VariantFields::Unit => 0,
+            VariantFields::Tuple(fields) => fields.len(),
+        };
+
+        let bindings: Vec<String> = (0..field_count).map(|i| format!("a{i}")).collect();
+
+        let pattern = if field_count == 0 {
+            format!("{pfx}{vname}()")
+        } else {
+            format!("{pfx}{vname}({})", bindings.join(", "))
+        };
+
+        let debug_str = if field_count == 0 {
+            format!("return \"{vname}\"")
+        } else {
+            let parts: Vec<String> = bindings.iter().map(|b| format!("{{{b}.debug()}}")).collect();
+            format!("return f\"{vname}({})\"", parts.join(", "))
+        };
+
+        arms.push_str(&format!(
+            "            case {pattern}:\n\
+             \x20               {debug_str}\n"
+        ));
+    }
+
+    format!(
+        "equip {gp}{type_name}{gs} with Debuggable:\n\
+         \x20   String debug(self):\n\
          \x20       match self:\n\
          {arms}"
     )

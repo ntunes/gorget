@@ -356,6 +356,7 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_int_to_str" => sig(vec![LirType::I64], s(), vec![Scalar]),
         "gorget_float_to_str" => sig(vec![LirType::F64], s(), vec![Scalar]),
         "gorget_bool_to_str" => sig(vec![LirType::Bool], s(), vec![Scalar]),
+        "gorget_string_debug" => sig(vec![s()], s(), vec![GorgetString]),
         "gorget_codepoint_to_utf8" => sig(vec![LirType::I64], s(), vec![Scalar]),
         "gorget_int_to_float" => sig(vec![LirType::I64], LirType::F64, vec![Scalar]),
         // I/O

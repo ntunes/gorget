@@ -6515,6 +6515,47 @@ static inline Str gorget_bool_to_str(bool b) {
     return gorget_string_adopt(out);
 }
 
+// debug() for String: produce a quoted, escaped representation.
+// Escapes: " \\ \n \r \t \0; bytes < 0x20 or 0x7F as \xNN.
+static inline Str gorget_string_debug(Str s) {
+    size_t slen = s.len;
+    const unsigned char* src = (const unsigned char*)s.data;
+    size_t cap = slen + 2; /* surrounding quotes */
+    for (size_t i = 0; i < slen; ++i) {
+        unsigned char c = src[i];
+        if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t' || c == '\0') cap += 1;
+        else if (c < 0x20 || c == 0x7F) cap += 3; /* \xNN - 1 raw char */
+    }
+    char* out = (char*)GORGET_ALLOC(cap + 1);
+    size_t j = 0;
+    out[j++] = '"';
+    for (size_t i = 0; i < slen; ++i) {
+        unsigned char c = src[i];
+        switch (c) {
+            case '"':  out[j++] = '\\'; out[j++] = '"'; break;
+            case '\\': out[j++] = '\\'; out[j++] = '\\'; break;
+            case '\n': out[j++] = '\\'; out[j++] = 'n'; break;
+            case '\r': out[j++] = '\\'; out[j++] = 'r'; break;
+            case '\t': out[j++] = '\\'; out[j++] = 't'; break;
+            case '\0': out[j++] = '\\'; out[j++] = '0'; break;
+            default:
+                if (c < 0x20 || c == 0x7F) {
+                    static const char hex[] = "0123456789abcdef";
+                    out[j++] = '\\';
+                    out[j++] = 'x';
+                    out[j++] = hex[(c >> 4) & 0xF];
+                    out[j++] = hex[c & 0xF];
+                } else {
+                    out[j++] = (char)c;
+                }
+                break;
+        }
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return gorget_string_adopt(out);
+}
+
 static inline double gorget_int_to_float(int64_t n) { return (double)n; }
 
 static inline Str gorget_char_to_str(char c) {

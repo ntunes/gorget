@@ -343,6 +343,68 @@ pub(super) fn lower_method_call(
         // Str.hash() is handled by the normal method dispatch path below
     }
 
+    // Primitive .debug() / .display() → runtime stringification.
+    // debug() on String quotes and escapes; display() on String is identity.
+    // For numeric/bool types, both are identical (reuse gorget_{int,float,bool}_to_str).
+    if method_name == "debug" || method_name == "display" {
+        let raw_type = infer_operand_type_full(ctx, &recv, builder);
+        let (recv_type, maybe_deref_recv): (TypeId, Option<Operand>) =
+            if let Some(inner) = ctx.pointee_type(raw_type) {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let derefed = builder.load_ref(place.clone(), inner);
+                    (inner, Some(FunctionBuilder::copy(derefed)))
+                } else {
+                    (raw_type, None)
+                }
+            } else {
+                (raw_type, None)
+            };
+        let owned_string_type = ctx.type_mapper.owned_string_type;
+        let use_recv = || maybe_deref_recv.clone().unwrap_or_else(|| recv.clone());
+        if recv_type == I64_TYPE {
+            let dst = builder.call_extern("gorget_int_to_str", vec![use_recv()], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if recv_type == I8_TYPE || recv_type == I16_TYPE || recv_type == I32_TYPE {
+            let widened = builder.cast(I64_TYPE, use_recv());
+            let dst = builder.call_extern("gorget_int_to_str", vec![FunctionBuilder::copy(widened)], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if recv_type == U64_TYPE || recv_type == U8_TYPE || recv_type == U16_TYPE || recv_type == U32_TYPE {
+            let arg = if recv_type == U64_TYPE {
+                use_recv()
+            } else {
+                let w = builder.cast(I64_TYPE, use_recv());
+                FunctionBuilder::copy(w)
+            };
+            let dst = builder.call_extern("gorget_int_to_str", vec![arg], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if recv_type == F64_TYPE {
+            let dst = builder.call_extern("gorget_float_to_str", vec![use_recv()], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if recv_type == F32_TYPE {
+            let widened = builder.cast(F64_TYPE, use_recv());
+            let dst = builder.call_extern("gorget_float_to_str", vec![FunctionBuilder::copy(widened)], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if recv_type == BOOL_TYPE {
+            let dst = builder.call_extern("gorget_bool_to_str", vec![use_recv()], owned_string_type);
+            return FunctionBuilder::copy(dst);
+        }
+        if ctx.type_mapper.is_string_type(recv_type) {
+            if method_name == "debug" {
+                let dst = builder.call_extern("gorget_string_debug", vec![use_recv()], owned_string_type);
+                return FunctionBuilder::copy(dst);
+            } else {
+                return use_recv();
+            }
+        }
+        // Named types fall through to the normal dispatch path (user-defined
+        // display/debug via equip blocks).
+    }
+
     // .unwrap() / .expect() / .unwrap_or() on Option/Result → inline extraction
     // On non-Option/Result types → pass-through (unwrap is a no-op)
     if matches!(method_name, "unwrap" | "expect" | "unwrap_or") {

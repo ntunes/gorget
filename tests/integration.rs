@@ -1966,6 +1966,24 @@ red != blue",
 }
 
 #[test]
+fn derive_debuggable() {
+    run_gg(
+        "derive_debuggable.gg",
+        "\
+42
+3.14
+true
+\"hi\\nthere\"
+hi
+there
+Outer { i: Inner { a: 42, s: \"foo\" }, flag: true }
+Login
+Tick(7)
+Message(\"hi\\nyou\")",
+    );
+}
+
+#[test]
 fn derive_generic() {
     run_gg(
         "derive_generic.gg",
@@ -15107,6 +15125,11 @@ fn closure_escape_error() {
 #[test]
 fn dict_no_hashable_error() {
     check_gg_fails("dict_no_hashable_error.gg", "does not satisfy trait bound `K is Hashable`");
+}
+
+#[test]
+fn set_no_hashable_error() {
+    check_gg_fails("set_no_hashable_error.gg", "does not satisfy trait bound `T is Hashable`");
 }
 
 #[test]

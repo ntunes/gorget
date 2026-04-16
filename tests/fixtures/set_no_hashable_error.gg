@@ -1,0 +1,7 @@
+struct Point:
+    int x
+    int y
+
+void main():
+    Set[Point] s = {Point(1, 2)}
+    print(s.size())

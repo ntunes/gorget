@@ -3259,6 +3259,7 @@ impl<'a> TypeChecker<'a> {
                 PrimitiveType::Bool
             ) => {
                 if method == "hash" { return Some(self.types.int_id); }
+                if method == "debug" || method == "display" { return Some(self.types.owned_string_id); }
                 // .mod(divisor) → Euclidean modulo, returns same type as receiver
                 if method == "mod" { return Some(receiver_type); }
                 return None;
@@ -3409,6 +3410,7 @@ impl<'a> TypeChecker<'a> {
                     => Some(self.types.string_id),
                 // Allocating returns — return String (GorgetString)
                 "to_upper" | "to_lower" | "replace" | "repeat" | "join" | "pad_left" | "pad_right"
+                | "debug" | "display"
                     => Some(self.types.owned_string_id),
                 "enumerate" => Some(receiver_type),
                 "byte_at" => Some(self.types.primitive_id(PrimitiveType::Uint8)),

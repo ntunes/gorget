@@ -1,0 +1,38 @@
+@derive(Debuggable)
+struct Inner:
+    int a
+    String s
+
+@derive(Debuggable)
+struct Outer:
+    Inner i
+    bool flag
+
+@derive(Debuggable)
+enum Event:
+    Login
+    Tick(int)
+    Message(String)
+
+void main():
+    # Primitives
+    int x = 42
+    print(x.debug())
+    print(3.14.debug())
+    print(true.debug())
+    # String: debug quotes + escapes, display is identity
+    String s = "hi\nthere"
+    print(s.debug())
+    print(s.display())
+
+    # Derived struct with nested struct + string field
+    Outer o = Outer(Inner(42, "foo"), true)
+    print(o.debug())
+
+    # Derived enum — unit, single-arg, string-arg variants
+    Event e1 = Event.Login()
+    Event e2 = Event.Tick(7)
+    Event e3 = Event.Message("hi\nyou")
+    print(e1.debug())
+    print(e2.debug())
+    print(e3.debug())

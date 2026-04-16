@@ -272,6 +272,17 @@ fn register_builtin_traits(
             });
             m
         }),
+        // Debuggable: String debug(self)
+        ("Debuggable", {
+            let mut m = FxHashMap::default();
+            m.insert("debug".into(), FunctionSig {
+                params: vec![],
+                return_type: types.owned_string_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
         // Equatable: bool eq(self, Self other)
         ("Equatable", {
             let mut m = FxHashMap::default();
@@ -1179,8 +1190,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 24 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 25);
+        // 25 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 26);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
