@@ -1042,12 +1042,13 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
             f.blocks.set(bb, blk)
             return dst
         case OpMove(local_id):
-            # OpMove: emit slot address (pointer) instead of value load.
-            # Used for &self in method calls — collection methods take void*.
+            # OpMove: load value like OpCopy. The GICallExtern handler
+            # converts to SlotAddr when needs_ptr_arg is true.
             int slot = local_to_slot.get(local_id).unwrap()
+            int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
             LirBlock blk = f.blocks.get(bb).unwrap()
-            blk.insts.push(ISlotAddr(dst, slot))
+            blk.insts.push(ISlotLoad(dst, slot, slot_ty))
             f.blocks.set(bb, blk)
             return dst
     return -1
@@ -1220,6 +1221,13 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 if need_ptr:
                     match arg:
                         case OpCopy(local_id):
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int addr = lir_fn_next_value(&f)
+                            LirBlock ablk = f.blocks.get(bb).unwrap()
+                            ablk.insts.push(ISlotAddr(addr, slot))
+                            f.blocks.set(bb, ablk)
+                            lir_args.push(addr)
+                        case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
                             int addr = lir_fn_next_value(&f)
                             LirBlock ablk = f.blocks.get(bb).unwrap()
