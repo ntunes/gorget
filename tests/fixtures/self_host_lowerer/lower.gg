@@ -355,6 +355,16 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "strip" or method == "lstrip" or method == "rstrip":
         return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "removeprefix" or method == "removesuffix":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "center" or method == "ljust" or method == "rjust" or method == "zfill":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "reverse" or method == "pad_left" or method == "pad_right":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "to_string" or method == "to_str":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "format":
+        return lookup_or_register_named(&gmod, "GorgetString")
     # get/unwrap/pop/last/first: return the element type inferred from receiver
     if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first":
         String recv_name = ""
@@ -837,10 +847,24 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             else:
                 gir_args.push(OpCopy(arg_local))
             ai = ai + 1
-        # Look up return type from module's fn_sigs, or infer from call name
+        # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
         if gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
+        # Also check call_redirects for the original name
+        if ret_type == I64_TYPE and gmod.call_redirects.contains(fname):
+            String redir = gmod.call_redirects.get(fname).unwrap()
+            if gmod.fn_sigs.contains(redir):
+                ret_type = gmod.fn_sigs.get(redir).unwrap()
+        # Check function definitions for return type
+        if ret_type == I64_TYPE:
+            int fi = 0
+            while fi < gmod.functions.len():
+                GirFunction gfn = gmod.functions.get(fi).unwrap()
+                if gfn.name == call_name:
+                    ret_type = gfn.return_type
+                    break
+                fi += 1
         # Collection/struct constructors: return the named type
         if ret_type == I64_TYPE and is_type_constructor(call_name):
             ret_type = lookup_or_register_named(&gmod, call_name)
