@@ -52,7 +52,7 @@
 
 - **Clone reduction — 3 deferrable sites (low ROI)**: (1) context.rs:905 Ptr(resource) init → scope escape check, (2) stmts/mod.rs:374 Ptr binding auto-clone → defer to mutation, (3) patterns.rs:522 string field extraction → check arm escape. Audit of all 952 fixtures found max 5 implicit clones per fixture, all at necessary ownership boundaries. These 3 sites add complexity for marginal gain. [demoted from High: 2026-04-09]
 
-- **Self-host LIR backend**: ~5,900 lines across 4 files. 324/924 fixtures compile (up from 0). 0 crashes. Field access implemented (EFieldAccess → __field_read_TYPE_FIELD → C arrow access), equip method self binding, Callable[T(int)] generic type propagation, ~30 method return types added. Remaining ~510 failures: ~184 link-only (domain modules, library imports), ~30 type mismatches (import return types, complex generics), ~20 arg mismatches. [updated: 2026-04-16]
+- **Self-host LIR backend**: ~6,100 lines across 4 files. 324/924 fixtures compile (up from 0). 0 crashes. Field access, equip self binding, Callable[T(int)] generic propagation, enum variant drop field names, Option__T__method routing. Remaining ~510 failures: ~184 link-only (domain imports), ~20 closure literal lowering (closures produce 0 not struct), ~15 type mismatches (generics, complex patterns). [updated: 2026-04-16]
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
