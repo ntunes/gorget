@@ -1077,6 +1077,8 @@ pub(super) fn lower_method_call(
         let effective_method = match (type_name.as_str(), method_name, args.len()) {
             ("GorgetString", "split", 2) => "splitn",
             ("GorgetString", "replace", 3) => "replacen",
+            ("GorgetString", "find", 2) => "find_from",
+            ("GorgetString", "find", 3) => "find_ext",
             _ => method_name,
         };
         let mangled = format!("{type_name}__{effective_method}");

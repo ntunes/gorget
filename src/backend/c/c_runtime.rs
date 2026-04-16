@@ -2586,6 +2586,63 @@ static inline int64_t gorget_str_index_of(Str s, Str needle) {
     return cp_idx;
 }
 
+// find starting at codepoint index `from`. Returns codepoint index or -1.
+static inline int64_t gorget_str_find_from(Str s, Str needle, int64_t from) {
+    if (from < 0) from = 0;
+    const char* d = (const char*)s.data;
+    // Skip `from` codepoints to get byte offset
+    size_t byte_start = 0;
+    int64_t cp = 0;
+    while (cp < from && byte_start < s.len) {
+        byte_start += (size_t)gorget_utf8_codepoint_len((unsigned char)d[byte_start]);
+        cp++;
+    }
+    if (byte_start >= s.len) return -1;
+    // Search in the remaining portion
+    Str sub = { .data = d + byte_start, .cap = 0, .len = s.len - byte_start, .alloc = NULL };
+    int64_t byte_off = gorget_str_find(sub, needle);
+    if (byte_off < 0) return -1;
+    // Convert byte offset in sub to codepoint index in original
+    int64_t cp_idx = from;
+    size_t pos = 0;
+    while (pos < (size_t)byte_off) {
+        pos += (size_t)gorget_utf8_codepoint_len((unsigned char)(d[byte_start + pos]));
+        cp_idx++;
+    }
+    return cp_idx;
+}
+
+// find with from + reverse. Returns codepoint index or -1.
+static inline int64_t gorget_str_find_ext(Str s, Str needle, int64_t from, bool reverse) {
+    if (!reverse) return gorget_str_find_from(s, needle, from);
+    // Reverse search: find LAST occurrence starting from codepoint `from` going backward
+    // Strategy: search forward from 0, keep last match whose codepoint index <= from (or all if from=0)
+    if (needle.len == 0) return -1;
+    const char* d = (const char*)s.data;
+    int64_t last_cp = -1;
+    size_t pos = 0;
+    int64_t cp_idx = 0;
+    size_t search_end = s.len;
+    // If from > 0, limit search to first `from` codepoints
+    if (from > 0) {
+        size_t limit_pos = 0;
+        int64_t limit_cp = 0;
+        while (limit_cp < from && limit_pos < s.len) {
+            limit_pos += (size_t)gorget_utf8_codepoint_len((unsigned char)d[limit_pos]);
+            limit_cp++;
+        }
+        search_end = limit_pos + needle.len <= s.len ? limit_pos + needle.len : s.len;
+    }
+    while (pos + needle.len <= search_end) {
+        if (memcmp(d + pos, (const char*)needle.data, needle.len) == 0) {
+            last_cp = cp_idx;
+        }
+        pos += (size_t)gorget_utf8_codepoint_len((unsigned char)d[pos]);
+        cp_idx++;
+    }
+    return last_cp;
+}
+
 static inline int64_t gorget_str_count(Str s, Str needle) {
     if (needle.len == 0) return 0;
     int64_t count = 0;
@@ -5363,6 +5420,16 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
     // Field order: { keys, cap, values, states, count, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn, val_drop, val_clone, key_drop, key_clone, val_materialize, key_materialize }
     return (GorgetMap){NULL, 0, NULL, NULL, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+}
+
+// Pre-allocate hash table to hold at least `new_cap` entries without growing.
+static inline void gorget_map_reserve(GorgetMap* m, int64_t new_cap) {
+    if (new_cap <= 0 || (size_t)new_cap <= m->cap) return;
+    while (m->cap < (size_t)new_cap) __gorget_map_grow(m);
+}
+
+static inline void gorget_set_reserve(GorgetSet* s, int64_t new_cap) {
+    gorget_map_reserve(s, new_cap);
 }
 
 // Ordered Dict: pre-allocates order array so put() tracks insertion order

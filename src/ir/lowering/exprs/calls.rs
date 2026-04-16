@@ -660,25 +660,41 @@ pub(super) fn lower_call(
                     let mangled = ctx.resolve_type_name(&mangled);
                     // Register the collection type if not present
                     let coll_type = get_or_register_type(ctx, &mangled, None);
-                    // Check for alloc= named argument
+                    // Check for alloc= and cap= named arguments
                     let alloc_arg = args.iter().find(|a| {
                         a.node.name.as_ref().map_or(false, |n| n.node == "alloc")
                     });
+                    let cap_arg = args.iter().find(|a| {
+                        a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+                    });
                     let positional_args: Vec<&Spanned<ast::CallArg>> = args.iter()
-                        .filter(|a| !a.node.name.as_ref().map_or(false, |n| n.node == "alloc"))
+                        .filter(|a| !a.node.name.as_ref().map_or(false, |n| n.node == "alloc" || n.node == "cap"))
                         .collect();
 
                     if positional_args.is_empty() {
                         let new_fn = format!("{mangled}__new");
                         if let Some(alloc_a) = alloc_arg {
-                            // alloc= present: push allocator, construct, pop allocator
                             let alloc_op = lower_expr(ctx, builder, &alloc_a.node.value);
                             builder.push_allocator(alloc_op);
                             let coll_local = builder.call_extern(&new_fn, vec![], coll_type);
                             builder.pop_allocator();
+                            if let Some(cap_a) = cap_arg {
+                                let cap_op = lower_expr(ctx, builder, &cap_a.node.value);
+                                let ptr_type = ctx.type_registry.insert(crate::ir::types::GirType::MutPtr(coll_type));
+                                let ptr = builder.borrow_mut(Place::local(coll_local), ptr_type);
+                                let reserve_fn = format!("{mangled}__reserve");
+                                builder.call_extern_void(&reserve_fn, vec![FunctionBuilder::copy(ptr), cap_op]);
+                            }
                             return FunctionBuilder::copy(coll_local);
                         } else {
                             let coll_local = builder.call_extern(&new_fn, vec![], coll_type);
+                            if let Some(cap_a) = cap_arg {
+                                let cap_op = lower_expr(ctx, builder, &cap_a.node.value);
+                                let ptr_type = ctx.type_registry.insert(crate::ir::types::GirType::MutPtr(coll_type));
+                                let ptr = builder.borrow_mut(Place::local(coll_local), ptr_type);
+                                let reserve_fn = format!("{mangled}__reserve");
+                                builder.call_extern_void(&reserve_fn, vec![FunctionBuilder::copy(ptr), cap_op]);
+                            }
                             return FunctionBuilder::copy(coll_local);
                         }
                     }

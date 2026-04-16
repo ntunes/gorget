@@ -828,12 +828,65 @@ pub fn call_extern(
             Ok(Value::Bool(s.as_str().contains(needle.as_str())))
         }
 
-        "gorget_str_index_of" => {
+        "gorget_str_index_of" | "gorget_str_find" => {
             let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let needle = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
             let found = s.as_str().find(needle.as_str()).map(|p| {
                 s.as_str()[..p].chars().count() as i64
             });
+            Ok(match found {
+                Some(idx) => Value::Enum {
+                    type_name: "Option__int64_t".to_string(),
+                    tag: 0, variant: "Some".to_string(),
+                    fields: vec![Value::I64(idx)],
+                },
+                None => Value::Enum {
+                    type_name: "Option__int64_t".to_string(),
+                    tag: 1, variant: "None".to_string(), fields: vec![],
+                },
+            })
+        }
+
+        "gorget_str_find_from" => {
+            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let needle = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let from = args.get(2).map(|v| v.as_i64()).unwrap_or(0) as usize;
+            // Skip `from` codepoints, then search
+            let text = s.as_str();
+            let byte_start: usize = text.char_indices().nth(from).map(|(i, _)| i).unwrap_or(text.len());
+            let found = text[byte_start..].find(needle.as_str()).map(|p| {
+                from as i64 + text[byte_start..byte_start + p].chars().count() as i64
+            });
+            Ok(match found {
+                Some(idx) => Value::Enum {
+                    type_name: "Option__int64_t".to_string(),
+                    tag: 0, variant: "Some".to_string(),
+                    fields: vec![Value::I64(idx)],
+                },
+                None => Value::Enum {
+                    type_name: "Option__int64_t".to_string(),
+                    tag: 1, variant: "None".to_string(), fields: vec![],
+                },
+            })
+        }
+
+        "gorget_str_find_ext" => {
+            let s = args.get(0).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let needle = args.get(1).map(|v| v.to_sim_str()).unwrap_or_else(|| SimStr::from_str(""));
+            let from = args.get(2).map(|v| v.as_i64()).unwrap_or(0) as usize;
+            let reverse = args.get(3).map(|v| v.as_bool()).unwrap_or(false);
+            let text = s.as_str();
+            let found = if !reverse {
+                let byte_start: usize = text.char_indices().nth(from).map(|(i, _)| i).unwrap_or(text.len());
+                text[byte_start..].find(needle.as_str()).map(|p| {
+                    from as i64 + text[byte_start..byte_start + p].chars().count() as i64
+                })
+            } else {
+                // Reverse: find last occurrence
+                text.rfind(needle.as_str()).map(|p| {
+                    text[..p].chars().count() as i64
+                })
+            };
             Ok(match found {
                 Some(idx) => Value::Enum {
                     type_name: "Option__int64_t".to_string(),

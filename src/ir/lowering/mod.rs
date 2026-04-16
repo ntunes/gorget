@@ -1381,6 +1381,9 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
         };
         ctx.fn_sigs.insert(format!("GorgetString__{m}"), (params, I64_TYPE));
     }
+    // find variants with extra params: find_from(pattern, from), find_ext(pattern, from, reverse)
+    ctx.fn_sigs.insert("GorgetString__find_from".to_string(), (vec![owned_string_type, owned_string_type, I64_TYPE], I64_TYPE));
+    ctx.fn_sigs.insert("GorgetString__find_ext".to_string(), (vec![owned_string_type, owned_string_type, I64_TYPE, BOOL_TYPE], I64_TYPE));
     // Methods returning bool
     for m in &["contains", "starts_with", "ends_with", "is_empty",
                "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
@@ -2489,6 +2492,8 @@ fn register_collection_method_sigs(
     // Register sentinel-to-Option for Str/Bytes/GorgetString/GorgetBytes/GorgetArray builtins
     for base in &["GorgetString", "Bytes", "GorgetBytes", "GorgetArray"] {
         ctx.sentinel_to_option_methods.insert(format!("{base}__find"));
+        ctx.sentinel_to_option_methods.insert(format!("{base}__find_from"));
+        ctx.sentinel_to_option_methods.insert(format!("{base}__find_ext"));
         ctx.sentinel_to_option_methods.insert(format!("{base}__index_of"));
     }
 }

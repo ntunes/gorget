@@ -1092,7 +1092,10 @@ impl<'a> TypeChecker<'a> {
                     if is_builtin_ctor {
                         for arg in args {
                             if let Some(ref name) = arg.node.name {
-                                if name.node != "alloc" {
+                                if name.node == "cap" {
+                                    // cap= valid on collection constructors — validated at GIR lowering
+                                    self.infer_expr(&arg.node.value);
+                                } else if name.node != "alloc" {
                                     self.error(
                                         SemanticErrorKind::UnknownNamedArg { name: name.node.clone() },
                                         arg.span,
@@ -3366,9 +3369,13 @@ impl<'a> TypeChecker<'a> {
             },
             "str" | "String" => match method {
                 "find" => {
-                    // String.find() removed — use index_of() instead.
-                    // (Vector.find() still exists for predicate search.)
-                    None
+                    // String.find(pattern, from=0, reverse=false) → Option[int]
+                    // Unified search primitive. index_of() is a POLA alias.
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
+                    } else {
+                        Some(self.types.int_id)
+                    }
                 }
                 "len" | "hash" | "count" | "byte_len" => Some(self.types.int_id),
                 "index_of" => {
