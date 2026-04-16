@@ -82,7 +82,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1))
     sr_register(&sr, "TaskHandle", task_id)
 
-    # GorgetMap: 13 fields, 152 bytes
+    # GorgetMap: 23 fields, 184 bytes
     Vector[StructField] map_fields = []
     map_fields.push(StructField("keys", LT_PTR))
     map_fields.push(StructField("cap", LT_I64))
@@ -97,7 +97,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     map_fields.push(StructField("tombstones", LT_I64))
     map_fields.push(StructField("hash_fn", LT_PTR))
     map_fields.push(StructField("eq_fn", LT_PTR))
-    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 152, -1))
+    int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 184, -1))
     sr_register(&sr, "GorgetMap", map_id)
 
     # GorgetSet: same layout as GorgetMap
@@ -115,7 +115,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     set_fields.push(StructField("tombstones", LT_I64))
     set_fields.push(StructField("hash_fn", LT_PTR))
     set_fields.push(StructField("eq_fn", LT_PTR))
-    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 152, -1))
+    int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 184, -1))
     sr_register(&sr, "GorgetSet", set_id)
 
     # GorgetRange: {start: I64, end: I64, step: I64}

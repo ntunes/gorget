@@ -1708,7 +1708,7 @@ impl<'a> FuncLowering<'a> {
                     .unwrap_or(rest);
                 if let Some(pos) = rest_stripped.find("__") {
                     let val_type = &rest_stripped[pos + 2..];
-                    // GorgetMap offsets: val_drop=104, val_clone=112, val_materialize=152
+                    // GorgetMap offsets: val_drop=104, val_clone=112, val_materialize=136
                     if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type) {
                         stores.push((104, drop_fn));
                     } else if self.recursive_drop_structs.contains_key(val_type)
@@ -1724,7 +1724,7 @@ impl<'a> FuncLowering<'a> {
                         stores.push((112, format!("{val_type}__clone_inplace")));
                     }
                     if val_type == "GorgetString" {
-                        stores.push((152, "gorget_string_materialize_inplace".into()));
+                        stores.push((136, "gorget_string_materialize_inplace".into()));
                     }
                 }
             }
