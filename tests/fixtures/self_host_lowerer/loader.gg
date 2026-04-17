@@ -5,7 +5,7 @@
 # call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source
-from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict

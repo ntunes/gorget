@@ -814,11 +814,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
         case EMethodCall(recv_box, mname, margs, _):
-            # Static method call: receiver is a TYPE name (e.g. Point.default()).
-            # Route to TypeName__method with no self argument.
+            # Static method call: receiver is a TYPE name (e.g. Point.default()
+            # or int.parse(s)). Route to TypeName__method with no self argument.
             match (*recv_box).expr:
                 case EIdentifier(ident_name):
-                    if gmod.type_infos.contains(ident_name):
+                    bool is_type = gmod.type_infos.contains(ident_name)
+                    # Also treat primitive type names as types.
+                    if not is_type:
+                        if ident_name == "int" or ident_name == "float" or ident_name == "bool":
+                            is_type = true
+                        elif ident_name == "String" or ident_name == "byte" or ident_name == "char":
+                            is_type = true
+                        elif ident_name == "int8" or ident_name == "int16" or ident_name == "int32" or ident_name == "int64":
+                            is_type = true
+                        elif ident_name == "uint8" or ident_name == "uint16" or ident_name == "uint32" or ident_name == "uint64":
+                            is_type = true
+                        elif ident_name == "float32" or ident_name == "float64":
+                            is_type = true
+                    if is_type:
                         Vector[Operand] static_args = []
                         int smi = 0
                         while smi < margs.len():
@@ -826,12 +839,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int sma_val = lower_expr(&ctx, sma, &gmod)
                             static_args.push(OpCopy(sma_val))
                             smi += 1
-                        String static_name = ident_name + "__" + mname
+                        # Primitive method names need C-runtime mangling.
+                        String type_prefix = ident_name
+                        if ident_name == "int":
+                            type_prefix = "int64_t"
+                        elif ident_name == "float":
+                            type_prefix = "double"
+                        elif ident_name == "String":
+                            type_prefix = "GorgetString"
+                        String static_name = type_prefix + "__" + mname
                         int static_ret = I64_TYPE
                         if gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
-                            static_ret = lookup_or_register_named(&gmod, ident_name)
+                            if gmod.type_infos.contains(ident_name):
+                                static_ret = lookup_or_register_named(&gmod, ident_name)
+                            else:
+                                # int.default() → int, float.default() → double, etc.
+                                int pt = prim_name_to_type(ident_name)
+                                if pt >= 0:
+                                    static_ret = pt
+                        elif mname == "parse":
+                            # int.parse(s) returns Option[int]
+                            int pt = prim_name_to_type(ident_name)
+                            if pt >= 0:
+                                String opt_name = "Option__" + type_id_to_name(pt, &gmod)
+                                static_ret = lookup_or_register_named(&gmod, opt_name)
                         else:
                             int binfer = builtin_call_return_type(static_name, &gmod)
                             if binfer >= 0:

@@ -2211,6 +2211,13 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     # positions, substitute an empty Str so the compile succeeds.
     bool str_by_value_fn = runtime_takes_str_by_value(name)
     int gs_ty = find_struct_type("GorgetString", &m)
+    # Arity padding: some runtime fns take an optional arg that Gorget allows
+    # callers to omit (e.g. str_strip(s) vs str_strip(s, chars)). Pad with
+    # empty Str to match the C declaration.
+    bool pad_trailing_empty_str = false
+    if args.len() == 1:
+        if name == "gorget_str_strip" or name == "gorget_str_lstrip" or name == "gorget_str_rstrip":
+            pad_trailing_empty_str = true
     int ai = 0
     while ai < args.len():
         if ai > 0:
@@ -2231,6 +2238,10 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
         else:
             out = out + v(arg_id)
         ai += 1
+    if pad_trailing_empty_str:
+        if args.len() > 0:
+            out = out + ", "
+        out = out + "((Str){0})"
     return out + ");"
 
 # ── Terminator emission ───────────────────────────────────
