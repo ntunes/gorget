@@ -81,3 +81,5 @@
 - **Metal runtime: ObjC method signature issue**: drawIndexedPrimitives with indirect buffer. [added: 2026-03-13]
 
 - **Metal runtime: deprecated APIs**: sampleCount, useResource, useHeap. [added: 2026-03-13]
+
+- **User DictIter[K, V] / DictKeyIter[K] hit Ptr-ABI codegen panic**: Constructing a generic struct with a `Vector[K]` field from a `Dict.keys()` source panics in `emit_types.rs:1645` with "Ptr ABI received scalar value" when the user-defined iterator is subsequently stored and read back through a self pointer. `VectorIter[T]` avoids this because the Vector is passed by value into a Vector-typed field. Reproducer: `tests/fixtures/iterator_direct.gg`-style iterator but on Dict-derived keys. [added: 2026-04-17]
