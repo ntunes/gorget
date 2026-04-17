@@ -1,9 +1,10 @@
 # Exercises std.io — the byte-shaped Writer trait + typed IoError.
 #
-# Phase 3 of the stdlib narrow-waist. A user-defined ByteSink satisfies
-# Writer; write_all and write_display are generic free functions so the
-# same helpers compose over any concrete Writer without trait-object
-# dispatch.
+# Two implementors in this fixture:
+#   - ByteSink: a user struct wrapping Vector[byte] (the original shape).
+#   - String: built-in, now wired via `equip String with Writer` in
+#     lib/std/io.gg (unblocked by the codegen-gap fix — `equip
+#     <PrimitiveType>:` now lowers correctly).
 
 from std.io import Writer, IoError, write_all, write_display
 
@@ -16,7 +17,7 @@ equip ByteSink with Writer:
         return Ok(buf.len())
 
 int main():
-    # Direct Writer.write_bytes on the sink.
+    # ── ByteSink path ────────────────────────────────────────────
     ByteSink s = ByteSink(Vector[byte]())
     Vector[byte] hi = "hello ".bytes()
     Result[int, IoError] r = s.write_bytes(hi)
@@ -48,6 +49,22 @@ int main():
         case Error(e):
             print(e.display())
     print(s3.buf.len())
+
+    # ── String-as-Writer path ───────────────────────────────────
+    String buf = ""
+    Result[int, IoError] rs = buf.write_bytes("hi ".bytes())
+    match rs:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+    Result[int, IoError] rs2 = write_all[String](&buf, "there".bytes())
+    match rs2:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+    print(buf)
 
     # IoError Displayable surface.
     print(IoError.NotFound().display())

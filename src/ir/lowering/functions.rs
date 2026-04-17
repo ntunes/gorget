@@ -665,8 +665,16 @@ pub fn lower_equip_method(
         let self_needs_mut_ptr = method.params.first()
             .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
             .unwrap_or(false);
+        // Scalar primitive receivers (int, float, bool, uint8, …) pass
+        // by value to match the call-site dispatch (see methods.rs
+        // `recv_type_id.0 < PRIMITIVE_TYPE_COUNT` branch). Only the
+        // mutable-borrow form goes through a pointer so the callee can
+        // write back.
+        let is_scalar = self_type_id.0 < crate::ir::types::PRIMITIVE_TYPE_COUNT;
         let spt = if self_needs_mut_ptr {
             ctx.register_mut_ptr_type(self_type_id)
+        } else if is_scalar {
+            self_type_id
         } else {
             ctx.register_ptr_type(self_type_id)
         };

@@ -1,7 +1,8 @@
 # Codegen-Gap Spike Memo — `equip` on Primitive-Typed Receivers
 
 Author: opus-4.7 session 2026-04-17.
-Status: **read-only investigation**. No code changed.
+Status: **landed 2026-04-17.** Implementation matches Option A below.
+See commit `feat: lower equip blocks on primitive types (codegen gap fix)`.
 
 ## The gap in one sentence
 

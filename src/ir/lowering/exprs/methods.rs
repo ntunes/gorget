@@ -2851,12 +2851,23 @@ pub(super) fn infer_type_name_from_operand_full(
     if effective_tid == ctx.type_mapper.owned_string_type {
         return Some("GorgetString".to_string());
     }
-    if effective_tid == ctx.type_mapper.owned_string_type {
-        return Some("GorgetString".to_string());
-    }
-    if effective_tid == U8_TYPE {
-        return Some("uint8_t".to_string());
-    }
+    // Scalar primitives — return their C mangled names so method
+    // dispatch on `equip int:` / `equip bool:` / etc. resolves to the
+    // same `int64_t__method` / `bool__method` registration used by
+    // `equip_target_name` in types.rs. Without this, a receiver with
+    // type I64_TYPE gets type_name=None and the call site falls
+    // through to `Constant::Unit`.
+    if effective_tid == I64_TYPE  { return Some("int64_t".to_string()); }
+    if effective_tid == I32_TYPE  { return Some("int32_t".to_string()); }
+    if effective_tid == I16_TYPE  { return Some("int16_t".to_string()); }
+    if effective_tid == I8_TYPE   { return Some("int8_t".to_string()); }
+    if effective_tid == U64_TYPE  { return Some("uint64_t".to_string()); }
+    if effective_tid == U32_TYPE  { return Some("uint32_t".to_string()); }
+    if effective_tid == U16_TYPE  { return Some("uint16_t".to_string()); }
+    if effective_tid == U8_TYPE   { return Some("uint8_t".to_string()); }
+    if effective_tid == F64_TYPE  { return Some("double".to_string()); }
+    if effective_tid == F32_TYPE  { return Some("float".to_string()); }
+    if effective_tid == BOOL_TYPE { return Some("bool".to_string()); }
     // Check named types (match both the original type_id and the dereferenced effective_tid,
     // since opaque pointer types like PoolAllocator are registered as Ptr(Named(...)))
     ctx.type_mapper.named_types.iter()

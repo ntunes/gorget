@@ -726,6 +726,36 @@ fn mangle_tuple_name(elems: &[Spanned<Type>]) -> String {
     result
 }
 
+/// Extract the mangled prefix used for `equip`-block method names
+/// (`{prefix}__{method}`). Returns `None` for generic targets (handled
+/// separately via monomorphization) and for types that aren't equippable
+/// (Void, Tuple, Function).
+///
+/// For `equip String:` the prefix is `"GorgetString"`, matching what the
+/// call-site resolver uses when dispatching `s.method()`. For
+/// `equip int:` it's `"int64_t"`. For `equip Point:` (user struct),
+/// it's just `"Point"`. Gorget-doc-level `String` / `int` / `bool` etc.
+/// all parse as `Type::Primitive(_)`; without this helper the
+/// equip-lowering pipeline silently dropped them (the filter sites in
+/// mod.rs only matched `Type::Named`). See
+/// `docs/internals/codegen-gap-spike.md`.
+pub fn equip_target_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                Some(name.node.clone())
+            } else {
+                None // generic — handled via monomorphization
+            }
+        }
+        Type::Primitive(prim) => match prim {
+            PrimitiveType::Void => None, // not equippable
+            _ => Some(mangle_type_for_name(ty)),
+        },
+        _ => None, // Tuple / Function / Ref / etc. — not valid equip targets
+    }
+}
+
 /// Produce a C-compatible name fragment for a type (used in name mangling).
 pub fn mangle_type_for_name(ty: &Type) -> String {
     match ty {

@@ -810,17 +810,15 @@ pub fn lower_module(
             if equip.trait_.is_some() {
                 continue;
             }
-            // Skip equip blocks on generic types (they're handled via monomorphization)
-            if let ast::Type::Named { generic_args, .. } = &equip.type_.node {
-                if !generic_args.is_empty() {
-                    continue;
-                }
-            }
 
-            if let ast::Type::Named { name: type_name, .. } = &equip.type_.node {
+            // Accepts Type::Named (non-generic) AND Type::Primitive — the latter
+            // handles `equip String:` / `equip int:` / etc. Returns None for
+            // generic-Named (monomorphization handles those) and non-equippable
+            // types. See docs/internals/codegen-gap-spike.md.
+            if let Some(type_name) = types::equip_target_name(&equip.type_.node) {
                 for method in &equip.items {
                     let method_def = &method.node;
-                    let mangled = format!("{}__{}", type_name.node, method_def.name.node);
+                    let mangled = format!("{}__{}", type_name, method_def.name.node);
 
                     let ret_type = ctx.type_mapper.map_ast_type_mut(&method_def.return_type.node, &mut ctx.type_registry);
                     let has_self = method_def.params.first()
@@ -1081,20 +1079,14 @@ pub fn lower_module(
             if equip.generic_params.is_some() || equip.trait_.is_some() {
                 continue;
             }
-            // Skip equip blocks on generic types
-            if let ast::Type::Named { generic_args, .. } = &equip.type_.node {
-                if !generic_args.is_empty() {
-                    continue;
-                }
-            }
 
-            if let ast::Type::Named { name: type_name, .. } = &equip.type_.node {
+            if let Some(type_name) = types::equip_target_name(&equip.type_.node) {
                 for method in &equip.items {
                     functions::lower_equip_method(
                         &mut ctx,
                         &mut module,
                         &method.node,
-                        &type_name.node,
+                        &type_name,
                         &equip.type_.node,
                     );
                 }
@@ -2236,13 +2228,12 @@ fn populate_trivial_getter_methods(
             if equip.generic_params.is_some() || equip.trait_.is_some() {
                 continue;
             }
-            if let ast::Type::Named { name: type_name, generic_args, .. } = &equip.type_.node {
-                if !generic_args.is_empty() { continue; }
+            if let Some(type_name) = types::equip_target_name(&equip.type_.node) {
                 for method in &equip.items {
                     if !is_trivial_getter_body(&method.node) { continue; }
                     let ret_type = ctx.type_mapper.map_ast_type(&method.node.return_type.node);
                     if ctx.type_registry.is_resource_type(ret_type) {
-                        let mangled = format!("{}__{}", type_name.node, method.node.name.node);
+                        let mangled = format!("{}__{}", type_name, method.node.name.node);
                         ctx.trivial_getter_methods.insert(mangled);
                     }
                 }
@@ -2271,14 +2262,9 @@ fn populate_gir_equip_methods(
                 continue; // generic equip handled below via GenericCollector
             }
 
-            let type_name = match &equip.type_.node {
-                ast::Type::Named { name, generic_args, .. } => {
-                    if !generic_args.is_empty() {
-                        continue; // equip on generic type — handled via monomorphization
-                    }
-                    &name.node
-                }
-                _ => continue,
+            let type_name = match types::equip_target_name(&equip.type_.node) {
+                Some(n) => n,
+                None => continue, // generic — handled via monomorphization
             };
 
             for method in &equip.items {

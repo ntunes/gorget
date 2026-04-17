@@ -129,11 +129,25 @@ trait Writer:
 trait Reader:
     Result[int, IoError] read_bytes(&self, Vector[byte] &buf)
 
-# Wiring Writer onto `String`, `File`, `Socket`, `stdout`/`stderr` is
-# deferred until the type checker accepts `Result[T, IoError]` as a
-# return type on a `String`-receiver equip method (same codegen gap
-# that blocks `.take()` / `.skip()` sugar on VectorIter). For now
-# callers wrap strings in a `Sink`-style struct to satisfy Writer.
+# String implements Writer: the input buffer is appended to the
+# String's builder. The String doesn't enforce UTF-8 at the byte level,
+# so arbitrary bytes pass through. `__bytes_to_str_raw` reinterprets a
+# `Vector[byte]` as a String without validation (it's a copy at the
+# C-layer, same bytes).
+extern "C" String __bytes_to_str_raw(Vector[uint8] data) = "gorget_bytes_to_str"
+
+equip String with Writer:
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+        int n = buf.len()
+        String chunk = __bytes_to_str_raw(buf.clone())
+        self.push(chunk)
+        return Ok(n)
+
+# File / Socket / TlsSocket / stdout / stderr Writer impls land in a
+# follow-up: they need a runtime `gorget_file_write_bytes_handle`-style
+# function that takes a File handle + byte slice (the existing
+# gorget_file_write takes a path+content pair). Scoped to the next
+# stdlib pass, not this codegen-gap slice.
 
 # ── Derived helpers (free functions, generic over the concrete Writer) ──
 

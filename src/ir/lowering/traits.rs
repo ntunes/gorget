@@ -1221,18 +1221,11 @@ pub fn extract_trait_name(ty: &Type) -> String {
 
 /// Extract a non-generic type name from an AST Type.
 fn extract_type_name(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Named {
-            name, generic_args, ..
-        } => {
-            if generic_args.is_empty() {
-                Some(name.node.clone())
-            } else {
-                None // Generic types handled separately
-            }
-        }
-        _ => None,
-    }
+    // Delegates to the canonical equip_target_name helper so
+    // `equip String with Foo:` and `equip int with Foo:` produce the
+    // same `GorgetString__method` / `int64_t__method` names the
+    // call-site resolver looks for.
+    super::types::equip_target_name(ty)
 }
 
 /// Build a fully-mangled trait equip method name.

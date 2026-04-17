@@ -1,0 +1,64 @@
+# Regression test for the codegen-gap fix: `equip <PrimitiveType>:`
+# was being silently dropped by the 5 equip-lowering sites in mod.rs
+# (all filtered on `Type::Named`, skipping `Type::Primitive`). After
+# the fix in `types::equip_target_name`, equip-on-primitive lowers
+# correctly — including methods returning aggregate types like
+# Result / Option. See docs/internals/codegen-gap-spike.md.
+
+from std.io import IoError
+
+# equip on String (Type::Primitive(StringType) → "GorgetString").
+# Previously this equip block was dropped and calls fell through to
+# gorget_str_* remapping, discarding the Result payload.
+equip String:
+    Result[int, IoError] my_len(self):
+        if self.len() == 0:
+            return Error(IoError.InvalidInput())
+        return Ok(self.len())
+
+# equip on int (Type::Primitive(Int) → "int64_t").
+equip int:
+    int doubled(self):
+        return self * 2
+
+    bool is_positive(self):
+        return self > 0
+
+# equip on bool.
+equip bool:
+    int to_int(self):
+        if self:
+            return 1
+        return 0
+
+int main():
+    # String equip with aggregate Result return.
+    String s = "hello"
+    Result[int, IoError] r1 = s.my_len()
+    match r1:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+
+    String empty = ""
+    Result[int, IoError] r2 = empty.my_len()
+    match r2:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+
+    # int equip, scalar self passed by value.
+    int x = 21
+    print(x.doubled())
+    print(x.is_positive())
+
+    int neg = -4
+    print(neg.is_positive())
+
+    # bool equip.
+    print(true.to_int())
+    print(false.to_int())
+
+    return 0
