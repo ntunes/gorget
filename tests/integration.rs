@@ -2036,6 +2036,14 @@ fn equip_supertrait_missing_error() {
 }
 
 #[test]
+fn error_trait_namespace_split() {
+    run_gg(
+        "error_trait_namespace_split.gg",
+        "not found\nIoError.NotFound\nno cause\n---\nbad input",
+    );
+}
+
+#[test]
 fn stdlib_io_reader() {
     run_gg("stdlib_io_reader.gg", "20\n8");
 }

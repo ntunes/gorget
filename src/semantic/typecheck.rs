@@ -1396,8 +1396,17 @@ impl<'a> TypeChecker<'a> {
                                     // methods that aren't in the equip's methods map.
                                     // Stdlib/runtime types without equip blocks have methods
                                     // only in the C backend, so we'd produce false positives.
+                                    //
+                                    // Auto-derivable methods (clone/debug/display/hash) are
+                                    // intrinsic — every type has them, and they may be synthesized
+                                    // at IR-lowering time without appearing in any registered
+                                    // equip block. Exempt them from the check.
+                                    let is_auto_derivable = matches!(
+                                        method.node.as_str(),
+                                        "clone" | "debug" | "display" | "hash"
+                                    );
                                     let has_inherent_only = self.traits.has_inherent_only_impls(name);
-                                    if has_inherent_only {
+                                    if has_inherent_only && !is_auto_derivable {
                                         self.error(
                                             SemanticErrorKind::NoMethodFound {
                                                 method: method.node.clone(),

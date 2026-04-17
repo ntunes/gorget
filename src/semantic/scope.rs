@@ -47,10 +47,55 @@ pub struct DefInfo {
 }
 
 /// A lexical scope.
+///
+/// Each scope keeps two disjoint name maps — type-namespace names
+/// (structs, enums, traits, type aliases, newtypes, generic params)
+/// and value-namespace names (variables, functions, constants,
+/// statics, variants). This lets e.g. `Error` live simultaneously as
+/// a user-defined trait *and* the `Result.Error` variant constructor
+/// — the former is looked up at type positions, the latter at
+/// expression / pattern positions.
+///
+/// Imports register in both namespaces (they can refer to either).
 pub struct Scope {
     pub parent: Option<ScopeId>,
     pub kind: ScopeKind,
-    pub names: FxHashMap<String, DefId>,
+    pub types: FxHashMap<String, DefId>,
+    pub values: FxHashMap<String, DefId>,
+}
+
+/// Classify a DefKind into the type or value namespace (some kinds —
+/// notably `Import` — span both; for those this returns `Type` and
+/// the define path also inserts into `values`).
+pub fn def_namespace(kind: DefKind) -> Namespace {
+    match kind {
+        // Pure type names — trait, type alias, generic param.
+        DefKind::Trait
+        | DefKind::TypeAlias
+        | DefKind::GenericParam => Namespace::Type,
+        // Struct / Enum / Newtype names are dual-role in Gorget: the
+        // same identifier is used as a type (`Vector[int] v`) AND as a
+        // constructor / path head (`Vector[int]()`, `Option.None`).
+        // Register in both namespaces so expression-position callers
+        // find them the same way type-position callers do.
+        DefKind::Struct
+        | DefKind::Enum
+        | DefKind::Newtype => Namespace::Both,
+        DefKind::Function
+        | DefKind::Variant
+        | DefKind::Variable
+        | DefKind::Const
+        | DefKind::Static => Namespace::Value,
+        // Imports are ambiguous — we register in both namespaces.
+        DefKind::Import => Namespace::Both,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Namespace {
+    Type,
+    Value,
+    Both,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +124,8 @@ impl ScopeTable {
         let root = Scope {
             parent: None,
             kind: ScopeKind::Module,
-            names: FxHashMap::default(),
+            types: FxHashMap::default(),
+            values: FxHashMap::default(),
         };
         Self {
             scopes: vec![root],
@@ -94,7 +140,8 @@ impl ScopeTable {
         self.scopes.push(Scope {
             parent: Some(self.current),
             kind,
-            names: FxHashMap::default(),
+            types: FxHashMap::default(),
+            values: FxHashMap::default(),
         });
         self.current = id;
         id
@@ -159,45 +206,44 @@ impl ScopeTable {
         span: Span,
         is_mutable: bool,
     ) -> Result<DefId, SemanticError> {
+        let ns = def_namespace(kind);
+        // Check for duplicates only within the same namespace.
+        // A type named `Error` and a variant named `Error` can coexist.
         let scope = &self.scopes[self.current.0 as usize];
-        if let Some(&existing_id) = scope.names.get(&name) {
-            let existing = &self.definitions[existing_id.0 as usize];
+        let existing_ids = match ns {
+            Namespace::Type => vec![scope.types.get(&name).copied()],
+            Namespace::Value => vec![scope.values.get(&name).copied()],
+            Namespace::Both => vec![
+                scope.types.get(&name).copied(),
+                scope.values.get(&name).copied(),
+            ],
+        };
+        for existing_opt in existing_ids.iter().copied().flatten() {
+            let existing = &self.definitions[existing_opt.0 as usize];
             // Allow a real definition to replace an import placeholder,
             // a real import to replace a built-in placeholder (dummy span),
             // a user definition to shadow a built-in trait (dummy span),
             // or a user-defined variant to shadow a built-in prelude variant (dummy span).
-            if (existing.kind == DefKind::Import && kind != DefKind::Import)
+            let can_replace = (existing.kind == DefKind::Import && kind != DefKind::Import)
                 || (existing.kind == DefKind::Import && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Trait && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Variant && existing.span == Span::dummy() && kind == DefKind::Variant)
-            {
-                let def_id = DefId(self.definitions.len() as u32);
-                self.definitions.push(DefInfo {
-                    name: name.clone(),
-                    kind,
+                // An Import can shadow any dummy-span prelude entry
+                // (prelude variant, built-in trait, etc.). The user
+                // wrote `from X import Y` because they want the
+                // imported Y — not the prelude placeholder with the
+                // same name.
+                || (kind == DefKind::Import && existing.span == Span::dummy());
+            if !can_replace {
+                let original_span = existing.span;
+                return Err(SemanticError {
+                    kind: SemanticErrorKind::DuplicateDefinition {
+                        name,
+                        original: original_span,
+                    },
                     span,
-                    scope: self.current,
-                    type_id: None,
-                    is_mutable,
-                    is_param: false,
-                    param_ownership: None,
-                    shared: crate::parser::ast::SharedKind::None,
-                    field_types: None,
-                    variant_field_types: None,
                 });
-                self.scopes[self.current.0 as usize]
-                    .names
-                    .insert(name, def_id);
-                return Ok(def_id);
             }
-            let original_span = existing.span;
-            return Err(SemanticError {
-                kind: SemanticErrorKind::DuplicateDefinition {
-                    name,
-                    original: original_span,
-                },
-                span,
-            });
         }
 
         let def_id = DefId(self.definitions.len() as u32);
@@ -214,18 +260,55 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
         });
-        self.scopes[self.current.0 as usize]
-            .names
-            .insert(name, def_id);
+        let scope = &mut self.scopes[self.current.0 as usize];
+        match ns {
+            Namespace::Type => {
+                scope.types.insert(name, def_id);
+            }
+            Namespace::Value => {
+                scope.values.insert(name, def_id);
+            }
+            Namespace::Both => {
+                scope.types.insert(name.clone(), def_id);
+                scope.values.insert(name, def_id);
+            }
+        }
         Ok(def_id)
     }
 
     /// Look up a name, walking the parent chain.
+    /// Look up a name, walking the parent chain. Checks the value
+    /// namespace first then the type namespace — preserves the
+    /// single-namespace behavior for all names that exist in one
+    /// namespace. When a name exists in both (e.g. `Error` as both
+    /// the `Result.Error` variant and a user-defined `trait Error`),
+    /// callers that care about the type meaning should use
+    /// `lookup_type`; callers that care about the value meaning
+    /// should use `lookup_value`. The generic `lookup` is fine for
+    /// ambiguous contexts where either meaning would make sense.
     pub fn lookup(&self, name: &str) -> Option<DefId> {
+        self.lookup_value(name).or_else(|| self.lookup_type(name))
+    }
+
+    /// Look up a name in the type namespace only.
+    pub fn lookup_type(&self, name: &str) -> Option<DefId> {
         let mut scope_id = Some(self.current);
         while let Some(sid) = scope_id {
             let scope = &self.scopes[sid.0 as usize];
-            if let Some(&def_id) = scope.names.get(name) {
+            if let Some(&def_id) = scope.types.get(name) {
+                return Some(def_id);
+            }
+            scope_id = scope.parent;
+        }
+        None
+    }
+
+    /// Look up a name in the value namespace only.
+    pub fn lookup_value(&self, name: &str) -> Option<DefId> {
+        let mut scope_id = Some(self.current);
+        while let Some(sid) = scope_id {
+            let scope = &self.scopes[sid.0 as usize];
+            if let Some(&def_id) = scope.values.get(name) {
                 return Some(def_id);
             }
             scope_id = scope.parent;
@@ -235,10 +318,28 @@ impl ScopeTable {
 
     /// Look up a name starting from a given scope, walking the parent chain.
     pub fn lookup_from_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
+        // Preserve old behavior: value first, then type.
+        self.lookup_value_from_scope(scope_id, name)
+            .or_else(|| self.lookup_type_from_scope(scope_id, name))
+    }
+
+    pub fn lookup_value_from_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
         let mut sid = Some(scope_id);
         while let Some(s) = sid {
             let scope = &self.scopes[s.0 as usize];
-            if let Some(&def_id) = scope.names.get(name) {
+            if let Some(&def_id) = scope.values.get(name) {
+                return Some(def_id);
+            }
+            sid = scope.parent;
+        }
+        None
+    }
+
+    pub fn lookup_type_from_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
+        let mut sid = Some(scope_id);
+        while let Some(s) = sid {
+            let scope = &self.scopes[s.0 as usize];
+            if let Some(&def_id) = scope.types.get(name) {
                 return Some(def_id);
             }
             sid = scope.parent;
@@ -282,8 +383,10 @@ impl ScopeTable {
     }
 
     /// Look in a specific scope only (no parent chain walk).
+    /// Value namespace first, then type namespace.
     pub fn lookup_in_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
-        self.scopes[scope_id.0 as usize].names.get(name).copied()
+        let scope = &self.scopes[scope_id.0 as usize];
+        scope.values.get(name).copied().or_else(|| scope.types.get(name).copied())
     }
 
     pub fn get_def(&self, id: DefId) -> &DefInfo {
@@ -382,7 +485,7 @@ impl ScopeTable {
         let mut scope_id = Some(self.current);
         while let Some(sid) = scope_id {
             let scope = &self.scopes[sid.0 as usize];
-            for name in scope.names.keys() {
+            for name in scope.types.keys().chain(scope.values.keys()) {
                 if seen.insert(name.clone()) {
                     result.push(name.clone());
                 }
@@ -416,18 +519,21 @@ impl ScopeTable {
     }
 
     /// Return all `(name, DefId)` pairs defined directly in the current scope.
+    /// Combines both namespaces.
     pub fn names_in_current_scope(&self) -> Vec<(String, DefId)> {
-        self.scopes[self.current.0 as usize]
-            .names
-            .iter()
-            .map(|(n, d)| (n.clone(), *d))
-            .collect()
+        let scope = &self.scopes[self.current.0 as usize];
+        let mut out = Vec::with_capacity(scope.types.len() + scope.values.len());
+        for (n, d) in scope.types.iter().chain(scope.values.iter()) {
+            out.push((n.clone(), *d));
+        }
+        out
     }
 
     /// Copy all non-private names from the current scope into the parent scope.
     ///
     /// Called after collecting a `FileModule` scope's items to make public items
-    /// accessible from the enclosing (global Module) scope.
+    /// accessible from the enclosing (global Module) scope. Both namespaces
+    /// are exported.
     pub fn export_non_private(&mut self, private_names: &rustc_hash::FxHashSet<String>) {
         let current_idx = self.current.0 as usize;
         let parent_idx = match self.scopes[current_idx].parent {
@@ -435,19 +541,22 @@ impl ScopeTable {
             None => return, // root scope — nothing to export to
         };
 
-        let names: Vec<(String, DefId)> = self.scopes[current_idx]
-            .names
+        // Collect per-namespace so we can export into the matching map.
+        let type_entries: Vec<(String, DefId)> = self.scopes[current_idx]
+            .types
+            .iter()
+            .filter(|(name, _)| !private_names.contains(name.as_str()))
+            .map(|(n, d)| (n.clone(), *d))
+            .collect();
+        let value_entries: Vec<(String, DefId)> = self.scopes[current_idx]
+            .values
             .iter()
             .filter(|(name, _)| !private_names.contains(name.as_str()))
             .map(|(n, d)| (n.clone(), *d))
             .collect();
 
-        for (name, def_id) in names {
-            // Allow real definitions to replace Import placeholders or dummy entries.
-            // Import placeholders are created in the parent scope by `from X import Y`
-            // in the entry module — the actual definition from the FileModule scope must
-            // take over. Don't overwrite a real (non-Import) definition.
-            let existing = self.scopes[parent_idx].names.get(&name).copied();
+        for (name, def_id) in type_entries {
+            let existing = self.scopes[parent_idx].types.get(&name).copied();
             let should_insert = match existing {
                 None => true,
                 Some(existing_id) => {
@@ -457,7 +566,21 @@ impl ScopeTable {
                 }
             };
             if should_insert {
-                self.scopes[parent_idx].names.insert(name, def_id);
+                self.scopes[parent_idx].types.insert(name, def_id);
+            }
+        }
+        for (name, def_id) in value_entries {
+            let existing = self.scopes[parent_idx].values.get(&name).copied();
+            let should_insert = match existing {
+                None => true,
+                Some(existing_id) => {
+                    let existing_def = &self.definitions[existing_id.0 as usize];
+                    existing_def.kind == DefKind::Import
+                        || existing_def.span == crate::span::Span::dummy()
+                }
+            };
+            if should_insert {
+                self.scopes[parent_idx].values.insert(name, def_id);
             }
         }
     }

@@ -142,14 +142,38 @@ equip IoError with Debuggable:
             case IoError.Other(msg):
                 return f"IoError.Other({msg.debug()})"
 
-# ── Error trait (deferred) ────────────────────────────────────
+# ── Error trait ───────────────────────────────────────────────
 #
-# The design doc envisions a narrow `Error` trait (Displayable +
-# Debuggable + `source() -> Option[Box[Error]]`) that every stdlib
-# error type implements. Landing it requires either a namespace
-# separation for types vs values (so `Error` the trait and
-# `Result.Error` the variant can coexist) or a context-sensitive
-# keyword fix in the parser. Tracked in TODO.
+# The narrow contract for a well-behaved error type: it can display
+# for humans, render for developers (Debuggable), and optionally
+# surface a human-readable description of the underlying cause.
+#
+# Every stdlib error type (IoError, ParseError, future JsonError /
+# HttpError / SqlError / …) should implement `Error` so generic
+# error-handling helpers can take any error without caring which
+# specific kind they're holding.
+#
+# Coexistence note: `Error` lives in the type namespace as this
+# trait; the `Result.Error(x)` variant constructor lives in the
+# value namespace. Use-site resolution picks the right one by
+# context (trait bound / equip target → trait; call / pattern →
+# variant). See `tests/fixtures/error_trait_namespace_split.gg`.
+#
+# Design note: `source()` returns `Option[String]` for now — the
+# cause's own human-readable description. The design doc envisions
+# `Option[Box[Error]]` (walkable trait-object chain), but boxed
+# trait objects are only partially supported today. The String form
+# is strictly less powerful but keeps the v1 stdlib callable; when
+# boxed-trait support stabilises the signature upgrades purely
+# additively.
+
+trait Error extends Displayable & Debuggable:
+    Option[String] source(&self)
+
+# IoError is a leaf — no underlying cause chain.
+equip IoError with Error:
+    Option[String] source(&self):
+        return None
 
 # ── Writer ────────────────────────────────────────────────────
 #

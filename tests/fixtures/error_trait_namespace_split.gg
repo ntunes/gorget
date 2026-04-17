@@ -1,0 +1,39 @@
+# Regression: `Error` the user trait and `Error` the Result variant
+# constructor coexist in distinct namespaces.
+#
+# Prior to namespace separation, `trait Error:` collided with the
+# prelude's `Result.Error(x)` registration and failed with
+# "duplicate definition". The scope now keeps a `types` map and a
+# `values` map — `trait Error` lands in `types`, the variant in
+# `values`, and each lookup picks the one that fits its context.
+
+from std.io import IoError, Error
+
+# Generic over any Error — the bound resolves through the type
+# namespace, so it finds the trait (not the variant).
+void report[Error E](E e):
+    print(e.display())
+    print(e.debug())
+    match e.source():
+        case Some(cause):
+            print(cause)
+        case None:
+            print("no cause")
+
+int main():
+    # Trait-position use: E: Error dispatches to the trait.
+    IoError e = IoError.NotFound()
+    report[IoError](e)
+
+    print("---")
+
+    # Value-position use: Error(...) still constructs a Result.Error.
+    # The parser + resolver pick the variant here because it's in
+    # value / pattern position.
+    Result[int, String] r = Error("bad input")
+    match r:
+        case Ok(n):
+            print(n)
+        case Error(msg):
+            print(msg)
+    return 0

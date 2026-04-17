@@ -1,7 +1,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::parser::ast::*;
-use crate::span::Span;
+use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
@@ -244,19 +244,12 @@ pub fn build_registry(
     // Register built-in core traits before processing user-defined ones.
     register_builtin_traits(scopes, types, &mut registry);
 
-    // First pass: collect all trait definitions
-    for item in &module.items {
-        if let Item::Trait(trait_def) = &item.node {
-            collect_trait(trait_def, scopes, types, &mut registry, errors);
-        }
-    }
+    // First pass: collect all trait definitions (recursing into Item::Module
+    // wrappers so imported-module traits land in the registry too).
+    collect_traits_from_items(&module.items, scopes, types, &mut registry, errors);
 
-    // Second pass: process all impl blocks
-    for item in &module.items {
-        if let Item::Equip(impl_block) = &item.node {
-            process_impl(impl_block, scopes, types, &mut registry, errors);
-        }
-    }
+    // Second pass: process all impl blocks (same recursion).
+    process_impls_from_items(&module.items, scopes, types, &mut registry, errors);
 
     // Third pass: detect trait inheritance cycles (before validate_trait_impls to avoid stack overflow)
     validate_trait_cycles(&registry, errors);
@@ -265,6 +258,46 @@ pub fn build_registry(
     validate_trait_impls(&registry, module, types, errors);
 
     registry
+}
+
+fn collect_traits_from_items(
+    items: &[Spanned<Item>],
+    scopes: &ScopeTable,
+    types: &mut TypeTable,
+    registry: &mut TraitRegistry,
+    errors: &mut Vec<SemanticError>,
+) {
+    for item in items {
+        match &item.node {
+            Item::Trait(trait_def) => {
+                collect_trait(trait_def, scopes, types, registry, errors);
+            }
+            Item::Module { items: inner, .. } => {
+                collect_traits_from_items(inner, scopes, types, registry, errors);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn process_impls_from_items(
+    items: &[Spanned<Item>],
+    scopes: &ScopeTable,
+    types: &mut TypeTable,
+    registry: &mut TraitRegistry,
+    errors: &mut Vec<SemanticError>,
+) {
+    for item in items {
+        match &item.node {
+            Item::Equip(impl_block) => {
+                process_impl(impl_block, scopes, types, registry, errors);
+            }
+            Item::Module { items: inner, .. } => {
+                process_impls_from_items(inner, scopes, types, registry, errors);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Register built-in core traits.
@@ -645,10 +678,13 @@ fn process_impl(
     )
     .unwrap_or(types.error_id);
 
-    // Resolve the trait (if any)
+    // Resolve the trait (if any). Use type-namespace lookup so that,
+    // e.g., `equip IoError with Error:` finds the user-defined `trait
+    // Error` rather than the `Result.Error` variant that shares the
+    // name in the value namespace.
     let trait_def_id = impl_block.trait_.as_ref().and_then(|t| {
         if let Type::Named { name, .. } = &t.trait_name.node {
-            scopes.lookup(&name.node)
+            scopes.lookup_type(&name.node)
         } else {
             None
         }
@@ -764,16 +800,27 @@ fn process_impl(
     if let Some(trait_id) = trait_def_id {
         registry.trait_impls.insert((trait_id, self_type_id, trait_arg_type_ids), impl_idx);
     } else {
-        // Duplicate inherent equip check
-        if registry.inherent_impls.contains_key(&self_type_id) {
-            errors.push(SemanticError {
-                kind: SemanticErrorKind::DuplicateImpl {
-                    trait_: "(inherent)".to_string(),
-                    type_: self_type_name.clone(),
-                },
-                span: impl_block.span,
-            });
-            return;
+        // Multiple inherent `equip T:` blocks are fine — they just
+        // accumulate methods on T. What's NOT fine is two different
+        // blocks declaring the same method; that's a real duplicate.
+        // Rust follows the same rule.
+        let new_methods: Vec<&String> = registry.impls[impl_idx].methods.keys().collect();
+        if let Some(existing_indices) = registry.inherent_impls.get(&self_type_id) {
+            for &prev_idx in existing_indices {
+                let prev = &registry.impls[prev_idx];
+                for m in &new_methods {
+                    if prev.methods.contains_key(m.as_str()) {
+                        errors.push(SemanticError {
+                            kind: SemanticErrorKind::DuplicateImpl {
+                                trait_: format!("(inherent method `{m}`)"),
+                                type_: self_type_name.clone(),
+                            },
+                            span: impl_block.span,
+                        });
+                        return;
+                    }
+                }
+            }
         }
         registry
             .inherent_impls
@@ -855,18 +902,22 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
             if trait_sig.return_type != types.error_id
                 && trait_sig.return_type != impl_sig.return_type
             {
-                errors.push(SemanticError {
-                    kind: SemanticErrorKind::MethodSignatureMismatch {
-                        trait_: source_trait_name.clone(),
-                        method: method_name.clone(),
-                        detail: format!(
-                            "return type is `{}`, expected `{}`",
-                            types.display(impl_sig.return_type),
-                            types.display(trait_sig.return_type),
-                        ),
-                    },
-                    span: impl_info.span,
-                });
+                let trait_display = types.display(trait_sig.return_type);
+                let impl_display = types.display(impl_sig.return_type);
+                if trait_display != impl_display {
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::MethodSignatureMismatch {
+                            trait_: source_trait_name.clone(),
+                            method: method_name.clone(),
+                            detail: format!(
+                                "return type is `{}`, expected `{}`",
+                                impl_display,
+                                trait_display,
+                            ),
+                        },
+                        span: impl_info.span,
+                    });
+                }
             }
 
             if trait_sig.params.len() != impl_sig.params.len() {
@@ -891,6 +942,18 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
                         continue;
                     }
                     if trait_param != impl_param {
+                        // Type-level equality is strict but the trait
+                        // registry interns types separately from the
+                        // impl builder, so legitimately-equivalent types
+                        // (same displayed form, notably trait objects
+                        // like `<trait object>`) can disagree at the
+                        // TypeId level. Fall back to comparing displayed
+                        // forms before flagging the mismatch.
+                        let trait_display = types.display(*trait_param);
+                        let impl_display = types.display(*impl_param);
+                        if trait_display == impl_display {
+                            continue;
+                        }
                         errors.push(SemanticError {
                             kind: SemanticErrorKind::MethodSignatureMismatch {
                                 trait_: source_trait_name.clone(),
@@ -898,8 +961,8 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
                                 detail: format!(
                                     "parameter {} type is `{}`, expected `{}`",
                                     i + 1,
-                                    types.display(*impl_param),
-                                    types.display(*trait_param),
+                                    impl_display,
+                                    trait_display,
                                 ),
                             },
                             span: impl_info.span,
@@ -1718,24 +1781,48 @@ equip Circle with Drawable:
     }
 
     #[test]
-    fn duplicate_inherent_equip_errors() {
+    fn split_inherent_equip_blocks_ok() {
+        // Rust-style: multiple `equip T:` blocks with DIFFERENT
+        // methods just accumulate. No error.
         let source = "\
 struct Point:
     float x
 
 equip Point:
-    float x(self):
+    float get_x(self):
         return self.x
 
 equip Point:
-    float y(self):
+    float get_y(self):
+        return 0.0
+";
+        let (_, errors) = analyze(source);
+        assert!(!errors.iter().any(|e| matches!(
+            &e.kind,
+            SemanticErrorKind::DuplicateImpl { .. }
+        )), "splitting inherent equip blocks across declarations is fine, got: {:?}", errors);
+    }
+
+    #[test]
+    fn duplicate_inherent_method_errors() {
+        // Same method name in two `equip T:` blocks → error.
+        let source = "\
+struct Point:
+    float x
+
+equip Point:
+    float get_x(self):
+        return self.x
+
+equip Point:
+    float get_x(self):
         return 0.0
 ";
         let (_, errors) = analyze(source);
         assert!(errors.iter().any(|e| matches!(
             &e.kind,
             SemanticErrorKind::DuplicateImpl { type_, .. } if type_ == "Point"
-        )), "expected DuplicateImpl for inherent equip, got: {:?}", errors);
+        )), "expected DuplicateImpl for duplicate method in split equip blocks, got: {:?}", errors);
     }
 
     #[test]
