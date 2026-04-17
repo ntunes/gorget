@@ -1967,7 +1967,7 @@ red != blue",
 
 #[test]
 fn sigil_type_args() {
-    run_gg("sigil_type_args.gg", "6\n30");
+    run_gg("sigil_type_args.gg", "6\nada\nbob\n30");
 }
 
 #[test]

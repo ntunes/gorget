@@ -1,12 +1,17 @@
-# Sigils in type-argument positions: Vector[T !], Option[T !].
-# Owned-sigil on Copy types is a no-op at runtime but parsed + monomorphized
-# through the transparent-Owned path. Non-Copy owning transfer works too.
+# Sigils in type-argument positions: Vector[T &], Vector[T !], Option[T !].
+# `T &` and `T !` inside generic brackets are iterator-intent markers — they
+# collapse to the bare T at monomorphization so container storage stays the
+# same. `Vector[String]` and `Vector[String &]` share runtime code.
 
 void take_owned(Vector[int !] items):
     int sum = 0
     for x in items:
         sum = sum + x
     print(sum)
+
+void borrow_strs(Vector[String &] items):
+    for s in items:
+        print(s)
 
 Option[int !] peek_last(Vector[int] items):
     return items.pop()
@@ -19,6 +24,9 @@ trait BoundedRange[T]:
 int main():
     Vector[int] v = [1, 2, 3]
     take_owned(v)
+
+    Vector[String] names = ["ada", "bob"]
+    borrow_strs(names)
 
     Vector[int] w = [10, 20, 30]
     Option[int !] last = peek_last(w)

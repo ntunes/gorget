@@ -274,8 +274,13 @@ impl TypeMapper {
                 registry.insert(GirType::FnPtr { params: param_types, return_type: ret })
             }
             Type::Ref(inner) => {
-                let inner_id = self.map_ast_type_mut(&inner.node, registry);
-                registry.insert(GirType::Ptr(inner_id))
+                // At a parameter position, `T &` means a mutable borrow (Ptr(T)).
+                // At a type-argument position (e.g., `Vector[T &]`), it's an
+                // iterator-intent marker and must NOT become Ptr(T) — the
+                // storage is still T. The resolver distinguishes the two via
+                // ownership on the FunctionParam, not via Type::Ref.
+                // Here (type-arg path), treat as transparent.
+                self.map_ast_type_mut(&inner.node, registry)
             }
             Type::Owned(inner) => {
                 self.map_ast_type_mut(&inner.node, registry)
@@ -750,7 +755,11 @@ pub fn mangle_type_for_name(ty: &Type) -> String {
         // Callable[T(Params)] has a Type::Function as its generic arg — all callables
         // are GorgetClosure at runtime, so use that as the C name fragment.
         Type::Function { .. } => "GorgetClosure".to_string(),
-        Type::Ref(inner) => format!("Ref_{}", mangle_type_for_name(&inner.node)),
+        // Sigils at type-arg positions (`T &`, `T !`) are iterator-intent markers,
+        // not distinct storage types. They collapse to the bare type during
+        // monomorphization so that `Vector[String &]` and `Vector[String]` share
+        // the same layout and runtime code.
+        Type::Ref(inner) => mangle_type_for_name(&inner.node),
         Type::Owned(inner) => mangle_type_for_name(&inner.node),
         _ => "unknown".to_string(),
     }
