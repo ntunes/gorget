@@ -6147,25 +6147,42 @@ fn emit_inst(
                 }
             }
             // Build arg list: env first, then user args.
-            // Closures emitted by the LLVM backend take small aggregates by value
-            // (matching the aarch64/x86-64 C ABI for <=16-byte structs). When the
-            // call site's val_type says the arg is a pointer to a small struct,
-            // we must load the struct first — passing a bare `ptr` causes the
-            // register slots to misalign against the callee's expected layout.
+            // The C ABI passes small aggregates (≤16 bytes) in registers while
+            // pointers fit in one register — the two are not interchangeable.
+            // Some closure bodies take struct args by value (`Callable[void(Entity, T)]`)
+            // and others take by reference (`Callable[int(&Counter)]`). The call site
+            // can't always tell which from val_types alone, so we only load when
+            // the arg's value came directly from a `load` of the struct type, which
+            // indicates the LIR already materialised the struct — a subsequent call
+            // to a by-value closure expects the value, not the pointer.
+            //
+            // Heuristic: if the arg value is the result of a `SlotLoad` whose slot
+            // holds the aggregate itself (not a `PtrTo` reference), load it here.
             let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
             for (ai, a) in args.iter().enumerate() {
                 let vt = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                // Check for PtrTo(small_struct): load to pass by value.
-                let deref_struct = if let Some(LirType::PtrTo(sid)) = vt {
-                    let sd = &module.structs[sid.0 as usize];
-                    // Small-aggregate check uses the shared opaque table.
+                // Only load when the arg's producing instruction was a SlotAddr of
+                // a slot whose type is a small aggregate — which signals the call
+                // site treats the struct as a value being shuttled through a slot.
+                // A SlotAddr of a struct slot followed by CallClosure with that arg
+                // matches the by-value-closure pattern (ecs_basics `ns.each(...)`).
+                let small_agg_slot = if let Some(LirType::PtrTo(sid)) = vt {
                     let s_ty = LirType::Struct(*sid);
-                    if is_small_aggregate(&s_ty, &module.structs) && !sd.is_union_layout {
-                        Some(sid)
+                    let via_slot_addr = func.blocks.iter()
+                        .flat_map(|b| b.insts.iter())
+                        .any(|i| matches!(i, Inst::SlotAddr { dst, slot }
+                            if dst.0 == a.0
+                            && matches!(&func.slots[slot.0 as usize].ty,
+                                LirType::Struct(sid2) if sid2 == sid)));
+                    if via_slot_addr
+                        && is_small_aggregate(&s_ty, &module.structs)
+                        && !module.structs[sid.0 as usize].is_union_layout
+                    {
+                        Some(*sid)
                     } else { None }
                 } else { None };
-                if let Some(sid) = deref_struct {
-                    let s_ty = LirType::Struct(*sid);
+                if let Some(sid) = small_agg_slot {
+                    let s_ty = LirType::Struct(sid);
                     let struct_ty_str = llvm_type_full(&s_ty, snames);
                     let tmp = format!("{pfx}.arg{ai}");
                     writeln!(out, "  %{tmp} = load {struct_ty_str}, ptr %v{}", a.0).unwrap();
