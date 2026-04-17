@@ -54,7 +54,7 @@
 #   df_from_csv(csv_text), df_to_csv(df)
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str, float_to_str, bool_to_str, parse_int, parse_float, int_to_float
+from std.conv import int_to_str, float_to_str, bool_to_str, parse_int, parse_float, int_to_float, ParseError
 from std.math import sqrt, floor, ceil
 
 # Returns true if s represents a valid integer (optional leading -, then digits)
@@ -524,7 +524,7 @@ equip DataFrame:
         int i = 0
         match col:
             case IntCol(c):
-                Result[int, String] parsed_int = parse_int(val)
+                Result[int, ParseError] parsed_int = parse_int(val)
                 while i < self.num_rows:
                     bool keep = false
                     if c.is_null(i):
@@ -547,7 +547,7 @@ equip DataFrame:
                     mask.push(keep)
                     i = i + 1
             case FloatCol(c):
-                Result[float, String] parsed_flt = parse_float(val)
+                Result[float, ParseError] parsed_flt = parse_float(val)
                 while i < self.num_rows:
                     bool keep = false
                     if c.is_null(i):
@@ -884,8 +884,8 @@ int col_compare(Column col, int ia, int ib):
             String va = c.data.get(ia).unwrap()
             String vb = c.data.get(ib).unwrap()
             # Try numeric comparison for string columns with numeric values
-            Result[float, String] fa = parse_float(va)
-            Result[float, String] fb = parse_float(vb)
+            Result[float, ParseError] fa = parse_float(va)
+            Result[float, ParseError] fb = parse_float(vb)
             if fa.is_ok() and fb.is_ok():
                 float fva = fa.unwrap()
                 float fvb = fb.unwrap()
@@ -2533,7 +2533,7 @@ Column cast_str_col(TypedColumn[String] c, String target_type):
         int j = 0
         while j < n:
             if c.mask.get(j).unwrap():
-                Result[int, String] ri = parse_int(c.data.get(j).unwrap())
+                Result[int, ParseError] ri = parse_int(c.data.get(j).unwrap())
                 if ri.is_ok():
                     d.push(ri.unwrap())
                     m.push(true)
@@ -2551,7 +2551,7 @@ Column cast_str_col(TypedColumn[String] c, String target_type):
         int j = 0
         while j < n:
             if c.mask.get(j).unwrap():
-                Result[float, String] rf = parse_float(c.data.get(j).unwrap())
+                Result[float, ParseError] rf = parse_float(c.data.get(j).unwrap())
                 if rf.is_ok():
                     d.push(rf.unwrap())
                     m.push(true)

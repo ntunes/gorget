@@ -8,7 +8,7 @@
 # everything else is left as String (the raw column text).
 
 from std.collections import Vector, Dict
-from std.conv import parse_int, parse_float
+from std.conv import parse_int, parse_float, ParseError
 
 # ── Raw row from a query result ──────────────────────────────
 
@@ -26,7 +26,7 @@ equip Row:
     int get_int(&self, String col):
         if not self.columns.contains(col):
             return 0
-        Result[int, String] r = parse_int(self.columns[col])
+        Result[int, ParseError] r = parse_int(self.columns[col])
         if r.is_ok():
             return r.unwrap()
         return 0
@@ -34,7 +34,7 @@ equip Row:
     float get_float(&self, String col):
         if not self.columns.contains(col):
             return 0.0
-        Result[float, String] r = parse_float(self.columns[col])
+        Result[float, ParseError] r = parse_float(self.columns[col])
         if r.is_ok():
             return r.unwrap()
         return 0.0

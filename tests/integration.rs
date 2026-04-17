@@ -2039,7 +2039,7 @@ fn equip_supertrait_missing_error() {
 fn error_trait_namespace_split() {
     run_gg(
         "error_trait_namespace_split.gg",
-        "not found\nIoError.NotFound\nno cause\n---\nbad input",
+        "not found\nIoError.NotFound\nno cause\n---\ninvalid number: abc\nParseError.InvalidNumber(\"abc\")\nno cause\n---\nbad input",
     );
 }
 

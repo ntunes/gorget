@@ -8,6 +8,7 @@
 # `values`, and each lookup picks the one that fits its context.
 
 from std.io import IoError, Error
+from std.conv import ParseError
 
 # Generic over any Error — the bound resolves through the type
 # namespace, so it finds the trait (not the variant).
@@ -22,8 +23,15 @@ void report[Error E](E e):
 
 int main():
     # Trait-position use: E: Error dispatches to the trait.
-    IoError e = IoError.NotFound()
-    report[IoError](e)
+    IoError e1 = IoError.NotFound()
+    report[IoError](e1)
+
+    print("---")
+
+    # Same generic over a different Error implementor — demonstrates
+    # that `Error` is a real narrow-waist trait, not a one-off.
+    ParseError e2 = ParseError.InvalidNumber("abc")
+    report[ParseError](e2)
 
     print("---")
 

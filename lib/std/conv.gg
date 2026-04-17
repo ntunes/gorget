@@ -1,4 +1,11 @@
-# std.conv — Type conversion functions
+# std.conv — Type conversion functions, primitive parsers.
+#
+# Parse failures report through `ParseError`, not stringly-typed
+# `Result[T, String]`. `ParseError` implements the narrow `Error` trait
+# (from std.io) — it displays, debugs, and can be boxed into any generic
+# `Error` handler.
+
+from std.io import Error
 
 # ── C extern bindings (const char* convention) ───────────────
 
@@ -24,18 +31,83 @@ extern "Gorget":
 extern "C":
     extern float int_to_float(int n) = "gorget_int_to_float"
 
-# ── Gorget wrappers for Result-returning functions ───────────
+# ── ParseError ───────────────────────────────────────────────
+#
+# Parsing failures surface as one of these variants. The enum grows
+# additively — richer parsers (json, toml, yaml) may add named
+# variants over time (UnterminatedString, DuplicateKey, …).
+#
+# `InvalidSyntax(byte_offset, message)` gives ad-hoc parsers a place
+# to report position-tagged errors without inventing a new type.
+# `Other(String)` is an escape hatch — prefer a named variant when
+# introducing a new category.
 
-Result[int, String] parse_int(String s):
+enum ParseError:
+    Empty
+    InvalidNumber(String)
+    OutOfRange(String)
+    InvalidSyntax(int, String)
+    Other(String)
+
+equip ParseError with Displayable:
+    String display(self):
+        match self:
+            case ParseError.Empty():
+                return "empty input"
+            case ParseError.InvalidNumber(s):
+                return f"invalid number: {s}"
+            case ParseError.OutOfRange(s):
+                return f"out of range: {s}"
+            case ParseError.InvalidSyntax(offset, msg):
+                return f"parse error at byte {offset}: {msg}"
+            case ParseError.Other(msg):
+                return f"parse error: {msg}"
+
+equip ParseError with Debuggable:
+    String debug(self):
+        match self:
+            case ParseError.Empty():
+                return "ParseError.Empty"
+            case ParseError.InvalidNumber(s):
+                return f"ParseError.InvalidNumber({s.debug()})"
+            case ParseError.OutOfRange(s):
+                return f"ParseError.OutOfRange({s.debug()})"
+            case ParseError.InvalidSyntax(offset, msg):
+                return f"ParseError.InvalidSyntax({offset}, {msg.debug()})"
+            case ParseError.Other(msg):
+                return f"ParseError.Other({msg.debug()})"
+
+equip ParseError with Error:
+    Option[String] source(&self):
+        return None
+
+# ── Typed parse wrappers ─────────────────────────────────────
+#
+# The C extern layer still reports through a thread-local last-error
+# string (`_parse_last_error`). Gorget-side callers go through these
+# wrappers which re-surface the failure as a structured `ParseError`.
+
+Result[int, ParseError] parse_int(String s):
+    if s.len() == 0:
+        return Error(ParseError.Empty())
     int raw = _parse_int_raw(s)
     String err = _parse_last_error()
     if err.len() > 0:
-        return Error(err)
+        # The C layer reports a single combined message. Route it
+        # through the named variant when the shape is recognisable,
+        # otherwise fall back to `Other`.
+        if err == "out of range":
+            return Error(ParseError.OutOfRange(!s))
+        return Error(ParseError.InvalidNumber(!s))
     return Ok(raw)
 
-Result[float, String] parse_float(String s):
+Result[float, ParseError] parse_float(String s):
+    if s.len() == 0:
+        return Error(ParseError.Empty())
     float raw = _parse_float_raw(s)
     String err = _parse_last_error()
     if err.len() > 0:
-        return Error(err)
+        if err == "out of range":
+            return Error(ParseError.OutOfRange(!s))
+        return Error(ParseError.InvalidNumber(!s))
     return Ok(raw)

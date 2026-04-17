@@ -1,25 +1,25 @@
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, ParseError
 
 void main():
-    # parse_int — Result[int, String]
-    Result[int, String] pi_res = parse_int("42")
+    # parse_int — Result[int, ParseError]
+    Result[int, ParseError] pi_res = parse_int("42")
     if pi_res is Ok(pi_val):
         print(f"{pi_val}")
 
-    Result[int, String] pi_bad = parse_int("hello")
+    Result[int, ParseError] pi_bad = parse_int("hello")
     if pi_bad is Error(pi_err):
         print("int_err")
 
-    # parse_float — Result[float, String]
-    Result[float, String] pf_res = parse_float("3.14")
+    # parse_float — Result[float, ParseError]
+    Result[float, ParseError] pf_res = parse_float("3.14")
     if pf_res is Ok(pi):
         print(f"{pi}")
 
-    Result[float, String] neg_res = parse_float("-0.5")
+    Result[float, ParseError] neg_res = parse_float("-0.5")
     if neg_res is Ok(neg):
         print(f"{neg}")
 
-    Result[float, String] pf_bad = parse_float("xyz")
+    Result[float, ParseError] pf_bad = parse_float("xyz")
     if pf_bad is Error(pf_err):
         print("float_err")
 
