@@ -2057,6 +2057,14 @@ fn stdlib_io_file_writer() {
 }
 
 #[test]
+fn static_global_method_call() {
+    run_gg(
+        "static_global_method_call.gg",
+        "counter: 1 2 3\ndirect\nwrote 7",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

@@ -1,0 +1,43 @@
+# Regression: method calls with `&self` on static globals.
+#
+# Before the fix, the IR lowerer turned `Operand::Constant(GlobalRef)`
+# into a value load and passed the receiver by value — a method
+# expecting a pointer got a struct by copy, the C compiler rejected
+# the arg type, or worse, accepted it and wrote into a local copy.
+# Now the receiver preparation detects GlobalRef for struct-typed
+# globals and converts to GlobalRefPtr so the backend emits
+# `&global_name` at the call site.
+#
+# Exercises two paths:
+#   1. User struct — `Counter.inc(&self)` called on a static Counter
+#      mutates the global; second call sees the updated state.
+#   2. Stdlib File — `stdout.write_bytes(...)` works directly, no
+#      `File f = stdout` alias required.
+
+from std.io import stdout
+
+struct Counter:
+    int n
+
+equip Counter:
+    int inc(&self):
+        self.n = self.n + 1
+        return self.n
+
+public static Counter counter = Counter(0)
+
+int main():
+    int a = counter.inc()
+    int b = counter.inc()
+    int c = counter.inc()
+    print(f"counter: {a} {b} {c}")
+
+    # Direct method call on a stdlib static global — previously
+    # broken, now produces the expected output.
+    Result[int, IoError] r = stdout.write_bytes("direct\n".bytes())
+    match r:
+        case Ok(n):
+            print(f"wrote {n}")
+        case Error(e):
+            print(e.display())
+    return 0

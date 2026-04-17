@@ -1300,6 +1300,31 @@ pub(super) fn lower_method_call(
             let pl = builder.add_local(pt, None);
             builder.emit_borrow(pl, Place::local(tmp_local));
             call_args.push(FunctionBuilder::copy(pl));
+        } else if let Operand::Constant(Constant::GlobalRef(gname)) = &recv {
+            // Static-global receiver. The default `Operand::Constant(GlobalRef)`
+            // emission loads the global's value, so a struct-typed `&self`
+            // method would get the value by copy and the C-side pointer arg
+            // would be wrong. Convert to `GlobalRefPtr(name)` (emitted as
+            // `&global_name`) for types that the callee receives by pointer.
+            //
+            // Primitives and by-value handle types (AtomicInt / Barrier /
+            // Semaphore / …) keep the `GlobalRef` form — those callees
+            // expect the value directly.
+            let is_by_value = ctx.global_type_names.get(gname).cloned()
+                .map(|t| {
+                    crate::ir::lowering::builtins::is_by_value_receiver(&t)
+                        || matches!(t.as_str(),
+                            "int" | "i8" | "i16" | "i32" | "i64"
+                            | "uint" | "u8" | "u16" | "u32" | "u64"
+                            | "float" | "f32" | "f64"
+                            | "bool" | "char" | "str")
+                })
+                .unwrap_or(false);
+            if is_by_value {
+                call_args.push(recv);
+            } else {
+                call_args.push(Operand::Constant(Constant::GlobalRefPtr(gname.clone())));
+            }
         } else {
             call_args.push(recv);
         }
