@@ -2351,6 +2351,13 @@ fn emit_inst(
             writeln!(out, "  %v{} = getelementptr i8, ptr %s{}, i32 0", dst.0, slot.0).unwrap();
         }
 
+        // Canonical ops — must have been expanded away by bir::lower before reaching here.
+        // The BirModule newtype + validator guarantee this, but keep an explicit arm so
+        // the pattern match stays exhaustive.
+        Inst::SizeOf { .. } => {
+            unreachable!("Inst::SizeOf survived BIR lowering — validator should have rejected it");
+        }
+
         // ── Constants ───────────────────────────────────────────────
         Inst::IConst { dst, ty, value } => {
             let lty = llvm_type(ty);

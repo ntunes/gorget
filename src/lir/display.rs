@@ -153,6 +153,7 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write!(f, "{dst}: {ty} = fconst {val}")
         }
         Inst::BoolConst { dst, value } => write!(f, "{dst}: bool = bconst {value}"),
+        Inst::SizeOf { dst, ty } => write!(f, "{dst}: i64 = sizeof {ty}"),
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),

@@ -44,25 +44,18 @@ pub fn assert_primitives_only(module: &LirModule) -> Result<(), BirError> {
     Ok(())
 }
 
-fn check_inst(inst: &Inst, _fn_name: &str, _block_id: u32) -> Result<(), BirError> {
+fn check_inst(inst: &Inst, fn_name: &str, block_id: u32) -> Result<(), BirError> {
     // Canonical-op arms live here. As each canonical op is added to `Inst`
-    // (Steps 1-8), add a match arm that uses `_fn_name` / `_block_id` and
-    // drops the leading underscores.
-    //
-    // Example for a future `Inst::HofExpand`:
-    //
-    //     Inst::HofExpand { .. } => {
-    //         return Err(BirError::UnloweredCanonicalOp {
-    //             fn_name: fn_name.to_string(),
-    //             block_id,
-    //             opcode: "HofExpand",
-    //         });
-    //     }
+    // (Steps 1-8), add a match arm that returns `UnloweredCanonicalOp`.
     //
     // All other variants fall through the catch-all below — they're primitives.
     match inst {
-        // === Canonical-op arms (none yet — Step 0) ===
-        // (placeholder — plug arms in as canonical ops are added to LIR)
+        // === Canonical-op arms ===
+        Inst::SizeOf { .. } => Err(BirError::UnloweredCanonicalOp {
+            fn_name: fn_name.to_string(),
+            block_id,
+            opcode: "SizeOf",
+        }),
 
         // === Primitives — the catch-all (default) ===
         _ => Ok(()),

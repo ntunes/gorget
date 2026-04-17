@@ -677,8 +677,7 @@ impl<'a> FuncLowering<'a> {
 
     /// Emit memset(ptr, 0, sizeof(ty)).
     pub(super) fn emit_memset_zero(&mut self, ptr: ValueId, ty: &LirType, bb: BlockId) {
-        let size = c_sizeof_lir_type(ty, self.module_structs) as i64;
-        let size_val = self.emit_i64_const(bb, size);
+        let size_val = self.emit_size_of(bb, ty.clone());
         let zero_byte = self.emit_i32_const(bb, 0);
         self.ensure_extern("memset", &[LirType::Ptr, LirType::I32, LirType::I64], &LirType::Ptr);
         let abis = self.lookup_arg_abis("memset");
@@ -739,7 +738,7 @@ impl<'a> FuncLowering<'a> {
             self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                 dst: temp_addr, slot: temp_slot,
             });
-            let sz_val = self.emit_i64_const(bb, sz as i64);
+            let sz_val = self.emit_size_of(bb, ty.clone());
             self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
                 dst_ptr: field_ptr, src_ptr: temp_addr, size: sz_val,
             });

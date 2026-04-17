@@ -1249,6 +1249,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. }
         | Inst::GlobalAddr { .. }
         | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
+        | Inst::SizeOf { .. }
         | Inst::Nop | Inst::InlineC { .. } => {}
         Inst::Add { lhs, rhs, .. } | Inst::Sub { lhs, rhs, .. }
         | Inst::Mul { lhs, rhs, .. } | Inst::Div { lhs, rhs, .. }

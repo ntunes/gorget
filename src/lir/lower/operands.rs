@@ -362,6 +362,19 @@ impl<'a> FuncLowering<'a> {
         val
     }
 
+    /// Emit `Inst::SizeOf { dst, ty }` and return the resulting value id.
+    ///
+    /// BIR lowering (`src/bir/lower.rs`) resolves this to a concrete
+    /// `IConst` via the shared `c_sizeof_lir_type` table before backends
+    /// see the module.
+    pub(super) fn emit_size_of(&mut self, bb: BlockId, ty: LirType) -> ValueId {
+        let val = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SizeOf {
+            dst: val, ty,
+        });
+        val
+    }
+
     /// Map a GIR type ID to an LIR type, using the current type registry and struct registry.
     pub(super) fn map_type(&self, type_id: &crate::ir::types::TypeId) -> LirType {
         map_gir_type_with_structs(type_id, self.gir_types, Some(self.struct_reg))

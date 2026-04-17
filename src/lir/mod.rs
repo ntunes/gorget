@@ -256,6 +256,16 @@ pub enum Inst {
     FConst { dst: ValueId, ty: LirType, bits: u64 },
     BoolConst { dst: ValueId, value: bool },
     NullPtr { dst: ValueId },
+    /// Canonical-op: compile-time size-of a type (bytes).
+    ///
+    /// Emitted by GIR→LIR lowering in place of eager `IConst { value: sizeof(T) }`
+    /// for sites that want to surface "this integer is a sizeof." `lower_lir_to_bir`
+    /// resolves each `SizeOf { dst, ty }` into `IConst { dst, ty: I64, value: N }`
+    /// by consulting the shared `opaque_runtime_size` / `c_sizeof_lir_type` tables,
+    /// so BIR (and therefore backends) never see this instruction.
+    ///
+    /// Step 3 of the BIR lift plan — see `docs/internals/lir-backend-lift-plan.md`.
+    SizeOf { dst: ValueId, ty: LirType },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
     /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
@@ -403,6 +413,7 @@ impl Inst {
             | Inst::FConst { dst, .. }
             | Inst::BoolConst { dst, .. }
             | Inst::NullPtr { dst }
+            | Inst::SizeOf { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::NamedFuncAddr { dst, .. }
             | Inst::GlobalAddr { dst, .. }
@@ -450,6 +461,7 @@ impl Inst {
             | Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. }
             | Inst::GlobalAddr { .. }
             | Inst::StrLit { .. } | Inst::ParamRef { .. } | Inst::MoveSlot { .. }
+            | Inst::SizeOf { .. }
             | Inst::Nop | Inst::InlineC { .. } => vec![],
 
             Inst::Add { lhs, rhs, .. }

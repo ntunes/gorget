@@ -555,6 +555,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::GlobalAddr { .. }
         | Inst::StrLit { .. }
         | Inst::ParamRef { .. }
+        | Inst::SizeOf { .. }
         | Inst::Trap { .. }
         | Inst::MoveSlot { .. }
         | Inst::Nop | Inst::InlineC { .. } => {}

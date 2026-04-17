@@ -1695,6 +1695,13 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{} = &{};", v(*dst), s(*slot)).unwrap();
         }
 
+        // Canonical ops — must have been expanded away by bir::lower before reaching here.
+        // The BirModule newtype + validator guarantee this, but keep an explicit arm so
+        // the pattern match stays exhaustive.
+        Inst::SizeOf { .. } => {
+            unreachable!("Inst::SizeOf survived BIR lowering — validator should have rejected it");
+        }
+
         // Constants
         Inst::IConst { dst, value, ty } => {
             write!(out, "{} = ({}){}LL;", v(*dst), c_type_named(ty, sn), value).unwrap();

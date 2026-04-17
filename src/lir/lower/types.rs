@@ -305,7 +305,7 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
 }
 
 /// Compute sizeof for an LirType.
-pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
+pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
     match ty {
         LirType::I8 | LirType::U8 | LirType::Bool => 1,
         LirType::I16 | LirType::U16 => 2,
