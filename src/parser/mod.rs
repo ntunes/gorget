@@ -1116,6 +1116,14 @@ impl Parser {
         self.expect_keyword(Keyword::Type)?;
         let name = self.expect_identifier()?;
 
+        // Optional bounds: `type Iter: Iterator[T] & Clone`
+        let bounds = if self.match_token(&Token::Colon) {
+            self.parse_trait_bound_list()?
+        } else {
+            Vec::new()
+        };
+
+        // Optional default: `type Item = T`
         let default = if self.match_token(&Token::Eq) {
             Some(self.parse_type()?)
         } else {
@@ -1128,7 +1136,7 @@ impl Parser {
         Ok(Spanned::new(
             AssociatedTypeDef {
                 name,
-                bounds: Vec::new(),
+                bounds,
                 default,
                 span: start.merge(end),
             },

@@ -1966,6 +1966,11 @@ red != blue",
 }
 
 #[test]
+fn sigil_type_args() {
+    run_gg("sigil_type_args.gg", "6\n30");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

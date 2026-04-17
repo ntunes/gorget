@@ -638,6 +638,15 @@ impl Formatter {
                 TraitItem::AssociatedType(at) => {
                     self.emitter.write("type ");
                     self.emitter.write(&at.name.node);
+                    if !at.bounds.is_empty() {
+                        self.emitter.write(": ");
+                        for (i, bound) in at.bounds.iter().enumerate() {
+                            if i > 0 {
+                                self.emitter.write(" & ");
+                            }
+                            self.format_trait_bound(bound);
+                        }
+                    }
                     if let Some(ref default) = at.default {
                         self.emitter.write(" = ");
                         self.format_type(default);

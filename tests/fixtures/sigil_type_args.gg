@@ -1,0 +1,31 @@
+# Sigils in type-argument positions: Vector[T !], Option[T !].
+# Owned-sigil on Copy types is a no-op at runtime but parsed + monomorphized
+# through the transparent-Owned path. Non-Copy owning transfer works too.
+
+void take_owned(Vector[int !] items):
+    int sum = 0
+    for x in items:
+        sum = sum + x
+    print(sum)
+
+Option[int !] peek_last(Vector[int] items):
+    return items.pop()
+
+# Associated type with bounds: parses and type-checks (bounds are currently
+# parsed but not enforced beyond name resolution — covered by Phase 2b).
+trait BoundedRange[T]:
+    type Limit: Comparable = T
+
+int main():
+    Vector[int] v = [1, 2, 3]
+    take_owned(v)
+
+    Vector[int] w = [10, 20, 30]
+    Option[int !] last = peek_last(w)
+    match last:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    return 0
