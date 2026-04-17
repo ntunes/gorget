@@ -164,6 +164,21 @@ bool is_opaque_pointer_type(String name):
 bool is_guard_struct_type(String name):
     return name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__")
 
+# Generic template / placeholder type names that should not be emitted as real
+# structs in C. These arise from unmonomorphized templates leaking into the
+# type table.
+bool is_generic_placeholder_name(String name):
+    # Single-letter type params: T, E, K, V, U
+    if name == "T" or name == "E" or name == "K" or name == "V" or name == "U":
+        return true
+    # Template ending in a bare type param suffix: TypedColumn__T, Box__T
+    if name.ends_with("__T") or name.ends_with("__E") or name.ends_with("__K") or name.ends_with("__V"):
+        return true
+    # Bare enum variant names (not the Option__X / Result__X parent types)
+    if name == "Some" or name == "None" or name == "Ok" or name == "Error" or name == "Err":
+        return true
+    return false
+
 int map_gir_type(int type_id, GirModule &gmod, StructRegistry &sr):
     if type_id == BOOL_TYPE:
         return LT_BOOL
@@ -276,6 +291,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         GirType gt = gmod.type_table.get(ti).unwrap()
         match gt:
             case GtNamed(name):
+                if is_generic_placeholder_name(name):
+                    ti += 1
+                    continue
                 if sr_lookup(&sr, name) < 0:
                     String rt = collection_runtime_type(name)
                     if rt != "":
@@ -315,6 +333,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     int tki_pre = 0
     while tki_pre < ti_keys.len():
         String tname = ti_keys.get(tki_pre).unwrap()
+        if is_generic_placeholder_name(tname):
+            tki_pre += 1
+            continue
         if sr_lookup(&sr, tname) < 0:
             Vector[StructField] empty_fields = []
             String ph_name = tname.clone()
@@ -1288,13 +1309,39 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                             lir_args.push(size_val)
                         # else: _str variant, no args needed
                     else:
-                        # Vector, Deque, Channel, Shared: 1 arg (elem_size)
+                        # Vector, Deque, Channel, Shared: 1 arg (elem_size).
+                        # Shared is special: size comes FIRST and init_data is
+                        # a pointer; handled below via arg reordering.
                         int elem_size = collection_elem_size(func_name, &sr)
                         int size_val = lir_fn_next_value(&f)
                         LirBlock sblk = f.blocks.get(bb).unwrap()
                         sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
                         f.blocks.set(bb, sblk)
                         lir_args.push(size_val)
+                # Shared__X constructor re-ordering: gorget_shared_new(size, *val).
+                # Replace existing lir_args [val, size] with [size, &val_slot].
+                # We cheat by reaching into the last arg emission's lower_operand
+                # result — it was a value, but we need its slot's address.
+                if func_name.starts_with("Shared__") and args.len() >= 1 and lir_args.len() >= 2:
+                    # Find the caller's user-arg 0 source (GIR arg 0, OpCopy/OpMove)
+                    Operand user0 = args.get(0).unwrap()
+                    int src_slot = -1
+                    match user0:
+                        case OpCopy(lid):
+                            src_slot = local_to_slot.get(lid).unwrap()
+                        case OpMove(lid):
+                            src_slot = local_to_slot.get(lid).unwrap()
+                        else:
+                            pass
+                    if src_slot >= 0:
+                        int addr_val = lir_fn_next_value(&f)
+                        LirBlock ablk = f.blocks.get(bb).unwrap()
+                        ablk.insts.push(ISlotAddr(addr_val, src_slot))
+                        f.blocks.set(bb, ablk)
+                        # lir_args[0] = user val (discard), lir_args[1] = size_val
+                        int size_val_last = lir_args.get(lir_args.len() - 1).unwrap()
+                        Vector[int] new_args = [size_val_last, addr_val]
+                        lir_args = new_args
                 int dst = -1
                 if dst_local >= 0:
                     dst = lir_fn_next_value(&f)

@@ -326,6 +326,12 @@ bool is_type_constructor(String name):
         return true
     if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
         return true
+    # Primitive type-constructor calls (e.g. String("x"), Int(1)) are coercions,
+    # not user struct instantiation — do not register as type constructors.
+    if name == "String" or name == "Int" or name == "Float" or name == "Bool":
+        return false
+    if name == "GorgetString" or name == "Str" or name == "Char":
+        return false
     # Also check for user-defined struct names (capitalized, no __)
     if name.len() > 0:
         String first = name.slice(0, 1)
