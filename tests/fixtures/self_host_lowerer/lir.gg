@@ -399,6 +399,10 @@ struct LirModule:
     Dict[String, Vector[EnumVariantDrop]] recursive_drop_enums
     Dict[String, bool] drop_collision_types
     Dict[String, TypeDropInfo] type_drop_fns
+    # Struct/enum names imported from other modules — their C struct body and
+    # drop/clone functions are already provided by the Rust-generated preamble,
+    # so the self-host must not emit them again.
+    Dict[String, bool] imported_type_names
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -449,4 +453,5 @@ LirModule new_lir_module():
     Dict[String, Vector[EnumVariantDrop]] rec_drop_e = {}
     Dict[String, bool] drop_coll = {}
     Dict[String, TypeDropInfo] type_drops = {}
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops)
+    Dict[String, bool] imported_t = {}
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t)

@@ -5,7 +5,7 @@
 # call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source
-from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
@@ -153,6 +153,18 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             String ename = edef.name.clone()
                             m.items.push(IEnum(edef))
                             imported_fns.put("__imported_type__" + ename, true)
+                    case IStruct(sdef):
+                        # Merge imported concrete struct so the lowerer's
+                        # type_infos can resolve field types — enables proper
+                        # field access on imported struct types (self.x where
+                        # self is Ptr(ImportedStruct)). Mark with
+                        # __imported_type__ prefix so lir_lower / lir_codegen
+                        # suppress duplicate struct body and drop/clone
+                        # definitions (Rust preamble already provides them).
+                        if sdef.type_params.len() == 0:
+                            String sname = sdef.name.clone()
+                            m.items.push(IStruct(sdef))
+                            imported_fns.put("__imported_type__" + sname, true)
                     case IEquip(eqblk):
                         # Filter: real methods have >=2 body stmts, OR expression body,
                         # OR 1 stmt that isn't a string-literal extern stub marker.

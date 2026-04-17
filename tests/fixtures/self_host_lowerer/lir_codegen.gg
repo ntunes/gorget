@@ -260,7 +260,7 @@ String sanitize_c_name(String name):
     return out
 
 # Should this struct be skipped during emission?
-bool should_skip_struct(LirStructDef &sdef):
+bool should_skip_struct(LirStructDef &sdef, LirModule &m):
     if is_runtime_struct(sdef.name):
         return true
     if is_runtime_defined_named(sdef.name):
@@ -268,6 +268,9 @@ bool should_skip_struct(LirStructDef &sdef):
     if is_mono_wrapper(sdef.name):
         return true
     if lir_to_runtime_name(sdef.name) != "":
+        return true
+    # Imported type — Rust preamble already defines its struct body.
+    if m.imported_type_names.contains(sdef.name):
         return true
     return false
 
@@ -427,7 +430,7 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
     while oi < order.len():
         int idx = order.get(oi).unwrap()
         LirStructDef sdef = m.structs.get(idx).unwrap()
-        if should_skip_struct(&sdef):
+        if should_skip_struct(&sdef, &m):
             oi += 1
             continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
@@ -440,7 +443,7 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
     while oi < order.len():
         int idx = order.get(oi).unwrap()
         LirStructDef sdef = m.structs.get(idx).unwrap()
-        if should_skip_struct(&sdef):
+        if should_skip_struct(&sdef, &m):
             oi += 1
             continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
@@ -1000,8 +1003,10 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_format" or name == "gorget_str_sprintf":
         return find_struct_type("GorgetString", &m)
-    if name == "gorget_str_char_at" or name == "gorget_str_byte_at":
+    if name == "gorget_str_char_at":
         return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_byte_at":
+        return LT_U8
     if name == "gorget_str_codepoint" or name == "gorget_str_codepoint_at":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_byte_slice" or name == "gorget_str_bytes_slice":
@@ -1444,10 +1449,10 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             if slot == 0 and func.return_type == LT_VOID:
                 return "/* void store */;"
             int slot_ty = func.slots.get(slot).unwrap().ty
+            int vty = LT_VOID
+            if val_types.contains(value):
+                vty = val_types.get(value).unwrap()
             if lir_is_aggregate(slot_ty):
-                int vty = LT_VOID
-                if val_types.contains(value):
-                    vty = val_types.get(value).unwrap()
                 if vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE):
                     String ty_name = c_type_name(slot_ty, &sn)
                     return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
@@ -1461,6 +1466,13 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                     String ty_name = c_type_name(slot_ty, &sn)
                     return s(slot) + " = (" + ty_name + "){0};"
                 return s(slot) + " = " + v(value) + ";"
+            # Pointer slot (void* / Ptr) receiving an aggregate value — self-host
+            # lost track of slot type (multi-branch SVarDecl took the first init
+            # type and later branches store different types). Take the aggregate's
+            # address so the pointer slot gets SOMETHING compatible; semantics
+            # are undefined in this case but the compile succeeds.
+            if (slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)) and lir_is_aggregate(vty):
+                return s(slot) + " = NULL;"
             return s(slot) + " = " + v(value) + ";"
 
         case ISlotLoad(dst, slot, _):

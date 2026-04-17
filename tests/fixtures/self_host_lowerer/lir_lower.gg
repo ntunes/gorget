@@ -177,6 +177,17 @@ bool is_generic_placeholder_name(String name):
     # Bare enum variant names (not the Option__X / Result__X parent types)
     if name == "Some" or name == "None" or name == "Ok" or name == "Error" or name == "Err":
         return true
+    # C-primitive type aliases that sometimes appear as named types (from
+    # field decls like `uint8_t x` being treated as TNamed). They have no
+    # struct body — the C preamble provides them via stdint.h.
+    if name == "uint8_t" or name == "uint16_t" or name == "uint32_t" or name == "uint64_t":
+        return true
+    if name == "int8_t" or name == "int16_t" or name == "int32_t" or name == "int64_t":
+        return true
+    if name == "byte" or name == "size_t" or name == "ssize_t":
+        return true
+    if name == "float32" or name == "float64" or name == "double":
+        return true
     return false
 
 int map_gir_type(int type_id, GirModule &gmod, StructRegistry &sr):
@@ -1738,6 +1749,19 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
 LirModule lower_gir_to_lir(GirModule &gmod):
     LirModule m = new_lir_module()
     StructRegistry sr = StructRegistry({})
+
+    # Copy imported-type flags from GirModule (loader stores imported struct
+    # and enum names with "__imported_type__NAME" keys). Used downstream to
+    # suppress duplicate struct body / drop / clone emission — the Rust
+    # preamble already provides them for imported types.
+    Vector[String] gm_fn_keys = gmod.imported_fns.keys()
+    int ifki = 0
+    while ifki < gm_fn_keys.len():
+        String k = gm_fn_keys.get(ifki).unwrap()
+        if k.starts_with("__imported_type__"):
+            String type_only = k.slice(17, k.len())
+            m.imported_type_names.put(type_only, true)
+        ifki += 1
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)
