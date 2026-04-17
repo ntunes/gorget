@@ -448,6 +448,7 @@ fn build_struct_names(module: &LirModule) -> HashMap<u32, String> {
 // ── Value Type Inference ───────────────────────────────────────────────────
 
 /// Infer the LirType produced by an instruction.
+#[allow(dead_code)]
 fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType>], func: Option<&LirFunction>) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } | Inst::ParamRef { ty, .. } => {
@@ -2099,7 +2100,6 @@ fn emit_function(
                         } else { false };
 
                         // Detect Dict/Set HOF calls that create inline loops
-                        let is_dict_hof = parse_dict_hof(name).is_some() || parse_set_hof(name).is_some();
                         let dict_hof_needs_inline = if parse_dict_hof(name).is_some() {
                             let (_, _, method) = parse_dict_hof(name).unwrap();
                             match method { "each" => true, _ => dst.is_some() }
@@ -2986,7 +2986,7 @@ fn emit_inst(
                 writeln!(out, "  call {ret_ty} @{}({})", call_name, arg_strs.join(", ")).unwrap();
             }
         }
-        Inst::CallExtern { dst, name, args, original_name, .. } => {
+        Inst::CallExtern { dst, name, args, .. } => {
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
@@ -3683,10 +3683,10 @@ fn emit_inst(
                                     }
                                     "any" | "all" => {
                                         let d = dst.unwrap();
-                                        let (init_val, early_val, final_val, pred_cmp) = if method == "any" {
-                                            ("false", "true", "false", "eq")
+                                        let (init_val, early_val, pred_cmp) = if method == "any" {
+                                            ("false", "true", "eq")
                                         } else {
-                                            ("true", "false", "true", "ne")
+                                            ("true", "false", "ne")
                                         };
                                         writeln!(out, "  br label %{pfx}.check").unwrap();
                                         writeln!(out, "{pfx}.check:").unwrap();
