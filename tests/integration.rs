@@ -2087,6 +2087,14 @@ fn stdlib_io_tls_writer() {
 }
 
 #[test]
+fn stdlib_io_fs_typed() {
+    run_gg(
+        "stdlib_io_fs_typed.gg",
+        "10\nround-trip\n9\n9\nnot found",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

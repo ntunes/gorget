@@ -341,6 +341,63 @@ Result[File, IoError] file_open(String path, String mode):
         return Error(_errno_to_io_error(-rc))
     return Ok(!out)
 
+# ── Typed-error read/write convenience ────────────────────────
+#
+# Narrow-waist equivalents of `std.fs.read_file` / `write_file` that
+# return a structured `IoError` instead of panicking on failure. The
+# existing infallible shortcuts in `std.fs` stay for quick scripts;
+# callers wanting error handling use these.
+
+Result[Vector[byte], IoError] read_all_bytes(String path):
+    Result[File, IoError] fr = file_open(path, "rb")
+    match fr:
+        case Error(e):
+            return Error(!e)
+        case Ok(f):
+            File file = !f
+            Result[Vector[byte], IoError] drained = reader_drain[File](&file)
+            file.close()
+            return drained
+
+Result[String, IoError] read_to_string(String path):
+    Result[Vector[byte], IoError] br = read_all_bytes(path)
+    match br:
+        case Error(e):
+            return Error(!e)
+        case Ok(bytes):
+            return bytes_str_checked(bytes)
+
+# Internal: bytes → String with UTF-8 validation, returning the
+# same IoError.Utf8Invalid the std.bytes layer uses. Kept private
+# so the std.io / std.bytes dependency stays one-way.
+Result[String, IoError] bytes_str_checked(Vector[byte] buf):
+    if not __bytes_utf8_valid_io(buf):
+        return Error(IoError.Utf8Invalid(0))
+    return Ok(__bytes_to_str_raw_io(buf))
+
+# Local extern bindings that mirror std.bytes. Duplicated here to
+# avoid a circular import between std.io and std.bytes (std.bytes
+# already imports IoError from std.io).
+extern "C":
+    extern String __bytes_to_str_raw_io(Vector[uint8] buf) = "gorget_bytes_to_str"
+    extern bool __bytes_utf8_valid_io(Vector[uint8] buf) = "gorget_bytes_utf8_valid"
+
+# Write `buf` to `path`, creating the file if it doesn't exist and
+# truncating if it does. Returns bytes written on success.
+Result[int, IoError] write_all_bytes(String path, Vector[byte] buf):
+    Result[File, IoError] fr = file_open(path, "wb")
+    match fr:
+        case Error(e):
+            return Error(!e)
+        case Ok(f):
+            File file = !f
+            Result[int, IoError] wrote = write_all[File](&file, buf)
+            file.close()
+            return wrote
+
+Result[int, IoError] write_string(String path, String content):
+    return write_all_bytes(path, content.bytes())
+
 # ── Derived helpers (free functions, generic over the concrete Writer) ──
 
 # Guarantee the entire byte slice gets written, or fail. Returns the

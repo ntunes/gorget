@@ -1,0 +1,57 @@
+# Typed-error file I/O — std.io.read_to_string / write_string /
+# read_all_bytes / write_all_bytes.
+#
+# These compose file_open (Result[File, IoError]) with the Writer/
+# Reader machinery to give callers structured error handling for
+# whole-file operations. The infallible `std.fs.read_file` /
+# `write_file` stay as convenience shortcuts that panic on error;
+# these are the narrow-waist alternative.
+
+from std.io import read_to_string, read_all_bytes, write_string, write_all_bytes, IoError
+from std.fs import delete_file
+from std.collections import Vector
+
+int main():
+    String path = "/tmp/gorget_io_fs_typed.txt"
+
+    # Round-trip: write_string → read_to_string.
+    Result[int, IoError] wr = write_string(path, "round-trip")
+    match wr:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+
+    Result[String, IoError] rr = read_to_string(path)
+    match rr:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e.display())
+
+    # Byte-mode round-trip: write_all_bytes → read_all_bytes.
+    Vector[byte] raw = "raw bytes".bytes()
+    Result[int, IoError] wb = write_all_bytes(path, raw)
+    match wb:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+
+    Result[Vector[byte], IoError] rb = read_all_bytes(path)
+    match rb:
+        case Ok(buf):
+            print(buf.len())
+        case Error(e):
+            print(e.display())
+
+    # Missing-file path → IoError.NotFound.
+    Result[String, IoError] nf = read_to_string("/no/such/file.xxx")
+    match nf:
+        case Ok(_):
+            print("unexpected")
+        case Error(e):
+            print(e.display())
+
+    delete_file(path)
+    return 0
