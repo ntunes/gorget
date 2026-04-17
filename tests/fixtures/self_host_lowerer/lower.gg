@@ -315,6 +315,25 @@ Vector[int] get_fn_param_types(String name, GirModule &gmod):
     return types
 
 # Check if a call name is a type constructor (produces a named type).
+# Returns the parent enum name if `name` is a variant of a known enum,
+# or "" if not a variant. Used to route bare variant constructors
+# (IntCol, Red, Ok, ...) to their enclosing enum's named type.
+String enum_variant_parent(String name, GirModule &gmod):
+    Vector[String] tikeys = gmod.type_infos.keys()
+    int i = 0
+    while i < tikeys.len():
+        String tname = tikeys.get(i).unwrap()
+        GirTypeInfo info = gmod.type_infos.get(tname).unwrap()
+        if info.is_enum:
+            int vi = 0
+            while vi < info.variants.len():
+                GirEnumVariantInfo v = info.variants.get(vi).unwrap()
+                if v.name == name:
+                    return tname
+                vi += 1
+        i += 1
+    return ""
+
 bool is_type_constructor(String name):
     if name.starts_with("Vector__") or name.starts_with("Deque__"):
         return true
@@ -1073,7 +1092,12 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 fi += 1
         # Collection/struct constructors: return the named type
         if ret_type == I64_TYPE and is_type_constructor(call_name):
-            ret_type = lookup_or_register_named(&gmod, call_name)
+            # If call_name is an enum variant, route to the parent enum type.
+            String parent = enum_variant_parent(call_name, &gmod)
+            if parent != "":
+                ret_type = lookup_or_register_named(&gmod, parent)
+            else:
+                ret_type = lookup_or_register_named(&gmod, call_name)
         # Builtin calls (args, read_file, int_to_str, ...)
         if ret_type == I64_TYPE:
             int builtin_ret = builtin_call_return_type(fname, &gmod)

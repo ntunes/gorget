@@ -2496,6 +2496,19 @@ String field_access(String sdef_name, String field_name, LirModule &m, Dict[Stri
 String emit_struct_drops(LirModule &m, Dict[String, String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
+    # Forward declarations first — drop functions may call each other for
+    # nested structs (Outer.drop calls Inner.drop). Without fwd decls, C
+    # infers implicit int return and later static definition conflicts.
+    int kf = 0
+    while kf < keys.len():
+        String type_name_f = keys.get(kf).unwrap()
+        String drop_name_f = type_name_f + "__drop"
+        if not fn_exists(drop_name_f, &m):
+            String cname_f = find_c_name(type_name_f, &m, &sn)
+            out = out + "static inline void " + drop_name_f + "(" + cname_f + "* self);\n"
+        kf += 1
+    if keys.len() > 0:
+        out = out + "\n"
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
@@ -2526,6 +2539,17 @@ String emit_struct_drops(LirModule &m, Dict[String, String] &sn):
 String emit_struct_clones(LirModule &m, Dict[String, String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
+    # Forward declarations to prevent implicit-decl conflicts.
+    int kf = 0
+    while kf < keys.len():
+        String type_name_f = keys.get(kf).unwrap()
+        String clone_name_f = type_name_f + "__clone"
+        if not fn_exists(clone_name_f, &m):
+            String cname_f = find_c_name(type_name_f, &m, &sn)
+            out = out + cname_f + " " + clone_name_f + "(void* __p);\n"
+        kf += 1
+    if keys.len() > 0:
+        out = out + "\n"
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
