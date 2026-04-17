@@ -240,10 +240,20 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
             # Named type with possible generic args
             String mangled = mangle_type_name(name, targs, &gmod)
             return lookup_or_register_named(&gmod, mangled)
-        case TFunction(_, _, _):
-            # Function types as params/fields → unit (closures are opaque in GIR).
+        case TFunction(ret_box, fn_params_f, _):
+            # Function types as params/fields → Ptr(FnPtr). The C-level ABI for
+            # bare closure params is void* (GorgetClosure* effectively); encode
+            # as Ptr(FnPtr(...)) so lir_lower sees a pointer type.
             # Function types as return types are handled by map_fn_return_type.
-            return UNIT_TYPE
+            Vector[int] fpf_params = []
+            int fpfi = 0
+            while fpfi < fn_params_f.len():
+                SpannedType fpf = fn_params_f.get(fpfi).unwrap()
+                fpf_params.push(map_ast_type(fpf, &gmod))
+                fpfi += 1
+            int fpf_ret = map_ast_type(*ret_box, &gmod)
+            int fpf_tid = register_type(&gmod, GtFnPtr(fpf_params, fpf_ret))
+            return register_ptr(&gmod, fpf_tid)
         case TInferred():
             return I64_TYPE
         case TTuple(elems):
@@ -1036,6 +1046,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             result = pdst
+    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1:
+        # Identity coercion: Str(x) / String(x) returns x (already a string).
+        # Lower the inner arg and pass its type through.
+        SpannedExpr inner = args.get(0).unwrap()
+        result = lower_expr(&ctx, inner, &gmod)
     else:
         # Compute mangled name for generic calls
         String call_name = fname

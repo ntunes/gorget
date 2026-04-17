@@ -5,7 +5,7 @@
 # call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source
-from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
@@ -140,6 +140,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             # Create a renamed copy
                             FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
                             m.items.push(IFunction(renamed))
+                    case IEnum(edef):
+                        # Merge imported enums so type_infos has variant info —
+                        # this lets the lowerer route bare variant constructors
+                        # (IntCol, Red, ...) to their parent enum type, and
+                        # lir_lower knows to skip emitting standalone variant
+                        # structs. Concrete non-generic only.
+                        if edef.type_params.len() == 0:
+                            m.items.push(IEnum(edef))
                     case IEquip(eqblk):
                         # Filter: real methods have >=2 body stmts, OR expression body,
                         # OR 1 stmt that isn't a string-literal extern stub marker.
