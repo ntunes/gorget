@@ -7719,7 +7719,7 @@ pub const SOCKET_RUNTIME: &str = r#"
 #include <sys/time.h>
 
 typedef struct {
-    int fd;
+    int64_t fd;
 } GorgetSocket;
 
 // Connect to host:port, returning a socket fd or -1 on error
@@ -8019,7 +8019,7 @@ static void gorget_socket_set_blocking(GorgetSocket* sock) {
 // ServerSocket Gorget type (which is co-registered in std.net.socket) can
 // be typedef'd to GorgetServerSocket even when SERVER_SOCKET_RUNTIME is not emitted.
 typedef struct {
-    int fd;
+    int64_t fd;
 } GorgetServerSocket;
 
 /* Non-blocking accept: try accept once.
@@ -8144,7 +8144,7 @@ pub const UDP_SOCKET_RUNTIME: &str = r#"
 #include <poll.h>
 
 typedef struct {
-    int fd;
+    int64_t fd;
 } GorgetUdpSocket;
 
 typedef struct {
@@ -8337,7 +8337,7 @@ pub const TLS_SOCKET_RUNTIME: &str = r#"
 #include <errno.h>
 
 typedef struct {
-    int fd;
+    int64_t fd;
     SSL_CTX* ctx;
     SSL* ssl;
 } GorgetTlsSocket;
@@ -8532,7 +8532,7 @@ static void gorget_tls_set_timeout(GorgetTlsSocket* sock, int64_t ms) {
 // (e.g. via xtd.http) can reference TlsServerSocket in type aliases and Result
 // structs even when TLS_SERVER_RUNTIME is not emitted (no tls_server_bind call).
 typedef struct {
-    int fd;
+    int64_t fd;
     SSL_CTX* ctx;
 } GorgetTlsServerSocket;
 

@@ -1411,8 +1411,68 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
 /// Emit LLVM IR to initialize a RuntimeCall global at the start of main().
 /// The C expression (e.g. "gorget_array_new(sizeof(int64_t))") is parsed to
 /// extract the function name and i64 sizeof arguments.
+/// A parsed arg from a RuntimeCall expression.
+enum RuntimeInitArg {
+    /// Plain i64 constant (from `sizeof(T)` or numeric literals).
+    Int(u64),
+    /// `&(T){val}` — address of an inline T holding `val`. Emits an alloca
+    /// of type T, stores val, passes the ptr. `type_name` is the C type.
+    AddrOfInline { type_name: String, value_expr: String },
+}
+
+/// Split `args_str` at top-level commas (ignoring those inside parens/braces).
+fn split_top_level_args(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, ch) in s.char_indices() {
+        match ch {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < s.len() {
+        let rest = s[start..].trim();
+        if !rest.is_empty() {
+            out.push(rest.to_string());
+        }
+    }
+    out
+}
+
+fn parse_runtime_init_arg(s: &str) -> RuntimeInitArg {
+    let s = s.trim();
+    if let Some(inner) = s.strip_prefix("sizeof(").and_then(|s| s.strip_suffix(')')) {
+        return RuntimeInitArg::Int(c_sizeof_name(inner) as u64);
+    }
+    // `&(TYPE){VAL}` — compound literal address.
+    if let Some(rest) = s.strip_prefix("&(") {
+        if let Some(type_end) = rest.find(')') {
+            let type_name = rest[..type_end].to_string();
+            let rest = &rest[type_end + 1..];
+            if let Some(val) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+                return RuntimeInitArg::AddrOfInline {
+                    type_name,
+                    value_expr: val.trim().to_string(),
+                };
+            }
+        }
+    }
+    if let Ok(n) = s.parse::<u64>() {
+        return RuntimeInitArg::Int(n);
+    }
+    // Fallback — treat as i64 0 so we at least produce valid IR.
+    RuntimeInitArg::Int(0)
+}
+
 fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &HashMap<u32, String>, module: &LirModule) {
-    // Parse: "func_name(arg1, arg2, ...)" where args are sizeof(TYPE) or numbers.
+    // Parse: "func_name(arg1, arg2, ...)" where args are sizeof(TYPE), numbers,
+    // or `&(TYPE){VAL}` compound literal addresses.
     let (fn_name, args_str) = if let Some(paren) = expr.find('(') {
         let name = &expr[..paren];
         // Strip outer parentheses: "func(a, b)" → "a, b"
@@ -1423,19 +1483,32 @@ fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &H
         return; // Can't parse, skip
     };
 
-    // Parse sizeof(TYPE) arguments → i64 constants.
-    let args: Vec<u64> = args_str.split(',')
-        .map(|a| {
-            let a = a.trim();
-            if let Some(inner) = a.strip_prefix("sizeof(").and_then(|s| s.strip_suffix(')')) {
-                c_sizeof_name(inner) as u64
-            } else if let Ok(n) = a.parse::<u64>() {
-                n
-            } else {
-                8 // fallback
-            }
-        })
+    let parsed_args: Vec<RuntimeInitArg> = split_top_level_args(args_str)
+        .iter()
+        .map(|a| parse_runtime_init_arg(a))
         .collect();
+
+    // Emit any AddrOfInline prelude allocas + store, then build the arg list.
+    let mut arg_strs: Vec<String> = Vec::new();
+    for (i, arg) in parsed_args.iter().enumerate() {
+        match arg {
+            RuntimeInitArg::Int(n) => arg_strs.push(format!("i64 {n}")),
+            RuntimeInitArg::AddrOfInline { type_name, value_expr } => {
+                let ty = c_type_to_llvm(type_name);
+                let tmp = format!("__ginit_{gid}_a{i}");
+                writeln!(out, "  %{tmp} = alloca {ty}").unwrap();
+                // Parse value: integer or float literal.
+                let val_str = if ty.starts_with('i') {
+                    value_expr.parse::<i64>().map(|n| format!("{n}")).unwrap_or_else(|_| "0".to_string())
+                } else {
+                    // Float bit encoding — fadd-style hex constants.
+                    value_expr.parse::<f64>().map(|v| format!("0x{:016X}", v.to_bits())).unwrap_or_else(|_| "0.0".to_string())
+                };
+                writeln!(out, "  store {ty} {val_str}, ptr %{tmp}").unwrap();
+                arg_strs.push(format!("ptr %{tmp}"));
+            }
+        }
+    }
 
     // Determine return type from function name
     let (ret_struct_name, ret_llvm) = if fn_name.contains("map") || fn_name.contains("dict") || fn_name.contains("set") {
@@ -1446,7 +1519,6 @@ fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &H
         ("GorgetString", "%GorgetString")
     } else {
         // Unknown — just call it with raw i64 return
-        let arg_strs: Vec<String> = args.iter().map(|a| format!("i64 {a}")).collect();
         writeln!(out, "  %__ginit_{gid}_raw = call i64 @{fn_name}({})", arg_strs.join(", ")).unwrap();
         writeln!(out, "  store i64 %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
         return;
@@ -1454,7 +1526,6 @@ fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &H
 
     // Emit sret call → memcpy to global
     let sz = sizeof_struct_by_name(ret_struct_name, module, snames);
-    let arg_strs: Vec<String> = args.iter().map(|a| format!("i64 {a}")).collect();
     writeln!(out, "  %__ginit_{gid} = alloca {ret_llvm}").unwrap();
     let sret_arg = format!("ptr sret({ret_llvm}) %__ginit_{gid}");
     let all_args = if arg_strs.is_empty() {
@@ -1464,6 +1535,19 @@ fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &H
     };
     writeln!(out, "  call void @{fn_name}({all_args})").unwrap();
     writeln!(out, "  call ptr @memcpy(ptr @__lir_g{gid}, ptr %__ginit_{gid}, i64 {sz})").unwrap();
+}
+
+/// Map a C type name to its LLVM type.
+fn c_type_to_llvm(c_type: &str) -> &'static str {
+    match c_type {
+        "int8_t" | "uint8_t" | "char" | "signed char" | "unsigned char" | "bool" => "i8",
+        "int16_t" | "uint16_t" | "short" | "unsigned short" => "i16",
+        "int32_t" | "uint32_t" | "int" | "unsigned int" => "i32",
+        "int64_t" | "uint64_t" | "long" | "long long" | "size_t" | "ssize_t" => "i64",
+        "float" => "float",
+        "double" => "double",
+        _ => "i64",
+    }
 }
 
 /// Return the C sizeof for a type name string.
