@@ -1971,6 +1971,14 @@ fn sigil_type_args() {
 }
 
 #[test]
+fn cloneable_primitive_bound() {
+    run_gg(
+        "cloneable_primitive_bound.gg",
+        "42\n3.140000\ntrue\nhi",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

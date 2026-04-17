@@ -343,6 +343,22 @@ pub(super) fn lower_method_call(
         // Str.hash() is handled by the normal method dispatch path below
     }
 
+    // Primitive .clone() is a no-op — POD types copy by assignment, so cloning
+    // just returns the value. Generic functions bounded by `T: Cloneable` can
+    // therefore call `.clone()` on primitive arguments without hitting a missing
+    // method. Resource-backed types (String, Vector) fall through to the normal
+    // dispatch path which invokes the runtime clone helpers.
+    if method_name == "clone" {
+        let recv_type = infer_operand_type_full(ctx, &recv, builder);
+        let is_pod = recv_type == I64_TYPE || recv_type == I32_TYPE || recv_type == I16_TYPE || recv_type == I8_TYPE
+            || recv_type == U64_TYPE || recv_type == U32_TYPE || recv_type == U16_TYPE || recv_type == U8_TYPE
+            || recv_type == F64_TYPE || recv_type == F32_TYPE
+            || recv_type == BOOL_TYPE;
+        if is_pod {
+            return recv;
+        }
+    }
+
     // Primitive .debug() / .display() → runtime stringification.
     // debug() on String quotes and escapes; display() on String is identity.
     // For numeric/bool types, both are identical (reuse gorget_{int,float,bool}_to_str).

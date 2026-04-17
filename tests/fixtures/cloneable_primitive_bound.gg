@@ -1,0 +1,19 @@
+# Generic functions bounded by T: Cloneable now accept primitives (int,
+# float, bool, String, …). Previously the bound was only satisfied by
+# user types that explicitly @derive(Cloneable).
+
+T dup_val[Cloneable T](T x):
+    return x.clone()
+
+void main():
+    int r = dup_val[int](42)
+    print(r)
+
+    float f = dup_val[float](3.14)
+    print(f)
+
+    bool b = dup_val[bool](true)
+    print(b)
+
+    String s = dup_val[String]("hi")
+    print(s)

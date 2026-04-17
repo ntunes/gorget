@@ -143,7 +143,14 @@ impl TraitRegistry {
             return true;
         }
         // Intrinsic satisfaction: hashable/equatable primitives.
-        is_hashable_primitive(type_name) && is_hashable_trait(trait_name)
+        if is_hashable_primitive(type_name) && is_hashable_trait(trait_name) {
+            return true;
+        }
+        // Intrinsic satisfaction: all primitives (+ String) are Cloneable,
+        // Displayable, and Debuggable. Cloning a POD is a copy; Display/Debug
+        // route to runtime stringification helpers at IR lowering time.
+        is_copy_displayable_primitive(type_name)
+            && matches!(trait_name, "Cloneable" | "Displayable" | "Debuggable")
     }
 
     /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
@@ -216,6 +223,12 @@ fn is_hashable_primitive(name: &str) -> bool {
 /// Check if a trait name is one that hashable primitives intrinsically satisfy.
 fn is_hashable_trait(name: &str) -> bool {
     matches!(name, "Hashable" | "Equatable")
+}
+
+/// Primitives plus String that are Cloneable / Displayable / Debuggable
+/// intrinsically (no derive needed).
+fn is_copy_displayable_primitive(name: &str) -> bool {
+    is_numeric_primitive(name) || matches!(name, "str" | "bool" | "char" | "String")
 }
 
 /// Build the trait and impl registry from the module.
