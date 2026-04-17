@@ -118,22 +118,6 @@ impl Parser {
                 ))
             }
 
-            // None
-            Token::Keyword(Keyword::None) => {
-                self.advance();
-                Ok(Spanned::new(
-                    Pattern::Literal(Box::new(Spanned::new(Expr::NoneLiteral, start))),
-                    start,
-                ))
-            }
-
-            // Named patterns: Some, Ok, Error, or identifiers
-            Token::Keyword(kw @ (Keyword::Some | Keyword::Ok | Keyword::Error)) => {
-                let name_str = kw.as_name().to_string();
-                self.advance();
-                self.parse_constructor_or_binding(Spanned::new(name_str, start), start)
-            }
-
             // Type-name keywords used as patterns in `T is <type>` expressions.
             // These are lexed as keywords (not identifiers) so need explicit handling.
             Token::Keyword(kw) if kw.is_type_keyword() => {
@@ -144,6 +128,17 @@ impl Parser {
 
             Token::Identifier(_) => {
                 let name = self.expect_identifier()?;
+                // `None` is a prelude variant — emit the same
+                // `Pattern::Literal(NoneLiteral)` shape the old
+                // keyword-based branch produced, so downstream
+                // pattern resolution / IR lowering doesn't have to
+                // change.
+                if name.node == "None" && !self.check(&Token::LParen) {
+                    return Ok(Spanned::new(
+                        Pattern::Literal(Box::new(Spanned::new(Expr::NoneLiteral, name.span))),
+                        name.span,
+                    ));
+                }
                 self.parse_constructor_or_binding(name, start)
             }
 

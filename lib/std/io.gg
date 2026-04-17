@@ -104,6 +104,53 @@ equip IoError with Displayable:
             case IoError.Other(msg):
                 return f"io error: {msg}"
 
+equip IoError with Debuggable:
+    String debug(self):
+        match self:
+            case IoError.NotFound():
+                return "IoError.NotFound"
+            case IoError.PermissionDenied():
+                return "IoError.PermissionDenied"
+            case IoError.AlreadyExists():
+                return "IoError.AlreadyExists"
+            case IoError.BrokenPipe():
+                return "IoError.BrokenPipe"
+            case IoError.ConnectionRefused():
+                return "IoError.ConnectionRefused"
+            case IoError.ConnectionReset():
+                return "IoError.ConnectionReset"
+            case IoError.ConnectionAborted():
+                return "IoError.ConnectionAborted"
+            case IoError.NotConnected():
+                return "IoError.NotConnected"
+            case IoError.AddrInUse():
+                return "IoError.AddrInUse"
+            case IoError.TimedOut():
+                return "IoError.TimedOut"
+            case IoError.WouldBlock():
+                return "IoError.WouldBlock"
+            case IoError.Interrupted():
+                return "IoError.Interrupted"
+            case IoError.UnexpectedEof():
+                return "IoError.UnexpectedEof"
+            case IoError.InvalidInput():
+                return "IoError.InvalidInput"
+            case IoError.InvalidData():
+                return "IoError.InvalidData"
+            case IoError.Utf8Invalid(offset):
+                return f"IoError.Utf8Invalid({offset})"
+            case IoError.Other(msg):
+                return f"IoError.Other({msg.debug()})"
+
+# ── Error trait (deferred) ────────────────────────────────────
+#
+# The design doc envisions a narrow `Error` trait (Displayable +
+# Debuggable + `source() -> Option[Box[Error]]`) that every stdlib
+# error type implements. Landing it requires either a namespace
+# separation for types vs values (so `Error` the trait and
+# `Result.Error` the variant can coexist) or a context-sensitive
+# keyword fix in the parser. Tracked in TODO.
+
 # ── Writer ────────────────────────────────────────────────────
 #
 # `write_bytes` is the single required method — all higher-level output

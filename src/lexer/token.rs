@@ -265,10 +265,11 @@ pub enum Keyword {
     // Literals
     True,
     False,
-    None,
-    Some,
-    Ok,
-    Error,
+    // Note: Option / Result variant constructors (None, Some, Ok, Error)
+    // used to be keywords here. They're now plain identifiers registered
+    // as prelude variants in `semantic::resolve` — that lets `Error`
+    // etc. be used as trait names while still resolving correctly in
+    // pattern / expression position via the prelude scope.
 
     // Error handling
     Throw,
@@ -409,10 +410,6 @@ impl Keyword {
             Keyword::Is => "is",
             Keyword::True => "true",
             Keyword::False => "false",
-            Keyword::None => "None",
-            Keyword::Some => "Some",
-            Keyword::Ok => "Ok",
-            Keyword::Error => "Error",
             Keyword::Throw => "throw",
             Keyword::Throws => "throws",
             Keyword::Rethrow => "rethrow",
@@ -498,10 +495,9 @@ impl Keyword {
             "is" => Some(Keyword::Is),
             "true" => Some(Keyword::True),
             "false" => Some(Keyword::False),
-            "None" => Some(Keyword::None),
-            "Some" => Some(Keyword::Some),
-            "Ok" => Some(Keyword::Ok),
-            "Error" => Some(Keyword::Error),
+            // `None` / `Some` / `Ok` / `Error` are NOT keywords — they
+            // lex as identifiers and resolve via the prelude scope
+            // (semantic::resolve registers them as variants).
             "throw" => Some(Keyword::Throw),
             "throws" => Some(Keyword::Throws),
             "rethrow" => Some(Keyword::Rethrow),

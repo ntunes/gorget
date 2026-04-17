@@ -354,10 +354,6 @@ impl Parser {
                 self.advance();
                 Ok(Spanned::new(Expr::BoolLiteral(false), start))
             }
-            Token::Keyword(Keyword::None) => {
-                self.advance();
-                Ok(Spanned::new(Expr::NoneLiteral, start))
-            }
             Token::Keyword(Keyword::SelfLower) => {
                 self.advance();
                 Ok(Spanned::new(Expr::SelfExpr, start))
@@ -527,7 +523,6 @@ impl Parser {
             // Postfix parsing handles `(args)` to form Call, `.method()` for static methods, etc.
             Token::Keyword(
                 kw @ (Keyword::StringType
-                | Keyword::Some | Keyword::Ok | Keyword::Error
                 | Keyword::SelfUpper
                 | Keyword::Int | Keyword::Int8 | Keyword::Int16 | Keyword::Int32 | Keyword::Int64
                 | Keyword::Uint | Keyword::Uint8 | Keyword::Uint16 | Keyword::Uint32 | Keyword::Uint64
@@ -1133,6 +1128,14 @@ impl Parser {
         let start = self.peek_span();
         let name = self.expect_identifier()?;
 
+        // `None` is a prelude variant (Option.None). For historical
+        // reasons the AST has a dedicated `Expr::NoneLiteral` node
+        // with special IR-lowering support — keep emitting it even
+        // though `None` is no longer a lexer keyword.
+        if name.node == "None" {
+            return Ok(Spanned::new(Expr::NoneLiteral, start));
+        }
+
         // Check for qualified path: Name.member
         // But NOT method call (that's handled by postfix)
         Ok(Spanned::new(Expr::Identifier(name.node), start))
@@ -1670,10 +1673,6 @@ impl Parser {
                 | Token::Tilde
                 | Token::Keyword(Keyword::True)
                 | Token::Keyword(Keyword::False)
-                | Token::Keyword(Keyword::None)
-                | Token::Keyword(Keyword::Some)
-                | Token::Keyword(Keyword::Ok)
-                | Token::Keyword(Keyword::Error)
                 | Token::Keyword(Keyword::Not)
                 | Token::Keyword(Keyword::If)
                 | Token::Keyword(Keyword::Match)
