@@ -973,6 +973,10 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_format" or name == "gorget_str_sprintf":
         return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_char_at" or name == "gorget_str_byte_at":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_codepoint" or name == "gorget_str_codepoint_at":
+        return find_struct_type("GorgetString", &m)
     # Array transform
     if name == "gorget_array_concat":
         return find_struct_type("GorgetArray", &m)
@@ -1410,12 +1414,13 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 if vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE):
                     String ty_name = c_type_name(slot_ty, &sn)
                     return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
-                # Type mismatch coercion: storing a scalar value (or unit / void /
-                # unknown) into an aggregate slot usually means the value was a
-                # placeholder from lossy lowering (tuple/array literal, None,
-                # default init). Emit a zero-initialization instead of a raw
-                # assignment that would fail C type checking.
-                if vty != slot_ty and not lir_is_aggregate(vty):
+                # Type mismatch coercion for aggregate slots. When the value
+                # type differs from the slot type (either a scalar placeholder
+                # or an aggregate that doesn't match), emit a zero-init.
+                # This covers: tuple literal placeholders, None/unit stores,
+                # and cases where the self-host lost return type info (e.g.
+                # returning a String where the function returns Result[String]).
+                if vty != slot_ty:
                     String ty_name = c_type_name(slot_ty, &sn)
                     return s(slot) + " = (" + ty_name + "){0};"
                 return s(slot) + " = " + v(value) + ";"
