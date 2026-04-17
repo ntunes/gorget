@@ -2007,6 +2007,14 @@ fn stdlib_iter_collect() {
 }
 
 #[test]
+fn stdlib_io_core() {
+    run_gg(
+        "stdlib_io_core.gg",
+        "6\nhello \n5\nworld\n2\n42\nnot found\ninvalid utf-8 at byte 7\nio error: disk full",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",
