@@ -194,7 +194,7 @@ an `Iterator`, then calls `next()` repeatedly.
 
 ```gorget
 trait Writer:
-    Result[int, IoError] write_bytes(&self, Vector[uint8] buf)
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf)
 ```
 
 Narrow output interface. Returns the byte count actually written; a
@@ -209,7 +209,7 @@ this with a loop that guarantees completion; `write_str(w, s)` and
 
 ```gorget
 trait Reader:
-    Result[int, IoError] read_bytes(&self, Vector[uint8] &buf)
+    Result[int, IoError] read_bytes(&self, Vector[byte] &buf)
 ```
 
 Narrow input interface. Reader fills the caller's buffer through a

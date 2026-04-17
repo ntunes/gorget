@@ -337,14 +337,14 @@ The narrow waist for output and input:
 from std.io import Writer, IoError, write_all, write_display
 
 struct ByteSink:
-    Vector[uint8] buf
+    Vector[byte] buf
 
 equip ByteSink with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[uint8] buf):
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
         self.buf.extend(buf.clone())
         return Ok(buf.len())
 
-ByteSink s = ByteSink(Vector[uint8]())
+ByteSink s = ByteSink(Vector[byte]())
 write_all[ByteSink](&s, "hello world".bytes())
 write_display[ByteSink, int](&s, 42)
 ```
@@ -354,10 +354,11 @@ Every Writer returns `Result[int, IoError]` — pattern-match on
 instead of parsing strings. Short-writes are allowed; `write_all` wraps
 the short-write loop.
 
-`write_bytes` takes raw bytes (`Vector[uint8]`, not `String`) because
+`write_bytes` takes raw bytes (`Vector[byte]`, not `String`) because
 Writer is byte-shaped — binary protocols, TLS, compression all push
 arbitrary bytes, not UTF-8. Callers with a `String` source convert via
-`.bytes()` at the boundary.
+`.bytes()` at the boundary. (`byte` is a lexer-level alias for `uint8`
+— same type, just clearer in signatures.)
 
 Reader mirror: `reader_drain[R](&r)` reads-to-EOF, `read_exact[R](&r, n)`
 fills at least `n` bytes.

@@ -593,13 +593,15 @@ top.
 
 ```gorget
 trait Writer:
-    Result[int, IoError] write(&self, Bytes buf)
+    Result[int, IoError] write(&self, Vector[byte] buf)
     # Returns bytes actually written. May be less than buf.len() for
     # sockets, pipes, or any short-write destination. Use write_all for
     # "must complete or fail" semantics.
 ```
 
-The input is `Bytes` (= `Vector[uint8]`, see §6.3), **not** `String` / `Str`.
+The input is `Vector[byte]` — a raw byte buffer — **not** `String`/`Str`.
+`byte` is a lexer-level alias for `uint8` (same type, no conversion
+cost, works across modules without alias-resolution hiccups).
 Writer is the narrow waist for *any* byte stream — binary files, TLS,
 compression, encrypted protocols — none of which are UTF-8. Callers with
 a `String` source convert via `.bytes()` at the boundary; callers with
@@ -610,7 +612,7 @@ raw bytes pass them directly with no pretence of text.
 ```gorget
 equip Writer:
     # Guarantee all bytes written, or fail.
-    Result[int, IoError] write_all(&self, Bytes buf):
+    Result[int, IoError] write_all(&self, Vector[byte] buf):
         int total = 0
         int len = buf.len()
         while total < len:
@@ -645,7 +647,7 @@ Implementors:
 
 ```gorget
 trait Reader:
-    Result[int, IoError] read(&self, Bytes &buf)
+    Result[int, IoError] read(&self, Vector[byte] &buf)
     # Fills buf up to its capacity; returns bytes read.
     # 0 means EOF. buf is a mutable borrow — Reader writes into
     # the caller's buffer.
@@ -656,23 +658,23 @@ trait Reader:
 ```gorget
 equip Reader:
     # Read until EOF into a new Vector.
-    Result[Bytes, IoError] read_all(&self):
-        Bytes out = Bytes(cap: 4096)
-        Bytes chunk = Bytes(cap: 4096)
+    Result[Vector[byte], IoError] read_all(&self):
+        Vector[byte] out = Vector[byte](cap: 4096)
+        Vector[byte] chunk = Vector[byte](cap: 4096)
         loop:
             match self.read(&chunk):
                 case Ok(0): return Ok(!out)
-                case Ok(_): out.extend(!chunk); chunk = Bytes(cap: 4096)
+                case Ok(_): out.extend(!chunk); chunk = Vector[byte](cap: 4096)
                 case Error(!e): return Error(!e)
 
     # Read until EOF, validate UTF-8, return String.
     Result[String, IoError] read_all_str(&self):
-        Bytes bytes = self.read_all()?
+        Vector[byte] bytes = self.read_all()?
         String.from_utf8(bytes)   # returns Result[String, IoError.Utf8Invalid]
 
     # Read exactly n bytes or fail.
-    Result[Bytes, IoError] read_exact(&self, int n):
-        Bytes out = Bytes(cap: n)
+    Result[Vector[byte], IoError] read_exact(&self, int n):
+        Vector[byte] out = Vector[byte](cap: n)
         while out.len() < n:
             match self.read(&out):
                 case Ok(0): return Error(IoError.UnexpectedEof())
@@ -683,28 +685,29 @@ equip Reader:
 
 Implementors: `File`, `Socket`, `TlsSocket`, `stdin`, `BufReader`.
 
-### 6.3 Bytes: A Thin Vector[uint8] Alias
+### 6.3 The `byte` / `uint8` Type Alias
 
-For API clarity, `Bytes` is the canonical owned byte-buffer type,
-aliasing `Vector[uint8]`:
+`byte` is a lexer-level alias for `uint8` — the same type at the AST
+level, zero conversion cost, works identically across module
+boundaries. `Vector[byte]` is the canonical name for "a byte buffer,
+not a string"; it reads honestly and costs nothing over the raw
+`Vector[uint8]` form.
 
-```gorget
-type Bytes = Vector[uint8]
-```
+No nominal `Bytes` wrapper is introduced. Rust's std doesn't have one
+(`&[u8]` is the interface); Go uses `[]byte`. A dedicated newtype
+would force wrap/unwrap ceremony at every boundary without enabling
+anything the free functions in `std.bytes` (hex, base64, endian
+helpers) don't already do over `Vector[byte]`.
 
-Exported from `std.io` — the Writer/Reader signatures above use it, so
-anyone already importing `Writer` / `Reader` picks up `Bytes` on the
-same line.
-
-Functions that traffic in raw bytes take `Bytes` / `Str` (view over bytes);
-text-oriented code takes `String` / `Str` (UTF-8-validated).
+Functions that traffic in raw bytes take `Vector[byte]`;
+text-oriented code takes `String` / `Str` (UTF-8-intended).
 
 ### 6.4 Displayable vs Writer
 
 Orthogonal:
 
 - **Displayable** = "what" — `String display(self)`
-- **Writer** = "where" — `Result[int, IoError] write(&self, Bytes buf)`
+- **Writer** = "where" — `Result[int, IoError] write(&self, Vector[byte] buf)`
 
 `print(x)` is: `stdout.write_display(x); stdout.write_str("\n")`.
 
@@ -971,7 +974,7 @@ demand, not shipped speculatively.
 3. Define `IoError` enum in `std.io` (see §9.1 — callers co-import with Writer/Reader).
 4. Define the `Error` trait (see §9.2).
 5. Implement Writer on String (byte append), File, Socket, TlsSocket,
-   stdout, stderr, Bytes.
+   stdout, stderr, `Vector[byte]`.
 6. Implement Reader on File, Socket, TlsSocket, stdin, BufReader.
 7. Derived methods: `write_all`, `write_str`, `write_display`, `read_all`,
    `read_all_str`, `read_exact` — equip on trait.

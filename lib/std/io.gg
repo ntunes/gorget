@@ -13,15 +13,11 @@
 
 from std.collections import Vector, File
 
-# Design note on the byte type
-# ────────────────────────────
-# Writer / Reader signatures use `Vector[uint8]` directly rather than a
-# `type Bytes = Vector[uint8]` alias. The design doc (§6.3) envisions
-# `Bytes` as the canonical name, but Gorget's type-alias resolution
-# doesn't cross module boundaries today — an imported `Bytes` doesn't
-# round-trip to `Vector[uint8]` at inference time, so every caller
-# would need to spell the underlying type anyway. The alias lands when
-# that limitation goes away; until then the explicit form is clearer.
+# Byte type note: signatures use `Vector[byte]` rather than
+# `Vector[byte]`. `byte` is a lexer-level alias for `uint8` — the
+# same type at the AST level, zero cost, no alias-resolution issues
+# across modules. `Vector[byte]` reads as what it is: a byte buffer
+# with no UTF-8 contract.
 
 # ── Standard file handles (codegen special-cases these) ───────
 
@@ -113,7 +109,7 @@ equip IoError with Displayable:
 # `write_bytes` is the single required method — all higher-level output
 # convenience is derived on top.
 #
-# Input is `Vector[uint8]` — a raw byte buffer — **not** `String`/`Str`.
+# Input is `Vector[byte]` — a raw byte buffer — **not** `String`/`Str`.
 # Writer is byte-shaped: binary files, TLS, compressed streams all push
 # arbitrary bytes that are not UTF-8. Callers with a `String` source go
 # through `.bytes()` at the boundary.
@@ -123,7 +119,7 @@ equip IoError with Displayable:
 # Once the extern is retired, the trait method renames to `write`.
 
 trait Writer:
-    Result[int, IoError] write_bytes(&self, Vector[uint8] buf)
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf)
 
 # ── Reader ────────────────────────────────────────────────────
 #
@@ -131,7 +127,7 @@ trait Writer:
 # count actually read. `Ok(0)` means EOF.
 
 trait Reader:
-    Result[int, IoError] read_bytes(&self, Vector[uint8] &buf)
+    Result[int, IoError] read_bytes(&self, Vector[byte] &buf)
 
 # Wiring Writer onto `String`, `File`, `Socket`, `stdout`/`stderr` is
 # deferred until the type checker accepts `Result[T, IoError]` as a
@@ -151,11 +147,11 @@ trait Reader:
 # The inner slice allocates a fresh Vector on the short-write path;
 # that's acceptable for the rare fragmented write. A future zero-cost
 # byte-view type would make this O(1).
-Result[int, IoError] write_all[W](W &w, Vector[uint8] buf):
+Result[int, IoError] write_all[W](W &w, Vector[byte] buf):
     int total = 0
     int len = buf.len()
     while total < len:
-        Vector[uint8] remaining = buf.slice(total, len)
+        Vector[byte] remaining = buf.slice(total, len)
         Result[int, IoError] r = w.write_bytes(remaining)
         match r:
             case Ok(0):
@@ -178,8 +174,8 @@ Result[int, IoError] write_display[W, Displayable D](W &w, D v):
 # Read all available bytes from `r` into a fresh buffer. Loops calling
 # `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
 # on success; `buf` accumulates across reads.
-Result[Vector[uint8], IoError] reader_drain[R](R &reader):
-    Vector[uint8] buf = Vector[uint8]()
+Result[Vector[byte], IoError] reader_drain[R](R &reader):
+    Vector[byte] buf = Vector[byte]()
     bool done = false
     while not done:
         int before = buf.len()
@@ -209,8 +205,8 @@ Result[T, IoError] from_string_error[T](Result[T, String] r):
 
 # Read exactly `n` bytes or fail with UnexpectedEof. Short reads are
 # re-issued until the total reaches `n`.
-Result[Vector[uint8], IoError] read_exact[R](R &reader, int n):
-    Vector[uint8] buf = Vector[uint8]()
+Result[Vector[byte], IoError] read_exact[R](R &reader, int n):
+    Vector[byte] buf = Vector[byte]()
     bool failed = false
     IoError err_kind = IoError.UnexpectedEof()
     while buf.len() < n and not failed:

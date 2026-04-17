@@ -8,17 +8,17 @@
 from std.io import Writer, IoError, write_all, write_display
 
 struct ByteSink:
-    Vector[uint8] buf
+    Vector[byte] buf
 
 equip ByteSink with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[uint8] buf):
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
         self.buf.extend(buf.clone())
         return Ok(buf.len())
 
 int main():
     # Direct Writer.write_bytes on the sink.
-    ByteSink s = ByteSink(Vector[uint8]())
-    Vector[uint8] hi = "hello ".bytes()
+    ByteSink s = ByteSink(Vector[byte]())
+    Vector[byte] hi = "hello ".bytes()
     Result[int, IoError] r = s.write_bytes(hi)
     match r:
         case Ok(n):
@@ -29,8 +29,8 @@ int main():
 
     # Generic write_all with short-write loop (ByteSink is eager, so
     # this just exercises the Ok path through the loop).
-    ByteSink s2 = ByteSink(Vector[uint8]())
-    Vector[uint8] world = "world".bytes()
+    ByteSink s2 = ByteSink(Vector[byte]())
+    Vector[byte] world = "world".bytes()
     Result[int, IoError] r2 = write_all[ByteSink](&s2, world)
     match r2:
         case Ok(n):
@@ -40,7 +40,7 @@ int main():
     print(s2.buf.len())
 
     # write_display routes through Displayable.display().bytes().
-    ByteSink s3 = ByteSink(Vector[uint8]())
+    ByteSink s3 = ByteSink(Vector[byte]())
     Result[int, IoError] r3 = write_display[ByteSink, int](&s3, 42)
     match r3:
         case Ok(n):
