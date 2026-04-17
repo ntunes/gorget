@@ -1,13 +1,11 @@
-# Exercises the Take / Skip adapter iterators from std.iter.
+# Exercises the Take / Skip / Chain adapter iterators from std.iter.
 #
 # Chaining via `.take()` / `.skip()` methods on VectorIter requires
 # generic monomorphization of nested iterator types before the parent
 # Vector__T__iter lowers, which currently trips a forward-reference.
-# For now adapters are constructed directly via their struct literal;
-# the adapter-method sugar lands in Phase 2c once the monomorphization
-# order is fixed.
+# For now adapters are constructed directly via their struct literal.
 
-from std.iter import VectorIter, TakeIter, SkipIter
+from std.iter import VectorIter, TakeIter, SkipIter, ChainIter
 
 int main():
     Vector[int] v = [10, 20, 30, 40, 50]
@@ -22,6 +20,15 @@ int main():
     VectorIter[int] vit_s = v.iter()
     SkipIter[int] s = SkipIter[int](vit_s, 2)
     for x in s:
+        print(x)
+
+    print("--chain--")
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [100, 200]
+    VectorIter[int] ia = a.iter()
+    VectorIter[int] ib = b.iter()
+    ChainIter[int] c = ChainIter[int](ia, ib, true)
+    for x in c:
         print(x)
 
     return 0

@@ -1997,7 +1997,7 @@ fn stdlib_vector_iter() {
 fn stdlib_iter_adapters() {
     run_gg(
         "stdlib_iter_adapters.gg",
-        "--take(2)--\n10\n20\n--skip(2)--\n30\n40\n50",
+        "--take(2)--\n10\n20\n--skip(2)--\n30\n40\n50\n--chain--\n1\n2\n3\n100\n200",
     );
 }
 

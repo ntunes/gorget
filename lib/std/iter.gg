@@ -53,6 +53,24 @@ equip [T] SkipIter[T] with Iterator[T]:
                     return None
         return self.inner.next()
 
+# ChainIter[T] — concatenates two VectorIter[T]. Yields from `a` until
+# exhausted, then from `b`.
+struct ChainIter[T]:
+    VectorIter[T] a
+    VectorIter[T] b
+    bool on_first
+
+equip [T] ChainIter[T] with Iterator[T]:
+    Option[T] next(&self):
+        if self.on_first:
+            Option[T] r = self.a.next()
+            match r:
+                case Some(x):
+                    return Some(x)
+                case None:
+                    self.on_first = false
+        return self.b.next()
+
 # Terminal — materialize any iterator of type Iter into a Vector[T] using
 # the for-loop protocol. `Iter` must implement `Iterator[T]`.
 Vector[T] collect_vec[T, Iter](Iter iter):
