@@ -797,6 +797,33 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 # ── Value type inference (simplified) ──────────────────────
 
 # Map runtime function names to their return LIR types.
+# Returns true if the given argument position of a runtime function is a Str
+# parameter (by value). Non-Str positions (e.g. size args to str_slice) return
+# false so we don't mistakenly wrap integer indices as Str.
+bool runtime_arg_is_str(String name, int arg_idx):
+    # Most str functions take Str at position 0.
+    if arg_idx == 0:
+        if name.starts_with("gorget_str_"):
+            return true
+    # Binary: str_cat/str_eq/cmp take Str at positions 0 and 1.
+    if arg_idx == 1:
+        if name == "gorget_str_cat" or name == "gorget_str_concat":
+            return true
+        if name == "gorget_str_eq" or name == "gorget_str_ne" or name == "gorget_str_cmp":
+            return true
+        if name == "gorget_str_lt" or name == "gorget_str_le" or name == "gorget_str_gt" or name == "gorget_str_ge":
+            return true
+        if name == "gorget_str_contains" or name == "gorget_str_starts_with" or name == "gorget_str_ends_with":
+            return true
+        if name == "gorget_str_find" or name == "gorget_str_index_of" or name == "gorget_str_count":
+            return true
+        if name == "gorget_str_replace" or name == "gorget_str_removeprefix" or name == "gorget_str_removesuffix":
+            return true
+    if arg_idx == 2:
+        if name == "gorget_str_replace":
+            return true
+    return false
+
 # Returns true for runtime functions whose Str-typed parameters are declared
 # by value (not Str*). Used to insert *(Str*) deref when the caller has a
 # pointer-typed actual (e.g. bare String param's void* ABI).
@@ -1544,14 +1571,23 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             bool lhs_str = (lty == gs_sid)
             bool rhs_str = (rty == gs_sid)
             if lhs_str or rhs_str:
-                # Coerce pointer-typed operand (bare String param passed by void*
-                # or Str*) by dereferencing as Str. Both sides must be Str by value.
+                # Coerce the other side based on its type:
+                # - Str value: use as-is
+                # - Pointer (void*, Str*): deref
+                # - Scalar placeholder (self-host lost type info): substitute
+                #   an empty Str so the compare is at least type-correct.
                 String lstr = v(lhs)
                 String rstr = v(rhs)
-                if not lhs_str and (lty == LT_PTR or (lty >= LT_PTR_TO_BASE and lty < LT_STRUCT_BASE)):
-                    lstr = "*(Str*)" + lstr
-                if not rhs_str and (rty == LT_PTR or (rty >= LT_PTR_TO_BASE and rty < LT_STRUCT_BASE)):
-                    rstr = "*(Str*)" + rstr
+                if not lhs_str:
+                    if lty == LT_PTR or (lty >= LT_PTR_TO_BASE and lty < LT_STRUCT_BASE):
+                        lstr = "*(Str*)" + lstr
+                    else:
+                        lstr = "((Str){0})"
+                if not rhs_str:
+                    if rty == LT_PTR or (rty >= LT_PTR_TO_BASE and rty < LT_STRUCT_BASE):
+                        rstr = "*(Str*)" + rstr
+                    else:
+                        rstr = "((Str){0})"
                 # Aggregate comparison — use gorget_str_eq/cmp for known Str types.
                 if op == CMP_EQ:
                     return v(dst) + " = gorget_str_eq(" + lstr + ", " + rstr + ");"
@@ -2163,7 +2199,10 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     # For runtime functions whose parameters take Str by value, coerce
     # pointer-typed actuals with an explicit *(Str*) deref so we don't fail
     # C type checking when the caller passed a bare String (which uses Ptr ABI).
+    # For scalar placeholder args (self-host lost type info) at known Str
+    # positions, substitute an empty Str so the compile succeeds.
     bool str_by_value_fn = runtime_takes_str_by_value(name)
+    int gs_ty = find_struct_type("GorgetString", &m)
     int ai = 0
     while ai < args.len():
         if ai > 0:
@@ -2173,9 +2212,14 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
         if val_types.contains(arg_id):
             arg_ty = val_types.get(arg_id).unwrap()
         bool is_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
-        bool is_agg = lir_is_aggregate(arg_ty)
-        if str_by_value_fn and is_ptr and not is_agg:
-            out = out + "*(Str*)" + v(arg_id)
+        bool is_str = (arg_ty == gs_ty)
+        bool str_pos = str_by_value_fn and runtime_arg_is_str(name, ai)
+        if str_pos and not is_str:
+            if is_ptr:
+                out = out + "*(Str*)" + v(arg_id)
+            else:
+                # Scalar placeholder (lossy lowering) at Str position — substitute empty Str.
+                out = out + "((Str){0})"
         else:
             out = out + v(arg_id)
         ai += 1
