@@ -1,10 +1,31 @@
-# LIR Backend-Lift Plan — "Dumb Backend" Endgame
+# LIR → BIR Backend-Lift Plan — "Dumb Backend" Endgame
 
-**Status:** Design analysis, 2026-04-17. Not yet implemented.
+**Status:** Design, 2026-04-17. Not yet implemented.
 **Context:** After several rounds of backend lifts, both C and LLVM backends still
 contain thousands of lines of semantic decisions (HOF inlining, enum construction,
 sentinel wrapping). This document identifies exactly which LIR primitives are
-missing and what lift passes would close the gap.
+missing, what lift passes would close the gap, and introduces a new **BIR**
+(Backend IR) stage between LIR and the backends to enforce the "dumb backend"
+contract at the type level.
+
+## TL;DR
+
+The new pipeline is:
+
+```
+.gg → AST → GIR → LIR → BIR → machine code
+```
+
+- **LIR** stays as the mid-level SSA IR but gains new canonical high-level ops
+  (`HofExpand`, `EnumInit`, `TraitCall`, `StructInit`, `SizeOf`, …).
+- **BIR** is a newtype wrapper over `LirModule` that guarantees those high-level
+  ops have been expanded — backends take `&BirModule` and see only primitives.
+- A single lowering pass `lower_lir_to_bir` expands the canonical ops into block
+  sequences that use existing primitives. A validator asserts no high-level ops
+  remain.
+
+This removes ~2,500 lines of duplicated logic from the two backends and makes
+adding new backends (WASM, LLVM-JIT, freestanding) a fraction of today's effort.
 
 ## Current Gap Audit
 
@@ -36,35 +57,40 @@ Studied SSA IRs, focusing on their closure/loop/enum handling:
 - **Swift SIL (OSSA)** — Progressive lowering through "passes". Canonical SIL
   has high-level ops (`apply`, `init_enum_data_addr`, `init_existential_addr`,
   `class_method`, `destructure_struct`). Lowered SIL (after SILGen cleanup) has
-  only memory primitives. Each pass lowers ops to simpler ones. **Key takeaway:**
+  only memory primitives. Each pass lowers ops to simpler ones. *Key takeaway:*
   you don't need one-level IR — you need an IR with *named* stages and passes.
 
 - **Cranelift CLIF** — Explicit calling convention carried on every call site
   (`call_indirect` takes a signature id). No aggregate SSA values — all structs
-  go through memory (we match this). **Key takeaway:** call-site signatures are
+  go through memory (we match this). *Key takeaway:* call-site signatures are
   explicit data, not inferred from name.
 
 - **MLIR Dialects** — `scf.for`/`scf.while` for loops; `memref` for sized memory;
-  `func.call_indirect` with signature. Progressive dialect conversion. **Key
-  takeaway:** high-level loop constructs are legitimate IR — they lower to
+  `func.call_indirect` with signature. Progressive dialect conversion. *Key
+  takeaway:* high-level loop constructs are legitimate IR — they lower to
   block-args + branches during a dedicated pass.
 
 - **QBE** — 4 types, minimalist. Calls carry explicit ABI annotations
-  (`call :foo(w %a, :s %b, ...)`). No string-matching. **Key takeaway:** if
+  (`call :foo(w %a, :s %b, ...)`). No string-matching. *Key takeaway:* if
   info is needed at emit time, make it an instruction operand.
 
 - **Roc MonoIR** — Explicit refcount operations (`Inc`, `Dec`, `DecRef`).
-  Enum construction as dedicated ops. **Key takeaway:** ownership/refcount
+  Enum construction as dedicated ops. *Key takeaway:* ownership/refcount
   operations belong in the IR, not the backend.
+
+- **Rustc (HIR → MIR → LLVM IR)** — Distinct datatypes per stage, each lowering
+  is a type transform. Type system enforces "you can't pass HIR to codegen."
+  *Key takeaway:* datatype separation catches "forgot to lower" bugs at
+  compile time.
 
 ## The Three Gaps
 
-### Gap 1 — GIR→LIR Lowering Still Defers to Backend
+### Gap 1 — LIR Lowering Still Defers to Backend
 
 Several patterns reach the backend as a single string-named CallExtern
-when they should already be expanded. The `src/lir/lower/lifts.rs` module
-shows the correct pattern (nullable-void→Option, last_error→Result) — same
-approach needs to extend.
+when they should already be expanded. `src/lir/lower/lifts.rs` shows the
+correct pattern (nullable-void→Option, last_error→Result) — same approach
+needs to extend.
 
 **Under-expanded patterns:**
 
@@ -95,42 +121,43 @@ the declared types. Examples:
 
 ### Gap 3 — A Handful of LIR Instructions Are Missing
 
-To eliminate the remaining backend smartness, we need these primitives:
+To eliminate the remaining backend smartness, we add these new canonical ops to
+`Inst`. Each is expanded away by `lower_lir_to_bir` before backend emission.
 
 #### 3a. `SizeOf { dst, type_id }`
 
 Today's state: `IConst { value: 8 }` with sizeof resolved at GIR→LIR lowering
-by consulting `opaque_runtime_size` and `c_sizeof_lir_type`. Backends sometimes
-re-resolve.
+by consulting `opaque_runtime_size` and `c_sizeof_lir_type`. Scattered.
 
-New state: first-class `SizeOf` instruction that backends resolve through the
-**shared** `opaque_runtime_size` table. Unifies collection constructors and any
-sizeof-dependent codegen.
+New state: first-class `SizeOf` instruction that the BIR lowering resolves
+through the shared `opaque_runtime_size` table. Unifies collection
+constructors and any sizeof-dependent codegen.
 
 #### 3b. `StructInit { dst, struct_id, fields: Vec<(field_idx, ValueId)> }`
 
 Today: alloca + N×(FieldPtr + Store) per struct literal. Both backends open-code
 the expansion.
 
-New: one instruction. C backend emits a compound literal; LLVM emits
-`insertvalue` chains or alloca + stores (its choice). Callers don't care.
+New: one canonical instruction. Expanded to the same alloca+stores during
+`lower_lir_to_bir`. Callers don't care how.
 
 #### 3c. `EnumInit { dst, struct_id, variant_tag, variant_idx, payload: Option<ValueId> }`
 
 Today: alloca + store tag (4 bytes) + FieldPtr to payload + memcpy/store
 payload. Every `Ok(x)`, `Some(v)`, `Error(msg)` open-codes this.
 
-New: one instruction. The Option/Result wrapping patterns (which account for
-~400 lines in `emit_sentinel_scalar_option_wrap`, `emit_nullable_ptr_option_wrap`,
-etc.) reduce to one `EnumInit` after checking the condition.
+New: one canonical instruction. The Option/Result wrapping patterns (which
+account for ~400 lines in `emit_sentinel_scalar_option_wrap`,
+`emit_nullable_ptr_option_wrap`, etc.) reduce to one `EnumInit` after checking
+the condition.
 
 #### 3d. `EnumCheck { dst, value, variant_tag }` + `EnumExtract { dst, value, variant_idx, payload_field, ty }`
 
 Today: FieldPtr to tag, Load i32, Cmp, Branch. Then FieldPtr to payload offset,
 Load ty.
 
-New: two instructions. Pattern matching lowers to EnumCheck + branches +
-EnumExtract. Backends know how their ABI lays out the tag+payload.
+New: two canonical instructions. Pattern matching lowers to EnumCheck + branches
++ EnumExtract. BIR lowering expands to the current primitive sequence.
 
 #### 3e. `NamedFieldPtr { dst, base, struct_name, field_name }`
 
@@ -138,7 +165,7 @@ Today: `FieldPtr` uses field **index**. For opaque runtime structs (declared
 as `struct X: pass` in Gorget, with no LIR fields), there's no way to access
 fields at all — backends hardcode `getelementptr i8, ptr %x, i64 16`.
 
-New: symbolic access resolved through a shared offset table (mirror of
+New: symbolic access resolved through a shared offset table (extension of
 `opaque_runtime_size`). Usage: `NamedFieldPtr { base: str_val, struct_name: "Str",
 field_name: "data" }` resolves to the `.data` field offset in `GorgetString`.
 
@@ -148,66 +175,194 @@ Match's start/end/text, GorgetArray's data/len/cap, etc.).
 #### 3f. `CallClosure.param_kinds`
 
 Today: `CallClosure { dst, kind, closure, args, ret_ty, arg_abis }`. But
-`arg_abis` is not always populated — and the LLVM backend still has to heuristically
-decide "is this arg passed by value or by reference?" (I added a SlotAddr-based
-heuristic in commit `3a858bcb`).
+`arg_abis` is not always populated — and the LLVM backend still has to
+heuristically decide "is this arg passed by value or by reference?" (the
+SlotAddr-based heuristic I added in commit `3a858bcb`).
 
 New: require `param_kinds: Vec<ClosureArgKind>` on every CallClosure, where:
-- `ByValue` — load the struct, pass by value (used for closures that take
-  small aggregates by value)
-- `ByRef` — pass pointer unchanged (used for `&Counter`-style args)
-- `Move` — pass pointer, source is consumed (zeroing happens elsewhere)
+- `ByValue` — load the struct, pass by value (closure takes small aggregates
+  by value)
+- `ByRef` — pass pointer unchanged (`&Counter`-style args)
+- `Move` — pass pointer, source is consumed (zeroing elsewhere)
 
-Lowering sets this from the closure's declared signature. No more heuristics.
+GIR→LIR lowering sets this from the closure's declared signature. No more
+heuristics.
 
-#### 3g. `HofExpand { collection, op, element_ty, closure, result_slot }` — **OPTIONAL**
+#### 3g. `HofExpand { collection, op, element_ty, closure, result_slot }`
 
-The cleanest way to lift HOF inlining is to have GIR→LIR emit explicit loops.
-But that's ~2,000 lines of lowering code per HOF (filter/map/fold/reduce/each/any/all/find/flat_map).
+The big one. A single canonical op expressing "run `op` over the collection
+using `closure`." Expansion lives in `lower_lir_to_bir` and generates
+block-args + branches + CallClosure — the same pattern both backends currently
+duplicate.
 
-Alternative: a high-level `HofExpand` instruction + a dedicated lowering pass
-run between GIR→LIR and backend emission. The pass expands `HofExpand` into
-block-args + branches + CallClosure. Both backends then see only primitives.
-
-**This is the Swift SIL pattern** — high-level ops in canonical form, lowered
-via dedicated passes before backend entry.
+After expansion, BIR sees only primitives. **Before** expansion, LIR-level
+optimizations can reason about HofExpand as a unit (e.g., fuse adjacent
+`HofExpand(filter)` + `HofExpand(map)` into one pass).
 
 ### Tradeoff Table — Should HOFs Be in the LIR?
 
 | Approach | Pros | Cons |
 |---|---|---|
-| Expand at GIR→LIR (QBE-style) | LIR stays minimal | 2,000 lines of lowering code |
-| `HofExpand` + lowering pass (SIL-style) | LIR has one high-level op that explains intent | LIR no longer strictly low-level |
+| Expand at GIR→LIR (QBE-style) | LIR stays minimal | 2,000 lines of lowering code up front |
+| `HofExpand` + BIR lowering pass (SIL-style) | LIR has one high-level op that explains intent, fusable | LIR isn't strictly low-level |
 | Keep backend-inline (current) | No new code | Can't share logic, no optimization visibility |
 
-**Recommendation: SIL-style with a lowering pass.** Reason: optimizations like
-fusion (`v.filter(p).map(f)` → single pass) become natural at the HofExpand
-level. Also makes it obvious what the program is doing when you read the LIR.
+**Decision: SIL-style with a BIR lowering pass.** Fusion optimizations become
+natural at the HofExpand level. Reading LIR remains intuitive — a HOF call is
+one instruction, not 50 lines of branch/phi/closure-dispatch.
 
-## Proposed Pipeline
+## The Pipeline
 
 ```
-GIR (high-level, ownership-aware)
+GIR (high-level, ownership-aware, trait-resolved, monomorphized)
   │
-  ▼ lower_to_canonical_lir
-Canonical LIR (has: HofExpand, EnumInit, TraitCall, etc.)
+  ▼ lir::lower (unchanged path + emits new canonical ops)
+LIR (SSA + memory + can contain HofExpand/EnumInit/TraitCall/StructInit/SizeOf/…)
   │
-  ▼ lower_canonical_to_core
-Core LIR (block-args + branches + memory only)
+  ▼ optimization passes (can fuse/simplify at LIR level)
   │
-  ▼ (optimization passes, same as today)
-  ▼
-Backend (pure 1:1 translator — zero name-based dispatch)
+  ▼ bir::lower::lower_lir_to_bir  (expands high-level ops into primitives)
+  ▼ bir::validate::assert_primitives_only  (enforces invariant)
+BIR (pure primitives — same Inst type, but validator guarantees no high-level ops)
+  │
+  ▼ backend::llvm or backend::c_lir (pure 1:1 translator — zero name-based dispatch)
+machine code
 ```
 
-The Canonical LIR and Core LIR use the **same types** (LirModule, LirFunction, Inst,
-Term) — the distinction is which instruction *variants* appear. A validator can
-check "this function is in Core LIR" by asserting no HofExpand, EnumInit, etc.
+The LIR and BIR **use the same underlying types** (`LirModule`, `LirFunction`,
+`Inst`, `Term`). BIR is a newtype wrapper that guarantees a lowering pass has
+run and the validator passed.
 
-Matches Swift SIL's approach (canonical SIL → lowered SIL — same datatypes,
-progressive lowering).
+## Concrete Design
+
+### File layout
+
+```
+src/ir/       → GIR (exists)
+src/lir/      → LIR (exists; `Inst` gains new canonical variants)
+src/bir/      → NEW
+    mod.rs          — BirModule newtype wrapper, from_lir() entry point
+    lower.rs        — lower_lir_to_bir (expansion pass)
+    validate.rs     — assert_primitives_only (validator)
+src/backend/llvm/   → takes &BirModule (not &LirModule)
+src/backend/c_lir/  → takes &BirModule
+```
+
+### Type definitions
+
+```rust
+// src/lir/mod.rs — existing `Inst` enum, augmented
+pub enum Inst {
+    // existing primitives — no change
+    SlotStore { .. }, SlotLoad { .. }, Add { .. }, Load { .. },
+    Store { .. }, Call { .. }, CallExtern { .. }, Branch { .. },
+    Jump { .. }, /* ... etc. */
+
+    // NEW canonical ops — expanded away by bir::lower, rejected by BIR validator
+    HofExpand { coll: ValueId, op: HofOp, element_ty: LirType,
+                closure: ValueId, closure_sig: ClosureSig,
+                result_slot: Option<SlotId> },
+    StructInit { dst: ValueId, struct_id: StructId,
+                 fields: Vec<(u32, ValueId)> },
+    EnumInit { dst: ValueId, struct_id: StructId, variant_tag: u32,
+               variant_idx: u32, payload: Option<ValueId> },
+    EnumCheck { dst: ValueId, value: ValueId, variant_tag: u32 },
+    EnumExtract { dst: ValueId, value: ValueId, variant_idx: u32,
+                  payload_field: u32, ty: LirType },
+    NamedFieldPtr { dst: ValueId, base: ValueId,
+                    struct_name: String, field_name: String },
+    SizeOf { dst: ValueId, type_id: TypeKey },
+    TraitCall { dst: Option<ValueId>, object: ValueId,
+                trait_name: String, method: String,
+                args: Vec<ValueId>, arg_abis: Vec<AbiKind> },
+    CowClone { dst: ValueId, src: ValueId, ty: LirType },
+}
+
+// src/bir/mod.rs — new
+/// BIR is a LIR module whose canonical ops have been expanded to primitives.
+/// Newtype seals the invariant: backends can only receive this type.
+pub struct BirModule(LirModule);
+
+impl BirModule {
+    /// Lowers a LIR module to BIR by expanding canonical ops and validating.
+    pub fn from_lir(m: LirModule) -> Result<Self, BirError> {
+        let lowered = crate::bir::lower::lower_lir_to_bir(m)?;
+        crate::bir::validate::assert_primitives_only(&lowered)?;
+        Ok(BirModule(lowered))
+    }
+
+    /// Read-only access to the underlying LirModule. Backends use this
+    /// internally for their 1:1 translation.
+    pub fn as_lir(&self) -> &LirModule { &self.0 }
+}
+
+// Backends take &BirModule — the type system guarantees they never
+// receive an unlowered LirModule.
+pub fn generate_llvm_ir(m: &BirModule) -> String { ... }
+pub fn generate_c_ir(m: &BirModule) -> String { ... }
+```
+
+### The validator
+
+`src/bir/validate.rs` is the single source of truth for "what's in BIR":
+
+```rust
+pub fn assert_primitives_only(m: &LirModule) -> Result<(), BirError> {
+    for func in &m.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                match inst {
+                    // Primitives — allowed in BIR
+                    Inst::SlotStore { .. } | Inst::SlotLoad { .. } |
+                    Inst::Add { .. } | Inst::Load { .. } |
+                    Inst::Store { .. } | Inst::Call { .. } |
+                    Inst::CallExtern { .. } | Inst::Branch { .. } |
+                    Inst::Jump { .. } | /* … all existing primitives … */ => {}
+
+                    // Canonical ops — must have been lowered
+                    Inst::HofExpand { .. } |
+                    Inst::EnumInit { .. } | Inst::EnumCheck { .. } |
+                    Inst::EnumExtract { .. } | Inst::StructInit { .. } |
+                    Inst::NamedFieldPtr { .. } | Inst::SizeOf { .. } |
+                    Inst::TraitCall { .. } | Inst::CowClone { .. } => {
+                        return Err(BirError::UnloweredCanonicalOp {
+                            fn_name: func.name.clone(),
+                            op: inst.opcode_name(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+Adding a new canonical op requires exactly one match-arm change here. Adding
+a new primitive requires no change (primitives are the "everything else"
+default).
+
+### Where optimization passes run
+
+| Pass | Runs on | Why |
+|---|---|---|
+| SSA construction | LIR (early) | Primitives only — canonical ops don't affect SSA shape |
+| HOF fusion | LIR | Needs to see `HofExpand` to fuse adjacent HOFs |
+| Enum simplification | LIR | Needs `EnumInit`/`EnumCheck` visibility |
+| SizeOf folding | LIR | Resolves to IConst when sizes are known |
+| DCE / copy-prop / inlining | LIR or BIR | Either works; run on LIR for optimization visibility |
+| mem2reg / scalar promotion | BIR | Primitives only, cleaner analysis |
+
+The rule: **if a pass benefits from seeing canonical ops, run it on LIR; otherwise run it on BIR.**
 
 ## Concrete Lift List (by ROI)
+
+### Priority 0 — Infrastructure setup (prerequisite)
+
+Create `src/bir/` with the newtype wrapper, an initially trivial
+`lower_lir_to_bir` (just unwraps), and a validator with today's empty
+canonical-op set. Switch both backends to take `&BirModule`. **Zero behavior
+change but the type boundary is enforced.**
 
 ### Priority 1 — Low effort, high backend simplification
 
@@ -219,15 +374,14 @@ progressive lowering).
    The `is_cstr_returning_fn` / `needs_null_terminated_cstr` patterns become
    reads of `param_abis[i]`.
 
-3. **Add `SizeOf` instruction** (~40 lines of shared `opaque_runtime_size`
-   uses become one lookup).
+3. **Add `SizeOf` canonical op** — shared `opaque_runtime_size` lookup
+   centralized to BIR expansion.
 
 ### Priority 2 — Medium effort, eliminates big sections
 
-4. **Add `EnumInit` / `EnumCheck` / `EnumExtract`** — eliminates ~400 lines of
-   sentinel/nullable/last-error wrapping in both backends (those already-written
-   `emit_sentinel_scalar_option_wrap` etc. helpers directly become these instructions
-   emitted at their call sites).
+4. **Add `EnumInit` / `EnumCheck` / `EnumExtract`** — eliminates ~400 lines
+   of sentinel/nullable/last-error wrapping in both backends. The existing
+   `emit_sentinel_scalar_option_wrap` helpers move to BIR expansion.
 
 5. **Add `StructInit`** — eliminates newtype constructor special-casing
    (~50 lines each backend).
@@ -235,15 +389,15 @@ progressive lowering).
 6. **Add `NamedFieldPtr`** — eliminates hardcoded `i64 8` / `i64 16` offsets
    for opaque runtime struct fields (~50 sites across backends).
 
-7. **Require `param_kinds` on `CallClosure`** — replaces my SlotAddr heuristic
-   with declared metadata. Unblocks correct closure dispatch for all cases.
+7. **Require `param_kinds` on `CallClosure`** — replaces the SlotAddr
+   heuristic with declared metadata. Correct closure dispatch for all cases.
 
 ### Priority 3 — Large effort, largest cleanup
 
-8. **`HofExpand` + lowering pass** — ~2,100 lines of duplicated HOF inlining
-   become one lowering pass + a `HofExpand` instruction variant. This is the
-   big one. Also unlocks **fusion optimizations** (adjacent HofExpand ops can
-   merge — same-pass filter+map, etc.).
+8. **`HofExpand` + BIR lowering pass** — ~2,100 lines of duplicated HOF
+   inlining become one shared expansion pass + a `HofExpand` instruction.
+   Also unlocks **fusion optimizations** (adjacent HofExpand ops can merge —
+   same-pass filter+map, etc.).
 
 ### Priority 4 — Smaller but valuable
 
@@ -254,53 +408,58 @@ progressive lowering).
     C backend's inline injection in SlotStore. Both backends translate to the
     same `gorget_string_copy_cow` call.
 
-## Fundamental Architectural Issue
+## Fundamental Architectural Issue (Addressed)
 
-**Yes, there is one.** The LIR's design doc says:
+The LIR design doc says:
 
 > *"Explicit everything. If the C backend currently generates code for it,
 > LIR must have an instruction for it."*
 
-The LIR is **faithful to this principle for explicit operations** (load, store,
-branch). But it **abandons the principle for implicit operations** — CallExtern
-with a specific name carries *semantic meaning* that the backend decodes.
+Today the LIR is **faithful to this principle for explicit operations** (load,
+store, branch). But it **abandons the principle for implicit operations** —
+CallExtern with a specific name carries *semantic meaning* that the backend
+decodes.
 
-Concretely: `CallExtern { name: "Vector__int64_t__filter" }` is not an explicit
-operation — it's a *symbolic reference* to a pattern the backend must unfold.
-That's not "explicit everything." That's "explicit for scalars, implicit for
+`CallExtern { name: "Vector__int64_t__filter" }` is not an explicit op — it's
+a *symbolic reference* to a pattern the backend must unfold. That's not
+"explicit everything." That's "explicit for scalars, implicit for
 collections/closures/sentinels."
 
-The fix: treat each such pattern as a distinct LIR instruction during lowering.
-Backends only see unfolded primitives. That's the contract the design doc
-promised but hasn't fully delivered.
+**Fix:** add canonical ops to LIR for each such pattern (`HofExpand`,
+`EnumInit`, `TraitCall`, etc.), expand them to primitives in
+`lower_lir_to_bir`, and enforce at the BIR boundary that nothing symbolic
+leaks to the backend. That's the contract the design doc promised.
 
 ## Answers to "Best Compiler Ever" Question
 
 The ingredients that separate world-class compilers from merely good ones:
 
-1. **Progressive lowering** — Multiple named IR stages with validators.
-   Swift, Rustc (MIR + LIR), GHC, V8. *Add to Gorget:* Canonical LIR + Core LIR
-   distinction with a validator asserting stage invariants.
+1. **Progressive lowering with type-enforced stage boundaries** — Rustc
+   (HIR → MIR → LLVM IR), GHC (Core → STG → Cmm). Each stage is a distinct
+   type; moving between stages is a type transform; backends can only receive
+   the final type. *Adopted:* GIR → LIR → BIR, with `BirModule` as a sealed
+   newtype.
 
 2. **Explicit ABI at call sites** — Cranelift and QBE carry signatures on
-   `call_indirect`. *Add to Gorget:* `param_kinds` on CallClosure, richer
-   AbiKind on CallExtern.
+   `call_indirect`. *Adopted:* `param_kinds` on `CallClosure`, richer
+   `AbiKind` already threads through CallExtern.
 
 3. **High-level ops that lower** — SIL's `apply`/`init_enum_data_addr`,
    MLIR's `scf.for`. Let optimizations work at the highest level they can.
-   *Add to Gorget:* `HofExpand`, `EnumInit`, `TraitCall`.
+   *Adopted:* `HofExpand`, `EnumInit`, `TraitCall`.
 
-4. **No name-based dispatch** — QBE, Cranelift. Names are just labels — meaning
-   is in the instruction kind and operand types. *Fix in Gorget:* eliminate all
-   `name == "X"` / `name.starts_with` via Priority 1-3 lifts above.
+4. **No name-based dispatch in backends** — QBE, Cranelift. Names are just
+   labels — meaning is in the instruction kind and operand types. *Adopted:*
+   BIR's validator rejects symbolic CallExtern patterns that should've
+   been expanded.
 
 5. **Shared metadata tables** — LLVM's intrinsic table, SPIR-V's op table —
-   one place defines each operation's semantics. *Extend in Gorget:*
-   `opaque_runtime_size` → `opaque_runtime_layout` with fields and offsets.
+   one place defines each operation's semantics. *Extended:* `opaque_runtime_size`
+   grows into `opaque_runtime_layout` with fields and offsets consumed by
+   `SizeOf` and `NamedFieldPtr` expansion.
 
-6. **Ownership in IR (optional)** — Swift OSSA, Roc MonoIR. Gorget already
-   handles this at GIR level. Keep it there; LIR stays ownership-unaware per
-   design doc.
+6. **Ownership in IR (optional)** — Swift OSSA, Roc MonoIR. Gorget handles
+   this at GIR level; LIR stays ownership-unaware per original design doc.
 
 ## Not Recommended
 
@@ -311,21 +470,81 @@ The ingredients that separate world-class compilers from merely good ones:
 
 - **Stack-based bytecode.** We want to target LLVM/native, not a VM.
 
-## Summary Recommendation
+- **Same-datatype phases with runtime validators (SIL-style).** Works for
+  well-funded teams with extensive invariant checking infrastructure. For
+  Gorget's solo/AI-assisted maintenance model, type-level errors are
+  dramatically cheaper than runtime validator errors.
 
-Implement Priorities 1-3 in order. After that, the backends will be
-~60% smaller and truly dumb. The HofExpand lift (Priority 3, #8) is the
-biggest single win — 2,000 lines of duplicated HOF code become one shared
-lowering pass.
+## Naming Rationale — Why "BIR"?
 
-After this work:
-- Adding a WASM backend becomes feasible (~1,500 lines vs today's 6,500).
-- Adding an LLVM-JIT backend becomes feasible (same).
-- Freestanding/UEFI builds get simpler (no runtime-specific smartness in
-  the backend to work around).
-- Self-host LIR backend (currently ~6,200 lines, 656 fixtures) catches up
-  faster because it has less semantics to reimplement.
+Considered several candidates:
+
+| Name | Meaning | Rejected because |
+|---|---|---|
+| **BIR** | Backend IR | ← chosen |
+| CIR | Canonical IR or Core IR | Overloaded with GHC's Core and could be confused with canonical LIR phase |
+| EIR | Emit IR | Phonetically awkward, less memorable |
+| PIR | Primitive IR | Parrot already owns this name |
+| MIR | Mid IR | Rustc owns this |
+| FIR | Flat/Final IR | "Flat" vague; "Final" ambiguous |
+| TIR | Target IR | Zig already uses |
+
+**BIR wins on:** clarity (*this is what backends eat*), pronounceability
+(`beer` or `bee-eye-arr`), no collision with established SSA-IR names in the
+compilers ecosystem, and describes *role* not content — if we later add a
+stage below BIR (machine-specific IR), BIR's meaning doesn't shift.
+
+## Migration Strategy
+
+Each step is a single commit, each removes code, each demonstrates payoff:
+
+1. **Step 0** — Create `src/bir/` scaffolding. `BirModule(LirModule)` newtype,
+   trivial `lower_lir_to_bir`, empty-allowlist validator. Both backends switch
+   to `&BirModule`. Zero behavior change.
+
+2. **Step 1** — Trust `LirExtern.return_type` for sret. Delete `name.contains`
+   chains in LLVM extern-declaration emission.
+
+3. **Step 2** — Trust `param_abis` for coercion in both backends.
+
+4. **Step 3** — Add `SizeOf` variant + BIR expansion. Remove ad-hoc sizeof
+   resolution at emit time.
+
+5. **Step 4** — Add `EnumInit`/`EnumCheck`/`EnumExtract` + BIR expansion.
+   Move `emit_sentinel_*`/`emit_nullable_*` helpers from `src/lir/lower/lifts.rs`
+   to produce these ops directly.
+
+6. **Step 5** — Add `StructInit`, `NamedFieldPtr`, `CowClone`.
+
+7. **Step 6** — Add `CallClosure.param_kinds`, remove SlotAddr heuristic.
+
+8. **Step 7** — Add `TraitCall` + BIR expansion. Fixes trait method ABI issues.
+
+9. **Step 8** — The big one. `HofExpand` variant + BIR expansion pass
+   generating loop blocks + CallClosure. Remove HOF inlining from both
+   backends.
+
+After Step 8, the backends are ~60% smaller and truly dumb. No name-based
+dispatch, no inline loop generation, no sentinel-wrapping logic. Each backend
+is a pure 1:1 translator from BIR to target syntax.
+
+## Expected Outcomes
+
+- **Backends shrink dramatically.** LLVM backend from ~6,500 lines to
+  ~3,000. C backend from ~5,000 to ~2,500.
+- **Adding a WASM backend becomes feasible** (~1,500 lines instead of today's
+  ~6,500 estimate).
+- **Self-host LIR backend** (currently ~6,200 lines, 656/924 fixtures) catches
+  up faster because it has less semantics to reimplement — it only needs to
+  understand BIR.
+- **Freestanding/UEFI builds** get simpler: no runtime-specific smartness in
+  the backend to work around.
+- **HOF fusion** optimization becomes trivially implementable as an LIR pass
+  (pre-BIR).
+- **Type safety** at the layer boundary catches "forgot to lower" bugs at
+  compile time rather than runtime.
 
 The "best compiler ever" outcome isn't from one heroic feature — it's from
 **consistent application of "explicit everything, backends are dumb"** until
-no semantic decisions remain at the emit layer.
+no semantic decisions remain at the emit layer. `BirModule` is how we enforce
+that consistency.
