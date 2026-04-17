@@ -17,6 +17,19 @@ trait Displayable:
 Enables string interpolation (`f"{value}"`) and `print`. All primitive types
 implement `Displayable`.
 
+### Debuggable
+
+```gorget
+trait Debuggable:
+    String debug(self)
+```
+
+Developer-facing, round-trip-ish rendering — the dual of `Displayable`.
+Where `display()` is hand-written for humans ("3.14"), `debug()` is
+derivable for logs, panics, and inspection: struct fields show as
+`TypeName { field: <field.debug()>, … }`; strings quote and escape
+(`"hi\nworld"`); all primitives implement `Debuggable` intrinsically.
+
 ### Equatable
 
 ```gorget
@@ -169,6 +182,67 @@ trait Iterable[T]:
 Creates an iterator. `for x in collection` calls `collection.iter()` to get
 an `Iterator`, then calls `next()` repeatedly.
 
+> Types that implement `Iterator[T]` directly (no separate iterator struct)
+> can also be used in a `for`-loop — the compiler treats the value as its
+> own iterator when it has `next()` but no `iter()`.
+
+---
+
+## Byte-shaped I/O
+
+### Writer
+
+```gorget
+trait Writer:
+    Result[int, IoError] write_bytes(&self, String bytes)
+```
+
+Narrow output interface. Returns the byte count actually written; a
+write may be short (sockets, pipes, compression streams).
+`write_all(w, bytes)` from `std.io_core` wraps this with a loop that
+guarantees completion.
+
+### Reader
+
+```gorget
+trait Reader:
+    Result[int, IoError] read_bytes(&self, Vector[uint8] &buf)
+```
+
+Narrow input interface. Reader fills the caller's buffer through a
+mutable borrow and returns the byte count read. `Ok(0)` indicates EOF.
+`reader_drain(r)` and `read_exact(r, n)` from `std.io_core` derive
+read-to-end and fill-exactly-n on top.
+
+### IoError
+
+```gorget
+enum IoError:
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    BrokenPipe
+    ConnectionRefused
+    ConnectionReset
+    ConnectionAborted
+    NotConnected
+    AddrInUse
+    TimedOut
+    WouldBlock
+    Interrupted
+    UnexpectedEof
+    InvalidInput
+    InvalidData
+    Utf8Invalid(int)      # byte offset
+    Other(String)
+```
+
+The typed error channel for all I/O. Pattern-match by category instead
+of parsing error strings. `IoError.Other(msg)` is the escape hatch;
+prefer a named variant when possible.
+
+`equip IoError with Displayable` for human-readable output.
+
 ---
 
 ## Conversion
@@ -243,12 +317,17 @@ struct Point:
     int y
 ```
 
-Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Cloneable`,
-`Comparable`, `Default`, `Ordinal` (enums only), `Serializable`, `Deserializable`.
+Derivable traits: `Equatable`, `Hashable`, `Displayable`, `Debuggable`,
+`Cloneable`, `Comparable`, `Default`, `Ordinal` (enums only),
+`Serializable`, `Deserializable`.
 
 The generated implementation operates field-by-field. For `Equatable`, all fields
 must be equal. For `Hashable`, all fields are combined into the hash. For
-`Displayable`, fields are printed as `TypeName(field1, field2, ...)`.
+`Displayable`, fields are printed as `TypeName(field1, field2, ...)`. For
+`Debuggable`, structs render as `TypeName { field1: …, field2: … }` where each
+field's `debug()` is called recursively (strings get quoted and escaped); enum
+variants render as `Variant` for unit variants and `Variant(arg1, arg2, …)`
+for tuple variants.
 
 ---
 
@@ -257,6 +336,7 @@ must be equal. For `Hashable`, all fields are combined into the hash. For
 | Trait | Method(s) | Enables | Derivable |
 |-------|-----------|---------|:---------:|
 | Displayable | `display` | `f"{val}"`, `print` | Yes |
+| Debuggable | `debug` | Developer logs, panics | Yes |
 | Equatable | `eq` | `==`, `!=` | Yes |
 | Comparable | `compare` | `<`, `>`, `<=`, `>=` | Yes |
 | Hashable | `hash` | Dict keys, Set elements | Yes |
@@ -268,8 +348,10 @@ must be equal. For `Hashable`, all fields are combined into the hash. For
 | Numeric | (composite) | Generic numeric code | No |
 | Index[K,V] | `get` | `val[key]` | No |
 | IndexMut[K,V] | `set` | `val[key] = x` | No |
-| Iterator[T] | `next` | Manual iteration | No |
-| Iterable[T] | `iter` | `for x in val` | No |
+| Iterator[T] | `next` | Manual iteration, `for x in val` | No |
+| Iterable[T] | `iter` | `for x in val` (with iter struct) | No |
+| Writer | `write_bytes` | Byte-shaped output | No |
+| Reader | `read_bytes` | Byte-shaped input | No |
 | From[T] | `from` | Type conversion | No |
 | TryFrom[T] | `try_from` | Fallible conversion | No |
 | Measurable | `len` | `.len()` | No |
