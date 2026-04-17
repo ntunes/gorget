@@ -363,6 +363,33 @@ enum DbError:
     Timeout(int elapsed_ms)
 ```
 
+### The I/O Error Channel
+
+`std.io_core` ships a canonical `IoError` enum — `NotFound`,
+`PermissionDenied`, `BrokenPipe`, `ConnectionReset`, `TimedOut`,
+`UnexpectedEof`, `Utf8Invalid(offset)`, `Other(String)`, and other
+common categories. All byte-shaped Writer/Reader methods return
+`Result[T, IoError]`, so I/O callers pattern-match on category
+instead of parsing message strings:
+
+```gorget
+from std.io_core import IoError
+
+match socket.write_bytes(request):
+    case Ok(n):
+        print(f"wrote {n} bytes")
+    case Error(IoError.BrokenPipe()):
+        reconnect()
+    case Error(IoError.TimedOut()):
+        retry_with_backoff()
+    case Error(e):
+        log.error(e.display())
+```
+
+If a stdlib function you need still returns `Result[T, String]`, the
+`from_string_error[T]` helper wraps the message in `IoError.Other`
+so the call site can start pattern-matching immediately.
+
 ---
 
 ## throws vs Result — Under the Hood
