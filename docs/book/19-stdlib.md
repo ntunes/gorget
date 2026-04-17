@@ -311,6 +311,52 @@ Option[int] smallest = h.pop()    # Some(1)
 
 Min-heap by default. Elements must implement `Comparable`.
 
+### Lazy Iterators (`std.iter`)
+
+Concrete state-machine iterators composable over `Vector[T]`:
+
+```gorget
+from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, collect_vec
+
+Vector[int] v = [10, 20, 30, 40, 50]
+VectorIter[int] vit = v.iter()
+TakeIter[int] first3 = TakeIter[int](vit, 3)
+Vector[int] out = collect_vec[int, TakeIter[int]](first3)  # [10, 20, 30]
+```
+
+Adapters: `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`.
+Terminals: `collect_vec[T, Iter]` materializes to a Vector,
+`count_iter[Iter]` counts elements. All generic over the concrete
+iterator type (no trait-object dispatch).
+
+### Byte-shaped I/O (`std.io_core`)
+
+The narrow waist for output and input:
+
+```gorget
+from std.io_core import Writer, IoError, write_all, write_display
+
+struct Sink:
+    String buf
+
+equip Sink with Writer:
+    Result[int, IoError] write_bytes(&self, String bytes):
+        self.buf.push(bytes)
+        return Ok(bytes.len())
+
+Sink s = Sink("")
+write_all[Sink](&s, "hello world")
+write_display[Sink, int](&s, 42)
+```
+
+Every Writer returns `Result[int, IoError]` — pattern-match on
+`IoError.NotFound` / `PermissionDenied` / `UnexpectedEof` / `Utf8Invalid(offset)`
+instead of parsing strings. Short-writes are allowed; `write_all` wraps
+the short-write loop.
+
+Reader mirror: `reader_drain[R](&r)` reads-to-EOF, `read_exact[R](&r, n)`
+fills at least `n` bytes.
+
 ---
 
 ## Concurrency
