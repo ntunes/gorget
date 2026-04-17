@@ -473,6 +473,40 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
 # ── Runtime function name mapping ───────────────────────────
 
 String map_runtime_name(String name):
+    # Hardcoded aliases for extern-method stubs whose method name carries
+    # the File/stream receiver type (lost to `int64_t__` fallback when the
+    # self-host type inference can't keep the receiver as a named type).
+    # These correspond to `equip File: extern ...` declarations in std.io.
+    if name == "int64_t___write_bytes_buf" or name == "File___write_bytes_buf":
+        return "gorget_file_write_bytes_buf"
+    if name == "int64_t___read_bytes_buf" or name == "File___read_bytes_buf":
+        return "gorget_file_read_bytes_buf"
+    if name == "_file_open_try":
+        return "gorget_file_open_try"
+    # Trait-method dispatch: File_write_bytes resolves to the equip-block
+    # specialization emitted with a `Writer_for_` prefix.
+    if name == "File__write_bytes":
+        return "Writer_for_File__write_bytes"
+    if name == "File__read_bytes":
+        return "Reader_for_File__read_bytes"
+    if name == "_parse_int_raw":
+        return "gorget_parse_int"
+    if name == "_parse_float_raw":
+        return "gorget_parse_float"
+    if name == "_parse_last_error":
+        return "gorget_parse_last_error"
+    if name == "_stdin_handle":
+        return "gorget_stdin_handle"
+    if name == "_stdout_handle":
+        return "gorget_stdout_handle"
+    if name == "_stderr_handle":
+        return "gorget_stderr_handle"
+    if name == "file_exists":
+        return "gorget_file_exists"
+    if name == "chr":
+        return "gorget_char_chr"
+    if name == "__bytes_to_str_raw":
+        return "gorget_bytes_to_str"
     # Bare type constructors for opaque pointer types: TaskGroup() → gorget_task_group_new().
     # These have no generic args (pointer typedefs, not generics).
     match name:

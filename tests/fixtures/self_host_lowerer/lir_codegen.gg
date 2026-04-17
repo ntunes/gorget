@@ -953,6 +953,18 @@ bool runtime_arg_is_str(String name, int arg_idx):
 # Returns true if the given argument position of a runtime function takes
 # a C-style null-terminated `const char*`. Str args at these positions
 # must be converted via gorget_str_to_cstr(&s).
+# Hardcoded rule: position in the runtime signature that expects a
+# pointer to an aggregate (struct). Used by emit_call_extern to wrap
+# the caller's arg with `&` when the self-host lowered it by value.
+bool runtime_arg_needs_addr(String name, int arg_idx):
+    if name == "gorget_file_open_try" and arg_idx == 2:
+        return true
+    if name == "gorget_file_write_bytes_buf" and arg_idx == 1:
+        return true
+    if name == "gorget_file_read_bytes_buf" and arg_idx == 1:
+        return true
+    return false
+
 bool runtime_arg_is_cstr(String name, int arg_idx):
     if arg_idx == 0:
         if name == "gorget_read_file" or name == "gorget_read_line" or name == "gorget_read_file_bytes":
@@ -1072,10 +1084,16 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetArray", &m)
     if name == "gorget_str_lines" or name == "gorget_str_chars":
         return find_struct_type("GorgetArray", &m)
+    if name == "gorget_str_bytes":
+        return find_struct_type("GorgetArray", &m)
     # Int/float to string: returns Str
     if name == "gorget_int_to_str" or name == "gorget_float_to_str" or name == "gorget_bool_to_str":
         return find_struct_type("GorgetString", &m)
     if name == "gorget_char_to_str" or name == "gorget_uint8_to_str":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_char_chr" or name == "gorget_bytes_to_str":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_codepoint_to_utf8":
         return find_struct_type("GorgetString", &m)
     # Scalar returns
     if name == "gorget_array_len" or name == "gorget_map_len" or name == "gorget_set_len":
@@ -1796,7 +1814,11 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             return "{ typeof(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
 
         case INeg(dst, _, operand):
-            return v(dst) + " = -" + v(operand) + ";"
+            # Cast the operand to int64_t: self-host type inference may
+            # declare the operand as void* when it's actually an integer
+            # carried through phi/merge points. The cast is a no-op for
+            # proper int declarations.
+            return v(dst) + " = -(int64_t)(intptr_t)" + v(operand) + ";"
 
         # ── Bitwise ──
         case IBitAnd(dst, _, lhs, rhs):
@@ -2741,7 +2763,13 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
         bool is_str = (arg_ty == gs_ty)
         bool str_pos = str_by_value_fn and runtime_arg_is_str(name, ai)
         bool cstr_pos = runtime_arg_is_cstr(name, ai)
-        if cstr_pos and is_str:
+        bool addr_pos = runtime_arg_needs_addr(name, ai)
+        if addr_pos and not is_ptr:
+            # Runtime fn declares this arg as a pointer to an aggregate;
+            # the self-host lowered it by value (lost `&` along the way).
+            # Wrap with `&` to recover the pointer.
+            out = out + "&" + v(arg_id)
+        elif cstr_pos and is_str:
             # Runtime fn wants const char*, caller has Str — convert via
             # gorget_str_to_cstr(s) for null-terminated path (takes Str by value).
             out = out + "gorget_str_to_cstr(" + v(arg_id) + ")"
@@ -2761,6 +2789,10 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                         out = out + "*(" + pty_name + "*)" + v(arg_id)
                     else:
                         out = out + "(" + pty_name + "){0}"
+                elif not lir_is_aggregate(pty) and lir_is_aggregate(arg_ty) and (pty == LT_PTR or (pty >= LT_PTR_TO_BASE and pty < LT_STRUCT_BASE)):
+                    # Callee expects a pointer, caller has an aggregate by
+                    # value — wrap with `&` to pass its address.
+                    out = out + "&" + v(arg_id)
                 else:
                     out = out + v(arg_id)
             else:
@@ -3419,6 +3451,16 @@ String generate_c(LirModule &m):
     Dict[String, String] sn = build_struct_names(&m)
 
     String out = ""
+
+    # Fallback stubs for prelude variants that fell through type inference
+    # — emitted as macros so any remaining bare `Some(x)` / `Ok(x)` / `Error(x)`
+    # calls lex as identity casts. The correct struct-literal path emits
+    # inline without hitting these. This lets stage-1 link even when the
+    # inference couldn't determine the parametrized Option/Result type.
+    out = out + "#define Some(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#define Ok(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#define Error(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#define None() ((int64_t)0)\n\n"
 
     # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
     # Emit FIRST so struct field types like `Box__SpannedExpr` (void*) are

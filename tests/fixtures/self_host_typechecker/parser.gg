@@ -3369,6 +3369,7 @@ equip Parser:
             return IFunction(decl)
         self.expect_tok(TOK_COLON, "expected ':' after extern")
         Vector[FunctionDef] fns = Vector[FunctionDef]()
+        self.skip_newlines()
         if self.match_tok(TOK_INDENT):
             while not self.check_tok(TOK_DEDENT) and not self.at_end():
                 self.skip_trivia()
@@ -3380,6 +3381,13 @@ equip Parser:
                 # Skip the inner `extern` keyword so the next token is the
                 # return type, matching what parse_function_def expects.
                 if self.check_kw(KW_EXTERN):
+                    self.advance()
+                # Skip optional `blocking` / `async` modifiers before the
+                # return type. `blocking` is a bare identifier in the self-
+                # host lexer (not a keyword).
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                    self.advance()
+                if self.check_kw(KW_ASYNC):
                     self.advance()
                 FunctionDef fn_fd = self.parse_function_def()
                 # Preserve the alias body (`= "symbol"`) so loader.gg can
