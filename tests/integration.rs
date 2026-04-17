@@ -1979,6 +1979,11 @@ fn cloneable_primitive_bound() {
 }
 
 #[test]
+fn iterator_direct() {
+    run_gg("iterator_direct.gg", "0\n1\n2\n3\n4\ndone");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

@@ -733,7 +733,9 @@ fn lower_for_iterable(
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
-    // 1. Find the iter() method for this type
+    // 1. Find the iter() method for this type, or — if the type implements
+    // Iterator directly (has `next()` but no `iter()`) — treat `self` as the
+    // iterator by skipping the iter() call.
     // Search fn_sigs for patterns like: Iterable__T_for_TypeName__iter or TypeName__iter
     let iter_fn_name = ctx.fn_sigs.keys()
         .find(|k| k.ends_with("__iter") && k.contains(&format!("_for_{type_name}__")))
@@ -743,22 +745,35 @@ fn lower_for_iterable(
             if ctx.fn_sigs.contains_key(&direct) { Some(direct) } else { None }
         });
 
-    let iter_fn_name = match iter_fn_name {
-        Some(name) => name,
-        None => return, // No iter() method found — silently skip
+    // Detect types that directly implement Iterator (have next() but no iter()).
+    let has_next_direct = {
+        let direct_next = format!("{type_name}__next");
+        ctx.fn_sigs.contains_key(&direct_next)
+            || ctx.fn_sigs.keys().any(|k| k.ends_with("__next") && k.contains(&format!("_for_{type_name}__")))
     };
+    let self_as_iterator = iter_fn_name.is_none() && has_next_direct;
 
-    // 2. Get the iterator return type from fn_sigs
-    let (_, iter_ret_type) = match ctx.fn_sigs.get(&iter_fn_name) {
-        Some(sig) => sig.clone(),
-        None => return,
-    };
-
-    // Get the iterator type name
-    let iter_type_name = match ctx.type_registry.type_name(iter_ret_type) {
-        Some(name) => name,
-        None => return,
-    };
+    // 2. Determine the iterator return type. If there's an iter() method, use
+    // its return type; otherwise the iterator IS the collection itself.
+    let iter_type_name;
+    let iter_ret_type;
+    if let Some(ref iter_fn) = iter_fn_name {
+        let (_, ret) = match ctx.fn_sigs.get(iter_fn) {
+            Some(sig) => sig.clone(),
+            None => return,
+        };
+        iter_ret_type = ret;
+        iter_type_name = match ctx.type_registry.type_name(iter_ret_type) {
+            Some(name) => name,
+            None => return,
+        };
+    } else if self_as_iterator {
+        // Self-as-iterator: iter type = collection type.
+        iter_ret_type = infer_operand_type_full(ctx, &iter_op, builder);
+        iter_type_name = type_name.to_string();
+    } else {
+        return;
+    }
 
     // 3. Find the next() method for the iterator type
     let next_fn_name = ctx.fn_sigs.keys()
@@ -787,19 +802,24 @@ fn lower_for_iterable(
         .unwrap_or("int64_t");
     let elem_type = ctx.type_mapper.lookup_named(elem_c_type).unwrap_or(I64_TYPE);
 
-    // 5. Store the iterable and call iter()
+    // 5. Store the iterable and (optionally) call iter()
     let iter_type_full = infer_operand_type_full(ctx, &iter_op, builder);
     let collection_local = builder.add_local(iter_type_full, None);
     builder.assign(Place::local(collection_local), iter_op);
 
-    // Call iter(&collection) → iterator
-    let self_ptr_type = ctx.register_ptr_type(iter_type_full);
-    let self_ref = builder.borrow(Place::local(collection_local), self_ptr_type);
-    let iterator_local = builder.call_extern(
-        &iter_fn_name,
-        vec![FunctionBuilder::copy(self_ref)],
-        iter_ret_type,
-    );
+    let iterator_local = if let Some(ref iter_fn) = iter_fn_name {
+        // Iterable path: Call iter(&collection) → iterator
+        let self_ptr_type = ctx.register_ptr_type(iter_type_full);
+        let self_ref = builder.borrow(Place::local(collection_local), self_ptr_type);
+        builder.call_extern(
+            iter_fn,
+            vec![FunctionBuilder::copy(self_ref)],
+            iter_ret_type,
+        )
+    } else {
+        // Direct-Iterator path: the collection IS the iterator.
+        collection_local
+    };
 
     // 6. Build the loop structure
     let header_bb = builder.new_block();

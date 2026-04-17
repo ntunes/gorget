@@ -1,0 +1,22 @@
+# User-defined types that implement Iterator directly (no separate
+# Iterable wrapper) can be used as for-loop targets — the for-lowering
+# treats `self` as its own iterator when a `next()` method is present
+# but no `iter()` method is.
+
+struct Counter:
+    int idx
+    int limit
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int r = self.idx
+        self.idx = self.idx + 1
+        return Some(r)
+
+void main():
+    Counter c = Counter(0, 5)
+    for x in c:
+        print(x)
+    print("done")
