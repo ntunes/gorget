@@ -1020,6 +1020,10 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if fn_name == "gorget_array_extend" and arg_idx == 1:
         return true
+    if fn_name == "gorget_array_index_of" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_array_safe_remove" and arg_idx == 1:
+        return true
     return false
 
 # Check if a GIR type ID represents a pointer type (Ptr or MutPtr).
