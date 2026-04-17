@@ -10892,6 +10892,7 @@ fn type_comparison() {
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
+#[serial(self_host_lowerer_driver)]
 fn lowerer_comparison() {
     // 1. Build the Gorget lowerer driver
     let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
@@ -11017,6 +11018,116 @@ fn lowerer_comparison() {
 
     // Diagnostic test — always passes. Mismatches guide development.
     eprintln!("\n================================\n");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Self-host Bootstrap
+// ═══════════════════════════════════════════════════════════════
+//
+// Verifies that the stage-0 driver (compiled from the self-host
+// source by the Rust compiler) can emit C for its own source, and
+// that the emitted C — paired with the Rust compiler's runtime
+// preamble — compiles and links into a stage-1 binary. This locks
+// in the "does the self-host produce linkable C" property so
+// bootstrap regressions fail loudly.
+//
+// The test does NOT assert stage-1 runs correctly (some prelude
+// variant calls currently drop their payload — see TODO.md). It
+// only guarantees the link succeeds.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_bootstrap() {
+    // 1. Build stage-0 driver via the Rust compiler. build_gg_dir
+    //    leaves driver.c next to the binary — we reuse it to extract
+    //    the runtime preamble in step 3.
+    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let driver_gg = manifest_dir
+        .join("tests/fixtures/self_host_lowerer/driver.gg");
+
+    // 2. Run stage-0 driver on its own source with `--lir-c` — emits
+    //    the self-contained C body (no preamble). Uses a longer
+    //    deadline than the default test timeout; the self-host driver
+    //    needs ~30s–1min on its own 4K-line source.
+    let body_out = run_with_deadline(
+        Command::new(&driver_exe)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_bootstrap driver.gg",
+        Duration::from_secs(120),
+    );
+    assert!(
+        body_out.status.success(),
+        "stage-0 driver failed: stderr={}",
+        String::from_utf8_lossy(&body_out.stderr),
+    );
+    let body_c = String::from_utf8_lossy(&body_out.stdout).to_string();
+    assert!(
+        body_c.len() > 10_000,
+        "stage-0 output suspiciously small: {} bytes",
+        body_c.len()
+    );
+
+    // 3. Extract runtime preamble from the Rust-compiled driver.c:
+    //    everything before the first user-type typedef. The stage-0
+    //    body re-emits the user types, so cutting the Rust preamble
+    //    at that boundary avoids duplicate struct definitions.
+    let rust_c = std::fs::read_to_string(&driver_c)
+        .expect("failed to read driver.c");
+    let preamble_end = rust_c
+        .find("\ntypedef struct __gg_")
+        .expect("driver.c has no user-type typedef boundary");
+    let runtime_preamble = &rust_c[..preamble_end];
+
+    // 4. Concatenate preamble + body into stage1 source, write to tmp.
+    let tmp_dir = std::env::temp_dir();
+    let stage1_c = tmp_dir.join("self_host_stage1.c");
+    let stage1_bin = tmp_dir.join("self_host_stage1");
+    std::fs::write(&stage1_c, format!("{runtime_preamble}\n{body_c}"))
+        .expect("failed to write stage1.c");
+
+    // 5. Compile with cc. `-w` suppresses warnings so only hard
+    //    errors (type mismatches, undefined refs) fail the test.
+    let cc_out = Command::new("cc")
+        .arg("-O0")
+        .arg("-w")
+        .arg("-o")
+        .arg(&stage1_bin)
+        .arg(&stage1_c)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("failed to spawn cc");
+
+    // 6. Cleanup the stage-0 artifacts regardless of the cc outcome.
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    if !cc_out.status.success() {
+        let stderr = String::from_utf8_lossy(&cc_out.stderr);
+        // Keep stage1.c around on failure so the user can inspect it.
+        panic!(
+            "stage-1 compile/link failed.\n\
+             stage1.c preserved at {}\n\
+             --- cc stderr (first 4 KB) ---\n{}",
+            stage1_c.display(),
+            &stderr[..stderr.len().min(4096)],
+        );
+    }
+
+    // 7. Binary exists and is executable.
+    assert!(
+        stage1_bin.exists(),
+        "cc succeeded but stage1 binary missing at {}",
+        stage1_bin.display()
+    );
+
+    // Cleanup stage1 artifacts on success.
+    let _ = std::fs::remove_file(&stage1_c);
+    let _ = std::fs::remove_file(&stage1_bin);
 }
 
 // Numeric trait integration tests
