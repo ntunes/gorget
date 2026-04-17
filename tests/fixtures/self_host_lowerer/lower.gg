@@ -444,7 +444,12 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetArray")
     if method == "chunks" or method == "zip":
         return lookup_or_register_named(&gmod, "GorgetArray")
-    if method == "filter_by":
+    if method == "filter_by" or method == "filter":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    # HOFs that return collections (preserve receiver type heuristically).
+    if method == "map" or method == "flat_map" or method == "flatten":
+        return lookup_or_register_named(&gmod, "GorgetArray")
+    if method == "concat":
         return lookup_or_register_named(&gmod, "GorgetArray")
     # Float-returning methods
     if method == "sum" or method == "avg" or method == "min" or method == "max":
