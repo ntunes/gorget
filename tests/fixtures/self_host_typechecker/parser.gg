@@ -3391,11 +3391,23 @@ equip Parser:
                     self.advance()
                 FunctionDef fn_fd = self.parse_function_def()
                 # Preserve the alias body (`= "symbol"`) so loader.gg can
-                # detect the rename. Strip any other expression body.
+                # detect the rename. parse_function_def wraps the expr in
+                # SReturn(Some(...)) — preserve that shape when the inner
+                # expression is a string literal.
                 Vector[Stmt] fn_body = Vector[Stmt]()
                 if fn_fd.is_expr_body and fn_fd.body.len() == 1:
                     Stmt fn_first = fn_fd.body.get(0).unwrap()
                     match fn_first:
+                        case SReturn(fn_ret_opt):
+                            match fn_ret_opt:
+                                case Some(fn_ret_expr):
+                                    match fn_ret_expr.expr:
+                                        case EStringLiteral(_, _):
+                                            fn_body.push(fn_first)
+                                        else:
+                                            pass
+                                case None:
+                                    pass
                         case SExpr(fn_sx):
                             match fn_sx.expr:
                                 case EStringLiteral(_, _):

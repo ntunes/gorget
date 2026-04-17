@@ -91,9 +91,9 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             import_mod_paths.push(sub_imp.module_path.clone())
                             loaded.put(sub_imp.module_path, true)
                     case IFunction(fdef):
-                        # Aliased extern stub: body is exactly one SExpr wrapping
-                        # an EStringLiteral with the C symbol name. Register the
-                        # rename in call_redirects so codegen calls the real ABI.
+                        # Aliased extern stub: body is one of SExpr(EStringLiteral)
+                        # or SReturn(Some(EStringLiteral)) depending on how the
+                        # parser wrapped `= "symbol"`.
                         if fdef.body.len() == 1:
                             Stmt alias_s = fdef.body.get(0).unwrap()
                             match alias_s:
@@ -102,6 +102,16 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                         case EStringLiteral(alias_val, _):
                                             call_redirects.put(fdef.name.clone(), alias_val.clone())
                                         else:
+                                            pass
+                                case SReturn(alias_ret_opt):
+                                    match alias_ret_opt:
+                                        case Some(alias_ret_expr):
+                                            match alias_ret_expr.expr:
+                                                case EStringLiteral(alias_val2, _):
+                                                    call_redirects.put(fdef.name.clone(), alias_val2.clone())
+                                                else:
+                                                    pass
+                                        case None:
                                             pass
                                 else:
                                     pass
@@ -229,8 +239,9 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field)
                             m.items.push(IEquip(filtered))
                     case IExternBlock(ext_fns):
-                        # Extract aliases from extern stubs: body is exactly one
-                        # SExpr(EStringLiteral(alias)). Populate call_redirects.
+                        # Extract aliases from extern stubs: body is one of
+                        # SExpr(EStringLiteral) or SReturn(Some(EStringLiteral))
+                        # depending on how parse_function_def wrapped `= "..."`.
                         int exi = 0
                         while exi < ext_fns.len():
                             FunctionDef ext_fd = ext_fns.get(exi).unwrap()
@@ -242,6 +253,16 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                             case EStringLiteral(ext_val, _):
                                                 call_redirects.put(ext_fd.name.clone(), ext_val.clone())
                                             else:
+                                                pass
+                                    case SReturn(ext_ret_opt):
+                                        match ext_ret_opt:
+                                            case Some(ext_ret_expr):
+                                                match ext_ret_expr.expr:
+                                                    case EStringLiteral(ext_val2, _):
+                                                        call_redirects.put(ext_fd.name.clone(), ext_val2.clone())
+                                                    else:
+                                                        pass
+                                            case None:
                                                 pass
                                     else:
                                         pass

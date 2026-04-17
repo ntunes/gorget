@@ -1021,6 +1021,8 @@ bool runtime_takes_str_by_value(String name):
         return true
     if name == "gorget_str_lines" or name == "gorget_str_chars":
         return true
+    if name == "gorget_str_bytes":
+        return true
     return false
 
 int runtime_fn_return_type(String name, LirModule &m):

@@ -934,6 +934,10 @@ bool is_collection_constructor(String name):
     # it's a constructor, not a method call.
     if method == "int64_t" or method == "double" or method == "bool" or method == "int32_t":
         return true
+    if method == "int16_t" or method == "int8_t" or method == "uint64_t" or method == "uint32_t":
+        return true
+    if method == "uint16_t" or method == "uint8_t" or method == "byte" or method == "float":
+        return true
     if method == "GorgetString" or method == "Str":
         return true
     if method.len() > 0:
@@ -950,7 +954,7 @@ int type_elem_size(String elem, StructRegistry &sr):
         return 4
     elif elem == "int16_t" or elem == "uint16_t":
         return 2
-    elif elem == "int8_t" or elem == "uint8_t" or elem == "bool":
+    elif elem == "int8_t" or elem == "uint8_t" or elem == "bool" or elem == "byte":
         return 1
     elif elem == "GorgetString" or elem == "Str":
         return 32

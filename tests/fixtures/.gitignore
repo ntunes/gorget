@@ -9,3 +9,9 @@
 !self_host_*/**
 !modules_pkg*/
 !modules_pkg*/**
+
+# Re-ignore compiled/generated artifacts inside self-host subdirs
+self_host_*/driver
+self_host_*/driver.c
+self_host_*/main
+self_host_*/main.c
