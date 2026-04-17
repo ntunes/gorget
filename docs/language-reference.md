@@ -2550,6 +2550,10 @@ The compiler automatically registers the following core traits. They cannot be r
 | `TryFrom[T]` | `Result[Self, String] try_from(T value)` (static) | `Result[Self, String]` | Fallible type conversion, `@derive(TryFrom)` |
 | `Parseable` | `Option[Self] parse(String s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
 | `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
+| `Debuggable` | `String debug(self)` | `String` | `@derive(Debuggable)` + developer-facing debug representation |
+| `Writer` | `Result[int, IoError] write_bytes(&self, Vector[byte] buf)` | `Result[int, IoError]` | Byte sinks — std.io `write_all`, `write_display`, `writeln`, `println` |
+| `Reader` | `Result[int, IoError] read_bytes(&self, Vector[byte] &buf)` | `Result[int, IoError]` | Byte sources — std.io `reader_drain`, `read_exact` |
+| `Error` | `Option[String] source(&self)` (extends `Displayable & Debuggable`) | `Option[String]` | Narrow error trait; every stdlib error type (`IoError`, `ParseError`, …) implements it |
 
 #### Displayable
 
@@ -3018,8 +3022,13 @@ These methods operate on individual characters within a `String`:
 | `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` (deep-clones resource-type elements) |
 | `clear()` | `→ void` | Remove all elements (drops resource-type elements) |
 | `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
-| `sort()` | `→ void` | Sort elements in place (ascending) |
-| `sorted()` | `→ Vector[T]` | Return a new sorted copy |
+| `capacity()` | `→ int` | Current allocated capacity (elements — may exceed `len()`) |
+| `sort()` / `sort(cmp)` | `[(T, T) → int] → void` | Sort elements in place (ascending by default, or with custom comparator) |
+| `sorted()` / `sorted(cmp)` | `[(T, T) → int] → Vector[T]` | Return a new sorted copy |
+| `sort_by_key(key_fn)` | `(T) → K → void` | Sort in place by a key function (avoids recomputing the key per comparison) |
+| `sorted_by_key(key_fn)` | `(T) → K → Vector[T]` | Return a new copy sorted by a key function |
+| `windows(n)` | `int → Vector[Vector[T]]` | Sliding windows of size `n` (overlapping) |
+| `chunks(n)` | `int → Vector[Vector[T]]` | Non-overlapping chunks of size `n` (last may be shorter) |
 | `reverse()` | `→ void` | Reverse elements in place |
 | `any(pred)` | `(T) → bool → bool` | True if any element satisfies predicate |
 | `all(pred)` | `(T) → bool → bool` | True if all elements satisfy predicate |
@@ -3221,27 +3230,51 @@ The following functions are available via `import`:
 |---|---|---|
 | `ord` | `int(String)` | Character to integer code point |
 | `chr` | `String(int)` | Integer code point to character |
-| `parse_int` | `Result[int, String](String)` | Parse string as integer |
-| `parse_float` | `Result[float, String](String)` | Parse string as float |
+| `parse_int` | `Result[int, ParseError](String)` | Parse string as integer |
+| `parse_float` | `Result[float, ParseError](String)` | Parse string as float |
 | `int_to_str` | `String(int)` | Integer to string |
 | `float_to_str` | `String(float)` | Float to string (compact format) |
 | `bool_to_str` | `String(bool)` | Bool to `"true"` or `"false"` |
 | `codepoint_to_str` | `String(int)` | Unicode code point to string |
 | `int_to_float` | `float(int)` | Integer to float |
 
-> **Note:** `parse_int` and `parse_float` return `Result` — use `.unwrap()` or pattern match to extract the value. For `Option`-based fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
+**Exports:** `ParseError` enum — `Empty`, `InvalidNumber(String)`, `OutOfRange(String)`, `InvalidSyntax(int, String)`, `Other(String)`. Implements `Displayable & Debuggable & Error`.
+
+> **Note:** `parse_int` / `parse_float` return `Result[T, ParseError]` — use `.unwrap()` or pattern match on `ParseError` variants. For `Option`-based fallible parsing, use the `Parseable` trait: `int.parse(s)` returns `Option[int]`, `float.parse(s)` returns `Option[float]` (see §15.1).
 
 **`std.io`** — I/O
 
 | Name | Signature | Description |
 |---|---|---|
-| `stderr` | `File` | Standard error stream |
+| `File` | `struct File { int handle }` | Opaque file handle (16 bytes: `FILE*` + `owned` flag) |
+| `stdin` | `File` | Standard input stream |
 | `stdout` | `File` | Standard output stream |
+| `stderr` | `File` | Standard error stream |
 | `getchar` | `int()` | Read one byte from stdin (-1 on EOF) |
 | `term_cols` | `int()` | Terminal width in columns |
 | `term_rows` | `int()` | Terminal height in rows |
 | `input` | `String(String)` | Print prompt, read a line from stdin |
 | `readline` | `String()` | Read a line from stdin (no prompt) |
+| `file_open` | `Result[File, IoError](String path, String mode)` | Open a file — typed open |
+| `read_to_string` | `Result[String, IoError](String path)` | Whole-file read with UTF-8 validation |
+| `read_all_bytes` | `Result[Vector[byte], IoError](String path)` | Whole-file read (bytes) |
+| `write_string` | `Result[int, IoError](String path, String content)` | Whole-file write |
+| `write_all_bytes` | `Result[int, IoError](String path, Vector[byte] buf)` | Whole-file write (bytes) |
+| `write_all[W]` | `Result[int, IoError](W &w, Vector[byte] buf)` | Generic short-write loop |
+| `write_str[W]` | `Result[int, IoError](W &w, String s)` | Text shortcut over `write_all` |
+| `write_display[W, D: Displayable]` | `Result[int, IoError](W &w, D v)` | Format + write |
+| `writeln[W, D: Displayable]` | `Result[int, IoError](W &w, D v)` | Formatted write + `"\n"` |
+| `println[D: Displayable]` | `Result[int, IoError](D v)` | `writeln[File, D](&stdout, v)` shortcut |
+| `println_str` | `Result[int, IoError](String s)` | Text shortcut over `println` |
+| `reader_drain[R]` | `Result[Vector[byte], IoError](R &reader)` | Read to EOF |
+| `read_exact[R]` | `Result[Vector[byte], IoError](R &reader, int n)` | Read exactly `n` bytes |
+| `from_string_error[T]` | `Result[T, IoError](Result[T, String])` | Adapt legacy stringly-typed errors |
+
+**Traits:** `Writer` — `Result[int, IoError] write_bytes(&self, Vector[byte] buf)`. `Reader` — `Result[int, IoError] read_bytes(&self, Vector[byte] &buf)`. `Error` — `extends Displayable & Debuggable` + `Option[String] source(&self)`.
+
+**Writer/Reader implementors:** `String`, `File` (includes `stdout`/`stderr`/`stdin`), `Socket`, `TlsSocket`.
+
+**Exports:** `IoError` enum — `NotFound`, `PermissionDenied`, `AlreadyExists`, `BrokenPipe`, `ConnectionRefused`, `ConnectionReset`, `ConnectionAborted`, `NotConnected`, `AddrInUse`, `TimedOut`, `WouldBlock`, `Interrupted`, `UnexpectedEof`, `InvalidInput`, `InvalidData`, `Utf8Invalid(int)`, `Other(String)`. Implements `Displayable & Debuggable & Error`.
 
 **`std.random`** — Random numbers
 

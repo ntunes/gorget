@@ -456,6 +456,38 @@ with x:
 Fix: pass the underlying shared reference (`&x` declared `shared`) directly to the spawn,
 outside the `with` block, so the spawned task manages its own lock acquisition.
 
+### §3.9 — Borrowed reference crossing `spawn`
+
+A `spawn` argument is a plain borrow (not wrapped in a `shared T` container). The child
+task could outlive the borrow's owner, leaving a dangling reference.
+
+```gorget
+void child(&Config cfg):    # takes a borrow
+    use(cfg)
+
+void parent():
+    Config cfg = Config.default()
+    spawn child(&cfg)       # ERROR: borrowed reference crossing spawn boundary
+```
+
+Fix: wrap the value in `shared Config`, pass by value (if Copy), move ownership with
+`!cfg`, or use a channel to communicate.
+
+### §3.10 — Closure captures a borrow
+
+A closure passed to `spawn` captures a local by borrow. Same risk as §3.9 — the capture
+could outlive the caller.
+
+```gorget
+void parent():
+    String msg = "hello"
+    spawn ((): print(msg))()  # ERROR: captures msg by borrow (String is a resource)
+```
+
+The compiler likewise rejects closures that capture a `shared` directly (use `shared.get()`
+inside the closure body instead) or capture mutably (`&`-bound). Reading a Copy value
+(int, bool, etc.) by capture is always safe.
+
 ---
 
 ## Choosing the Right Primitive
