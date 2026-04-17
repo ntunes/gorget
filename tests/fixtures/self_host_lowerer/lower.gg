@@ -325,6 +325,21 @@ Vector[int] get_fn_param_types(String name, GirModule &gmod):
     return types
 
 # Check if a call name is a type constructor (produces a named type).
+# Map binary operator strings to their trait-method names (for operator
+# overload dispatch on user structs).
+String binop_method_name(String op):
+    if op == "+":
+        return "add"
+    if op == "-":
+        return "sub"
+    if op == "*":
+        return "mul"
+    if op == "/":
+        return "div"
+    if op == "%":
+        return "rem"
+    return ""
+
 # Returns the parent enum name if `name` is a variant of a known enum,
 # or "" if not a variant. Used to route bare variant constructors
 # (IntCol, Red, Ok, ...) to their enclosing enum's named type.
@@ -729,6 +744,26 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 concat_args.push(OpCopy(rhs))
                 emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
                 return dst
+            # Operator overload on user types: if lhs is a user struct/enum,
+            # route `a + b` → a.add(b), `a - b` → a.sub(b), etc.
+            String op_method = binop_method_name(op)
+            if op_method != "":
+                String lhs_tname = local_type_name(lhs, &ctx, &gmod)
+                bool lhs_is_user = gmod.type_infos.contains(lhs_tname)
+                if lhs_is_user:
+                    String method_full = lhs_tname + "__" + op_method
+                    Vector[Operand] op_args = [OpMove(lhs), OpCopy(rhs)]
+                    int op_ret = I64_TYPE
+                    if gmod.fn_sigs.contains(method_full):
+                        op_ret = gmod.fn_sigs.get(method_full).unwrap()
+                    else:
+                        # Assume op returns lhs type (common for Add/Sub/Mul/Div).
+                        int lhs_tid = ctx.locals.get(lhs).unwrap().type_id
+                        if lhs_tid != I64_TYPE:
+                            op_ret = lhs_tid
+                    int op_dst = add_local(&ctx, op_ret, NO_NAME)
+                    emit(&ctx, GICallExtern(op_dst, method_full, op_args))
+                    return op_dst
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
             return dst
@@ -1173,6 +1208,19 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 ret_type = lookup_or_register_named(&gmod, parent)
             else:
                 ret_type = lookup_or_register_named(&gmod, call_name)
+        # Monomorphized user-struct constructors (e.g. Wrapper__int64_t) —
+        # detect via type_infos lookup even if name contains "__".
+        if ret_type == I64_TYPE and gmod.type_infos.contains(call_name):
+            ret_type = lookup_or_register_named(&gmod, call_name)
+        # Template-name constructor: Wrapper__int64_t has template Wrapper
+        # in type_infos. Route to the monomorphized named type.
+        if ret_type == I64_TYPE:
+            if call_name.contains("__"):
+                int dunder = call_name.index_of("__").unwrap()
+                if dunder > 0:
+                    String tmpl_name = call_name.slice(0, dunder)
+                    if gmod.type_infos.contains(tmpl_name):
+                        ret_type = lookup_or_register_named(&gmod, call_name)
         # Builtin calls (args, read_file, int_to_str, ...)
         if ret_type == I64_TYPE:
             int builtin_ret = builtin_call_return_type(fname, &gmod)
