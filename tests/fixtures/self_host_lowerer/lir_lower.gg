@@ -1777,6 +1777,31 @@ LirModule lower_gir_to_lir(GirModule &gmod):
                 m.enum_variant_parent.put(v_v.name, tname_v)
                 vi_v += 1
         tivi += 1
+    # Prelude variants: these aren't in type_infos but follow known enum
+    # conventions. Ok/Error belong to Result (parametrized), Some/None to
+    # Option. We can't know the full parametrized name without context, but
+    # for codegen purposes we redirect them to whichever concrete Option__X /
+    # Result__X__Y is registered (picked heuristically — first one found).
+    String any_option = ""
+    String any_result = ""
+    int sdi = 0
+    while sdi < m.structs.len():
+        LirStructDef s_def = m.structs.get(sdi).unwrap()
+        if s_def.name.starts_with("Option__") and any_option == "":
+            any_option = s_def.name
+        if s_def.name.starts_with("Result__") and any_result == "":
+            any_result = s_def.name
+        sdi += 1
+    if any_option != "" and not m.enum_variant_parent.contains("Some"):
+        m.enum_variant_parent.put("Some", any_option)
+    if any_option != "" and not m.enum_variant_parent.contains("None"):
+        m.enum_variant_parent.put("None", any_option)
+    if any_result != "" and not m.enum_variant_parent.contains("Ok"):
+        m.enum_variant_parent.put("Ok", any_result)
+    if any_result != "" and not m.enum_variant_parent.contains("Error"):
+        m.enum_variant_parent.put("Error", any_result)
+    if any_result != "" and not m.enum_variant_parent.contains("Err"):
+        m.enum_variant_parent.put("Err", any_result)
 
     # Register builtin structs
     register_builtin_structs(&m, &sr)

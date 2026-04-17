@@ -400,13 +400,23 @@ String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
         return "int64_t"
     int tid = ctx.locals.get(local_id).unwrap().type_id
-    if tid >= 0 and tid < gmod.type_table.len():
-        GirType gt = gmod.type_table.get(tid).unwrap()
-        match gt:
-            case GtNamed(name):
-                return name
-            else:
-                pass
+    return type_id_to_base_name(tid, &gmod)
+
+# Unwrap Ptr/MutPtr to reach the underlying named type (for method dispatch
+# on borrow/move params).
+String type_id_to_base_name(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return "int64_t"
+    GirType gt = gmod.type_table.get(tid).unwrap()
+    match gt:
+        case GtNamed(name):
+            return name
+        case GtPtr(inner):
+            return type_id_to_base_name(inner, &gmod)
+        case GtMutPtr(inner):
+            return type_id_to_base_name(inner, &gmod)
+        else:
+            pass
     return "int64_t"
 
 # Infer the return type of a method call.
