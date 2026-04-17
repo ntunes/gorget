@@ -332,6 +332,18 @@ bool is_type_constructor(String name):
         return false
     if name == "GorgetString" or name == "Str" or name == "Char":
         return false
+    # Runtime-provided generic wrapper constructors — bare form maps to
+    # runtime fns (gorget_box_new, gorget_rc_new, etc.), not user structs.
+    if name == "Box" or name == "Rc" or name == "Arc" or name == "Weak":
+        return false
+    if name == "Shared" or name == "Mutex" or name == "RWLock":
+        return false
+    if name == "Channel" or name == "Deque" or name == "Vector":
+        return false
+    if name == "Dict" or name == "HashMap" or name == "Set" or name == "HashSet":
+        return false
+    if name == "Option" or name == "Result":
+        return false
     # Also check for user-defined struct names (capitalized, no __)
     if name.len() > 0:
         String first = name.slice(0, 1)

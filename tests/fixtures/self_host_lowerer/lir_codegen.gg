@@ -1404,18 +1404,18 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 return "/* void store */;"
             int slot_ty = func.slots.get(slot).unwrap().ty
             if lir_is_aggregate(slot_ty):
-                int vty = -1
+                int vty = LT_VOID
                 if val_types.contains(value):
                     vty = val_types.get(value).unwrap()
-                if vty == LT_PTR:
+                if vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE):
                     String ty_name = c_type_name(slot_ty, &sn)
                     return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
-                # Type mismatch coercion: storing a scalar I64 into an aggregate
-                # slot usually means the value was a placeholder from lossy
-                # lowering (tuple/array literal, default init). Emit a
-                # zero-initialization to keep the C compiler happy instead of
-                # a raw assignment that would fail type checking.
-                if vty != LT_VOID and vty != slot_ty and not lir_is_aggregate(vty):
+                # Type mismatch coercion: storing a scalar value (or unit / void /
+                # unknown) into an aggregate slot usually means the value was a
+                # placeholder from lossy lowering (tuple/array literal, None,
+                # default init). Emit a zero-initialization instead of a raw
+                # assignment that would fail C type checking.
+                if vty != slot_ty and not lir_is_aggregate(vty):
                     String ty_name = c_type_name(slot_ty, &sn)
                     return s(slot) + " = (" + ty_name + "){0};"
                 return s(slot) + " = " + v(value) + ";"
