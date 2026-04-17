@@ -5780,16 +5780,12 @@ fn emit_inst(
 
                     let expects_agg = expected_ty.map_or(false, |t| t.is_aggregate());
 
-                    // Detect GorgetString value passed to const char* param:
-                    // Use param_abis (CStr annotation) or known function list.
+                    // Detect GorgetString value passed to const char* param: trust the
+                    // CStr ABI tag on the extern's param_abis (registered by
+                    // runtime_extern_sig in src/lir/lower/calls.rs).
                     let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
-                    let is_str_to_cstr = (param_abi == crate::ir::abi::AbiKind::CStr
-                        || (expects_ptr && match (name, i) {
-                            ("gorget_assert_fail_values", 0) | ("gorget_panic", 0) => true,
-                            // gorget_string_push_line takes (GorgetString*, const char*) — extract data from arg 1
-                            ("gorget_string_push_line", 1) => true,
-                            _ => false,
-                        }))
+                    let _ = expects_ptr; // kept to preserve surrounding structure
+                    let is_str_to_cstr = param_abi == crate::ir::abi::AbiKind::CStr
                         && match actual_ty {
                         Some(LirType::PtrTo(sid)) if snames.get(&sid.0).map_or(false, |n| n == "GorgetString") => {
                             true

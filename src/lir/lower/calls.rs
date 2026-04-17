@@ -216,6 +216,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_string_cstr" => sig(vec![LirType::Ptr], LirType::Ptr, vec![Ptr]),
         "gorget_string_concat" => sig(vec![LirType::Ptr, LirType::Ptr], g(), vec![Ptr, Ptr]),
         "gorget_string_append" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, Ptr]),
+        // gorget_string_push_line(GorgetString* dst, const char* line)
+        "gorget_string_push_line" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, CStr]),
         // gorget_str_str(GorgetString*) — single ptr arg; sig is wrong (2 Str) but pre-existing
         "gorget_str_str" => sig(vec![s(), s()], s(), vec![Auto, Auto]),
         // gorget_str_from_literal(const char* raw, size_t len) — arg is already const char*
@@ -422,6 +424,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         // gorget_panic(const char*) — may receive Str struct from assert paths
         "gorget_panic" => sig(vec![LirType::Ptr], LirType::Void, vec![CStr]),
         "gorget_assert_fail" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Void, vec![CStr, CStr, Scalar]),
+        // gorget_assert_fail_values(const char* op, Str left, Str right)
+        "gorget_assert_fail_values" => sig(vec![LirType::Ptr, s(), s()], LirType::Void, vec![CStr, GorgetString, GorgetString]),
         "gorget_overflow_add" | "gorget_overflow_sub" | "gorget_overflow_mul" => {
             sig(vec![], LirType::Void, vec![])
         }
