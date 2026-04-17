@@ -248,6 +248,14 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         "GorgetMap" | "GorgetSet" => 152,
         "GorgetClosure" => 16,
         "GorgetRange" => 24,
+        // Monomorphized collection aliases — each `Vector[T]`/`HashSet[T]`/…
+        // wraps a GorgetArray/GorgetMap/GorgetSet so they share the same
+        // runtime layout. Without this the LLVM backend emits `{ i8 }` for
+        // the empty Gorget struct and misaligns everything downstream.
+        _ if name.starts_with("Vector__") || name.starts_with("Deque__") => 64,
+        _ if name.starts_with("Dict__") || name.starts_with("HashMap__") => 152,
+        _ if name.starts_with("Set__") || name.starts_with("HashSet__") => 152,
+        _ if name.starts_with("Heap__") => 64,
         // Concurrency opaque handles — pointer-sized.
         "AtomicInt" | "AtomicBool" | "Mutex" | "Shared" | "RWLock" | "Barrier"
         | "CondVar" | "WaitGroup" | "Semaphore" | "OnceFlag" | "TaskGroup"
