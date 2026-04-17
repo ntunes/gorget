@@ -776,6 +776,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if op_method != "":
                 String lhs_tname = local_type_name(lhs, &ctx, &gmod)
                 bool lhs_is_user = gmod.type_infos.contains(lhs_tname)
+                # Also consider monomorphized names (Wrapper__int64_t has
+                # template Wrapper in type_infos).
+                if not lhs_is_user and lhs_tname.contains("__"):
+                    int dd = lhs_tname.index_of("__").unwrap()
+                    if dd > 0:
+                        String tp = lhs_tname.slice(0, dd)
+                        if gmod.type_infos.contains(tp):
+                            lhs_is_user = true
                 if lhs_is_user:
                     String method_full = lhs_tname + "__" + op_method
                     Vector[Operand] op_args = [OpMove(lhs), OpCopy(rhs)]
