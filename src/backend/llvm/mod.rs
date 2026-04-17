@@ -1342,67 +1342,14 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                             writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                         }
                     } else {
-                        // Truly unknown — infer from args, defaulting to ptr params.
-                        // For return type, check if the function name matches a runtime
-                        // pattern that returns an aggregate (GorgetArray, GorgetString, etc.)
+                        // Truly unknown — no LirExtern declared and not a locally-defined
+                        // function. By design every CallExtern should have a matching
+                        // LirExtern registered via ensure_extern (or be in LIBC_BUILTINS /
+                        // the preamble). Anything reaching here is a forgotten registration
+                        // upstream; declare a minimal void/ptr signature and move on.
                         let params: Vec<String> = args.iter().map(|_| "ptr".to_string()).collect();
-                        let returns_array = name.contains("gorget_array_clone")
-                            || name.contains("gorget_array_slice")
-                            || name.contains("gorget_array_concat");
-                        let returns_string = name.contains("gorget_str_slice")
-                            || name.contains("gorget_str_substr")
-                            || name.contains("gorget_str_trim")
-                            || name.contains("gorget_str_to_lower")
-                            || name.contains("gorget_str_to_upper")
-                            || name.contains("gorget_str_replace")
-                            || name.contains("gorget_str_repeat")
-                            || name.contains("gorget_str_join")
-                            || name.contains("gorget_str_reverse")
-                            || name.contains("gorget_str_pad")
-                            || name.contains("gorget_str_lstrip")
-                            || name.contains("gorget_str_rstrip")
-                            || name.contains("gorget_str_strip")
-                            || name.contains("gorget_string_clone")
-                            || name.contains("gorget_int_to_str")
-                            || name.contains("gorget_float_to_str")
-                            || name.contains("gorget_char_to_str");
-                        let returns_map = name.contains("gorget_map_clone");
-                        let returns_set = name.contains("gorget_set_clone");
-                        if dst.is_none() {
-                            writeln!(out, "declare void @{name}({})", params.join(", ")).unwrap();
-                        } else if returns_array {
-                            let sret_params = if params.is_empty() {
-                                "ptr sret(%GorgetArray)".to_string()
-                            } else {
-                                format!("ptr sret(%GorgetArray), {}", params.join(", "))
-                            };
-                            writeln!(out, "declare void @{name}({sret_params})").unwrap();
-                        } else if returns_string {
-                            let sret_params = if params.is_empty() {
-                                "ptr sret(%GorgetString)".to_string()
-                            } else {
-                                format!("ptr sret(%GorgetString), {}", params.join(", "))
-                            };
-                            writeln!(out, "declare void @{name}({sret_params})").unwrap();
-                        } else if returns_map {
-                            let sret_params = if params.is_empty() {
-                                "ptr sret(%GorgetMap)".to_string()
-                            } else {
-                                format!("ptr sret(%GorgetMap), {}", params.join(", "))
-                            };
-                            writeln!(out, "declare void @{name}({sret_params})").unwrap();
-                        } else if returns_set {
-                            let sret_params = if params.is_empty() {
-                                "ptr sret(%GorgetSet)".to_string()
-                            } else {
-                                format!("ptr sret(%GorgetSet), {}", params.join(", "))
-                            };
-                            writeln!(out, "declare void @{name}({sret_params})").unwrap();
-                        } else {
-                            // Default: return ptr if has dst (most runtime fns return pointers)
-                            let ret = if dst.is_some() { "ptr" } else { "void" };
-                            writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
-                        }
+                        let ret = if dst.is_some() { "ptr" } else { "void" };
+                        writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                     }
                 }
             }
