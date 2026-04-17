@@ -8140,6 +8140,41 @@ static int64_t gorget_socket_write_str(GorgetSocket* sock, const char* s) {
     return (int64_t)total;
 }
 
+// ── Byte-oriented Writer/Reader helpers (errno-returning) ───
+//
+// Mirror the File-side helpers: return bytes written/read (>= 0) on
+// success, or a negative errno on failure. Used by the Writer/Reader
+// equip blocks in std.io to surface a typed IoError. Short writes /
+// reads are legitimate for sockets — callers loop via write_all /
+// reader_drain / read_exact.
+static int64_t gorget_socket_write_bytes_buf(GorgetSocket* sock, const GorgetArray* buf) {
+    if (!sock || sock->fd < 0) return -9;   // EBADF
+    if (!buf || !buf->data || buf->len == 0) return 0;
+    ssize_t sent = send(sock->fd, buf->data, buf->len, 0);
+    if (sent < 0) {
+        int e = errno;
+        if (e == 0) e = 5; // EIO
+        return -(int64_t)e;
+    }
+    return (int64_t)sent;
+}
+
+static int64_t gorget_socket_read_bytes_buf(GorgetSocket* sock, GorgetArray* buf, int64_t max_bytes) {
+    if (!sock || sock->fd < 0) return -9;   // EBADF
+    if (!buf || max_bytes <= 0) return 0;
+    size_t old_len = (size_t)buf->len;
+    gorget_array_ensure_capacity(buf, old_len + (size_t)max_bytes, 1);
+    ssize_t got = recv(sock->fd, (uint8_t*)buf->data + old_len, (size_t)max_bytes, 0);
+    if (got < 0) {
+        int e = errno;
+        if (e == 0) e = 5; // EIO
+        return -(int64_t)e;
+    }
+    if (got == 0) return 0;   // EOF (clean peer close)
+    buf->len = (int64_t)(old_len + (size_t)got);
+    return (int64_t)got;
+}
+
 // Read until \n, return as String (for text protocols like SSH banner)
 static GorgetString gorget_socket_read_line(GorgetSocket* sock) {
     if (sock->fd < 0) return GORGET_EMPTY_STR;
@@ -8794,6 +8829,45 @@ static int64_t gorget_tls_write_str(GorgetTlsSocket* sock, const char* s) {
         total += (size_t)sent;
     }
     return (int64_t)total;
+}
+
+// ── Byte-oriented TLS Writer/Reader helpers (errno-returning) ───
+//
+// Same contract as the socket/file versions: non-negative count on
+// success, negative errno on failure. OpenSSL error codes are mapped
+// to a best-fit errno (ECONNRESET for SSL_ERROR_ZERO_RETURN, EIO
+// otherwise) so the Gorget-side `_errno_to_io_error` helper can
+// produce a structured `IoError`.
+static int64_t gorget_tls_write_bytes_buf(GorgetTlsSocket* sock, const GorgetArray* buf) {
+    if (!sock || !sock->ssl) return -9;   // EBADF
+    if (!buf || !buf->data || buf->len == 0) return 0;
+    int sent = SSL_write(sock->ssl, buf->data, (int)buf->len);
+    if (sent <= 0) {
+        int ssl_err = SSL_get_error(sock->ssl, sent);
+        if (ssl_err == SSL_ERROR_ZERO_RETURN) return -104;  // ECONNRESET
+        int e = errno;
+        if (e == 0) e = 5;   // EIO
+        return -(int64_t)e;
+    }
+    return (int64_t)sent;
+}
+
+static int64_t gorget_tls_read_bytes_buf(GorgetTlsSocket* sock, GorgetArray* buf, int64_t max_bytes) {
+    if (!sock || !sock->ssl) return -9;   // EBADF
+    if (!buf || max_bytes <= 0) return 0;
+    size_t old_len = (size_t)buf->len;
+    gorget_array_ensure_capacity(buf, old_len + (size_t)max_bytes, 1);
+    int got = SSL_read(sock->ssl, (uint8_t*)buf->data + old_len, (int)max_bytes);
+    if (got < 0) {
+        int ssl_err = SSL_get_error(sock->ssl, got);
+        if (ssl_err == SSL_ERROR_ZERO_RETURN) return 0;   // clean close → EOF
+        int e = errno;
+        if (e == 0) e = 5;   // EIO
+        return -(int64_t)e;
+    }
+    if (got == 0) return 0;   // EOF
+    buf->len = (int64_t)(old_len + (size_t)got);
+    return (int64_t)got;
 }
 
 static GorgetString gorget_tls_read_line(GorgetTlsSocket* sock) {

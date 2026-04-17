@@ -1,0 +1,78 @@
+# Socket Writer/Reader — narrow-waist network I/O with typed errors.
+#
+# Spins up a local TCP echo server, writes via Writer.write_bytes on
+# the client, reads back via Reader.read_bytes on the accepted socket.
+# Exercises:
+#   - equip Socket with Writer — write_bytes returns Ok(n) or
+#     Error(IoError.*) per errno.
+#   - equip Socket with Reader — read_bytes appends into caller's
+#     buffer, returns Ok(n) or Ok(0) for EOF.
+#   - write_all loop works over Socket (typed IoError on short-write
+#     path, though a local TCP loopback never exercises it here).
+#
+# Note: Socket's existing equip block defines methods named `read`,
+# `read_exact`, `write`, `write_str` — the narrow-waist free-function
+# helpers in std.io share those names so direct use would shadow the
+# method lookup. This fixture uses the Writer/Reader trait methods
+# (`write_bytes`, `read_bytes`) and the unambiguous `write_all` helper.
+
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.io import IoError, write_all
+from std.collections import Vector
+from std.time import sleep
+
+async void echo_once(ServerSocket !srv):
+    Socket conn = srv.accept().unwrap()
+    srv.close()
+    conn.set_timeout(2000)
+    Vector[byte] buf = Vector[byte]()
+    # Loop Reader.read_bytes until we have 5 bytes.
+    while buf.len() < 5:
+        Result[int, IoError] r = conn.read_bytes(&buf)
+        match r:
+            case Ok(0):
+                break
+            case Ok(n):
+                pass
+            case Error(e):
+                print("server_read_err")
+                return
+    Result[int, IoError] wr = write_all[Socket](&conn, buf)
+    if wr.is_error():
+        print("server_write_err")
+    conn.close()
+
+async void main():
+    ServerSocket srv = server_socket_bind("127.0.0.1", 0).unwrap()
+    int port = srv.local_port()
+    Task[void] server = spawn echo_once(!srv)
+    sleep(0.05).await()
+
+    Socket c = socket_connect("127.0.0.1", port).unwrap()
+    c.set_timeout(2000)
+
+    # Write via Writer.write_bytes directly — the trait method.
+    Result[int, IoError] wr = c.write_bytes("hello".bytes())
+    match wr:
+        case Ok(n):
+            print(n)
+        case Error(e):
+            print(e.display())
+
+    # Read back 5 bytes via Reader.read_bytes in a loop.
+    Vector[byte] rbuf = Vector[byte]()
+    while rbuf.len() < 5:
+        Result[int, IoError] rr = c.read_bytes(&rbuf)
+        match rr:
+            case Ok(0):
+                break
+            case Ok(n):
+                pass
+            case Error(e):
+                print(e.display())
+                break
+    print(rbuf.len())
+
+    c.close()
+    server.await()
+    print("done")

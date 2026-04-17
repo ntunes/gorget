@@ -1,0 +1,39 @@
+# TlsSocket Writer/Reader — compile-only smoke test.
+#
+# No real TLS connection is made (would require a cert/key pair and
+# a network stack). The test verifies:
+#   1. `TlsSocket` implements `Writer` and `Reader` via the equip
+#      blocks in `std.net.tls`.
+#   2. The errno → IoError mapping compiles against OpenSSL's return
+#      codes at the C layer.
+#   3. Free-function helpers `write_all[TlsSocket]` / `reader_drain
+#      [TlsSocket]` monomorphize (with TlsSocket passing the needs_mut
+#      check for `&self` methods).
+#
+# The fixture never reaches the network — the Ok(TlsSocket) branch
+# isn't taken. We only care that the file compiles and exits cleanly.
+
+from std.net.tls import TlsSocket, tls_connect
+from std.io import IoError, write_all, reader_drain
+from std.collections import Vector
+
+int main():
+    Result[TlsSocket, String] cr = tls_connect("127.0.0.1", 1)
+    match cr:
+        case Ok(conn):
+            TlsSocket c = !conn
+            # Writer.write_bytes on a TlsSocket — not reached here, but
+            # the monomorphization must succeed for this branch to compile.
+            Result[int, IoError] wr = c.write_bytes("ping".bytes())
+            Result[int, IoError] wa = write_all[TlsSocket](&c, "pong".bytes())
+            Vector[byte] rbuf = Vector[byte]()
+            Result[int, IoError] rr = c.read_bytes(&rbuf)
+            Result[Vector[byte], IoError] dr = reader_drain[TlsSocket](&c)
+            c.close()
+        case Error(e):
+            # Expected path — no TLS server on port 1. Don't print
+            # the message (errno text varies by platform).
+            pass
+
+    print("ok")
+    return 0

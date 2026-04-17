@@ -1,6 +1,7 @@
 # std.net.socket — TCP socket operations
 
 from std.collections import Vector
+from std.io import IoError, _errno_to_io_error
 
 # ── Opaque types ─────────────────────────────────────────────
 
@@ -30,6 +31,30 @@ equip Socket:
     extern Vector[uint8] nb_read(int n) = "gorget_socket_async_read"
     extern int nb_write(Vector[uint8] data) = "gorget_socket_async_write"
     extern "C" int nb_write_str(String s) = "gorget_socket_async_write_str"
+    # Byte-oriented primitives used by the Writer / Reader equips below.
+    # Returns bytes (>=0) on success, or a negative errno on failure.
+    extern blocking int _write_bytes_buf(Vector[byte] buf) = "gorget_socket_write_bytes_buf"
+    extern blocking int _read_bytes_buf(Vector[byte] &buf, int max_bytes) = "gorget_socket_read_bytes_buf"
+
+# ── Writer / Reader impls ────────────────────────────────────
+#
+# Typed-error wrappers over the byte-oriented extern primitives.
+# Short writes / reads are legitimate — `write_all` / `reader_drain`
+# loop on top of these.
+
+equip Socket with Writer:
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+        int n = self._write_bytes_buf(buf)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
+
+equip Socket with Reader:
+    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+        int n = self._read_bytes_buf(&buf, 4096)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
 
 # ── ServerSocket methods ─────────────────────────────────────
 

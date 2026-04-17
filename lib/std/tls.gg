@@ -1,6 +1,7 @@
 # std.net.tls — TLS socket operations
 
 from std.collections import Vector
+from std.io import IoError, _errno_to_io_error
 
 # ── Opaque types ─────────────────────────────────────────────
 
@@ -26,6 +27,32 @@ equip TlsSocket:
     extern blocking Result[String, String] read_line() = "gorget_tls_read_line"
     extern void close() = "gorget_tls_close"
     extern void set_timeout(int ms) = "gorget_tls_set_timeout"
+    # Byte-oriented primitives used by the Writer / Reader equips below.
+    # Returns bytes (>=0) on success, or a negative errno on failure.
+    extern blocking int _write_bytes_buf(Vector[byte] buf) = "gorget_tls_write_bytes_buf"
+    extern blocking int _read_bytes_buf(Vector[byte] &buf, int max_bytes) = "gorget_tls_read_bytes_buf"
+
+# ── Writer / Reader impls ────────────────────────────────────
+#
+# OpenSSL-backed; SSL_ERROR_ZERO_RETURN (clean peer shutdown) is
+# surfaced as Ok(0) by the Reader (EOF) and ECONNRESET by the
+# Writer — the C helper handles the mapping. Short writes / reads
+# are legitimate and the `write_all` / `reader_drain` helpers loop
+# on top of these.
+
+equip TlsSocket with Writer:
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+        int n = self._write_bytes_buf(buf)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
+
+equip TlsSocket with Reader:
+    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+        int n = self._read_bytes_buf(&buf, 4096)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
 
 # ── TlsServerSocket methods ─────────────────────────────────
 

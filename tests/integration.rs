@@ -2073,6 +2073,20 @@ fn stdlib_io_println() {
 }
 
 #[test]
+#[serial_test::serial(socket_ephemeral)]
+fn stdlib_io_socket_writer() {
+    run_gg(
+        "stdlib_io_socket_writer.gg",
+        "5\n5\ndone",
+    );
+}
+
+#[test]
+fn stdlib_io_tls_writer() {
+    run_gg("stdlib_io_tls_writer.gg", "ok");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",
