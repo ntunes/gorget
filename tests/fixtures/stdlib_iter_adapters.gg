@@ -1,0 +1,27 @@
+# Exercises the Take / Skip adapter iterators from std.iter.
+#
+# Chaining via `.take()` / `.skip()` methods on VectorIter requires
+# generic monomorphization of nested iterator types before the parent
+# Vector__T__iter lowers, which currently trips a forward-reference.
+# For now adapters are constructed directly via their struct literal;
+# the adapter-method sugar lands in Phase 2c once the monomorphization
+# order is fixed.
+
+from std.iter import VectorIter, TakeIter, SkipIter
+
+int main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+
+    print("--take(2)--")
+    VectorIter[int] vit_t = v.iter()
+    TakeIter[int] t = TakeIter[int](vit_t, 2)
+    for x in t:
+        print(x)
+
+    print("--skip(2)--")
+    VectorIter[int] vit_s = v.iter()
+    SkipIter[int] s = SkipIter[int](vit_s, 2)
+    for x in s:
+        print(x)
+
+    return 0

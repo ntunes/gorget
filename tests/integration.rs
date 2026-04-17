@@ -1994,6 +1994,14 @@ fn stdlib_vector_iter() {
 }
 
 #[test]
+fn stdlib_iter_adapters() {
+    run_gg(
+        "stdlib_iter_adapters.gg",
+        "--take(2)--\n10\n20\n--skip(2)--\n30\n40\n50",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

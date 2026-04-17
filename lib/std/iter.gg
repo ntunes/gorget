@@ -23,3 +23,31 @@ equip [T] VectorIter[T] with Iterator[T]:
 equip [T] Vector[T]:
     VectorIter[T] iter(self):
         return VectorIter[T](self, 0)
+
+struct TakeIter[T]:
+    VectorIter[T] inner
+    int remaining
+
+equip [T] TakeIter[T] with Iterator[T]:
+    Option[T] next(&self):
+        if self.remaining <= 0:
+            return None
+        self.remaining = self.remaining - 1
+        return self.inner.next()
+
+struct SkipIter[T]:
+    VectorIter[T] inner
+    int remaining
+
+equip [T] SkipIter[T] with Iterator[T]:
+    Option[T] next(&self):
+        while self.remaining > 0:
+            Option[T] consumed = self.inner.next()
+            match consumed:
+                case Some(_):
+                    self.remaining = self.remaining - 1
+                case None:
+                    self.remaining = 0
+                    return None
+        return self.inner.next()
+
