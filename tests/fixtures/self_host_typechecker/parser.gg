@@ -3234,8 +3234,14 @@ equip Parser:
         if self.check_kw(KW_FROM):
             self.advance()
             # Parse dotted path: std.collections
+            # Accept both identifiers and keywords used as module-path segments
+            # (e.g. `from meta import X` — `meta` is a lexer keyword).
             SpannedToken first = self.advance()
             module_path = token_ident(first.lex_token)
+            if module_path == "":
+                module_path = non_type_keyword_name(keyword_tag(first.lex_token))
+                if module_path == "":
+                    module_path = type_keyword_name(keyword_tag(first.lex_token))
             while self.match_tok(TOK_DOT):
                 SpannedToken next = self.advance()
                 String seg = token_ident(next.lex_token)
@@ -3344,9 +3350,22 @@ equip Parser:
         # Detected when next token is a type keyword or identifier (not ':')
         if not self.check_tok(TOK_COLON):
             FunctionDef fd = self.parse_function_def()
-            # Convert expr-body (= "symbol") to declaration (empty body)
-            Vector[Stmt] empty = Vector[Stmt]()
-            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, empty, false, fd.throws_type)
+            # Preserve the `= "symbol"` body (single string-literal stmt) so
+            # loader.gg can detect the rename and populate call_redirects.
+            # Collapse any other body to empty.
+            Vector[Stmt] body_out = Vector[Stmt]()
+            if fd.is_expr_body and fd.body.len() == 1:
+                Stmt first_b = fd.body.get(0).unwrap()
+                match first_b:
+                    case SExpr(sexpr_b):
+                        match sexpr_b.expr:
+                            case EStringLiteral(_, _):
+                                body_out.push(first_b)
+                            else:
+                                pass
+                    else:
+                        pass
+            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, body_out, false, fd.throws_type)
             return IFunction(decl)
         self.expect_tok(TOK_COLON, "expected ':' after extern")
         Vector[FunctionDef] fns = Vector[FunctionDef]()
@@ -3358,12 +3377,27 @@ equip Parser:
                 # Skip 'public' if present
                 if self.check_kw(KW_PUBLIC):
                     self.advance()
-                Item fn_item = self.parse_function_item()
-                match fn_item:
-                    case IFunction(fd):
-                        fns.push(fd)
-                    else:
-                        pass
+                # Skip the inner `extern` keyword so the next token is the
+                # return type, matching what parse_function_def expects.
+                if self.check_kw(KW_EXTERN):
+                    self.advance()
+                FunctionDef fn_fd = self.parse_function_def()
+                # Preserve the alias body (`= "symbol"`) so loader.gg can
+                # detect the rename. Strip any other expression body.
+                Vector[Stmt] fn_body = Vector[Stmt]()
+                if fn_fd.is_expr_body and fn_fd.body.len() == 1:
+                    Stmt fn_first = fn_fd.body.get(0).unwrap()
+                    match fn_first:
+                        case SExpr(fn_sx):
+                            match fn_sx.expr:
+                                case EStringLiteral(_, _):
+                                    fn_body.push(fn_first)
+                                else:
+                                    pass
+                        else:
+                            pass
+                FunctionDef fn_decl = FunctionDef(fn_fd.name, fn_fd.params, fn_fd.return_type, fn_fd.type_params, fn_body, false, fn_fd.throws_type)
+                fns.push(fn_decl)
                 self.skip_trivia()
             if self.check_tok(TOK_DEDENT):
                 self.advance()

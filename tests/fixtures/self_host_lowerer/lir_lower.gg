@@ -429,6 +429,47 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             m.structs.set(sid, new_sdef)
         tki += 1
 
+    # Pass 3: Synthesize fields for monomorphized Option__T / Result__T__E
+    # placeholders (they don't appear in gmod.type_infos by name).
+    int psi = 0
+    while psi < m.structs.len():
+        LirStructDef psdef = m.structs.get(psi).unwrap()
+        if psdef.fields.len() != 0:
+            psi += 1
+            continue
+        String pname = psdef.name
+        if pname.starts_with("Option__"):
+            String inner = pname.slice(8, pname.len())
+            int inner_ty = resolve_field_lir_type(inner, &sr)
+            Vector[StructField] ofields = []
+            ofields.push(StructField("tag", LT_I32))
+            ofields.push(StructField("Some_0", inner_ty))
+            LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
+            m.structs.set(psi, opt_sdef)
+        elif pname.starts_with("Result__"):
+            # Split "Result__<Ok>__<Err>" — find the __ separator between
+            # the two type args (scan from left, first __ after Result__ start).
+            String rest = pname.slice(8, pname.len())
+            int split = -1
+            int si = 0
+            while si + 1 < rest.byte_len():
+                if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
+                    split = si
+                    break
+                si += 1
+            if split > 0:
+                String ok_name = rest.slice(0, split)
+                String err_name = rest.slice(split + 2, rest.len())
+                int ok_ty = resolve_field_lir_type(ok_name, &sr)
+                int err_ty = resolve_field_lir_type(err_name, &sr)
+                Vector[StructField] rfields = []
+                rfields.push(StructField("tag", LT_I32))
+                rfields.push(StructField("Ok_0", ok_ty))
+                rfields.push(StructField("Error_0", err_ty))
+                LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1)
+                m.structs.set(psi, res_sdef)
+        psi += 1
+
 # ── Runtime function name mapping ───────────────────────────
 
 String map_runtime_name(String name):
@@ -451,6 +492,20 @@ String map_runtime_name(String name):
             return "gorget_semaphore_new"
         else:
             pass
+    # Collection-type wrapper methods: self-host sometimes lost the Vector/
+    # Dict/Set monomorphization and emits GorgetArray__len etc. directly.
+    # Route to the corresponding runtime fn so needs_ptr_arg can pick up
+    # the self-by-pointer convention.
+    if name.starts_with("GorgetArray__"):
+        String am = extract_method_name(name)
+        return map_array_method(am)
+    if name.starts_with("GorgetMap__"):
+        String mm = extract_method_name(name)
+        return map_dict_method(mm)
+    if name.starts_with("GorgetSet__"):
+        String sm = extract_method_name(name)
+        return map_set_method(sm)
+
     # Collection constructors (bare name, no method suffix).
     # Vector__int64_t() → gorget_array_new(sizeof(int64_t))
     # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V)) or gorget_dict_new_str(sizeof(V))
@@ -616,14 +671,29 @@ String map_runtime_name(String name):
                 return "gorget_box_get"
             case "free" | "drop":
                 return "gorget_box_free"
+            case "clone":
+                return "gorget_box_clone"
             else:
-                return "gorget_box_" + method
+                # Box__TYPE without a real method suffix — `Box__SpannedType`
+                # is the bare type constructor, not a method call. Leave the
+                # name unmapped so codegen can emit __gorget_box_alloc_TYPE.
+                return name
 
     # Scalar-prefixed methods (self-host GIR uses T__method not Vector__T__method)
     if is_scalar_type_prefix(name):
         String method = extract_method_name(name)
-        # Skip `new` and `get` — different arg counts in scalar-prefix context
-        if method != "new" and method != "get":
+        # Dict-only methods (put/keys/values/items) — lost container prefix means
+        # we can't tell Dict from Vector, but these methods only exist on Dict.
+        if method == "put" or method == "keys" or method == "values" or method == "items":
+            return map_dict_method(method)
+        # Shared method name, try Dict first (since get works for both Dict and
+        # Vector with a 2-arg ABI via gorget_map_get / gorget_array_safe_get).
+        if method == "get" or method == "contains" or method == "remove" or method == "clear" or method == "len":
+            String dm = map_dict_method(method)
+            if dm != "":
+                return dm
+        # Skip `new` — different arg counts in scalar-prefix context
+        if method != "new":
             String arr = map_array_method(method)
             if arr != "":
                 return arr

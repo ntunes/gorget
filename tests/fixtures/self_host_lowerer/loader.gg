@@ -91,6 +91,20 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             import_mod_paths.push(sub_imp.module_path.clone())
                             loaded.put(sub_imp.module_path, true)
                     case IFunction(fdef):
+                        # Aliased extern stub: body is exactly one SExpr wrapping
+                        # an EStringLiteral with the C symbol name. Register the
+                        # rename in call_redirects so codegen calls the real ABI.
+                        if fdef.body.len() == 1:
+                            Stmt alias_s = fdef.body.get(0).unwrap()
+                            match alias_s:
+                                case SExpr(alias_sx):
+                                    match alias_sx.expr:
+                                        case EStringLiteral(alias_val, _):
+                                            call_redirects.put(fdef.name.clone(), alias_val.clone())
+                                        else:
+                                            pass
+                                else:
+                                    pass
                         # Skip extern stubs and forward declarations.
                         # Real functions: >=2 body statements, OR expression body,
                         # OR 1 statement that is SIf/SWhile/SFor/SMatch.
@@ -214,10 +228,28 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         if real_methods.len() > 0:
                             EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field)
                             m.items.push(IEquip(filtered))
+                    case IExternBlock(ext_fns):
+                        # Extract aliases from extern stubs: body is exactly one
+                        # SExpr(EStringLiteral(alias)). Populate call_redirects.
+                        int exi = 0
+                        while exi < ext_fns.len():
+                            FunctionDef ext_fd = ext_fns.get(exi).unwrap()
+                            if ext_fd.body.len() == 1:
+                                Stmt ext_s = ext_fd.body.get(0).unwrap()
+                                match ext_s:
+                                    case SExpr(ext_sx):
+                                        match ext_sx.expr:
+                                            case EStringLiteral(ext_val, _):
+                                                call_redirects.put(ext_fd.name.clone(), ext_val.clone())
+                                            else:
+                                                pass
+                                    else:
+                                        pass
+                            exi += 1
                     else:
-                        # Skip extern blocks, structs, enums, traits, etc.
-                        # from imported modules — only functions and equip
-                        # blocks with real bodies are needed for GIR comparison.
+                        # Skip structs, enums, traits, etc. from imported modules.
+                        # Only functions, equip blocks with real bodies, and
+                        # extern aliases are needed.
                         pass
                 ji += 1
 

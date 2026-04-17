@@ -269,8 +269,10 @@ bool should_skip_struct(LirStructDef &sdef, LirModule &m):
         return true
     if lir_to_runtime_name(sdef.name) != "":
         return true
-    # Imported type — Rust preamble already defines its struct body.
-    if m.imported_type_names.contains(sdef.name):
+    # Imported type — only skip if the runtime preamble already defines it.
+    # User-defined imports (ast.gg / parser.gg / etc.) must still be emitted
+    # so the output is self-contained when bootstrapping.
+    if m.imported_type_names.contains(sdef.name) and is_runtime_defined_named(sdef.name):
         return true
     return false
 
@@ -610,6 +612,96 @@ bool is_std_header_fn(String name):
     if name == "clock" or name == "time" or name == "sleep" or name == "usleep":
         return true
     return false
+
+# ── Box allocator helpers ──────────────────────────────────
+# Scan the module for `__gorget_box_alloc_TYPE(x)` calls and emit one
+# static inline helper per unique suffix. Mirrors src/backend/c_lir's
+# emit_runtime_helpers box_allocs loop.
+String emit_box_allocators(LirModule &m, Dict[String, String] &sn):
+    Dict[String, bool] seen = {}
+    String out = ""
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            LirBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                match inst:
+                    case ICallExtern(_, n, _):
+                        String alloc_name = ""
+                        if n.starts_with("__gorget_box_alloc_"):
+                            alloc_name = n
+                        elif n.starts_with("Box__"):
+                            # codegen will rewrite Box__TYPE(x) → __gorget_box_alloc_TYPE(x)
+                            alloc_name = "__gorget_box_alloc_" + n.slice(5, n.len())
+                        if alloc_name != "" and not seen.contains(alloc_name):
+                            seen.put(alloc_name, true)
+                            String suffix = alloc_name.slice(19, alloc_name.len())
+                            String c_ty = box_alloc_c_type(suffix)
+                            out = out + "static inline void* " + alloc_name + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
+                    else:
+                        pass
+                ii += 1
+            bi += 1
+        fi += 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+# Scan an already-emitted body for `__gorget_box_alloc_<SUFFIX>(` patterns
+# and emit one static inline helper per unique suffix. Uses a simple scan
+# (String doesn't have index_of_from, so we slice+index_of per step).
+String emit_box_allocators_scan(String &body):
+    Dict[String, bool] seen = {}
+    String out = ""
+    String prefix = "__gorget_box_alloc_"
+    int plen = prefix.len()
+    int pos = 0
+    int blen = body.len()
+    while pos < blen:
+        String tail = body.slice(pos, blen)
+        Option[int] hit_opt = tail.index_of(prefix)
+        int hit = -1
+        match hit_opt:
+            case Some(h):
+                hit = h
+            case None:
+                pass
+        if hit < 0:
+            break
+        int start = pos + hit + plen
+        int end = start
+        while end < blen:
+            String ch = body.slice(end, end + 1)
+            if ch == "(":
+                break
+            end += 1
+        if end >= blen:
+            break
+        String suffix = body.slice(start, end)
+        if not seen.contains(suffix):
+            seen.put(suffix, true)
+            String c_ty = box_alloc_c_type(suffix)
+            out = out + "static inline void* " + prefix + suffix + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
+        pos = end + 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+String box_alloc_c_type(String suffix):
+    if suffix == "Str" or suffix == "GorgetString":
+        return "Str"
+    if suffix == "int64_t" or suffix == "int32_t" or suffix == "int16_t" or suffix == "int8_t":
+        return suffix
+    if suffix == "uint64_t" or suffix == "uint32_t" or suffix == "uint16_t" or suffix == "uint8_t":
+        return suffix
+    if suffix == "double" or suffix == "float" or suffix == "bool":
+        return suffix
+    # Struct name — reference as typedef
+    return "__gg_" + suffix
 
 # ── Globals ────────────────────────────────────────────────
 
@@ -1193,6 +1285,10 @@ int find_struct_type(String name, LirModule &m):
 
 # Infer the result type of an LIR instruction.
 int infer_inst_type(LirInst &inst, LirModule &m):
+    Dict[int, int] empty_types = {}
+    return infer_inst_type_with(&inst, &m, &empty_types)
+
+int infer_inst_type_with(LirInst &inst, LirModule &m, Dict[int, int] &val_types):
     match inst:
         case ISlotLoad(_, _, ty):
             return ty
@@ -1269,12 +1365,45 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_PTR
         case IElemPtr(_, _, _, _):
             return LT_PTR
-        case ICall(dst, fid, _):
+        case ICall(dst, fid, args):
             if dst >= 0 and fid >= 0 and fid < m.functions.len():
                 LirFunction callee = m.functions.get(fid).unwrap()
+                # Prelude variants (Some/None/Ok/Error) / Box constructors —
+                # callee.return_type is a generic placeholder. Compute the
+                # actual parametrized type from the first argument's type.
+                if args.len() > 0:
+                    String cn = callee.name
+                    if cn == "Some" or cn == "None" or cn == "Ok" or cn == "Error":
+                        int arg0 = args.get(0).unwrap()
+                        int arg_ty = LT_VOID
+                        if val_types.contains(arg0):
+                            arg_ty = val_types.get(arg0).unwrap()
+                        String arg_tname = ""
+                        if arg_ty >= LT_STRUCT_BASE:
+                            arg_tname = m.structs.get(arg_ty - LT_STRUCT_BASE).unwrap().name
+                        elif arg_ty == LT_I64:
+                            arg_tname = "int64_t"
+                        elif arg_ty == LT_F64:
+                            arg_tname = "double"
+                        elif arg_ty == LT_BOOL:
+                            arg_tname = "bool"
+                        elif arg_ty == LT_PTR or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE):
+                            arg_tname = "GorgetString"
+                        if arg_tname != "":
+                            String parent_nm = ""
+                            if cn == "Some" or cn == "None":
+                                parent_nm = "Option__" + arg_tname
+                            elif cn == "Ok":
+                                parent_nm = "Result__" + arg_tname + "__GorgetString"
+                            elif cn == "Error":
+                                parent_nm = "Result__int64_t__" + arg_tname
+                            if parent_nm != "":
+                                int psid = find_struct_type(parent_nm, &m)
+                                if psid >= LT_STRUCT_BASE:
+                                    return psid
                 return callee.return_type
             return LT_VOID
-        case ICallExtern(dst, name, _, _, _):
+        case ICallExtern(dst, name, args_ce, _, _):
             if dst >= 0:
                 # Enum variant constructor: returns parent enum struct.
                 if m.enum_variant_parent.contains(name):
@@ -1282,6 +1411,48 @@ int infer_inst_type(LirInst &inst, LirModule &m):
                     int psid = find_struct_type(parent, &m)
                     if psid >= LT_STRUCT_BASE:
                         return psid
+                # Qualified enum variant: EnumName__VariantName(x).
+                if name.contains("__"):
+                    int uix = name.index_of("__").unwrap()
+                    String eparent = name.slice(0, uix)
+                    String evariant = name.slice(uix + 2, name.len())
+                    if m.enum_variant_parent.contains(evariant) and m.enum_variant_parent.get(evariant).unwrap() == eparent:
+                        int psid_q = find_struct_type(eparent, &m)
+                        if psid_q >= LT_STRUCT_BASE:
+                            return psid_q
+                # Prelude variants Some/None/Ok/Error — compute parametrized
+                # Option/Result type from arg type.
+                if (name == "Some" or name == "None" or name == "Ok" or name == "Error") and args_ce.len() > 0:
+                    int arg_ce = args_ce.get(0).unwrap()
+                    int arg_ty_ce = LT_VOID
+                    if val_types.contains(arg_ce):
+                        arg_ty_ce = val_types.get(arg_ce).unwrap()
+                    String arg_tname_ce = ""
+                    if arg_ty_ce >= LT_STRUCT_BASE:
+                        arg_tname_ce = m.structs.get(arg_ty_ce - LT_STRUCT_BASE).unwrap().name
+                    elif arg_ty_ce == LT_I64:
+                        arg_tname_ce = "int64_t"
+                    elif arg_ty_ce == LT_F64:
+                        arg_tname_ce = "double"
+                    elif arg_ty_ce == LT_BOOL:
+                        arg_tname_ce = "bool"
+                    elif arg_ty_ce == LT_PTR or (arg_ty_ce >= LT_PTR_TO_BASE and arg_ty_ce < LT_STRUCT_BASE):
+                        arg_tname_ce = "GorgetString"
+                    if arg_tname_ce != "":
+                        String parent_name_ce = ""
+                        if name == "Some" or name == "None":
+                            parent_name_ce = "Option__" + arg_tname_ce
+                        elif name == "Ok":
+                            parent_name_ce = "Result__" + arg_tname_ce + "__GorgetString"
+                        elif name == "Error":
+                            parent_name_ce = "Result__int64_t__" + arg_tname_ce
+                        if parent_name_ce != "":
+                            int psid_ce = find_struct_type(parent_name_ce, &m)
+                            if psid_ce >= LT_STRUCT_BASE:
+                                return psid_ce
+                # Box__TYPE(x) — returns Box__TYPE (typedef void*).
+                if name.starts_with("Box__"):
+                    return LT_PTR
                 # Closure construction: __make_closure_N → GorgetClosure struct type
                 if name.starts_with("__make_closure_"):
                     return find_struct_type("GorgetClosure", &m)
@@ -1383,7 +1554,7 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
             LirInst inst = blk.insts.get(ii).unwrap()
             int dst = inst_dst(&inst)
             if dst >= 0:
-                int ty = infer_inst_type(&inst, &m)
+                int ty = infer_inst_type_with(&inst, &m, &types)
                 types.put(dst, ty)
             ii += 1
         bi += 1
@@ -1784,6 +1955,14 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 # through emit_call_extern which handles inline struct init.
                 if m.enum_variant_parent.contains(callee.name):
                     return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
+                # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
+                if callee.name == "Box" or callee.name.starts_with("Box__"):
+                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
+                # Prelude Option/Result variant constructors — pulled from
+                # user-code even if unrecognized in type_infos. The codegen
+                # uses dst type to resolve parametrization.
+                if callee.name == "Some" or callee.name == "None" or callee.name == "Ok" or callee.name == "Error":
+                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
                 String fname = c_func_name(callee.name)
                 int gs_ty = find_struct_type("GorgetString", &m)
                 String out = ""
@@ -1979,12 +2158,6 @@ String map_mono_to_runtime(String name, LirModule &m):
         return "gorget_array_" + method
     if method == "clone":
         return "gorget_array_clone"
-    # GorgetArray prefix: wrapper methods — these are Vector helpers.
-    if prefix == "GorgetArray":
-        if method == "get" or method == "safe_get":
-            return "gorget_array_safe_get"
-        if method == "len" or method == "is_empty" or method == "contains":
-            return "gorget_array_" + method
     # String method fallbacks: when self-host lost the recv type and emitted
     # int64_t__byte_at etc., remap to gorget_str_* so linkage succeeds.
     # These don't preserve correct semantics (recv value is a placeholder),
@@ -2356,12 +2529,123 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     # Look up callee's param types for scalar-to-aggregate coercion.
     int callee_idx = find_fn_by_name(&m, name)
 
+    # Box__TYPE(x) constructor: Rust emits `__gorget_box_alloc_TYPE(x)`. The
+    # raw name Box__TYPE arrives before map_mono_to_runtime mutation. Match
+    # on raw_name to avoid false matches with mapped runtime prefixes.
+    if raw_name.starts_with("Box__") and args.len() == 1:
+        String box_type = raw_name.slice(5, raw_name.len())
+        String out = ""
+        if dst >= 0:
+            out = v(dst) + " = "
+        return out + "__gorget_box_alloc_" + box_type + "(" + v(args.get(0).unwrap()) + ");"
+
+    # Box(x) constructor: Rust emits `__gorget_box_alloc_TYPE(x)` per type.
+    # Look up the argument's value type to find the right alloc function.
+    # If the type is unknown (self-host lost it via placeholder), fall back
+    # to casting the arg as void* — Box is `typedef void*` at C level so
+    # this preserves link correctness.
+    if name == "Box" and args.len() == 1:
+        int box_arg = args.get(0).unwrap()
+        int box_arg_ty = LT_VOID
+        if val_types.contains(box_arg):
+            box_arg_ty = val_types.get(box_arg).unwrap()
+        String type_suffix = ""
+        if box_arg_ty >= LT_STRUCT_BASE:
+            int tsid = box_arg_ty - LT_STRUCT_BASE
+            if tsid < m.structs.len():
+                type_suffix = m.structs.get(tsid).unwrap().name
+        String out = ""
+        if dst >= 0:
+            out = v(dst) + " = "
+        if type_suffix != "":
+            return out + "__gorget_box_alloc_" + type_suffix + "(" + v(box_arg) + ");"
+        # Unknown struct type — degenerate cast (arg already a pointer or
+        # will be coerced to one via NULL-on-scalar).
+        return out + "(void*)(uintptr_t)" + v(box_arg) + ";"
+
+    # Prelude variants (Some/None/Ok/Error). Pick the parametrized
+    # Option__X / Result__X__Y based on:
+    # 1. The DST's value type, if it's already an aggregate (usual case).
+    # 2. The ARG's value type — compute Option__<ArgType> or
+    #    Result__<ArgType>__GorgetString / Result__int64_t__<ArgType>.
+    if name == "Some" or name == "None" or name == "Ok" or name == "Error":
+        if dst >= 0:
+            int parent_sid_pv = -1
+            int dst_ty_pv = LT_VOID
+            if val_types.contains(dst):
+                dst_ty_pv = val_types.get(dst).unwrap()
+            if dst_ty_pv >= LT_STRUCT_BASE:
+                parent_sid_pv = dst_ty_pv
+            # Fallback: compute parent name from arg type.
+            if parent_sid_pv < 0 and args.len() > 0:
+                int arg_ty_pv = LT_VOID
+                if val_types.contains(args.get(0).unwrap()):
+                    arg_ty_pv = val_types.get(args.get(0).unwrap()).unwrap()
+                String arg_tname = ""
+                if arg_ty_pv >= LT_STRUCT_BASE:
+                    arg_tname = m.structs.get(arg_ty_pv - LT_STRUCT_BASE).unwrap().name
+                elif arg_ty_pv == LT_I64:
+                    arg_tname = "int64_t"
+                elif arg_ty_pv == LT_F64:
+                    arg_tname = "double"
+                elif arg_ty_pv == LT_BOOL:
+                    arg_tname = "bool"
+                elif arg_ty_pv == LT_PTR or (arg_ty_pv >= LT_PTR_TO_BASE and arg_ty_pv < LT_STRUCT_BASE):
+                    arg_tname = "GorgetString"
+                if arg_tname != "":
+                    String parent_name_pv = ""
+                    if name == "Some" or name == "None":
+                        parent_name_pv = "Option__" + arg_tname
+                    elif name == "Ok":
+                        parent_name_pv = "Result__" + arg_tname + "__GorgetString"
+                    elif name == "Error":
+                        parent_name_pv = "Result__int64_t__" + arg_tname
+                    if parent_name_pv != "":
+                        parent_sid_pv = find_struct_type(parent_name_pv, &m)
+            # None with no args: pick any Option__X.
+            if parent_sid_pv < 0 and (name == "None"):
+                int sdi_pv = 0
+                while sdi_pv < m.structs.len():
+                    LirStructDef sd_pv = m.structs.get(sdi_pv).unwrap()
+                    if sd_pv.name.starts_with("Option__"):
+                        parent_sid_pv = LT_STRUCT_BASE + sdi_pv
+                        break
+                    sdi_pv += 1
+            if parent_sid_pv >= LT_STRUCT_BASE:
+                String parent_c_dst = c_type_name(parent_sid_pv, &sn)
+                int pv_tag = 0
+                if name == "None" or name == "Error":
+                    pv_tag = 1
+                String out_pv = ""
+                if dst >= 0:
+                    out_pv = v(dst) + " = "
+                out_pv = out_pv + "(" + parent_c_dst + "){.tag = " + int_to_str(pv_tag)
+                if args.len() > 0:
+                    int pva = 0
+                    while pva < args.len():
+                        out_pv = out_pv + ", ." + name + "_" + int_to_str(pva) + " = " + v(args.get(pva).unwrap())
+                        pva += 1
+                out_pv = out_pv + "};"
+                return out_pv
+
+    # Qualified enum variant: `EnumName__VariantName(x)` (the resolved form
+    # of `EnumName.VariantName(x)`). Split and recurse the lookup.
+    String ev_name = name
+    if name.contains("__"):
+        # Parser/resolver emits EnumName__VariantName for qualified variants.
+        # Check if the bare variant name is registered — recurse via it.
+        int underscore_idx = name.index_of("__").unwrap()
+        String maybe_parent = name.slice(0, underscore_idx)
+        String maybe_variant = name.slice(underscore_idx + 2, name.len())
+        if m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent:
+            ev_name = maybe_variant
+
     # Enum variant constructor: `VariantName(x)` → inline struct init for
     # the parent enum (no C function exists for variants). For 0-arg
     # variants, emits just the tag. For 1+-arg variants, initializes the
     # variant's payload fields.
-    if m.enum_variant_parent.contains(name):
-        String parent_name = m.enum_variant_parent.get(name).unwrap()
+    if m.enum_variant_parent.contains(ev_name):
+        String parent_name = m.enum_variant_parent.get(ev_name).unwrap()
         int parent_sid = find_struct_type(parent_name, &m)
         if parent_sid >= LT_STRUCT_BASE:
             int parent_idx = parent_sid - LT_STRUCT_BASE
@@ -2396,7 +2680,7 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
             # Lookup variant tag via seen_variants ordinal.
             int sv_i = 0
             while sv_i < seen_variants.len():
-                if seen_variants.get(sv_i).unwrap() == name:
+                if seen_variants.get(sv_i).unwrap() == ev_name:
                     variant_tag = sv_i
                     break
                 sv_i += 1
@@ -2412,7 +2696,7 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
             int vfi = 1
             while vfi < pdef.fields.len():
                 StructField vsf = pdef.fields.get(vfi).unwrap()
-                if vsf.name.starts_with(name + "_"):
+                if vsf.name.starts_with(ev_name + "_"):
                     variant_field_tys.push(vsf.ty)
                 vfi += 1
             String out = ""
@@ -2425,15 +2709,15 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                     out = out + ", .data = {"
                     if args.len() == 1:
                         # Single-field variant: direct union member.
-                        out = out + "." + name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, &val_types, &sn, &m)
+                        out = out + "." + ev_name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, &val_types, &sn, &m)
                     else:
                         # Multi-field variant: nested struct named after variant.
-                        out = out + "." + name + " = {"
+                        out = out + "." + ev_name + " = {"
                         int va = 0
                         while va < args.len():
                             if va > 0:
                                 out = out + ", "
-                            out = out + "." + name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                            out = out + "." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
                             va += 1
                         out = out + "}"
                     out = out + "}"
@@ -2441,7 +2725,7 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                     # Flat layout: payload fields are direct struct members.
                     int va = 0
                     while va < args.len():
-                        out = out + ", ." + name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                        out = out + ", ." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
                         va += 1
             out = out + "};"
             return out
@@ -3136,11 +3420,13 @@ String generate_c(LirModule &m):
 
     String out = ""
 
+    # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
+    # Emit FIRST so struct field types like `Box__SpannedExpr` (void*) are
+    # visible when the enclosing struct body is emitted.
+    out = out + emit_mono_typedefs(&m)
+
     # Struct definitions
     out = out + emit_structs(&m, &sn)
-
-    # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
-    out = out + emit_mono_typedefs(&m)
 
     # Extern declarations
     out = out + emit_externs(&m, &sn)
@@ -3160,20 +3446,27 @@ String generate_c(LirModule &m):
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)
     out = out + emit_adapter_functions(&m, &sn, &fa_targets)
 
-    # Drop/clone functions (must come after forward decls, before function defs)
-    out = out + emit_struct_drops(&m, &sn)
-    out = out + emit_struct_clones(&m, &sn)
-    out = out + emit_enum_drops(&m, &sn)
-    out = out + emit_enum_clones(&m, &sn)
-    out = out + emit_type_drop_fns(&m, &sn)
+    # Emit function bodies to a temp buffer so we can scan them for
+    # __gorget_box_alloc_* occurrences (codegen rewrites Box(x) → alloc at
+    # emit time, so the call doesn't appear in LIR form).
+    String body = ""
+    body = body + emit_struct_drops(&m, &sn)
+    body = body + emit_struct_clones(&m, &sn)
+    body = body + emit_enum_drops(&m, &sn)
+    body = body + emit_enum_clones(&m, &sn)
+    body = body + emit_type_drop_fns(&m, &sn)
 
-    # Function definitions
-    out = out + "// ── Function Definitions ──\n"
+    body = body + "// ── Function Definitions ──\n"
     int fi = 0
     while fi < m.functions.len():
         LirFunction func = m.functions.get(fi).unwrap()
-        out = out + emit_function(&func, &m, &sn, &slit_map)
-        out = out + "\n"
+        body = body + emit_function(&func, &m, &sn, &slit_map)
+        body = body + "\n"
         fi += 1
 
+    # Box allocator helpers: scan body for `__gorget_box_alloc_<SUFFIX>(`
+    # occurrences and emit one static inline helper per unique suffix.
+    out = out + emit_box_allocators_scan(&body)
+
+    out = out + body
     return out
