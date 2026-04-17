@@ -25,12 +25,23 @@ from std.collections import Vector
 enum IoError:
     NotFound
     PermissionDenied
+    AlreadyExists
     BrokenPipe
+    ConnectionRefused
     ConnectionReset
+    ConnectionAborted
+    NotConnected
+    AddrInUse
+    TimedOut
+    WouldBlock
+    Interrupted
     UnexpectedEof
+    InvalidInput
+    InvalidData
     # Byte offset of the first invalid UTF-8 sequence.
     Utf8Invalid(int)
     # Escape hatch for errors that don't fit any named variant.
+    # Prefer a named variant when introducing a new category.
     Other(String)
 
 equip IoError with Displayable:
@@ -40,12 +51,32 @@ equip IoError with Displayable:
                 return "not found"
             case IoError.PermissionDenied():
                 return "permission denied"
+            case IoError.AlreadyExists():
+                return "already exists"
             case IoError.BrokenPipe():
                 return "broken pipe"
+            case IoError.ConnectionRefused():
+                return "connection refused"
             case IoError.ConnectionReset():
                 return "connection reset"
+            case IoError.ConnectionAborted():
+                return "connection aborted"
+            case IoError.NotConnected():
+                return "not connected"
+            case IoError.AddrInUse():
+                return "address in use"
+            case IoError.TimedOut():
+                return "timed out"
+            case IoError.WouldBlock():
+                return "would block"
+            case IoError.Interrupted():
+                return "interrupted"
             case IoError.UnexpectedEof():
                 return "unexpected eof"
+            case IoError.InvalidInput():
+                return "invalid input"
+            case IoError.InvalidData():
+                return "invalid data"
             case IoError.Utf8Invalid(offset):
                 return f"invalid utf-8 at byte {offset}"
             case IoError.Other(msg):
@@ -125,6 +156,16 @@ Result[Vector[uint8], IoError] reader_drain[R](R &reader):
             case Error(e):
                 return Error(!e)
     return Ok(!buf)
+
+# Adapt a legacy `Result[T, String]` error into `Result[T, IoError]` by
+# wrapping the message in `IoError.Other`. Bridge used during the stdlib
+# migration from stringly-typed I/O errors to typed ones.
+Result[T, IoError] from_string_error[T](Result[T, String] r):
+    match r:
+        case Ok(v):
+            return Ok(!v)
+        case Error(e):
+            return Error(IoError.Other(!e))
 
 # Read exactly `n` bytes or fail with UnexpectedEof. Short reads are
 # re-issued until the total reaches `n`.
