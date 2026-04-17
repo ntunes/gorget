@@ -1763,6 +1763,21 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             m.imported_type_names.put(type_only, true)
         ifki += 1
 
+    # Populate enum variant → parent enum map for codegen rewriting of
+    # `Variant(args)` calls into inline struct initializers.
+    Vector[String] ti_keys_v = gmod.type_infos.keys()
+    int tivi = 0
+    while tivi < ti_keys_v.len():
+        String tname_v = ti_keys_v.get(tivi).unwrap()
+        GirTypeInfo tinfo_v = gmod.type_infos.get(tname_v).unwrap()
+        if tinfo_v.is_enum:
+            int vi_v = 0
+            while vi_v < tinfo_v.variants.len():
+                GirEnumVariantInfo v_v = tinfo_v.variants.get(vi_v).unwrap()
+                m.enum_variant_parent.put(v_v.name, tname_v)
+                vi_v += 1
+        tivi += 1
+
     # Register builtin structs
     register_builtin_structs(&m, &sr)
 

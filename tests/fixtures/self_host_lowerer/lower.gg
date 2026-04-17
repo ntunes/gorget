@@ -475,8 +475,10 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "GorgetString")
     if method == "format":
         return lookup_or_register_named(&gmod, "GorgetString")
-    if method == "char_at" or method == "byte_at":
+    if method == "char_at":
         return lookup_or_register_named(&gmod, "GorgetString")
+    if method == "byte_at":
+        return U8_TYPE
     # Collection-returning methods
     if method == "split" or method == "lines" or method == "chars" or method == "bytes":
         return lookup_or_register_named(&gmod, "GorgetArray")
@@ -957,6 +959,44 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # unwrap() is a no-op passthrough — the self-host doesn't wrap in Option
             int recv = lower_expr(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or":
+                # Lower any args (for unwrap_or the default value).
+                int uoi = 0
+                while uoi < margs.len():
+                    lower_expr(&ctx, margs.get(uoi).unwrap(), &gmod)
+                    uoi += 1
+                # Extract the inner T from Option__T or Result__T__E names so
+                # downstream code sees a value typed as the payload rather than
+                # the wrapper struct.
+                String recv_tn = local_type_name(recv, &ctx, &gmod)
+                int inner_tid = -1
+                if recv_tn.starts_with("Option__"):
+                    String inner_name = recv_tn.slice(8, recv_tn.len())
+                    int prim_t = prim_name_to_type(inner_name)
+                    if prim_t >= 0:
+                        inner_tid = prim_t
+                    else:
+                        inner_tid = lookup_or_register_named(&gmod, inner_name)
+                elif recv_tn.starts_with("Result__"):
+                    # Extract Ok type: Result__OkT__ErrT — find the split __.
+                    String rest = recv_tn.slice(8, recv_tn.len())
+                    int split = -1
+                    int si = 0
+                    while si + 1 < rest.byte_len():
+                        if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
+                            split = si
+                            break
+                        si += 1
+                    if split > 0:
+                        String ok_name = rest.slice(0, split)
+                        int ok_t = prim_name_to_type(ok_name)
+                        if ok_t >= 0:
+                            inner_tid = ok_t
+                        else:
+                            inner_tid = lookup_or_register_named(&gmod, ok_name)
+                if inner_tid >= 0:
+                    int ud = add_local(&ctx, inner_tid, NO_NAME)
+                    emit(&ctx, GIAssign(ud, OpCopy(recv)))
+                    return ud
                 return recv
             # clone() — return a copy of the receiver
             if mname == "clone":

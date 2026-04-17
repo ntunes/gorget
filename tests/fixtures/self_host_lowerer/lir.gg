@@ -403,6 +403,9 @@ struct LirModule:
     # drop/clone functions are already provided by the Rust-generated preamble,
     # so the self-host must not emit them again.
     Dict[String, bool] imported_type_names
+    # Enum variant constructor → parent enum name. Used by lir_codegen to
+    # rewrite `VariantName(args)` calls into inline struct initializers.
+    Dict[String, String] enum_variant_parent
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -454,4 +457,5 @@ LirModule new_lir_module():
     Dict[String, bool] drop_coll = {}
     Dict[String, TypeDropInfo] type_drops = {}
     Dict[String, bool] imported_t = {}
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t)
+    Dict[String, String] evp = {}
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp)

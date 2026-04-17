@@ -800,6 +800,23 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 # ── Value type inference (simplified) ──────────────────────
 
 # Map runtime function names to their return LIR types.
+# Emit a single variant-payload argument, coercing if the arg's value type
+# differs from the expected field type (e.g. Result aggregate at a scalar
+# int field — lossy self-host lowering).
+String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, int] &val_types, Dict[String, String] &sn, LirModule &m):
+    int expected = -1
+    if idx < field_tys.len():
+        expected = field_tys.get(idx).unwrap()
+    int arg_ty = LT_VOID
+    if val_types.contains(arg_id):
+        arg_ty = val_types.get(arg_id).unwrap()
+    # Aggregate value at scalar field position — emit zero literal.
+    if expected >= 0 and lir_is_aggregate(arg_ty) and not lir_is_aggregate(expected):
+        if expected == LT_F32 or expected == LT_F64:
+            return "0.0"
+        return "0"
+    return v(arg_id)
+
 # Find a function by name in a LirModule. Returns its index, or -1.
 int find_fn_by_name(LirModule &m, String name):
     int n = m.functions.len()
@@ -841,6 +858,26 @@ bool runtime_arg_is_str(String name, int arg_idx):
 # Returns true for runtime functions whose Str-typed parameters are declared
 # by value (not Str*). Used to insert *(Str*) deref when the caller has a
 # pointer-typed actual (e.g. bare String param's void* ABI).
+# Returns true if the given argument position of a runtime function takes
+# a C-style null-terminated `const char*`. Str args at these positions
+# must be converted via gorget_str_to_cstr(&s).
+bool runtime_arg_is_cstr(String name, int arg_idx):
+    if arg_idx == 0:
+        if name == "gorget_read_file" or name == "gorget_read_line" or name == "gorget_read_file_bytes":
+            return true
+        if name == "gorget_write_file" or name == "gorget_file_exists":
+            return true
+        if name == "gorget_getenv" or name == "gorget_setenv":
+            return true
+        if name == "gorget_mkdir" or name == "gorget_rmdir" or name == "gorget_remove":
+            return true
+        if name == "gorget_parse_int" or name == "gorget_parse_float":
+            return true
+    if arg_idx == 1:
+        if name == "gorget_write_file":
+            return true
+    return false
+
 bool runtime_takes_str_by_value(String name):
     if name == "gorget_str_cat" or name == "gorget_str_concat":
         return true
@@ -1235,6 +1272,12 @@ int infer_inst_type(LirInst &inst, LirModule &m):
             return LT_VOID
         case ICallExtern(dst, name, _, _, _):
             if dst >= 0:
+                # Enum variant constructor: returns parent enum struct.
+                if m.enum_variant_parent.contains(name):
+                    String parent = m.enum_variant_parent.get(name).unwrap()
+                    int psid = find_struct_type(parent, &m)
+                    if psid >= LT_STRUCT_BASE:
+                        return psid
                 # Closure construction: __make_closure_N → GorgetClosure struct type
                 if name.starts_with("__make_closure_"):
                     return find_struct_type("GorgetClosure", &m)
@@ -1484,6 +1527,10 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             # are undefined in this case but the compile succeeds.
             if (slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)) and lir_is_aggregate(vty):
                 return s(slot) + " = NULL;"
+            # Scalar slot (I64/I32/etc.) receiving an aggregate value — same
+            # cause. Discard the aggregate, assign zero.
+            if not lir_is_aggregate(slot_ty) and lir_is_aggregate(vty):
+                return s(slot) + " = 0;"
             return s(slot) + " = " + v(value) + ";"
 
         case ISlotLoad(dst, slot, _):
@@ -2264,6 +2311,96 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
             pad_trailing_empty_str = true
     # Look up callee's param types for scalar-to-aggregate coercion.
     int callee_idx = find_fn_by_name(&m, name)
+
+    # Enum variant constructor: `VariantName(x)` → inline struct init for
+    # the parent enum (no C function exists for variants). For 0-arg
+    # variants, emits just the tag. For 1+-arg variants, initializes the
+    # variant's payload fields.
+    if m.enum_variant_parent.contains(name):
+        String parent_name = m.enum_variant_parent.get(name).unwrap()
+        int parent_sid = find_struct_type(parent_name, &m)
+        if parent_sid >= LT_STRUCT_BASE:
+            int parent_idx = parent_sid - LT_STRUCT_BASE
+            LirStructDef pdef = m.structs.get(parent_idx).unwrap()
+            # Find variant tag (its ordinal among non-tag fields whose
+            # name prefix matches `name`).
+            int variant_tag = -1
+            int vt_i = 1
+            Vector[String] seen_variants = []
+            while vt_i < pdef.fields.len():
+                StructField sf = pdef.fields.get(vt_i).unwrap()
+                # Field name format: "VariantName_N" (0-indexed per variant).
+                # Scan for last underscore.
+                int underscore = -1
+                int ci = 0
+                while ci < sf.name.byte_len():
+                    if sf.name.byte_at(ci) == 0x5F:
+                        underscore = ci
+                    ci += 1
+                if underscore > 0:
+                    String vname = sf.name.slice(0, underscore)
+                    bool seen = false
+                    int svi = 0
+                    while svi < seen_variants.len():
+                        if seen_variants.get(svi).unwrap() == vname:
+                            seen = true
+                            break
+                        svi += 1
+                    if not seen:
+                        seen_variants.push(vname.clone())
+                vt_i += 1
+            # Lookup variant tag via seen_variants ordinal.
+            int sv_i = 0
+            while sv_i < seen_variants.len():
+                if seen_variants.get(sv_i).unwrap() == name:
+                    variant_tag = sv_i
+                    break
+                sv_i += 1
+            # If variant name has no fields in pdef (variant has no payload),
+            # assign it the next available tag based on current `seen`.
+            if variant_tag < 0:
+                variant_tag = seen_variants.len()
+            String parent_c = c_type_name(parent_sid, &sn)
+            # Look up variant field types to coerce mismatched arg values.
+            # Variant payload field names are "VariantName_N"; we pull the
+            # field type to wrap scalar-mismatched aggregate args.
+            Vector[int] variant_field_tys = []
+            int vfi = 1
+            while vfi < pdef.fields.len():
+                StructField vsf = pdef.fields.get(vfi).unwrap()
+                if vsf.name.starts_with(name + "_"):
+                    variant_field_tys.push(vsf.ty)
+                vfi += 1
+            String out = ""
+            if dst >= 0:
+                out = v(dst) + " = "
+            out = out + "(" + parent_c + "){.tag = " + int_to_str(variant_tag)
+            if args.len() > 0:
+                if pdef.is_union_layout:
+                    # Large enum: payload lives in a union named `data`.
+                    out = out + ", .data = {"
+                    if args.len() == 1:
+                        # Single-field variant: direct union member.
+                        out = out + "." + name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, &val_types, &sn, &m)
+                    else:
+                        # Multi-field variant: nested struct named after variant.
+                        out = out + "." + name + " = {"
+                        int va = 0
+                        while va < args.len():
+                            if va > 0:
+                                out = out + ", "
+                            out = out + "." + name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                            va += 1
+                        out = out + "}"
+                    out = out + "}"
+                else:
+                    # Flat layout: payload fields are direct struct members.
+                    int va = 0
+                    while va < args.len():
+                        out = out + ", ." + name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                        va += 1
+            out = out + "};"
+            return out
     int ai = 0
     while ai < args.len():
         if ai > 0:
@@ -2275,7 +2412,12 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
         bool is_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
         bool is_str = (arg_ty == gs_ty)
         bool str_pos = str_by_value_fn and runtime_arg_is_str(name, ai)
-        if str_pos and not is_str:
+        bool cstr_pos = runtime_arg_is_cstr(name, ai)
+        if cstr_pos and is_str:
+            # Runtime fn wants const char*, caller has Str — convert via
+            # gorget_str_to_cstr(s) for null-terminated path (takes Str by value).
+            out = out + "gorget_str_to_cstr(" + v(arg_id) + ")"
+        elif str_pos and not is_str:
             if is_ptr:
                 out = out + "*(Str*)" + v(arg_id)
             else:
