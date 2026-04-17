@@ -90,6 +90,9 @@ print(raw)    # no \n escape here
 auto v = [10, 20, 30]                # literal — inferred as Vector[int]
 Vector[int] empty = Vector[int]()    # empty vector with explicit type
 Vector[String] names = Vector[String]()
+
+# Pre-allocate when you know the size — avoids reallocation during growth.
+Vector[int] big = Vector[int](cap=10_000)
 ```
 
 ### Basic Operations
@@ -99,11 +102,42 @@ auto v = [10, 20, 30]
 
 v.push(40)            # append
 int len = v.len()     # 4
+int cap = v.capacity()  # current allocated capacity
 int first = v[0]      # subscript read: 10
 v[1] = 99             # subscript write
 
 for x in v:
     print(f"{x}")      # iterate
+```
+
+### Sort
+
+```gorget
+auto v = [3, 1, 4, 1, 5, 9, 2, 6]
+
+v.sort()                            # in place, natural order
+Vector[int] sorted = v.sorted()     # returns new sorted vector
+
+# Custom comparator (sort / sorted take an optional closure).
+v.sort((a, b): b - a)               # descending
+
+# Sort by key — avoids recomputing the key per comparison.
+Vector[String] words = ["banana", "fig", "apple"]
+words.sort_by_key((s): s.len())     # by length
+
+Vector[String] sorted_by_len = words.sorted_by_key((s): s.len())
+```
+
+### Windows and Chunks
+
+```gorget
+auto v = [1, 2, 3, 4, 5]
+
+# Fixed-width sliding windows (size 3): [[1,2,3], [2,3,4], [3,4,5]]
+Vector[Vector[int]] wins = v.windows(3)
+
+# Non-overlapping chunks (size 2): [[1,2], [3,4], [5]]
+Vector[Vector[int]] chs = v.chunks(2)
 ```
 
 ### Index Access and Ownership
