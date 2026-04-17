@@ -1989,6 +1989,11 @@ fn vector_iter_userdef() {
 }
 
 #[test]
+fn stdlib_vector_iter() {
+    run_gg("stdlib_vector_iter.gg", "10\n20\n30");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

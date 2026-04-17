@@ -2418,7 +2418,12 @@ fn register_collection_method_sigs(
 
         // Helper: insert fn_sigs + fn_param_abis + fn_param_ownerships.
         // `move_indices` marks which non-self params take ownership (indices into params, 1-based).
+        // User equip blocks take precedence — if a signature is already registered,
+        // leave it alone (e.g. a user-defined `iter()` returning VectorIter[T]).
         let mut insert_collection_sig = |name: String, params: Vec<TypeId>, ret: TypeId, move_indices: &[usize]| {
+            if ctx.fn_sigs.contains_key(&name) {
+                return;
+            }
             let abis: Vec<context::ParamABI> = params.iter().enumerate()
                 .map(|(i, _)| if i == 0 { context::ParamABI::ByPtr } else { context::ParamABI::ByValue })
                 .collect();

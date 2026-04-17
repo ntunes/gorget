@@ -29,7 +29,7 @@ pub fn is_builtin_module(segments: &[String]) -> bool {
     match segments.first().map(|s| s.as_str()) {
         Some("std") => match segments.len() {
             2 => matches!(segments[1].as_str(),
-                "fs" | "path" | "os" | "conv" | "io" | "random" | "time"
+                "fs" | "path" | "os" | "conv" | "io" | "iter" | "random" | "time"
                 | "collections" | "math" | "fmt" | "process" | "bytes"
                 | "encoding" | "channel" | "alloc" | "term" | "heap" | "datetime"
                 | "sync" | "thread" | "async" | "signal"),
@@ -74,6 +74,7 @@ pub fn builtin_module_source(segments: &[String]) -> Option<&'static str> {
             Some("channel") => Some(include_str!("../lib/std/channel.gg")),
             Some("collections") => Some(include_str!("../lib/std/collections.gg")),
             Some("io") => Some(include_str!("../lib/std/io.gg")),
+            Some("iter") => Some(include_str!("../lib/std/iter.gg")),
             Some("math") => Some(include_str!("../lib/std/math.gg")),
             Some("os") => Some(include_str!("../lib/std/os.gg")),
             Some("signal") => Some(include_str!("../lib/std/signal.gg")),

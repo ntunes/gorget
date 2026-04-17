@@ -1,0 +1,11 @@
+# Exercises std.iter: `v.iter()` yields a VectorIter[T] that implements
+# Iterator[T], consumable through a for-loop.
+
+from std.iter import VectorIter
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    VectorIter[int] vit = v.iter()
+    for x in vit:
+        print(x)
+    return 0
