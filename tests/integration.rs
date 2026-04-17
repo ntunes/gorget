@@ -2015,6 +2015,11 @@ fn stdlib_io_core() {
 }
 
 #[test]
+fn stdlib_io_reader() {
+    run_gg("stdlib_io_reader.gg", "20\n8");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

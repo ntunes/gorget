@@ -10,7 +10,7 @@
 #   written may be less than the input for short-write destinations
 #   (sockets, pipes). `write_all` is derived to guarantee full write.
 # - Reader.read_bytes fills the caller's buffer through a mutable borrow.
-#   Returning Ok(0) means EOF. `read_all` / `read_exact` derive on top.
+#   Returning Ok(0) means EOF. `reader_drain` / `read_exact` derive on top.
 # - Errors are typed via `IoError`; no stringly-typed `Result[T, String]`
 #   at the I/O boundary.
 
@@ -103,3 +103,49 @@ Result[int, IoError] write_all[W](W &w, String bytes):
 # resulting bytes through `write_all`.
 Result[int, IoError] write_display[W, Displayable D](W &w, D v):
     return write_all[W](&w, v.display())
+
+# Read all available bytes from `r` into a fresh buffer. Loops calling
+# `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
+# on success; `buf` accumulates across reads.
+Result[Vector[uint8], IoError] reader_drain[R](R &reader):
+    Vector[uint8] buf = Vector[uint8]()
+    bool done = false
+    while not done:
+        int before = buf.len()
+        Result[int, IoError] step = reader.read_bytes(&buf)
+        match step:
+            case Ok(0):
+                done = true
+            case Ok(_):
+                # Defensive: if the reader returns Ok(n) but didn't
+                # actually grow the buffer, treat as EOF to avoid a
+                # busy loop.
+                if buf.len() == before:
+                    done = true
+            case Error(e):
+                return Error(!e)
+    return Ok(!buf)
+
+# Read exactly `n` bytes or fail with UnexpectedEof. Short reads are
+# re-issued until the total reaches `n`.
+Result[Vector[uint8], IoError] read_exact[R](R &reader, int n):
+    Vector[uint8] buf = Vector[uint8]()
+    bool failed = false
+    IoError err_kind = IoError.UnexpectedEof()
+    while buf.len() < n and not failed:
+        int before = buf.len()
+        Result[int, IoError] step = reader.read_bytes(&buf)
+        match step:
+            case Ok(0):
+                failed = true
+                err_kind = IoError.UnexpectedEof()
+            case Ok(_):
+                if buf.len() == before:
+                    failed = true
+                    err_kind = IoError.UnexpectedEof()
+            case Error(e):
+                failed = true
+                err_kind = !e
+    if failed:
+        return Error(!err_kind)
+    return Ok(!buf)

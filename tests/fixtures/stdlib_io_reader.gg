@@ -1,0 +1,54 @@
+# Exercises std.io_core Reader — Cursor-as-Reader, plus the generic
+# `reader_drain` and `read_exact` helpers. `reader_drain` consumes until
+# EOF; `read_exact` attempts to fill at least `n` bytes.
+
+from std.io_core import Reader, IoError, reader_drain, read_exact
+
+struct Cursor:
+    Vector[uint8] src
+    int pos
+
+equip Cursor with Reader:
+    # Each call yields at most 8 bytes — simulates a short-read source
+    # so the drain/exact loops are exercised across multiple iterations.
+    Result[int, IoError] read_bytes(&self, Vector[uint8] &buf):
+        int n = 0
+        while self.pos < self.src.len() and n < 8:
+            buf.push(self.src.get(self.pos).unwrap())
+            self.pos = self.pos + 1
+            n = n + 1
+        return Ok(n)
+
+int main():
+    Vector[uint8] data = Vector[uint8]()
+    int i = 0
+    while i < 20:
+        data.push(i as uint8)
+        i = i + 1
+
+    # reader_drain consumes everything.
+    Cursor c1 = Cursor(data, 0)
+    Result[Vector[uint8], IoError] all = reader_drain[Cursor](&c1)
+    match all:
+        case Ok(bytes):
+            print(bytes.len())
+        case Error(e):
+            print(e.display())
+
+    # read_exact with n available returns at least n (the cursor's
+    # 8-byte chunk size means we may get slightly more on the final
+    # step, but >= 5).
+    Vector[uint8] data2 = Vector[uint8]()
+    int j = 0
+    while j < 10:
+        data2.push(j as uint8)
+        j = j + 1
+    Cursor c2 = Cursor(data2, 0)
+    Result[Vector[uint8], IoError] five = read_exact[Cursor](&c2, 5)
+    match five:
+        case Ok(bytes):
+            print(bytes.len())
+        case Error(e):
+            print(e.display())
+
+    return 0

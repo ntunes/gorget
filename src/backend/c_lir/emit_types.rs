@@ -2551,7 +2551,16 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     }
 
     // Collections: Array
-    if has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__")) {
+    // Trigger on any gorget_array_* / Vector__* call, OR on the mere
+    // presence of `Vector__` anywhere in a type name (including nested
+    // Option__Vector__*, Result__Vector__*__IoError, etc.) — user-defined
+    // types with Vector[T] fields emit clone/drop code that references
+    // gorget_array_clone / gorget_array_free without ever showing up as
+    // a CallExtern.
+    let vector_struct_present = module.structs.iter().any(|s| s.name.contains("Vector__"));
+    if vector_struct_present
+        || has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__"))
+    {
         ensure_array!(out, emitted_array);
     }
 
