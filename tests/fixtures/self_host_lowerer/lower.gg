@@ -732,6 +732,32 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
             if is_comparison(op):
+                # Comparable operator overload: `a < b` etc. on user types →
+                # TypeName__compare(&a, b) OP 0.
+                String lhs_cmp_name = local_type_name(lhs, &ctx, &gmod)
+                if gmod.type_infos.contains(lhs_cmp_name) and (op == "<" or op == "<=" or op == ">" or op == ">="):
+                    String cmp_method = lhs_cmp_name + "__compare"
+                    if gmod.fn_sigs.contains(cmp_method):
+                        Vector[Operand] cmp_args = [OpMove(lhs), OpCopy(rhs)]
+                        int cmp_val = add_local(&ctx, I64_TYPE, NO_NAME)
+                        emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
+                        int zero = add_local(&ctx, I64_TYPE, NO_NAME)
+                        emit(&ctx, GIAssign(zero, OpConstI64(0)))
+                        int cmp_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                        emit(&ctx, GICmp(cmp_dst, map_cmpop(op), I64_TYPE, OpCopy(cmp_val), OpCopy(zero)))
+                        return cmp_dst
+                # Equatable operator overload for ==/!=: `a == b` → a.eq(b) / !a.eq(b).
+                if (op == "==" or op == "!=") and gmod.type_infos.contains(lhs_cmp_name):
+                    String eq_method = lhs_cmp_name + "__eq"
+                    if gmod.fn_sigs.contains(eq_method):
+                        Vector[Operand] eq_args = [OpMove(lhs), OpCopy(rhs)]
+                        int eq_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                        emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
+                        if op == "==":
+                            return eq_dst
+                        int neq_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                        emit(&ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
+                        return neq_dst
                 int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
                 return dst
@@ -772,6 +798,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int inner_type = ctx.locals.get(inner).unwrap().type_id
             match op:
                 case "-":
+                    # Operator overload: -user_struct → user_struct.neg()
+                    String inner_tname = local_type_name(inner, &ctx, &gmod)
+                    if gmod.type_infos.contains(inner_tname):
+                        String neg_method = inner_tname + "__neg"
+                        Vector[Operand] neg_args = [OpMove(inner)]
+                        int neg_ret = inner_type
+                        if gmod.fn_sigs.contains(neg_method):
+                            neg_ret = gmod.fn_sigs.get(neg_method).unwrap()
+                        int neg_dst = add_local(&ctx, neg_ret, NO_NAME)
+                        emit(&ctx, GICallExtern(neg_dst, neg_method, neg_args))
+                        return neg_dst
                     int dst = add_local(&ctx, inner_type, NO_NAME)
                     emit(&ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
                     return dst
