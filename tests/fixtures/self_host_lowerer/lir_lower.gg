@@ -285,6 +285,22 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     # Two-pass registration: Pass 1 creates placeholder entries,
     # Pass 2 fills in fields.
 
+    # Collect enum variant names to skip them in Pass 1 — they should be
+    # represented as their parent enum, not as their own standalone struct.
+    Dict[String, bool] enum_variant_names = {}
+    Vector[String] ti_all_keys = gmod.type_infos.keys()
+    int tiek = 0
+    while tiek < ti_all_keys.len():
+        String tname_k = ti_all_keys.get(tiek).unwrap()
+        GirTypeInfo tinfo_k = gmod.type_infos.get(tname_k).unwrap()
+        if tinfo_k.is_enum:
+            int vk = 0
+            while vk < tinfo_k.variants.len():
+                GirEnumVariantInfo v = tinfo_k.variants.get(vk).unwrap()
+                enum_variant_names.put(v.name, true)
+                vk += 1
+        tiek += 1
+
     # Pass 1: Pre-register all named types
     int ti = PRIM_COUNT
     while ti < gmod.type_table.len():
@@ -292,6 +308,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         match gt:
             case GtNamed(name):
                 if is_generic_placeholder_name(name):
+                    ti += 1
+                    continue
+                if enum_variant_names.contains(name):
                     ti += 1
                     continue
                 if sr_lookup(&sr, name) < 0:
@@ -334,6 +353,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     while tki_pre < ti_keys.len():
         String tname = ti_keys.get(tki_pre).unwrap()
         if is_generic_placeholder_name(tname):
+            tki_pre += 1
+            continue
+        if enum_variant_names.contains(tname):
             tki_pre += 1
             continue
         if sr_lookup(&sr, tname) < 0:
