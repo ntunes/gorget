@@ -1,8 +1,9 @@
-# Exercises `collect_vec` — turn any Iterator[T] back into Vector[T] via
-# the for-loop protocol. The generic `Iter` param lets the same function
-# work with VectorIter / TakeIter / SkipIter. No trait-object dispatch.
+# Exercises `collect_vec` and `count_iter` — terminal functions that
+# turn any Iterator[T] back into Vector[T] or an element count via the
+# for-loop protocol. Generic over the concrete iterator type — no
+# trait-object dispatch.
 
-from std.iter import VectorIter, TakeIter, collect_vec
+from std.iter import VectorIter, TakeIter, collect_vec, count_iter
 
 int main():
     Vector[int] v = [10, 20, 30, 40, 50]
@@ -11,4 +12,10 @@ int main():
     Vector[int] result = collect_vec[int, TakeIter[int]](t)
     for x in result:
         print(x)
+
+    VectorIter[int] vit2 = v.iter()
+    TakeIter[int] t2 = TakeIter[int](vit2, 4)
+    int n = count_iter[TakeIter[int]](t2)
+    print(n)
+
     return 0

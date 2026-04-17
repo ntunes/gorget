@@ -61,3 +61,12 @@ Vector[T] collect_vec[T, Iter](Iter iter):
         out.push(x)
     return !out
 
+# Terminal — count the elements produced by any Iterator-shaped iter.
+# Explicitly generic over the concrete iterator type to avoid trait
+# object dispatch; callers write `count_iter[VectorIter[int]](vit)`.
+int count_iter[Iter](Iter iter):
+    int n = 0
+    for _ in iter:
+        n = n + 1
+    return n
+

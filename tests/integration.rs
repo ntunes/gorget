@@ -2003,7 +2003,7 @@ fn stdlib_iter_adapters() {
 
 #[test]
 fn stdlib_iter_collect() {
-    run_gg("stdlib_iter_collect.gg", "10\n20\n30");
+    run_gg("stdlib_iter_collect.gg", "10\n20\n30\n4");
 }
 
 #[test]
