@@ -2007,9 +2007,9 @@ fn stdlib_iter_collect() {
 }
 
 #[test]
-fn stdlib_io_core() {
+fn stdlib_io_writer() {
     run_gg(
-        "stdlib_io_core.gg",
+        "stdlib_io_writer.gg",
         "6\nhello \n5\nworld\n2\n42\nnot found\ninvalid utf-8 at byte 7\nio error: disk full",
     );
 }

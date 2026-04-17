@@ -1,11 +1,11 @@
-# Exercises std.io_core — the byte-shaped Writer trait + typed IoError.
+# Exercises std.io — the byte-shaped Writer trait + typed IoError.
 #
 # Phase 3 of the stdlib narrow-waist. A user-defined Sink satisfies
 # Writer; write_all and write_display are generic free functions so the
 # same helpers compose over any concrete Writer without trait-object
 # dispatch.
 
-from std.io_core import Writer, IoError, write_all, write_display
+from std.io import Writer, IoError, write_all, write_display
 
 struct Sink:
     String buf

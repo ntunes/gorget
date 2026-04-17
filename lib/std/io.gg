@@ -1,10 +1,28 @@
-# std.io — Input/output functions
+# std.io — byte-shaped I/O: Writer/Reader traits, IoError, stdin/stdout/stderr.
+#
+# Phase 3 of the stdlib narrow-waist redesign (docs/internals/stdlib-design.md §6).
+#
+# Conventions:
+# - Writer.write_bytes returns `Result[int, IoError]` — the byte count actually
+#   written may be less than the input for short-write destinations
+#   (sockets, pipes). `write_all` is derived to guarantee full write.
+# - Reader.read_bytes fills the caller's buffer through a mutable borrow.
+#   Returning Ok(0) means EOF. `reader_drain` / `read_exact` derive on top.
+# - Errors are typed via `IoError`; no stringly-typed `Result[T, String]`
+#   at the I/O boundary.
 
-from std.collections import File
+from std.collections import Vector, File
 
-# Standard file handles (codegen special-cases these)
+# ── Standard file handles (codegen special-cases these) ───────
+
 public static File stderr = File(0)
 public static File stdout = File(0)
+
+# ── Legacy cstr-based terminal / stdin helpers ────────────────
+#
+# These pre-date the Writer/Reader traits. Keep them around so existing
+# callers of `getchar()` / `readline()` / `input(prompt)` don't break;
+# the Phase 3 migration is Writer/Reader-based and layers on top.
 
 extern "C":
     extern int getchar() = "gorget_getchar"
@@ -13,3 +31,178 @@ extern "C":
     extern blocking cstr input(cstr prompt) = "gorget_input"
     extern cstr readline() = "gorget_readline"
     extern bool stdin_eof() = "gorget_stdin_eof"
+
+# ── IoError ───────────────────────────────────────────────────
+#
+# The narrow error channel for all I/O operations. Every Writer/Reader
+# implementor and every derived helper (write_all, read_exact, …)
+# reports failure through one of these variants.
+
+enum IoError:
+    NotFound
+    PermissionDenied
+    AlreadyExists
+    BrokenPipe
+    ConnectionRefused
+    ConnectionReset
+    ConnectionAborted
+    NotConnected
+    AddrInUse
+    TimedOut
+    WouldBlock
+    Interrupted
+    UnexpectedEof
+    InvalidInput
+    InvalidData
+    # Byte offset of the first invalid UTF-8 sequence.
+    Utf8Invalid(int)
+    # Escape hatch for errors that don't fit any named variant.
+    # Prefer a named variant when introducing a new category.
+    Other(String)
+
+equip IoError with Displayable:
+    String display(self):
+        match self:
+            case IoError.NotFound():
+                return "not found"
+            case IoError.PermissionDenied():
+                return "permission denied"
+            case IoError.AlreadyExists():
+                return "already exists"
+            case IoError.BrokenPipe():
+                return "broken pipe"
+            case IoError.ConnectionRefused():
+                return "connection refused"
+            case IoError.ConnectionReset():
+                return "connection reset"
+            case IoError.ConnectionAborted():
+                return "connection aborted"
+            case IoError.NotConnected():
+                return "not connected"
+            case IoError.AddrInUse():
+                return "address in use"
+            case IoError.TimedOut():
+                return "timed out"
+            case IoError.WouldBlock():
+                return "would block"
+            case IoError.Interrupted():
+                return "interrupted"
+            case IoError.UnexpectedEof():
+                return "unexpected eof"
+            case IoError.InvalidInput():
+                return "invalid input"
+            case IoError.InvalidData():
+                return "invalid data"
+            case IoError.Utf8Invalid(offset):
+                return f"invalid utf-8 at byte {offset}"
+            case IoError.Other(msg):
+                return f"io error: {msg}"
+
+# ── Writer ────────────────────────────────────────────────────
+#
+# `write_bytes` is the single required method — all higher-level output
+# convenience is derived on top. Naming note: the trait method is
+# `write_bytes` (not `write`) to avoid colliding with the legacy
+# `File.write` extern. Once the migration is complete, the legacy
+# `.write` goes away and the trait method renames to `write`.
+
+trait Writer:
+    Result[int, IoError] write_bytes(&self, String bytes)
+
+# ── Reader ────────────────────────────────────────────────────
+#
+# `read_bytes` fills `buf` through a mutable borrow and returns the byte
+# count actually read. `Ok(0)` means EOF.
+
+trait Reader:
+    Result[int, IoError] read_bytes(&self, Vector[uint8] &buf)
+
+# Wiring Writer onto `String`, `File`, `Socket`, `stdout`/`stderr` is
+# deferred until the type checker accepts `Result[T, IoError]` as a
+# return type on a `String`-receiver equip method (same codegen gap
+# that blocks `.take()` / `.skip()` sugar on VectorIter). For now
+# callers wrap strings in a `Sink`-style struct to satisfy Writer.
+
+# ── Derived helpers (free functions, generic over the concrete Writer) ──
+
+# Guarantee the entire byte slice gets written, or fail. Returns the
+# total byte count written on success (always equal to `bytes.len()`),
+# or the first IoError produced by the underlying Writer.
+#
+# Note: generic over the concrete Writer type to avoid trait-object
+# dispatch. Callers write `write_all[Sink](&w, "hi")`.
+Result[int, IoError] write_all[W](W &w, String bytes):
+    int total = 0
+    int len = bytes.len()
+    while total < len:
+        String remaining = bytes.byte_slice(total, len)
+        Result[int, IoError] r = w.write_bytes(remaining)
+        match r:
+            case Ok(0):
+                return Error(IoError.BrokenPipe())
+            case Ok(n):
+                total = total + n
+            case Error(e):
+                return Error(e)
+    return Ok(total)
+
+# Formatted write — render `v` through `Displayable` and push the
+# resulting bytes through `write_all`.
+Result[int, IoError] write_display[W, Displayable D](W &w, D v):
+    return write_all[W](&w, v.display())
+
+# Read all available bytes from `r` into a fresh buffer. Loops calling
+# `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
+# on success; `buf` accumulates across reads.
+Result[Vector[uint8], IoError] reader_drain[R](R &reader):
+    Vector[uint8] buf = Vector[uint8]()
+    bool done = false
+    while not done:
+        int before = buf.len()
+        Result[int, IoError] step = reader.read_bytes(&buf)
+        match step:
+            case Ok(0):
+                done = true
+            case Ok(_):
+                # Defensive: if the reader returns Ok(n) but didn't
+                # actually grow the buffer, treat as EOF to avoid a
+                # busy loop.
+                if buf.len() == before:
+                    done = true
+            case Error(e):
+                return Error(!e)
+    return Ok(!buf)
+
+# Adapt a legacy `Result[T, String]` error into `Result[T, IoError]` by
+# wrapping the message in `IoError.Other`. Bridge used during the stdlib
+# migration from stringly-typed I/O errors to typed ones.
+Result[T, IoError] from_string_error[T](Result[T, String] r):
+    match r:
+        case Ok(v):
+            return Ok(!v)
+        case Error(e):
+            return Error(IoError.Other(!e))
+
+# Read exactly `n` bytes or fail with UnexpectedEof. Short reads are
+# re-issued until the total reaches `n`.
+Result[Vector[uint8], IoError] read_exact[R](R &reader, int n):
+    Vector[uint8] buf = Vector[uint8]()
+    bool failed = false
+    IoError err_kind = IoError.UnexpectedEof()
+    while buf.len() < n and not failed:
+        int before = buf.len()
+        Result[int, IoError] step = reader.read_bytes(&buf)
+        match step:
+            case Ok(0):
+                failed = true
+                err_kind = IoError.UnexpectedEof()
+            case Ok(_):
+                if buf.len() == before:
+                    failed = true
+                    err_kind = IoError.UnexpectedEof()
+            case Error(e):
+                failed = true
+                err_kind = !e
+    if failed:
+        return Error(!err_kind)
+    return Ok(!buf)

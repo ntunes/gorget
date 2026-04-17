@@ -199,7 +199,7 @@ trait Writer:
 
 Narrow output interface. Returns the byte count actually written; a
 write may be short (sockets, pipes, compression streams).
-`write_all(w, bytes)` from `std.io_core` wraps this with a loop that
+`write_all(w, bytes)` from `std.io` wraps this with a loop that
 guarantees completion.
 
 ### Reader
@@ -211,7 +211,7 @@ trait Reader:
 
 Narrow input interface. Reader fills the caller's buffer through a
 mutable borrow and returns the byte count read. `Ok(0)` indicates EOF.
-`reader_drain(r)` and `read_exact(r, n)` from `std.io_core` derive
+`reader_drain(r)` and `read_exact(r, n)` from `std.io` derive
 read-to-end and fill-exactly-n on top.
 
 ### IoError

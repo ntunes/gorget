@@ -365,7 +365,7 @@ enum DbError:
 
 ### The I/O Error Channel
 
-`std.io_core` ships a canonical `IoError` enum — `NotFound`,
+`std.io` ships a canonical `IoError` enum — `NotFound`,
 `PermissionDenied`, `BrokenPipe`, `ConnectionReset`, `TimedOut`,
 `UnexpectedEof`, `Utf8Invalid(offset)`, `Other(String)`, and other
 common categories. All byte-shaped Writer/Reader methods return
@@ -373,7 +373,7 @@ common categories. All byte-shaped Writer/Reader methods return
 instead of parsing message strings:
 
 ```gorget
-from std.io_core import IoError
+from std.io import IoError
 
 match socket.write_bytes(request):
     case Ok(n):

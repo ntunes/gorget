@@ -329,12 +329,12 @@ Terminals: `collect_vec[T, Iter]` materializes to a Vector,
 `count_iter[Iter]` counts elements. All generic over the concrete
 iterator type (no trait-object dispatch).
 
-### Byte-shaped I/O (`std.io_core`)
+### Byte-shaped I/O (`std.io`)
 
 The narrow waist for output and input:
 
 ```gorget
-from std.io_core import Writer, IoError, write_all, write_display
+from std.io import Writer, IoError, write_all, write_display
 
 struct Sink:
     String buf

@@ -1,8 +1,8 @@
-# Exercises std.io_core Reader — Cursor-as-Reader, plus the generic
+# Exercises std.io Reader — Cursor-as-Reader, plus the generic
 # `reader_drain` and `read_exact` helpers. `reader_drain` consumes until
 # EOF; `read_exact` attempts to fill at least `n` bytes.
 
-from std.io_core import Reader, IoError, reader_drain, read_exact
+from std.io import Reader, IoError, reader_drain, read_exact
 
 struct Cursor:
     Vector[uint8] src

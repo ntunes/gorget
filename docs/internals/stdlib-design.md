@@ -832,7 +832,12 @@ enum IoError:
     Other(String message)    # escape hatch — prefer a named variant
 ```
 
-Defined in the prelude. Available without import.
+Defined in `std.io`. Every producer or consumer of `IoError` also imports
+from `std.io` (Writer/Reader traits, `write_all` helpers, I/O functions),
+so the type is naturally in scope on the same `from std.io import …`
+line — no prelude bloat needed. (Earlier revisions of this doc proposed
+prelude placement; we walked that back when it became clear callers
+would always co-import other std.io items.)
 
 ### 9.2 The `Error` Trait
 
@@ -949,7 +954,7 @@ demand, not shipped speculatively.
 
 1. Define the `Writer` trait (byte-shaped, `Result[int, IoError]`).
 2. Define the `Reader` trait (`Result[int, IoError] read(&self, Vector[byte] &buf)`).
-3. Define `IoError` enum in the prelude (see §9.1).
+3. Define `IoError` enum in `std.io` (see §9.1 — callers co-import with Writer/Reader).
 4. Define the `Error` trait (see §9.2).
 5. Implement Writer on String (byte append), File, Socket, TlsSocket,
    stdout, stderr, Bytes.
