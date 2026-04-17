@@ -4,7 +4,7 @@
 # All variables prefixed enc_ to avoid cross-module name collisions.
 
 from std.collections import Vector
-from std.conv import chr, codepoint_to_str
+from std.conv import chr, codepoint_to_str, ParseError
 
 # ── Internal helpers ──────────────────────────────────────────
 
@@ -66,7 +66,7 @@ String url_encode(String enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[String, String] url_decode(String enc_input):
+Result[String, ParseError] url_decode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -74,11 +74,11 @@ Result[String, String] url_decode(String enc_input):
         byte enc_ch = enc_input.byte_at(enc_i)
         if enc_ch == b'%':
             if enc_i + 2 >= enc_slen:
-                return Error("incomplete percent encoding")
+                return Error(ParseError.InvalidSyntax(enc_i, "incomplete percent encoding"))
             int enc_hi = enc_hex_value(enc_input.byte_at(enc_i + 1))
             int enc_lo = enc_hex_value(enc_input.byte_at(enc_i + 2))
             if enc_hi < 0 or enc_lo < 0:
-                return Error("invalid hex in percent encoding")
+                return Error(ParseError.InvalidSyntax(enc_i, "invalid hex in percent encoding"))
             enc_out = enc_out + chr(enc_hi * 16 + enc_lo)
             enc_i = enc_i + 3
         else:
@@ -101,7 +101,7 @@ String form_encode(String enc_input):
         enc_i = enc_i + 1
     return enc_out
 
-Result[String, String] form_decode(String enc_input):
+Result[String, ParseError] form_decode(String enc_input):
     String enc_out = ""
     int enc_i = 0
     int enc_slen = enc_input.byte_len()
@@ -112,11 +112,11 @@ Result[String, String] form_decode(String enc_input):
             enc_i = enc_i + 1
         elif enc_ch == b'%':
             if enc_i + 2 >= enc_slen:
-                return Error("incomplete percent encoding")
+                return Error(ParseError.InvalidSyntax(enc_i, "incomplete percent encoding"))
             int enc_hi = enc_hex_value(enc_input.byte_at(enc_i + 1))
             int enc_lo = enc_hex_value(enc_input.byte_at(enc_i + 2))
             if enc_hi < 0 or enc_lo < 0:
-                return Error("invalid hex in percent encoding")
+                return Error(ParseError.InvalidSyntax(enc_i, "invalid hex in percent encoding"))
             enc_out = enc_out + chr(enc_hi * 16 + enc_lo)
             enc_i = enc_i + 3
         else:

@@ -7,7 +7,7 @@
 # comment skipping. No namespaces, DTD, CDATA, or processing instructions.
 
 from std.collections import Vector, Dict
-from std.conv import int_to_str, parse_int, chr
+from std.conv import int_to_str, parse_int, chr, ParseError
 
 # ── XML node types ─────────────────────────────────────────
 # Element(tag_name, attributes, child_nodes) | Text(content)
@@ -350,13 +350,13 @@ equip XmlParser:
 
 # ── Public API ─────────────────────────────────────────────
 
-Result[XmlNode, String] xml_parse(String xml_src):
+Result[XmlNode, ParseError] xml_parse(String xml_src):
     XmlParser xp = XmlParser(xml_src, 0, "")
     xp.skip_ws()
     XmlNode root_node = xp.parse_node()
     if xp.failed():
-        return Error(xp.err)
-    return Ok(root_node)
+        return Error(ParseError.InvalidSyntax(xp.pos, !xp.err))
+    return Ok(!root_node)
 
 # ── Serialization ──────────────────────────────────────────
 

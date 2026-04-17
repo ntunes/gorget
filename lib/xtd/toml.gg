@@ -9,7 +9,7 @@
 # This avoids Gorget's value-type Dict aliasing (copying metadata on extract).
 
 from std.collections import Vector, Dict
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str, ParseError
 
 # ── TOML value type ─────────────────────────────────────────
 
@@ -714,7 +714,7 @@ private Vector[String] subpath(Vector[String] full_path, int from_idx):
 
 # ── Public API ──────────────────────────────────────────────
 
-Result[TomlValue, String] parse(String input):
+Result[TomlValue, ParseError] parse(String input):
     Vector[TomlSection] secs = Vector[TomlSection]()
     Dict[String, TomlValue] root_data = Dict[String, TomlValue]()
     Vector[String] root_path = Vector[String]()
@@ -723,7 +723,7 @@ Result[TomlValue, String] parse(String input):
     TomlParser tp = TomlParser(input, 0, "", !secs, 0)
     tp.parse_document()
     if tp.failed():
-        return Error(tp.err)
+        return Error(ParseError.InvalidSyntax(tp.pos, !tp.err))
     return Ok(assemble(tp.sections))
 
 # ── Serialization ───────────────────────────────────────────

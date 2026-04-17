@@ -1,5 +1,6 @@
 from xtd.json import Json, json_parse, json_stringify, json_pretty
 from std.collections import Vector, Dict
+from std.conv import ParseError
 
 void main():
     # Build an object using Dict (avoids string interpolation issues with JSON braces)
@@ -59,7 +60,7 @@ void main():
     print(f"{has_on_str}")
     print(f"{has_idx_on_obj}")
     # Parse error
-    Result[Json, String] bad_result = json_parse("not json")
+    Result[Json, ParseError] bad_result = json_parse("not json")
     bool is_err_val = bad_result.is_error()
     print(f"{is_err_val}")
     # Unicode escapes

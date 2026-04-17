@@ -75,7 +75,7 @@ void main():
     print(n14.text())
 
     # Parse error
-    Result[XmlNode, String] bad_result = xml_parse("<unclosed>")
+    Result[XmlNode, ParseError] bad_result = xml_parse("<unclosed>")
     bool is_err = bad_result.is_error()
     print(f"{is_err}")
 

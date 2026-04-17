@@ -4,7 +4,7 @@
 # No C dependencies — uses only Gorget standard library.
 
 from std.collections import Vector, Dict, Box
-from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str
+from std.conv import parse_int, parse_float, int_to_str, float_to_str, bool_to_str, codepoint_to_str, ParseError
 
 # ── JSON value type ──────────────────────────────────────────
 
@@ -457,15 +457,15 @@ equip JsonParser:
 
 # ── Public API ───────────────────────────────────────────────
 
-Result[Json, String] json_parse(String input):
+Result[Json, ParseError] json_parse(String input):
     JsonParser p = JsonParser(input, 0, "")
     Json value = p.parse_value()
     if p.failed():
-        return Error(p.err)
+        return Error(ParseError.InvalidSyntax(p.pos, !p.err))
     p.skip_whitespace()
     if p.pos < p.input.byte_len():
-        return Error("unexpected trailing content")
-    return Ok(value)
+        return Error(ParseError.InvalidSyntax(p.pos, "unexpected trailing content"))
+    return Ok(!value)
 
 # ── Serialization ────────────────────────────────────────────
 

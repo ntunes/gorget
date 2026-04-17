@@ -11,6 +11,7 @@
 from xtd.httpserver import HttpRequest, HttpServerResponse, http_server_handle_conn_ka
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
 from std.bytes import bytes_to_str
+from std.io import IoError
 from std.conv import int_to_str
 from std.time import sleep
 from std.signal import signal_ignore, SIGPIPE
@@ -96,7 +97,7 @@ async void main():
     String resp_body = ""
     if content_length > 0:
         Vector[uint8] raw_body = conn.read_exact(content_length)
-        Result[String, String] sr = bytes_to_str(raw_body)
+        Result[String, IoError] sr = bytes_to_str(raw_body)
         if sr.is_ok():
             resp_body = sr.unwrap()
     conn.close()

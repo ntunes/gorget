@@ -16,6 +16,7 @@
 from xtd.httpserver import HttpRequest, HttpServerResponse, HttpServer
 from xtd.json import Json, json_parse, json_stringify
 from xtd.http import post, HttpResponse
+from std.conv import ParseError
 from std.collections import Dict, Vector
 from std.time import sleep
 from std.signal import signal_ignore, SIGPIPE
@@ -33,7 +34,7 @@ void test_direct():
     body1_map.put("name", Str("Alice"))
     body1_map.put("age", Int(30))
     HttpRequest req1 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[String, String](), json_stringify(Obj(body1_map)).str(), Dict[String, String]())
-    Result[Json, String] r1 = req1.json()
+    Result[Json, ParseError] r1 = req1.json()
     bool t1 = false
     if r1.is_ok():
         Json j1 = r1.unwrap()
@@ -44,7 +45,7 @@ void test_direct():
 
     # 2. Invalid JSON → Err
     HttpRequest req2 = HttpRequest("POST", "/", "", "HTTP/1.1", Dict[String, String](), "not json", Dict[String, String]())
-    Result[Json, String] r2 = req2.json()
+    Result[Json, ParseError] r2 = req2.json()
     check("json_parse_err", r2.is_error())
 
     # 3. of_json sets Content-Type: application/json
@@ -54,14 +55,14 @@ void test_direct():
     check("of_json_ctype", resp3.content_type == "application/json")
 
     # 4. of_json body round-trips through json_parse
-    Result[Json, String] r4 = json_parse(resp3.body)
+    Result[Json, ParseError] r4 = json_parse(resp3.body)
     bool t4 = false
     if r4.is_ok():
         t4 = r4.unwrap().get("status").unwrap().as_str() == "ok"
     check("of_json_roundtrip", t4)
 
 HttpServerResponse echo_json(HttpRequest req):
-    Result[Json, String] parsed = req.json()
+    Result[Json, ParseError] parsed = req.json()
     if parsed.is_ok():
         return HttpServerResponse.of_json(parsed.unwrap())
     return HttpServerResponse.bad_request("bad json")
@@ -90,7 +91,7 @@ async void main():
     if r5.is_ok():
         HttpResponse resp5 = r5.unwrap()
         if resp5.status_code == 200:
-            Result[Json, String] body5 = json_parse(resp5.body_text)
+            Result[Json, ParseError] body5 = json_parse(resp5.body_text)
             if body5.is_ok():
                 t5 = body5.unwrap().get("x").unwrap().as_int() == 42
     check("wire_echo_json", t5)

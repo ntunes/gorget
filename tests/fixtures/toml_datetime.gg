@@ -2,7 +2,7 @@ from xtd.toml import parse, TomlValue
 
 void main():
     String src = "ts = 2024-01-15T10:30:00Z\nname = \"test\"\n"
-    Result[TomlValue, String] r = parse(src)
+    Result[TomlValue, ParseError] r = parse(src)
     match r:
         case Ok(root):
             TomlValue ts = root.get("ts")

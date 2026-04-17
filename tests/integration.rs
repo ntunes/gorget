@@ -5941,9 +5941,9 @@ fn utf8_validation() {
         "utf8_validation.gg",
         "\
 hi
-invalid UTF-8 in byte buffer
+invalid utf-8 at byte 0
 café
-invalid UTF-8 in byte buffer",
+invalid utf-8 at byte 0",
     );
 }
 

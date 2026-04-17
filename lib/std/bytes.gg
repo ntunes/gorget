@@ -4,6 +4,7 @@
 # pure Gorget Base64 encoding/decoding (RFC 4648).
 
 from std.collections import Vector
+from std.io import IoError
 
 # ── C-backed extern functions ────────────────────────────────
 
@@ -12,10 +13,12 @@ extern String __bytes_to_str_raw(Vector[uint8] b64_buf) = "gorget_bytes_to_str"
 extern bool __bytes_utf8_valid(Vector[uint8] b64_buf) = "gorget_bytes_utf8_valid"
 
 # Convert byte buffer to String with UTF-8 validation.
-# Returns Error if the buffer contains invalid UTF-8 byte sequences.
-Result[String, String] bytes_to_str(Vector[uint8] b64_buf):
+# Returns `IoError.Utf8Invalid(0)` if the buffer is not valid UTF-8 —
+# the byte offset is 0 for now (the underlying validator reports a
+# simple bool; offset tracking is a future refinement).
+Result[String, IoError] bytes_to_str(Vector[uint8] b64_buf):
     if not __bytes_utf8_valid(b64_buf):
-        return Error("invalid UTF-8 in byte buffer")
+        return Error(IoError.Utf8Invalid(0))
     String raw_str = __bytes_to_str_raw(b64_buf)
     return Ok(raw_str)
 

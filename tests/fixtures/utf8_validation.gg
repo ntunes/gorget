@@ -1,28 +1,29 @@
 from std.bytes import bytes_to_str
 from std.collections import Vector
+from std.io import IoError
 
 void main():
     # Valid UTF-8
     Vector[uint8] valid = Vector[uint8]()
     valid.push(104)
     valid.push(105)
-    Result[String, String] r1 = bytes_to_str(valid)
+    Result[String, IoError] r1 = bytes_to_str(valid)
     match r1:
         case Ok(s):
             print(s)
         case Error(e):
-            print(e)
+            print(e.display())
 
     # Invalid UTF-8 (0xFF is never valid)
     Vector[uint8] invalid = Vector[uint8]()
     invalid.push(255)
     invalid.push(254)
-    Result[String, String] r2 = bytes_to_str(invalid)
+    Result[String, IoError] r2 = bytes_to_str(invalid)
     match r2:
         case Ok(s):
             print(s)
         case Error(e):
-            print(e)
+            print(e.display())
 
     # Valid multibyte UTF-8 (é = 0xC3 0xA9)
     Vector[uint8] multi = Vector[uint8]()
@@ -31,19 +32,19 @@ void main():
     multi.push(102)
     multi.push(195)
     multi.push(169)
-    Result[String, String] r3 = bytes_to_str(multi)
+    Result[String, IoError] r3 = bytes_to_str(multi)
     match r3:
         case Ok(s):
             print(s)
         case Error(e):
-            print(e)
+            print(e.display())
 
     # Truncated multibyte (0xC3 alone is incomplete 2-byte)
     Vector[uint8] trunc = Vector[uint8]()
     trunc.push(195)
-    Result[String, String] r4 = bytes_to_str(trunc)
+    Result[String, IoError] r4 = bytes_to_str(trunc)
     match r4:
         case Ok(s):
             print(s)
         case Error(e):
-            print(e)
+            print(e.display())

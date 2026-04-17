@@ -1,5 +1,6 @@
 from xtd.json import Json, json_parse, json_pretty
 from std.collections import Dict
+from std.conv import ParseError
 
 void main():
     # Single-key object built via Dict (avoids string interpolation issues)
@@ -10,7 +11,7 @@ void main():
     print(pp)
 
     # Array prettification
-    Result[Json, String] r2 = json_parse("[1,2,3]")
+    Result[Json, ParseError] r2 = json_parse("[1,2,3]")
     match r2:
         case Ok(j2):
             String pp2 = json_pretty(j2)

@@ -19,11 +19,11 @@
 
 from xtd.json import Json, json_parse
 from xtd.jsonpath import get, get_all, exists, count, set, delete
-from std.conv import int_to_str
+from std.conv import int_to_str, ParseError
 
 void main():
     String src = "{\"name\":\"Alice\",\"age\":30,\"address\":{\"city\":\"New York\",\"zip\":\"10001\"},\"scores\":[85,92,78],\"friends\":[{\"name\":\"Bob\",\"age\":25,\"email\":\"alice@test.com\"},{\"name\":\"Carol\",\"age\":35,\"email\":\"carol@test.com\"},{\"name\":\"Dave\",\"age\":28,\"email\":\"dave@test.com\"}]}"
-    Result[Json, String] r = json_parse(src)
+    Result[Json, ParseError] r = json_parse(src)
     match r:
         case Ok(doc):
             # Simple key lookup

@@ -19,9 +19,11 @@ from std.net.tls import TlsSocket, TlsServerSocket, tls_server_bind
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.bytes import bytes_to_str, bytes_concat, bytes_from_str, bytes_to_hex
+from std.io import IoError
 from std.fs import read_file, file_exists, is_dir
 from std.path import path_join, path_extension
 from std.encoding import url_decode, form_decode
+from std.conv import ParseError
 from xtd.crypto import crypto_sha1
 from xtd.json import Json, json_parse, json_stringify
 
@@ -212,10 +214,10 @@ Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm).clone()
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len()).clone()
-    Result[String, String] pd = url_decode(req_path)
+    Result[String, ParseError] pd = url_decode(req_path)
     if pd.is_ok():
         req_path = pd.unwrap()
-    Result[String, String] qd = url_decode(req_query)
+    Result[String, ParseError] qd = url_decode(req_query)
     if qd.is_ok():
         req_query = qd.unwrap()
 
@@ -248,7 +250,7 @@ Result[HttpRequest, String] http_server_parse_request(Socket &conn, int max_body
                 return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
-                Result[String, String] body_r = bytes_to_str(body_bytes)
+                Result[String, IoError] body_r = bytes_to_str(body_bytes)
                 if body_r.is_ok():
                     req_body = body_r.unwrap()
 
@@ -381,10 +383,10 @@ Result[HttpRequest, String] http_server_parse_request_tls(TlsSocket &conn, int m
         int qm = qm_opt.unwrap()
         req_path = raw_path.byte_slice(0, qm).clone()
         req_query = raw_path.byte_slice(qm + 1, raw_path.byte_len()).clone()
-    Result[String, String] tls_pd = url_decode(req_path)
+    Result[String, ParseError] tls_pd = url_decode(req_path)
     if tls_pd.is_ok():
         req_path = tls_pd.unwrap()
-    Result[String, String] tls_qd = url_decode(req_query)
+    Result[String, ParseError] tls_qd = url_decode(req_query)
     if tls_qd.is_ok():
         req_query = tls_qd.unwrap()
 
@@ -415,7 +417,7 @@ Result[HttpRequest, String] http_server_parse_request_tls(TlsSocket &conn, int m
                 return Error("request body too large")
             if cl_v > 0:
                 Vector[uint8] body_bytes = conn.read_exact(cl_v)
-                Result[String, String] body_r = bytes_to_str(body_bytes)
+                Result[String, IoError] body_r = bytes_to_str(body_bytes)
                 if body_r.is_ok():
                     req_body = body_r.unwrap()
 
@@ -575,8 +577,8 @@ Dict[String, String] parse_query_string(String qs):
             int eq = eq_opt.unwrap()
             String raw_key = pair.byte_slice(0, eq).clone()
             String raw_val = pair.byte_slice(eq + 1, pair.byte_len()).clone()
-            Result[String, String] dk = url_decode(raw_key)
-            Result[String, String] dv = url_decode(raw_val)
+            Result[String, ParseError] dk = url_decode(raw_key)
+            Result[String, ParseError] dv = url_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
             Result[String, String] dk2 = url_decode(pair)
@@ -599,8 +601,8 @@ Dict[String, String] parse_form_body(String body):
             int eq = eq_opt.unwrap()
             String raw_key = pair.byte_slice(0, eq).clone()
             String raw_val = pair.byte_slice(eq + 1, pair.byte_len()).clone()
-            Result[String, String] dk = form_decode(raw_key)
-            Result[String, String] dv = form_decode(raw_val)
+            Result[String, ParseError] dk = form_decode(raw_key)
+            Result[String, ParseError] dv = form_decode(raw_val)
             params.put(dk.unwrap_or(raw_key), dv.unwrap_or(raw_val))
         else:
             Result[String, String] dk2 = form_decode(pair)
@@ -646,8 +648,8 @@ equip HttpRequest:
         return Dict[String, String]()
 
     # Parse the request body as JSON.
-    # Returns Ok(Json) on success or Err(message) on parse failure.
-    Result[Json, String] json(self):
+    # Returns Ok(Json) on success or Err(ParseError) on parse failure.
+    Result[Json, ParseError] json(self):
         return json_parse(self.body)
 
 # ── Router ────────────────────────────────────────────────────
