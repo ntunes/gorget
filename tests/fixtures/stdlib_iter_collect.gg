@@ -1,0 +1,14 @@
+# Exercises `collect_vec` — turn any Iterator[T] back into Vector[T] via
+# the for-loop protocol. The generic `Iter` param lets the same function
+# work with VectorIter / TakeIter / SkipIter. No trait-object dispatch.
+
+from std.iter import VectorIter, TakeIter, collect_vec
+
+int main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    VectorIter[int] vit = v.iter()
+    TakeIter[int] t = TakeIter[int](vit, 3)
+    Vector[int] result = collect_vec[int, TakeIter[int]](t)
+    for x in result:
+        print(x)
+    return 0

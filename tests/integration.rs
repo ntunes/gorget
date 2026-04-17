@@ -2002,6 +2002,11 @@ fn stdlib_iter_adapters() {
 }
 
 #[test]
+fn stdlib_iter_collect() {
+    run_gg("stdlib_iter_collect.gg", "10\n20\n30");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

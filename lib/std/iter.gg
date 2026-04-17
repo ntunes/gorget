@@ -1,10 +1,12 @@
 # std.iter — minimal lazy iterator support (Phase 2 placeholder)
 #
 # Provides `VectorIter[T]` and `Vector.iter()` so a Vector can be iterated
-# lazily through the `Iterator[T]` protocol. This is the v0 cut — no
-# adapter fusion, no chaining. Later phases add `.map()`, `.filter()`,
-# `.take()`, etc. as concrete state-machine structs that return their
-# own iterator types.
+# lazily through the `Iterator[T]` protocol. Adapters: TakeIter[T],
+# SkipIter[T]. Terminal: `collect_vec` materializes back to Vector.
+#
+# NOTE: Adapter-method sugar (`.take(n)` / `.skip(n)`) on VectorIter is
+# not yet wired because it trips a monomorphization ordering bug —
+# users construct adapters with `TakeIter[int](v.iter(), n)` for now.
 
 from std.collections import Vector
 
@@ -50,4 +52,12 @@ equip [T] SkipIter[T] with Iterator[T]:
                     self.remaining = 0
                     return None
         return self.inner.next()
+
+# Terminal — materialize any iterator of type Iter into a Vector[T] using
+# the for-loop protocol. `Iter` must implement `Iterator[T]`.
+Vector[T] collect_vec[T, Iter](Iter iter):
+    Vector[T] out = Vector[T]()
+    for x in iter:
+        out.push(x)
+    return !out
 
