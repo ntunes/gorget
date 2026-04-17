@@ -539,7 +539,9 @@ fn try_build_ir(
         }
         gorget::lir::optimize::optimize_module(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
-        let c_code = gorget::backend::c_lir::generate_c(&lir_module);
+        let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+            .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
         print!("{c_code}");
         let input_path = Path::new(filename);
         let stem = input_path
@@ -549,8 +551,8 @@ fn try_build_ir(
         return Ok(PathBuf::from(stem));
     }
 
-    // ── LIR → C → binary ──────────
-    // Lower GIR → LIR → SSA → optimize → backend
+    // ── LIR → BIR → target source → binary ──────────
+    // Lower GIR → LIR → SSA → optimize → BIR → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
         for func in &mut lir_module.functions {
@@ -559,13 +561,19 @@ fn try_build_ir(
         gorget::lir::optimize::optimize_module(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
 
+        // Save metadata we need after handing ownership to BirModule.
+        let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+            .map_err(|e| format!("BIR lowering failed: {e}"))?;
+
         let backend: Box<dyn gorget::backend::Backend> = match backend_name {
             "llvm" => Box::new(gorget::backend::llvm::LlvmBackend),
             _ => Box::new(gorget::backend::c_lir::CLirBackend),
         };
-        let output = gorget::backend::Backend::generate(backend.as_ref(), &lir_module);
+        let output = gorget::backend::Backend::generate(backend.as_ref(), &bir_module);
         let generated_code = output.code;
         let code_ext = output.extension;
+        // Keep a LIR reference for metadata (hot_reload flags, target, etc.).
+        let lir_module = bir_module.as_lir();
 
         // Determine output paths
         let input_path = Path::new(filename);
@@ -1211,10 +1219,12 @@ fn try_profile(
         .map(|f| f.blocks.iter().map(|b| b.insts.len()).sum::<usize>())
         .sum();
 
-    // Phase 9: C code generation
+    // Phase 9: BIR lowering + C code generation
     let t = Instant::now();
+    let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+        .map_err(|e| format!("BIR lowering failed: {e}"))?;
     let backend = gorget::backend::c_lir::CLirBackend;
-    let output = gorget::backend::Backend::generate(&backend, &lir_module);
+    let output = gorget::backend::Backend::generate(&backend, &bir_module);
     let codegen_ms = t.elapsed().as_secs_f64() * 1000.0;
     let c_lines = output.code.lines().count();
 

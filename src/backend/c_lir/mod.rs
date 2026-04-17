@@ -2392,9 +2392,11 @@ impl super::Backend for CLirBackend {
         "c-lir"
     }
 
-    fn generate(&self, module: &LirModule) -> super::CodegenOutput {
+    fn generate(&self, module: &crate::bir::BirModule) -> super::CodegenOutput {
+        // Backends consume BIR (guaranteed by the newtype); the C emitter
+        // works on the underlying LirModule for its 1:1 translation.
         super::CodegenOutput {
-            code: generate_c(module),
+            code: generate_c(module.as_lir()),
             extension: "c",
         }
     }

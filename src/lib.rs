@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod bir;
 pub mod errors;
 pub mod formatter;
 pub mod intern;

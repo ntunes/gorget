@@ -2586,7 +2586,7 @@ mod tests {
         (module, result)
     }
 
-    /// Generate C code from a GIR module via the LIR pipeline.
+    /// Generate C code from a GIR module via the LIR → BIR pipeline.
     fn gir_to_lir_c(gir: &crate::ir::Module) -> String {
         let mut lir_module = crate::lir::lower::lower_module(gir);
         for func in &mut lir_module.functions {
@@ -2594,8 +2594,10 @@ mod tests {
         }
         crate::lir::optimize::optimize_module(&mut lir_module);
         crate::lir::types::compute_module_value_types(&mut lir_module);
+        let bir_module = crate::bir::BirModule::from_lir(lir_module)
+            .expect("BIR lowering failed in gir_to_lir_c test helper");
         let backend = crate::backend::c_lir::CLirBackend;
-        crate::backend::Backend::generate(&backend, &lir_module).code
+        crate::backend::Backend::generate(&backend, &bir_module).code
     }
 
     #[test]

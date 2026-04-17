@@ -59,9 +59,11 @@ impl super::Backend for LlvmBackend {
         "llvm"
     }
 
-    fn generate(&self, module: &LirModule) -> super::CodegenOutput {
+    fn generate(&self, module: &crate::bir::BirModule) -> super::CodegenOutput {
+        // Backends consume BIR (guaranteed by the newtype); the LLVM emitter
+        // works on the underlying LirModule for its 1:1 translation.
         super::CodegenOutput {
-            code: generate_llvm_ir(module),
+            code: generate_llvm_ir(module.as_lir()),
             extension: "ll",
         }
     }

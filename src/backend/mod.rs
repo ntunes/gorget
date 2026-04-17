@@ -381,16 +381,22 @@ pub struct BackendFeatures {
     pub per_function_emit: bool,
 }
 
-/// Trait for LIR-consuming backends.
+/// Trait for BIR-consuming backends.
 ///
-/// All backends consume an optimized `LirModule` and produce source code
-/// that can be compiled to a binary by an external toolchain.
+/// Backends consume a `BirModule` — a LIR module that has passed through the
+/// `bir::lower_lir_to_bir` expansion pass and the `bir::validate` check,
+/// guaranteeing no canonical-level high-level ops remain. Callers must
+/// construct the `BirModule` via `BirModule::from_lir()` before invoking a
+/// backend; this turns "forgot to lower a canonical op" from a silent runtime
+/// miscompile into a compile-time type error.
+///
+/// See `docs/internals/lir-backend-lift-plan.md` for the pipeline rationale.
 pub trait Backend {
     /// Human-readable backend name (e.g., "c-lir", "llvm").
     fn name(&self) -> &str;
 
-    /// Generate source code from an LIR module.
-    fn generate(&self, module: &LirModule) -> CodegenOutput;
+    /// Generate source code from a BIR module.
+    fn generate(&self, module: &crate::bir::BirModule) -> CodegenOutput;
 
     /// Advertise supported features. Defaults to none.
     fn features(&self) -> BackendFeatures {
@@ -399,6 +405,8 @@ pub trait Backend {
 
     /// Emit a single function's code (for testing or inspection).
     /// Returns `None` if the backend doesn't support per-function emission.
+    /// Takes raw `LirFunction` + `LirModule` (no BIR newtype) because the
+    /// per-function debug path is not on the main emit pipeline.
     fn emit_function(&self, _func: &crate::lir::LirFunction, _module: &LirModule) -> Option<String> {
         None
     }
