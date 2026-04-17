@@ -593,33 +593,43 @@ top.
 
 ```gorget
 trait Writer:
-    Result[int, IoError] write(&self, Str bytes)
-    # Returns bytes actually written. May be less than bytes.len for
+    Result[int, IoError] write(&self, Bytes buf)
+    # Returns bytes actually written. May be less than buf.len() for
     # sockets, pipes, or any short-write destination. Use write_all for
     # "must complete or fail" semantics.
 ```
+
+The input is `Bytes` (= `Vector[uint8]`, see §6.3), **not** `String` / `Str`.
+Writer is the narrow waist for *any* byte stream — binary files, TLS,
+compression, encrypted protocols — none of which are UTF-8. Callers with
+a `String` source convert via `.bytes()` at the boundary; callers with
+raw bytes pass them directly with no pretence of text.
 
 **Derived convenience (once per Writer):**
 
 ```gorget
 equip Writer:
     # Guarantee all bytes written, or fail.
-    Result[void, IoError] write_all(&self, Str bytes):
+    Result[int, IoError] write_all(&self, Bytes buf):
         int total = 0
-        while total < bytes.byte_len():
-            match self.write(bytes.byte_slice(total, bytes.byte_len())):
-                case Ok(0): return Error(IoError.BrokenPipe)
-                case Ok(n): total += n
+        int len = buf.len()
+        while total < len:
+            # slice() allocates a fresh Vector each call — acceptable for
+            # the short-write path, which is rare for buffered Writers.
+            # A future zero-cost byte-view type would make this O(1).
+            match self.write(buf.slice(total, len)):
+                case Ok(0): return Error(IoError.BrokenPipe())
+                case Ok(n): total = total + n
                 case Error(!e): return Error(!e)
-        return Ok()
+        return Ok(total)
 
-    # Text convenience (UTF-8 str → bytes).
-    Result[void, IoError] write_str(&self, String s):
-        self.write_all(s)
+    # Text convenience — route a String through .bytes() then write_all.
+    Result[int, IoError] write_str(&self, String s):
+        self.write_all(s.bytes())
 
     # Formatted write — delegates to Displayable.
-    Result[void, IoError] write_display(&self, Displayable v):
-        self.write_all(v.display())
+    Result[int, IoError] write_display(&self, Displayable v):
+        self.write_all(v.display().bytes())
 ```
 
 Implementors:
@@ -635,7 +645,7 @@ Implementors:
 
 ```gorget
 trait Reader:
-    Result[int, IoError] read(&self, Vector[byte] &buf)
+    Result[int, IoError] read(&self, Bytes &buf)
     # Fills buf up to its capacity; returns bytes read.
     # 0 means EOF. buf is a mutable borrow — Reader writes into
     # the caller's buffer.
@@ -646,26 +656,26 @@ trait Reader:
 ```gorget
 equip Reader:
     # Read until EOF into a new Vector.
-    Result[Vector[byte], IoError] read_all(&self):
-        Vector[byte] out = Vector[byte](cap: 4096)
-        Vector[byte] chunk = Vector[byte](cap: 4096)
+    Result[Bytes, IoError] read_all(&self):
+        Bytes out = Bytes(cap: 4096)
+        Bytes chunk = Bytes(cap: 4096)
         loop:
             match self.read(&chunk):
                 case Ok(0): return Ok(!out)
-                case Ok(_): out.extend(!chunk); chunk = Vector[byte](cap: 4096)
+                case Ok(_): out.extend(!chunk); chunk = Bytes(cap: 4096)
                 case Error(!e): return Error(!e)
 
     # Read until EOF, validate UTF-8, return String.
     Result[String, IoError] read_all_str(&self):
-        Vector[byte] bytes = self.read_all()?
+        Bytes bytes = self.read_all()?
         String.from_utf8(bytes)   # returns Result[String, IoError.Utf8Invalid]
 
     # Read exactly n bytes or fail.
-    Result[Vector[byte], IoError] read_exact(&self, int n):
-        Vector[byte] out = Vector[byte](cap: n)
+    Result[Bytes, IoError] read_exact(&self, int n):
+        Bytes out = Bytes(cap: n)
         while out.len() < n:
             match self.read(&out):
-                case Ok(0): return Error(IoError.UnexpectedEof)
+                case Ok(0): return Error(IoError.UnexpectedEof())
                 case Ok(_): pass
                 case Error(!e): return Error(!e)
         return Ok(!out)
@@ -673,14 +683,18 @@ equip Reader:
 
 Implementors: `File`, `Socket`, `TlsSocket`, `stdin`, `BufReader`.
 
-### 6.3 Bytes: A Thin Vector[byte] Alias
+### 6.3 Bytes: A Thin Vector[uint8] Alias
 
-For API clarity, introduce `Bytes` as the canonical owned byte-buffer type,
-aliasing `Vector[byte]`:
+For API clarity, `Bytes` is the canonical owned byte-buffer type,
+aliasing `Vector[uint8]`:
 
 ```gorget
-type Bytes = Vector[byte]
+type Bytes = Vector[uint8]
 ```
+
+Exported from `std.io` — the Writer/Reader signatures above use it, so
+anyone already importing `Writer` / `Reader` picks up `Bytes` on the
+same line.
 
 Functions that traffic in raw bytes take `Bytes` / `Str` (view over bytes);
 text-oriented code takes `String` / `Str` (UTF-8-validated).
@@ -690,7 +704,7 @@ text-oriented code takes `String` / `Str` (UTF-8-validated).
 Orthogonal:
 
 - **Displayable** = "what" — `String display(self)`
-- **Writer** = "where" — `Result[int, IoError] write(&self, Str bytes)`
+- **Writer** = "where" — `Result[int, IoError] write(&self, Bytes buf)`
 
 `print(x)` is: `stdout.write_display(x); stdout.write_str("\n")`.
 

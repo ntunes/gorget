@@ -13,6 +13,16 @@
 
 from std.collections import Vector, File
 
+# Design note on the byte type
+# ────────────────────────────
+# Writer / Reader signatures use `Vector[uint8]` directly rather than a
+# `type Bytes = Vector[uint8]` alias. The design doc (§6.3) envisions
+# `Bytes` as the canonical name, but Gorget's type-alias resolution
+# doesn't cross module boundaries today — an imported `Bytes` doesn't
+# round-trip to `Vector[uint8]` at inference time, so every caller
+# would need to spell the underlying type anyway. The alias lands when
+# that limitation goes away; until then the explicit form is clearer.
+
 # ── Standard file handles (codegen special-cases these) ───────
 
 public static File stderr = File(0)
@@ -101,13 +111,19 @@ equip IoError with Displayable:
 # ── Writer ────────────────────────────────────────────────────
 #
 # `write_bytes` is the single required method — all higher-level output
-# convenience is derived on top. Naming note: the trait method is
-# `write_bytes` (not `write`) to avoid colliding with the legacy
-# `File.write` extern. Once the migration is complete, the legacy
-# `.write` goes away and the trait method renames to `write`.
+# convenience is derived on top.
+#
+# Input is `Vector[uint8]` — a raw byte buffer — **not** `String`/`Str`.
+# Writer is byte-shaped: binary files, TLS, compressed streams all push
+# arbitrary bytes that are not UTF-8. Callers with a `String` source go
+# through `.bytes()` at the boundary.
+#
+# Naming note: the trait method is `write_bytes` (not `write`) to avoid
+# colliding with the legacy `File.write` extern during the migration.
+# Once the extern is retired, the trait method renames to `write`.
 
 trait Writer:
-    Result[int, IoError] write_bytes(&self, String bytes)
+    Result[int, IoError] write_bytes(&self, Vector[uint8] buf)
 
 # ── Reader ────────────────────────────────────────────────────
 #
@@ -126,16 +142,20 @@ trait Reader:
 # ── Derived helpers (free functions, generic over the concrete Writer) ──
 
 # Guarantee the entire byte slice gets written, or fail. Returns the
-# total byte count written on success (always equal to `bytes.len()`),
+# total byte count written on success (always equal to `buf.len()`),
 # or the first IoError produced by the underlying Writer.
 #
 # Note: generic over the concrete Writer type to avoid trait-object
-# dispatch. Callers write `write_all[Sink](&w, "hi")`.
-Result[int, IoError] write_all[W](W &w, String bytes):
+# dispatch. Callers write `write_all[Sink](&w, buf)`.
+#
+# The inner slice allocates a fresh Vector on the short-write path;
+# that's acceptable for the rare fragmented write. A future zero-cost
+# byte-view type would make this O(1).
+Result[int, IoError] write_all[W](W &w, Vector[uint8] buf):
     int total = 0
-    int len = bytes.len()
+    int len = buf.len()
     while total < len:
-        String remaining = bytes.byte_slice(total, len)
+        Vector[uint8] remaining = buf.slice(total, len)
         Result[int, IoError] r = w.write_bytes(remaining)
         match r:
             case Ok(0):
@@ -146,10 +166,14 @@ Result[int, IoError] write_all[W](W &w, String bytes):
                 return Error(e)
     return Ok(total)
 
+# Text convenience — route a String through `.bytes()` then write_all.
+Result[int, IoError] write_str[W](W &w, String s):
+    return write_all[W](&w, s.bytes())
+
 # Formatted write — render `v` through `Displayable` and push the
 # resulting bytes through `write_all`.
 Result[int, IoError] write_display[W, Displayable D](W &w, D v):
-    return write_all[W](&w, v.display())
+    return write_all[W](&w, v.display().bytes())
 
 # Read all available bytes from `r` into a fresh buffer. Loops calling
 # `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer

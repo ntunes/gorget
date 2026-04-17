@@ -336,23 +336,28 @@ The narrow waist for output and input:
 ```gorget
 from std.io import Writer, IoError, write_all, write_display
 
-struct Sink:
-    String buf
+struct ByteSink:
+    Vector[uint8] buf
 
-equip Sink with Writer:
-    Result[int, IoError] write_bytes(&self, String bytes):
-        self.buf.push(bytes)
-        return Ok(bytes.len())
+equip ByteSink with Writer:
+    Result[int, IoError] write_bytes(&self, Vector[uint8] buf):
+        self.buf.extend(buf.clone())
+        return Ok(buf.len())
 
-Sink s = Sink("")
-write_all[Sink](&s, "hello world")
-write_display[Sink, int](&s, 42)
+ByteSink s = ByteSink(Vector[uint8]())
+write_all[ByteSink](&s, "hello world".bytes())
+write_display[ByteSink, int](&s, 42)
 ```
 
 Every Writer returns `Result[int, IoError]` — pattern-match on
 `IoError.NotFound` / `PermissionDenied` / `UnexpectedEof` / `Utf8Invalid(offset)`
 instead of parsing strings. Short-writes are allowed; `write_all` wraps
 the short-write loop.
+
+`write_bytes` takes raw bytes (`Vector[uint8]`, not `String`) because
+Writer is byte-shaped — binary protocols, TLS, compression all push
+arbitrary bytes, not UTF-8. Callers with a `String` source convert via
+`.bytes()` at the boundary.
 
 Reader mirror: `reader_drain[R](&r)` reads-to-EOF, `read_exact[R](&r, n)`
 fills at least `n` bytes.

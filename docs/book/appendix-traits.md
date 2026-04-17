@@ -194,13 +194,16 @@ an `Iterator`, then calls `next()` repeatedly.
 
 ```gorget
 trait Writer:
-    Result[int, IoError] write_bytes(&self, String bytes)
+    Result[int, IoError] write_bytes(&self, Vector[uint8] buf)
 ```
 
 Narrow output interface. Returns the byte count actually written; a
-write may be short (sockets, pipes, compression streams).
-`write_all(w, bytes)` from `std.io` wraps this with a loop that
-guarantees completion.
+write may be short (sockets, pipes, compression streams). Input is
+raw bytes, not UTF-8 — binary protocols, TLS, compression all push
+arbitrary byte sequences. Callers with a `String` source convert via
+`.bytes()` at the boundary. `write_all(w, buf)` from `std.io` wraps
+this with a loop that guarantees completion; `write_str(w, s)` and
+`write_display(w, v)` are the text/Displayable convenience adapters.
 
 ### Reader
 
