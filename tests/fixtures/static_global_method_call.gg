@@ -24,7 +24,7 @@ equip Counter:
         self.n = self.n + 1
         return self.n
 
-public static Counter counter = Counter(0)
+static Counter counter = Counter(0)
 
 int main():
     int a = counter.inc()
