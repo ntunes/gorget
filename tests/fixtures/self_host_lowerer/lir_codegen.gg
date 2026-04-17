@@ -800,6 +800,17 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 # ── Value type inference (simplified) ──────────────────────
 
 # Map runtime function names to their return LIR types.
+# Find a function by name in a LirModule. Returns its index, or -1.
+int find_fn_by_name(LirModule &m, String name):
+    int n = m.functions.len()
+    int i = 0
+    while i < n:
+        String fname = m.functions.get(i).unwrap().name
+        if fname == name:
+            return i
+        i = i + 1
+    return -1
+
 # Returns true if the given argument position of a runtime function is a Str
 # parameter (by value). Non-Str positions (e.g. size args to str_slice) return
 # false so we don't mistakenly wrap integer indices as Str.
@@ -1713,6 +1724,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             if fid >= 0 and fid < m.functions.len():
                 LirFunction callee = m.functions.get(fid).unwrap()
                 String fname = c_func_name(callee.name)
+                int gs_ty = find_struct_type("GorgetString", &m)
                 String out = ""
                 if dst >= 0 and callee.return_type != LT_VOID:
                     out = v(dst) + " = "
@@ -1721,7 +1733,25 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 while ai < args.len():
                     if ai > 0:
                         out = out + ", "
-                    out = out + v(args.get(ai).unwrap())
+                    int arg_id = args.get(ai).unwrap()
+                    int arg_ty = LT_VOID
+                    if val_types.contains(arg_id):
+                        arg_ty = val_types.get(arg_id).unwrap()
+                    bool is_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
+                    # Scalar/ptr-to-aggregate coercion: self-host often loses
+                    # type info and passes I64 placeholders or void* to
+                    # aggregate-typed params. Emit cast so C compile succeeds.
+                    if ai < callee.params.len():
+                        int pty = callee.params.get(ai).unwrap()
+                        if lir_is_aggregate(pty) and not lir_is_aggregate(arg_ty):
+                            String pty_name = c_type_name(pty, &sn)
+                            if is_ptr:
+                                out = out + "*(" + pty_name + "*)" + v(arg_id)
+                            else:
+                                out = out + "(" + pty_name + "){0}"
+                            ai += 1
+                            continue
+                    out = out + v(arg_id)
                     ai += 1
                 out = out + ");"
                 return out
@@ -2232,6 +2262,8 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
     if args.len() == 1:
         if name == "gorget_str_strip" or name == "gorget_str_lstrip" or name == "gorget_str_rstrip":
             pad_trailing_empty_str = true
+    # Look up callee's param types for scalar-to-aggregate coercion.
+    int callee_idx = find_fn_by_name(&m, name)
     int ai = 0
     while ai < args.len():
         if ai > 0:
@@ -2249,6 +2281,20 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
             else:
                 # Scalar placeholder (lossy lowering) at Str position — substitute empty Str.
                 out = out + "((Str){0})"
+        elif callee_idx >= 0:
+            LirFunction callee_fn = m.functions.get(callee_idx).unwrap()
+            if ai < callee_fn.params.len():
+                int pty = callee_fn.params.get(ai).unwrap()
+                if lir_is_aggregate(pty) and not lir_is_aggregate(arg_ty):
+                    String pty_name = c_type_name(pty, &sn)
+                    if is_ptr:
+                        out = out + "*(" + pty_name + "*)" + v(arg_id)
+                    else:
+                        out = out + "(" + pty_name + "){0}"
+                else:
+                    out = out + v(arg_id)
+            else:
+                out = out + v(arg_id)
         else:
             out = out + v(arg_id)
         ai += 1
