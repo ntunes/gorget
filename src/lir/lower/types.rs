@@ -234,6 +234,68 @@ pub fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
     }
 }
 
+/// Known sizes for opaque runtime C structs that have no LIR fields
+/// (declared as `struct X: pass` in Gorget, backed by a C typedef).
+///
+/// Shared by size-of calculations, LLVM struct emission, and aggregate-return
+/// ABI decisions. Keeping the table in one place means both backends reach
+/// the same layout; adding a new runtime struct requires one edit here.
+pub fn opaque_runtime_size(name: &str) -> Option<usize> {
+    let sz = match name {
+        // Core collections (layouts match c_runtime.rs typedefs).
+        "GorgetString" | "Str" => 32,
+        "GorgetArray" => 64,
+        "GorgetMap" | "GorgetSet" => 152,
+        "GorgetClosure" => 16,
+        "GorgetRange" => 24,
+        // Concurrency opaque handles — pointer-sized.
+        "AtomicInt" | "AtomicBool" | "Mutex" | "Shared" | "RWLock" | "Barrier"
+        | "CondVar" | "WaitGroup" | "Semaphore" | "OnceFlag" | "TaskGroup"
+        | "Weak" | "Executor" | "BlockingPool" | "FileWatcher" | "Reactor"
+        | "GuestModule" | "Thread" => 8,
+        // Channel[T] is a pointer to GorgetChannel.
+        "Channel" => 8,
+        // Task__T and per-type Thread__T: {task_ptr, drop_fn} = 16.
+        _ if name.starts_with("Task__") => 16,
+        _ if name.starts_with("Thread__") => 8,
+        // Per-type concurrency typedefs alias to opaque pointers.
+        _ if name.starts_with("Mutex__") || name.starts_with("Shared__")
+            || name.starts_with("RWLock__") || name.starts_with("Channel__")
+            || name.starts_with("Weak__") => 8,
+        // Sockets / files / process — runtime uses fixed layouts.
+        "Socket" | "ServerSocket" | "UdpSocket" => 8,
+        "TlsSocket" | "TlsServerSocket" => 24,  // fd + SSL_CTX* + SSL*/ctx
+        "UdpAddr" => 40,   // {Str host, int64_t port} = 32 + 8
+        "UdpPacket" => 104,// {GorgetArray data, UdpAddr sender} = 64 + 40
+        "File" | "GorgetFile" => 16,
+        "Process" => 48,   // {pid, stdin/out/err fds, status, owned}
+        "ExecResult" => 48, // {int status, Vector[uint8] stdout, stderr}
+        // Regex — see c_runtime.rs GorgetRegexMatch.
+        "Regex" => 16,       // {pcre2_code*, const char* pattern}
+        "Match" | "RegexMatch" => 56, // {text, start, end, groups, count, names, names_len}
+        // Allocators — each has its own fixed layout.
+        "Arena" => 64,       // fields vary; treat as 64-byte allocator handle
+        "ArenaCheckpoint" => 16,
+        "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator"
+        | "FallbackAllocator" | "TrackingAllocator" => 8,
+        // Crypto.
+        "CipherContext" => 8,
+        "BigNum" | "RSAKey" => 8,
+        "Ed25519KeyPair" | "X25519KeyPair" => 64,
+        // SDL.
+        "SDLWindow" | "SDLRenderer" | "SDLTexture" | "SDLFont" | "SDLEvent" => 8,
+        // Audio.
+        "AudioChunk" => 16,
+        // Box[T] types are 1-ptr.
+        _ if name.starts_with("Box__") => 8,
+        // Guard types: { owner: ptr, data: ptr } = 16.
+        _ if name.starts_with("Guard__") || name.starts_with("ReadGuard__")
+            || name.starts_with("WriteGuard__") => 16,
+        _ => return None,
+    };
+    Some(sz)
+}
+
 /// Compute sizeof for an LirType.
 pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
     match ty {
@@ -244,20 +306,7 @@ pub(super) fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
-                // For runtime structs whose LIR field list omits hidden C fields
-                // (e.g. the `alloc` pointer in GorgetArray/GorgetMap), use the
-                // authoritative hardcoded size rather than counting LIR fields.
-                let runtime_size = match sd.name.as_str() {
-                    // GorgetArray: {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
-                    "GorgetArray" => Some(64usize),
-                    // GorgetMap / GorgetSet: 19 fields × 8 = 152
-                    "GorgetMap" | "GorgetSet" => Some(152usize),
-                    // GorgetString: 32-byte fat struct { data, cap, len, alloc }
-                    "GorgetString" => Some(32usize),
-                    _ if sd.name.starts_with("Task__") => Some(16usize),
-                    _ => None,
-                };
-                if let Some(sz) = runtime_size {
+                if let Some(sz) = opaque_runtime_size(&sd.name) {
                     return sz;
                 }
                 c_sizeof_struct_def(sd, structs)

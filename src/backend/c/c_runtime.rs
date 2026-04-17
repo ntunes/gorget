@@ -9564,6 +9564,39 @@ static GorgetString gorget_regex_escape(const char* s) {
     return result;
 }
 
+// Pattern-based convenience wrappers — compile on call, free after use.
+// Previously emitted only by the C backend via emit_types.rs; moved here so
+// the LLVM backend can link against the same runtime amalgamation.
+static inline GorgetArray gorget_array_new(size_t elem_size);
+static GorgetRegexMatch gorget_regex_find_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) { GorgetRegexMatch _m; _m.start = -1; return _m; }
+    GorgetRegexMatch _m = gorget_regex_find(&_rx, subject, 0);
+    gorget_regex_free(&_rx);
+    return _m;
+}
+static bool gorget_regex_is_match_pat(const char* pattern, const char* subject) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return false;
+    bool _b = gorget_regex_is_match(&_rx, subject);
+    gorget_regex_free(&_rx);
+    return _b;
+}
+static GorgetString gorget_regex_replace_pat(const char* pattern, const char* subject, const char* replacement) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) return gorget_string_new(subject);
+    GorgetString _gs = gorget_regex_replace(&_rx, subject, replacement);
+    gorget_regex_free(&_rx);
+    return _gs;
+}
+static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subject, int64_t limit) {
+    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
+    if (!_rx.code) { GorgetArray _a = gorget_array_new(sizeof(Str)); return _a; }
+    GorgetArray _a = gorget_regex_split(&_rx, subject, limit);
+    gorget_regex_free(&_rx);
+    return _a;
+}
+
 "#;
 
 pub const HOT_RELOAD_RUNTIME: &str = r#"

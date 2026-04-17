@@ -2748,42 +2748,11 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         out.push_str(crate::backend::c::c_runtime::BYTES_RUNTIME);
     }
 
-    // Regex
+    // Regex — the _pat convenience wrappers are now inside REGEX_RUNTIME itself
+    // (previously injected only by the C backend, causing undefined references
+    // from the LLVM backend).
     if has(&|n| n.starts_with("gorget_regex_") || n.starts_with("gorget_match_")) {
         out.push_str(crate::backend::c::c_runtime::REGEX_RUNTIME);
-        // Forward-declare gorget_array_new for regex_split_pat.
-        out.push_str("static inline GorgetArray gorget_array_new(size_t elem_size);\n");
-        // Convenience wrappers for pattern-based regex operations.
-        out.push_str(r#"
-static GorgetRegexMatch gorget_regex_find_pat(const char* pattern, const char* subject) {
-    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
-    if (!_rx.code) { GorgetRegexMatch _m; _m.start = -1; return _m; }
-    GorgetRegexMatch _m = gorget_regex_find(&_rx, subject, 0);
-    gorget_regex_free(&_rx);
-    return _m;
-}
-static bool gorget_regex_is_match_pat(const char* pattern, const char* subject) {
-    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
-    if (!_rx.code) return false;
-    bool _b = gorget_regex_is_match(&_rx, subject);
-    gorget_regex_free(&_rx);
-    return _b;
-}
-static GorgetString gorget_regex_replace_pat(const char* pattern, const char* subject, const char* replacement) {
-    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
-    if (!_rx.code) return gorget_string_new(subject);
-    GorgetString _gs = gorget_regex_replace(&_rx, subject, replacement);
-    gorget_regex_free(&_rx);
-    return _gs;
-}
-static GorgetArray gorget_regex_split_pat(const char* pattern, const char* subject, int64_t limit) {
-    GorgetRegex _rx = gorget_regex_compile(pattern, NULL);
-    if (!_rx.code) { GorgetArray _a = gorget_array_new(sizeof(Str)); return _a; }
-    GorgetArray _a = gorget_regex_split(&_rx, subject, limit);
-    gorget_regex_free(&_rx);
-    return _a;
-}
-"#);
     }
 
     // Crypto

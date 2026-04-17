@@ -21,10 +21,10 @@ fn needs_sret(ty: &LirType, structs: &[StructDef]) -> bool {
 fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
     if let LirType::Struct(sid) = ty {
         let sdef = &structs[sid.0 as usize];
-        // Known opaque types with fixed C layout sizes.
-        if sdef.name == "TaskGroup" { return true; }       // ptr = 8 bytes
-        if sdef.name.starts_with("Task__") { return true; } // {ptr,ptr} = 16 bytes
-        if sdef.name == "File" || sdef.name == "GorgetFile" { return true; } // {ptr,i64} = 16 bytes
+        // Shared opaque runtime-struct table (see src/lir/lower/types.rs).
+        if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&sdef.name) {
+            return sz <= 16;
+        }
         // Use computed_c_size if available, otherwise estimate from fields.
         let size = if let Some(cs) = sdef.computed_c_size {
             cs
@@ -641,14 +641,10 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(def) = structs.get(sid.0 as usize) {
-                // Box types are opaque pointers — always 8 bytes
-                if def.name.starts_with("Box__") {
-                    return 8;
+                // Shared opaque-runtime-struct table (Box__, Match, Socket, …).
+                if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&def.name) {
+                    return sz;
                 }
-                // Known opaque types with fixed C sizes
-                if def.name == "TaskGroup" { return 8; }
-                if def.name.starts_with("Task__") { return 16; }
-                if def.name == "File" || def.name == "GorgetFile" { return 16; }
                 // Union-layout enums: LLVM type is { i32, i32, [N x i8] } =
                 // 8 (tag + pad) + N (payload). Matches C ABI union layout.
                 if def.is_union_layout {
@@ -835,17 +831,23 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 writeln!(out, "%{name} = type {{ i32 }}").unwrap();
             }
         } else if def.fields.is_empty() {
-            // Known opaque types whose C layout is fixed:
-            // - TaskGroup: typedef gorget_task_group_t* → ptr (8 bytes)
-            // - Task__T:   { void* __task, void(*__drop)(void*) } = 16 bytes
-            // - File:      GorgetFile { FILE*, bool } padded to 16 bytes
-            if name == "TaskGroup" {
-                writeln!(out, "%{name} = type {{ ptr }}").unwrap();
-            } else if name.starts_with("Task__") {
-                writeln!(out, "%{name} = type {{ ptr, ptr }}").unwrap();
-            } else if name == "File" || name == "GorgetFile" {
-                // { FILE* handle, bool owned } — bool padded to i64 for C ABI (16 bytes total)
-                writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
+            // Known opaque types whose C runtime layout is fixed. The shared
+            // table lives in src/lir/lower/types.rs so all backends agree.
+            if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(name) {
+                // Specific layouts whose internal shape matters for GEP emission.
+                if name.starts_with("Task__") {
+                    writeln!(out, "%{name} = type {{ ptr, ptr }}").unwrap();
+                } else if name == "File" || name == "GorgetFile" {
+                    writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
+                } else if sz == 8 {
+                    // Pointer-sized handle (TaskGroup, Socket, AtomicInt, …).
+                    writeln!(out, "%{name} = type {{ ptr }}").unwrap();
+                } else {
+                    // Opaque byte buffer matching the C struct size. The LLVM
+                    // backend never needs to GEP into these — they are passed
+                    // around by pointer or memcpy'd as whole blobs.
+                    writeln!(out, "%{name} = type {{ [{sz} x i8] }}").unwrap();
+                }
             } else {
                 // Other empty structs — use single byte padding
                 writeln!(out, "%{name} = type {{ i8 }}").unwrap();
