@@ -810,8 +810,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Resolve receiver type name from the GIR local's type
             String recv_type_name = local_type_name(recv, &ctx, &gmod)
             String full_name = recv_type_name + "__" + mname
-            # Determine return type — most methods return the receiver's type or a scalar
-            int ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
+            # Prefer fn_sigs lookup for known user method signatures — this
+            # gives the real return type for equip-block methods. Fall back
+            # to the name-based heuristic if no signature is recorded.
+            int ret_tid = I64_TYPE
+            if gmod.fn_sigs.contains(full_name):
+                ret_tid = gmod.fn_sigs.get(full_name).unwrap()
+            else:
+                ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
                 emit(&ctx, GICallExtern(-1, full_name, call_args))
@@ -2990,6 +2996,28 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
                     if ret_tid >= 0:
                         gmod.fn_sigs.put(fsdef.name.clone(), ret_tid)
+            case IEquip(ieqblk):
+                # Register equip-block methods as TypeName__method in fn_sigs.
+                # Only for non-generic equip blocks on concrete types.
+                if ieqblk.type_params.len() == 0:
+                    String target_name = ""
+                    match ieqblk.target.ty:
+                        case TNamed(tn, targs):
+                            if targs.len() == 0:
+                                target_name = tn
+                        case TPrimitive(tn):
+                            target_name = tn
+                        else:
+                            pass
+                    if target_name != "":
+                        int emi = 0
+                        while emi < ieqblk.methods.len():
+                            FunctionDef em = ieqblk.methods.get(emi).unwrap()
+                            if em.type_params.len() == 0:
+                                int em_ret = map_fn_return_type(em.return_type, &gmod)
+                                if em_ret >= 0:
+                                    gmod.fn_sigs.put(target_name + "__" + em.name, em_ret)
+                            emi += 1
             else:
                 pass
         fsi += 1

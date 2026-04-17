@@ -1059,6 +1059,14 @@ bool is_void_runtime_fn(String name):
         return true
     if name == "free" or name == "abort" or name == "exit":
         return true
+    if name == "gorget_atomic_int_store" or name == "gorget_atomic_bool_store":
+        return true
+    if name == "gorget_atomic_int_free" or name == "gorget_atomic_bool_free":
+        return true
+    if name == "gorget_shared_drop" or name == "gorget_rc_drop" or name == "gorget_arc_drop":
+        return true
+    if name == "gorget_box_drop":
+        return true
     if name.starts_with("gorget_array_each") or name.starts_with("gorget_map_each"):
         return true
     if name.ends_with("__drop") or name.ends_with("__clone_inplace"):
