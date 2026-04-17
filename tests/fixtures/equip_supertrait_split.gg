@@ -1,0 +1,31 @@
+# Split-equip supertrait satisfaction — a trait that extends
+# Displayable + Debuggable (or any other supertrait) can be
+# satisfied by having the parent-trait methods in *separate* equip
+# blocks on the same type. Previously the checker demanded every
+# inherited method be present in the same equip block that named the
+# child trait.
+
+trait MyError extends Displayable & Debuggable:
+    String kind(self)
+
+struct ParseErr:
+    String msg
+
+equip ParseErr with Displayable:
+    String display(self):
+        return self.msg
+
+equip ParseErr with Debuggable:
+    String debug(self):
+        return f"ParseErr({self.msg.debug()})"
+
+equip ParseErr with MyError:
+    String kind(self):
+        return "ParseErr"
+
+int main():
+    ParseErr e = ParseErr("bad token")
+    print(e.display())
+    print(e.debug())
+    print(e.kind())
+    return 0

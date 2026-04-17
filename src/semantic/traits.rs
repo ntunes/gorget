@@ -815,6 +815,21 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
                 if impl_info.via_field.is_some() {
                     continue;
                 }
+                // Split-equip satisfaction: an inherited method can be
+                // supplied by a sibling equip block on the same type
+                // (e.g. `equip ParseErr with Error:` inherits display
+                // from Displayable; `equip ParseErr with Displayable:`
+                // provides it elsewhere in the file). Look for the
+                // method on *any* impl of *any* trait for the same
+                // self-type name.
+                let satisfied_elsewhere = *source_trait_name != trait_info.name
+                    && registry.impls.iter().any(|other| {
+                        other.self_type_name == impl_info.self_type_name
+                            && other.methods.contains_key(method_name)
+                    });
+                if satisfied_elsewhere {
+                    continue;
+                }
                 errors.push(SemanticError {
                     kind: SemanticErrorKind::MissingTraitMethod {
                         trait_: source_trait_name.clone(),

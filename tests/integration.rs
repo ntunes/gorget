@@ -2020,6 +2020,22 @@ fn equip_on_primitive() {
 }
 
 #[test]
+fn equip_supertrait_split() {
+    run_gg(
+        "equip_supertrait_split.gg",
+        "bad token\nParseErr(\"bad token\")\nParseErr",
+    );
+}
+
+#[test]
+fn equip_supertrait_missing_error() {
+    check_gg_fails(
+        "equip_supertrait_missing_error.gg",
+        "type `BadErr` is missing method `debug`",
+    );
+}
+
+#[test]
 fn stdlib_io_reader() {
     run_gg("stdlib_io_reader.gg", "20\n8");
 }

@@ -620,7 +620,10 @@ impl Formatter {
             self.emitter.write(" extends ");
             for (i, bound) in t.extends.iter().enumerate() {
                 if i > 0 {
-                    self.emitter.write(" + ");
+                    // Parser consumes `&` between supertrait names
+                    // (parse_trait_bound_list); emit the same so fmt
+                    // round-trips.
+                    self.emitter.write(" & ");
                 }
                 self.format_trait_bound(bound);
             }

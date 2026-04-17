@@ -1,0 +1,25 @@
+# Negative — even with split-equip satisfaction relaxed, a genuinely
+# missing parent-trait method still errors. Here `debug` is not
+# supplied anywhere, so `equip BadErr with MyError:` can't claim the
+# inherited Debuggable contract.
+
+trait MyError extends Displayable & Debuggable:
+    String kind(self)
+
+struct BadErr:
+    int code
+
+equip BadErr with Displayable:
+    String display(self):
+        return f"bad {self.code}"
+
+# Missing: equip BadErr with Debuggable
+
+equip BadErr with MyError:
+    String kind(self):
+        return "BadErr"
+
+int main():
+    BadErr e = BadErr(42)
+    print(e.kind())
+    return 0
