@@ -323,7 +323,7 @@ pub(super) fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef]) -> 
     total
 }
 
-pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>, target_ty: &LirType) -> LirGlobalInit {
+pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>, target_ty: &LirType, struct_reg: &StructRegistry) -> LirGlobalInit {
     match init {
         ir::GlobalInit::Zeroed => LirGlobalInit::Zeroed,
         ir::GlobalInit::Bytes(b) => LirGlobalInit::Bytes(b.clone()),
@@ -334,10 +334,19 @@ pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collect
                 LirGlobalInit::Zeroed
             }
         }
-        ir::GlobalInit::Struct { fields, .. } => {
+        ir::GlobalInit::Struct { type_name, fields } => {
+            // Resolve struct_id from the GIR type_name. Falls back to the
+            // target type's struct if the registry doesn't have it yet,
+            // then StructId(0) if neither is available (trivial structs).
+            let struct_id = struct_reg.lookup(type_name)
+                .or_else(|| match target_ty {
+                    LirType::Struct(sid) | LirType::PtrTo(sid) => Some(*sid),
+                    _ => None,
+                })
+                .unwrap_or(StructId(0));
             LirGlobalInit::Struct {
-                struct_id: StructId(0), // placeholder
-                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64)).collect(),
+                struct_id,
+                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64, struct_reg)).collect(),
             }
         }
         ir::GlobalInit::RuntimeCall(expr) => {

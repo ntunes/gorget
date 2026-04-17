@@ -855,13 +855,23 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
             // may not when aggregate fields have lower apparent alignment than their
             // C alignment (e.g., %Json = {i32, i32, [N x i8]} has LLVM align 4
             // but C align 8 due to int64_t inside the union).
+            // VTable structs carry function-pointer fields regardless of what the
+            // LIR struct def says (the GIR types them as closures for call-site
+            // abstraction, but at the ABI level they are bare `ptr`s — matching
+            // the C backend's override in src/backend/c_lir/mod.rs).
+            let is_vtable = name.ends_with("_VTable");
             let mut fields: Vec<String> = Vec::new();
             let mut offset = 0usize;
             for (_, fty) in &def.fields {
-                let field_llvm = if *fty == LirType::Void { "i8".to_string() }
-                    else { llvm_type_full(fty, snames) };
-                let fsz = sizeof_lir_type(fty, &module.structs, snames);
-                let c_align = crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs);
+                let (field_llvm, fsz, c_align) = if is_vtable {
+                    ("ptr".to_string(), 8usize, 8usize)
+                } else if *fty == LirType::Void {
+                    ("i8".to_string(), 1usize, 1usize)
+                } else {
+                    (llvm_type_full(fty, snames),
+                     sizeof_lir_type(fty, &module.structs, snames),
+                     crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs))
+                };
                 let aligned_offset = (offset + c_align - 1) & !(c_align - 1);
                 if aligned_offset > offset {
                     let pad = aligned_offset - offset;
@@ -871,11 +881,15 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 fields.push(field_llvm);
                 offset += fsz;
             }
-            // Trailing padding to match C size (for runtime structs with hidden fields)
-            if let Some(c_size) = def.computed_c_size {
-                if c_size > offset {
-                    let pad = c_size - offset;
-                    fields.push(format!("[{pad} x i8]"));
+            // Trailing padding to match C size (for runtime structs with hidden fields).
+            // Skip for VTables — we've remapped closure fields to ptr, so the LIR-tracked
+            // c_size (counting closures) no longer matches our bare-ptr emission.
+            if !is_vtable {
+                if let Some(c_size) = def.computed_c_size {
+                    if c_size > offset {
+                        let pad = c_size - offset;
+                        fields.push(format!("[{pad} x i8]"));
+                    }
                 }
             }
             writeln!(out, "%{name} = type {{ {} }}", fields.join(", ")).unwrap();
@@ -1483,28 +1497,24 @@ fn sizeof_struct_by_name(name: &str, module: &LirModule, snames: &HashMap<u32, S
 
 fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     // Check if we need overflow intrinsics
-    let mut need_sadd_i64 = false;
-    let mut need_ssub_i64 = false;
-    let mut need_smul_i64 = false;
-    let mut need_sadd_i32 = false;
-    let mut need_ssub_i32 = false;
-    let mut need_smul_i32 = false;
-
+    // Track all (signed_prefix, op, bits) triples used across the module so we
+    // declare only the intrinsics we actually reference (LLVM is picky about
+    // `declare` signatures and rejects unused duplicates).
+    let mut overflow_intrinsics: std::collections::HashSet<(char, &'static str, u32)> =
+        std::collections::HashSet::new();
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                match inst {
-                    Inst::Add { ty, overflow: Overflow::Trap, .. } => {
-                        match ty { LirType::I64 => need_sadd_i64 = true, LirType::I32 => need_sadd_i32 = true, _ => {} }
-                    }
-                    Inst::Sub { ty, overflow: Overflow::Trap, .. } => {
-                        match ty { LirType::I64 => need_ssub_i64 = true, LirType::I32 => need_ssub_i32 = true, _ => {} }
-                    }
-                    Inst::Mul { ty, overflow: Overflow::Trap, .. } => {
-                        match ty { LirType::I64 => need_smul_i64 = true, LirType::I32 => need_smul_i32 = true, _ => {} }
-                    }
-                    _ => {}
-                }
+                let (op, ty) = match inst {
+                    Inst::Add { ty, overflow: Overflow::Trap, .. } => ("add", ty),
+                    Inst::Sub { ty, overflow: Overflow::Trap, .. } => ("sub", ty),
+                    Inst::Mul { ty, overflow: Overflow::Trap, .. } => ("mul", ty),
+                    _ => continue,
+                };
+                if !ty.is_integer() { continue; }
+                let bits = int_bits(ty);
+                let signed = if is_signed(ty) { 's' } else { 'u' };
+                overflow_intrinsics.insert((signed, op, bits));
             }
         }
     }
@@ -1513,12 +1523,13 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     writeln!(out, "declare void @llvm.trap() noreturn nounwind").unwrap();
     writeln!(out, "declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)").unwrap();
     writeln!(out, "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)").unwrap();
-    if need_sadd_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.sadd.with.overflow.i64(i64, i64)").unwrap(); }
-    if need_ssub_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.ssub.with.overflow.i64(i64, i64)").unwrap(); }
-    if need_smul_i64 { writeln!(out, "declare {{ i64, i1 }} @llvm.smul.with.overflow.i64(i64, i64)").unwrap(); }
-    if need_sadd_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.sadd.with.overflow.i32(i32, i32)").unwrap(); }
-    if need_ssub_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.ssub.with.overflow.i32(i32, i32)").unwrap(); }
-    if need_smul_i32 { writeln!(out, "declare {{ i32, i1 }} @llvm.smul.with.overflow.i32(i32, i32)").unwrap(); }
+    let mut sorted_intrinsics: Vec<_> = overflow_intrinsics.into_iter().collect();
+    sorted_intrinsics.sort();
+    for (signed, op, bits) in sorted_intrinsics {
+        writeln!(out,
+            "declare {{ i{bits}, i1 }} @llvm.{signed}{op}.with.overflow.i{bits}(i{bits}, i{bits})"
+        ).unwrap();
+    }
 
     // Adapter function definitions for FuncAddr → callable wrapping.
     // Each adapter ignores the closure env pointer and forwards to the real function.
@@ -1769,6 +1780,49 @@ fn emit_function(
         }
     }
 
+    // Parse method type override: int8_t__parse / double__parse etc. are declared
+    // `i64` in LIR but the LLVM inline handler (emit_inst) materializes the result
+    // as an alloca'd Option struct — so the value IS a pointer. Override val_types
+    // to PtrTo(Option__T) so SlotStore takes the memcpy path (not scalar store).
+    // The target struct is inferred from the slot's type at consumer sites when
+    // the extern's declared return_type is a scalar.
+    for block in &func.blocks {
+        let insts = &block.insts;
+        for (i, inst) in insts.iter().enumerate() {
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                let is_parse = name.ends_with("__parse")
+                    && (name.starts_with("int") || name.starts_with("uint")
+                        || name == "double__parse" || name == "float__parse"
+                        || name == "bool__parse");
+                if !is_parse { continue; }
+                let vid = d.0 as usize;
+                // Look at the extern declaration. If it returns a struct, use PtrTo(sid).
+                // Otherwise search downstream SlotStore for a struct slot type.
+                let mut target_sid: Option<StructId> = module.externs.iter()
+                    .find(|e| e.name == *name)
+                    .and_then(|e| match &e.return_type {
+                        LirType::Struct(sid) => Some(*sid),
+                        _ => None,
+                    });
+                if target_sid.is_none() {
+                    for ci in (i+1)..insts.len().min(i+10) {
+                        if let Inst::SlotStore { value, slot, .. } = &insts[ci] {
+                            if *value == *d {
+                                if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
+                                    target_sid = Some(*sid);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(sid) = target_sid {
+                    val_types[vid] = Some(LirType::PtrTo(sid));
+                }
+            }
+        }
+    }
+
     // Guard/shared value accessor type override: gorget_guard_get / gorget_shared_get
     // return void* but the value needs to be loaded as the actual inner type.
     // Infer from downstream consumers (arithmetic, slot store, printf format).
@@ -1800,7 +1854,15 @@ fn emit_function(
                         Inst::SlotStore { value, slot, .. } if *value == *d => {
                             let slot_ty = &func.slots[slot.0 as usize].ty;
                             if !slot_ty.is_ptr() {
-                                inferred = Some(slot_ty.clone()); break;
+                                // gorget_guard_get returns a pointer to the inner type;
+                                // for struct slots we must treat the call result as
+                                // PtrTo(struct) so SlotStore does memcpy-from-ptr, not
+                                // a struct-by-value store (LLVM rejects type mismatch).
+                                inferred = Some(match slot_ty {
+                                    LirType::Struct(sid) => LirType::PtrTo(*sid),
+                                    other => other.clone(),
+                                });
+                                break;
                             }
                         }
                         _ => {}
@@ -2038,7 +2100,21 @@ fn emit_function(
                         .cloned()
                         .unwrap_or_else(|| format!("bb{}", pred_id.0));
                     if pi < args.len() {
-                        phi_entries.push(format!("[ %v{}, %{pred_label} ]", args[pi].0));
+                        // If emit_branch_arg_casts widened/narrowed this arg, use the cast.
+                        // See branch-arg emission before emit_term at end of each block.
+                        let arg = args[pi];
+                        let needs_cast = param_ty.is_integer() && {
+                            let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+                            actual.map(int_bits).unwrap_or(64) != int_bits(param_ty)
+                        };
+                        if needs_cast {
+                            phi_entries.push(format!(
+                                "[ %br.cast.{}.{}.{pi}, %{pred_label} ]",
+                                pred_id.0, block.id.0
+                            ));
+                        } else {
+                            phi_entries.push(format!("[ %v{}, %{pred_label} ]", arg.0));
+                        }
                     } else {
                         phi_entries.push(format!("[ undef, %{pred_label} ]"));
                     }
@@ -2063,7 +2139,9 @@ fn emit_function(
 
         }
 
-        // Terminator
+        // Terminator — pre-emit any int-width casts needed for branch args
+        // whose types don't match the target block's params.
+        emit_branch_arg_casts(out, &block.terminator, func, bid, &val_types);
         emit_term(out, &block.terminator, func, module, snames, &val_types);
     }
 
@@ -6078,28 +6156,26 @@ fn emit_overflow_check(
 
     // For sub-64-bit types (i8, i16, i32), LIR constants are always emitted as i64,
     // but some operands may already be the narrower type (e.g., from gorget_str_byte_at).
-    // Only emit trunc when the actual operand type is wider than the target type.
-    let needs_trunc = |vid: u32| -> bool {
-        if bits >= 64 { return false; }
-        match val_types.get(vid as usize).and_then(|t| t.as_ref()) {
-            Some(t) => int_bits(t) > bits,
-            None => true, // unknown — assume i64, truncate to be safe
+    // Emit trunc when the operand is wider than target, or sext/zext when narrower.
+    let signed = is_signed(ty);
+    let adjust_operand = |out: &mut String, vid: u32, tag: &str| -> String {
+        let actual = val_types.get(vid as usize).and_then(|t| t.as_ref()).cloned();
+        let actual_bits = actual.as_ref().map(int_bits).unwrap_or(64);
+        if actual_bits == bits {
+            return format!("%v{vid}");
         }
-    };
-    let lhs_str = if needs_trunc(lhs.0) {
-        let name = format!("ov.{block_id}.{trap_id}.lhs");
-        writeln!(out, "  %{name} = trunc i64 %v{} to {lty}", lhs.0).unwrap();
+        let from_ty = actual.as_ref().map(llvm_type).unwrap_or("i64");
+        let name = format!("ov.{block_id}.{trap_id}.{tag}");
+        if actual_bits > bits {
+            writeln!(out, "  %{name} = trunc {from_ty} %v{vid} to {lty}").unwrap();
+        } else {
+            let op = if signed { "sext" } else { "zext" };
+            writeln!(out, "  %{name} = {op} {from_ty} %v{vid} to {lty}").unwrap();
+        }
         format!("%{name}")
-    } else {
-        format!("%v{}", lhs.0)
     };
-    let rhs_str = if needs_trunc(rhs.0) {
-        let name = format!("ov.{block_id}.{trap_id}.rhs");
-        writeln!(out, "  %{name} = trunc i64 %v{} to {lty}", rhs.0).unwrap();
-        format!("%{name}")
-    } else {
-        format!("%v{}", rhs.0)
-    };
+    let lhs_str = adjust_operand(out, lhs.0, "lhs");
+    let rhs_str = adjust_operand(out, rhs.0, "rhs");
 
     writeln!(out, "  %{result} = call {{ {lty}, i1 }} {intrinsic}({lty} {lhs_str}, {lty} {rhs_str})").unwrap();
     writeln!(out, "  %{val} = extractvalue {{ {lty}, i1 }} %{result}, 0").unwrap();
@@ -6121,6 +6197,48 @@ fn emit_overflow_check(
 }
 
 // ── Terminator Emission ────────────────────────────────────────────────────
+
+/// Emit integer-width conversions for branch args whose type doesn't match
+/// the target block's param type. Returns a map {(target_bid, arg_idx) -> cast name}
+/// that the phi emitter consults when building phi entries.
+fn emit_branch_arg_casts(
+    out: &mut String,
+    term: &Term,
+    func: &LirFunction,
+    pred_bid: u32,
+    val_types: &[Option<LirType>],
+) {
+    let targets: Vec<(BlockId, Vec<ValueId>)> = match term {
+        Term::Jump(tgt, args) => vec![(*tgt, args.clone())],
+        Term::Branch { then_block, then_args, else_block, else_args, .. } => vec![
+            (*then_block, then_args.clone()),
+            (*else_block, else_args.clone()),
+        ],
+        Term::Switch { cases, default, default_args, .. } => {
+            let mut ts: Vec<_> = cases.iter().map(|(_, b, a)| (*b, a.clone())).collect();
+            ts.push((*default, default_args.clone()));
+            ts
+        }
+        _ => Vec::new(),
+    };
+    for (tgt, args) in targets {
+        let target_block = &func.blocks[tgt.0 as usize];
+        for (ai, arg) in args.iter().enumerate() {
+            let Some((_, param_ty)) = target_block.params.get(ai) else { continue; };
+            if !param_ty.is_integer() { continue; }
+            let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+            let actual_bits = actual.map(int_bits).unwrap_or(64);
+            let param_bits = int_bits(param_ty);
+            if actual_bits == param_bits { continue; }
+            let from_ty = actual.map(llvm_type).unwrap_or("i64");
+            let to_ty = llvm_type(param_ty);
+            let op = if actual_bits > param_bits { "trunc" }
+                else if is_signed(param_ty) { "sext" } else { "zext" };
+            writeln!(out, "  %br.cast.{pred_bid}.{}.{ai} = {op} {from_ty} %v{} to {to_ty}",
+                tgt.0, arg.0).unwrap();
+        }
+    }
+}
 
 fn emit_term(
     out: &mut String,

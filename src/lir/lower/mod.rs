@@ -172,7 +172,7 @@ impl<'a> LoweringContext<'a> {
             let gid = self.module.add_global(LirGlobal {
                 name: global.name.clone(),
                 ty: ty.clone(),
-                init: lower_global_init(&global.init, &self.func_index, &ty),
+                init: lower_global_init(&global.init, &self.func_index, &ty, &self.struct_reg),
                 is_const: false, // GIR doesn't distinguish const vs mut globals
             });
             self.global_index.insert(global.name.clone(), gid);
