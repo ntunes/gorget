@@ -1540,8 +1540,9 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 lty = val_types.get(lhs).unwrap()
             if val_types.contains(rhs):
                 rty = val_types.get(rhs).unwrap()
-            bool lhs_str = lir_is_aggregate(lty)
-            bool rhs_str = lir_is_aggregate(rty)
+            int gs_sid = find_struct_type("GorgetString", &m)
+            bool lhs_str = (lty == gs_sid)
+            bool rhs_str = (rty == gs_sid)
             if lhs_str or rhs_str:
                 # Coerce pointer-typed operand (bare String param passed by void*
                 # or Str*) by dereferencing as Str. Both sides must be Str by value.
@@ -1564,6 +1565,14 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                     return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") > 0;"
                 elif op == CMP_GE:
                     return v(dst) + " = gorget_str_cmp(" + lstr + ", " + rstr + ") >= 0;"
+            # Non-string aggregate comparison — fall back to memcmp for ==/!=.
+            # Other comparisons on aggregates are rare and unlikely to be correct.
+            if lir_is_aggregate(lty) and lir_is_aggregate(rty) and lty == rty:
+                String ty_name = c_type_name(lty, &sn)
+                if op == CMP_EQ:
+                    return v(dst) + " = memcmp(&" + v(lhs) + ", &" + v(rhs) + ", sizeof(" + ty_name + ")) == 0;"
+                elif op == CMP_NE:
+                    return v(dst) + " = memcmp(&" + v(lhs) + ", &" + v(rhs) + ", sizeof(" + ty_name + ")) != 0;"
             String cop = cmp_op_str(op)
             return v(dst) + " = " + v(lhs) + " " + cop + " " + v(rhs) + ";"
 
