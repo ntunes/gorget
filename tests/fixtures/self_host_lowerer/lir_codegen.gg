@@ -1004,6 +1004,8 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_codepoint" or name == "gorget_str_codepoint_at":
         return find_struct_type("GorgetString", &m)
+    if name == "gorget_str_byte_slice" or name == "gorget_str_bytes_slice":
+        return find_struct_type("GorgetString", &m)
     # Array transform
     if name == "gorget_array_concat":
         return find_struct_type("GorgetArray", &m)
