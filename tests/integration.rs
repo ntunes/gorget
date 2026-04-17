@@ -2065,6 +2065,14 @@ fn static_global_method_call() {
 }
 
 #[test]
+fn stdlib_io_println() {
+    run_gg(
+        "stdlib_io_println.gg",
+        "42\nhello\n-7\ndirect text",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

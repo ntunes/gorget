@@ -377,6 +377,35 @@ Result[int, IoError] write_str[W](W &w, String s):
 Result[int, IoError] write_display[W, Displayable D](W &w, D v):
     return write_all[W](&w, v.display().bytes())
 
+# Render `v` + newline to `w`. Narrow-waist equivalent of Gorget's
+# builtin `print(v)` but explicit about the destination and return
+# type. Callers wanting text-mode output to a custom Writer use
+# `writeln[W, D](&my_writer, x)`; stdout shortcuts are below.
+#
+# Implementation note: the newline is appended to the rendered
+# String before a single `write_all` call so the happy-path only
+# makes one round-trip into the underlying Writer. A calling pattern
+# of `display → write_all` followed by a second `write_all` for "\n"
+# (the naive fused form) trips a compiler bug where the second
+# generic call has its return type lost during monomorphization —
+# using a single rendered buffer sidesteps that.
+Result[int, IoError] writeln[W, Displayable D](W &w, D v):
+    String rendered = v.display() + "\n"
+    return write_all[W](&w, rendered.bytes())
+
+# Narrow-waist `println(v)` — shortcut for `writeln[File, D](&stdout, v)`.
+# Equivalent to the builtin `print(v)` but routes through the Writer
+# trait so Writer wiring is exercised end-to-end. Use `writeln` for
+# non-stdout targets.
+Result[int, IoError] println[Displayable D](D v):
+    return writeln[File, D](&stdout, v)
+
+# Text-only println (no Displayable bound — just bytes through). Same
+# shape as `println` but skips the display step; useful when you
+# already have the rendered String.
+Result[int, IoError] println_str(String s):
+    return write_all[File](&stdout, (s + "\n").bytes())
+
 # Read all available bytes from `r` into a fresh buffer. Loops calling
 # `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
 # on success; `buf` accumulates across reads.

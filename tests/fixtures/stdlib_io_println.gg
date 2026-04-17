@@ -1,0 +1,25 @@
+# Narrow-waist `println` — the Writer-based alternative to the
+# builtin `print`. Lives in std.io, goes through `write_all` on
+# `stdout`, so the full Writer stack (File → errno → IoError) is
+# exercised end to end.
+#
+# The builtin `print` stays as a convenient shortcut that doesn't
+# require Displayable; `println` is for callers who want typed
+# errors from output and to exercise the Writer API.
+
+from std.io import println, println_str, writeln, stdout, stderr, IoError
+
+int main():
+    # Displayable → println[T] dispatches through write_display.
+    Result[int, IoError] r1 = println[int](42)
+    Result[int, IoError] r2 = println[String]("hello")
+    Result[int, IoError] r3 = println[int](-7)
+
+    # Text-path shortcut (skip Displayable).
+    Result[int, IoError] r4 = println_str("direct text")
+
+    # writeln to a non-stdout Writer — stderr here, output is
+    # captured separately so stdout stays clean.
+    Result[int, IoError] r5 = writeln[File, String](&stderr, "to stderr")
+
+    return 0
