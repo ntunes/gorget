@@ -1780,6 +1780,10 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
         case ICall(dst, fid, args):
             if fid >= 0 and fid < m.functions.len():
                 LirFunction callee = m.functions.get(fid).unwrap()
+                # If this is actually an enum variant constructor, route
+                # through emit_call_extern which handles inline struct init.
+                if m.enum_variant_parent.contains(callee.name):
+                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
                 String fname = c_func_name(callee.name)
                 int gs_ty = find_struct_type("GorgetString", &m)
                 String out = ""
@@ -1975,6 +1979,12 @@ String map_mono_to_runtime(String name, LirModule &m):
         return "gorget_array_" + method
     if method == "clone":
         return "gorget_array_clone"
+    # GorgetArray prefix: wrapper methods — these are Vector helpers.
+    if prefix == "GorgetArray":
+        if method == "get" or method == "safe_get":
+            return "gorget_array_safe_get"
+        if method == "len" or method == "is_empty" or method == "contains":
+            return "gorget_array_" + method
     # String method fallbacks: when self-host lost the recv type and emitted
     # int64_t__byte_at etc., remap to gorget_str_* so linkage succeeds.
     # These don't preserve correct semantics (recv value is a placeholder),
@@ -1992,6 +2002,13 @@ String map_mono_to_runtime(String name, LirModule &m):
             return "gorget_str_" + method
         if method == "find" or method == "index_of" or method == "count":
             return "gorget_str_" + method
+        # Char predicate methods on byte.
+        if method == "is_alpha" or method == "is_digit" or method == "is_alphanumeric":
+            return "gorget_uint8_" + method
+        if method == "is_hex_digit" or method == "is_space" or method == "is_upper" or method == "is_lower":
+            return "gorget_uint8_" + method
+        if method == "to_upper" or method == "to_lower":
+            return "gorget_uint8_" + method
     return name
 
 # ── Option/Result combinator inline expansion ──────────────
