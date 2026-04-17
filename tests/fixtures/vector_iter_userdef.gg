@@ -1,0 +1,23 @@
+# A VectorIter struct implemented in user code — a cheap iterator over
+# Vector[T] that uses Vector.get() under the hood. Exercises the
+# direct-Iterator path through the for-loop lowerer end-to-end on a
+# generic struct instantiated with an int element type.
+
+struct VectorIter[T]:
+    Vector[T] source
+    int idx
+
+equip [T] VectorIter[T] with Iterator[T]:
+    Option[T] next(&self):
+        if self.idx >= self.source.len():
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return self.source.get(cur)
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    VectorIter[int] vit = VectorIter[int](v, 0)
+    for x in vit:
+        print(x)
+    return 0

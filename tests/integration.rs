@@ -1984,6 +1984,11 @@ fn iterator_direct() {
 }
 
 #[test]
+fn vector_iter_userdef() {
+    run_gg("vector_iter_userdef.gg", "10\n20\n30");
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",
