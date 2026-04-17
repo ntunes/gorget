@@ -244,7 +244,82 @@ The typed error channel for all I/O. Pattern-match by category instead
 of parsing error strings. `IoError.Other(msg)` is the escape hatch;
 prefer a named variant when possible.
 
-`equip IoError with Displayable` for human-readable output.
+`equip IoError with Displayable & Debuggable & Error`.
+
+### ParseError
+
+```gorget
+enum ParseError:
+    Empty
+    InvalidNumber(String)
+    OutOfRange(String)
+    InvalidSyntax(int byte_offset, String message)
+    Other(String)
+```
+
+Defined in `std.conv`. Used by `parse_int`, `parse_float`,
+`json_parse`, `toml.parse`, `yaml.parse`, `xml_parse`, `url_decode`,
+`form_decode`, and future parsers. Kept separate from `IoError`
+because "bad input" (format fault) is categorically different from
+"bad I/O" (transport fault) — a parser built on top of a `Reader`
+surfaces both distinctly.
+
+`equip ParseError with Displayable & Debuggable & Error`.
+
+### Error
+
+```gorget
+trait Error extends Displayable & Debuggable:
+    Option[String] source(&self)
+```
+
+The narrow contract every well-behaved error type implements. Gives
+generic helpers a single bound that covers display, debug, and an
+optional underlying-cause message. Both `IoError` and `ParseError`
+implement it, and generic error-handling code can accept any error:
+
+```gorget
+void log_error[Error E](E e):
+    print(e.display())
+    print(e.debug())
+```
+
+Coexists with the `Result.Error(x)` variant via type/value namespace
+separation — the trait lives in the type namespace, the variant in
+the value namespace, and context picks the right one.
+
+### println / writeln / println_str
+
+Narrow-waist convenience helpers for writing text with typed errors:
+
+```gorget
+Result[int, IoError] writeln[W, Displayable D](W &w, D v)
+Result[int, IoError] println[Displayable D](D v)            # → stdout
+Result[int, IoError] println_str(String s)                  # → stdout
+```
+
+`println[D](v)` renders `v` through `Displayable.display()`, appends
+`"\n"`, and writes the combined bytes to `stdout` via the `Writer`
+trait. Equivalent to the builtin `print(v)` but routes through the
+full typed-error Writer stack. Use `writeln[W, D](&w, v)` for
+non-stdout destinations.
+
+### Typed file I/O
+
+Whole-file convenience helpers in `std.io`:
+
+```gorget
+Result[File, IoError]          file_open(String path, String mode)
+Result[String, IoError]        read_to_string(String path)
+Result[Vector[byte], IoError]  read_all_bytes(String path)
+Result[int, IoError]           write_string(String path, String content)
+Result[int, IoError]           write_all_bytes(String path, Vector[byte] buf)
+```
+
+These compose `file_open` + the `Reader` / `Writer` machinery so
+callers get structured errors for common operations. The infallible
+`std.fs.read_file` / `write_file` stay as convenience shortcuts that
+panic on failure.
 
 ---
 

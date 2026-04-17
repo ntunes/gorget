@@ -390,6 +390,66 @@ If a stdlib function you need still returns `Result[T, String]`, the
 `from_string_error[T]` helper wraps the message in `IoError.Other`
 so the call site can start pattern-matching immediately.
 
+### The Parse Error Channel
+
+Parsing and I/O are two different failure categories, so `std.conv`
+ships a separate `ParseError` enum used by `parse_int`,
+`parse_float`, `json_parse`, `toml.parse`, `yaml.parse`,
+`xml_parse`, `url_decode`, and `form_decode`. Variants:
+`Empty`, `InvalidNumber(String)`, `OutOfRange(String)`,
+`InvalidSyntax(int byte_offset, String message)`, and
+`Other(String)`.
+
+```gorget
+from std.conv import parse_int, ParseError
+
+match parse_int(input):
+    case Ok(n):
+        use(n)
+    case Error(ParseError.Empty()):
+        return default_value()
+    case Error(ParseError.OutOfRange(s)):
+        log.warn(f"overflow in {s}")
+    case Error(e):
+        log.error(e.display())
+```
+
+The two channels are disjoint on purpose: a typed parser layered on
+top of a Reader surfaces a `ParseError` for "bad input" (format
+fault) and an `IoError` for "bad transport" (network/disk fault).
+Callers can handle them independently.
+
+### The `Error` Trait
+
+Both `IoError` and `ParseError` implement the narrow `Error` trait
+(defined in `std.io`):
+
+```gorget
+trait Error extends Displayable & Debuggable:
+    Option[String] source(&self)
+```
+
+Every well-behaved stdlib error type implements `Error`, which means
+a generic helper can receive any error uniformly:
+
+```gorget
+from std.io import Error
+
+void log_error[Error E](E e):
+    print(e.display())            # human message
+    print(e.debug())              # developer view
+    match e.source():
+        case Some(cause):
+            print(f"  caused by: {cause}")
+        case None:
+            pass
+```
+
+The `Error` trait coexists with the `Result.Error(x)` variant: the
+first lives in the type namespace (trait bound / equip target), the
+second in the value namespace (call / pattern). Use-site resolution
+picks the right one by context.
+
 ---
 
 ## throws vs Result — Under the Hood

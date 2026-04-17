@@ -363,6 +363,32 @@ arbitrary bytes, not UTF-8. Callers with a `String` source convert via
 Reader mirror: `reader_drain[R](&r)` reads-to-EOF, `read_exact[R](&r, n)`
 fills at least `n` bytes.
 
+**Writer/Reader implementors** in the stdlib: `String` (in-memory
+byte buffer), `File` (disk I/O + `stdout` / `stderr` / `stdin`
+handles), `Socket` (TCP), `TlsSocket` (OpenSSL). All surface failures
+as `IoError` variants; short-writes / short-reads are handled
+transparently by the `write_all` / `reader_drain` / `read_exact`
+loops on top.
+
+**Whole-file convenience** — `file_open(path, mode)` returns
+`Result[File, IoError]`; `read_to_string(path)`, `read_all_bytes(path)`,
+`write_string(path, content)`, `write_all_bytes(path, buf)` wrap the
+common patterns.
+
+**`println` / `writeln`** — typed-error alternatives to the builtin
+`print`:
+
+```gorget
+from std.io import println, writeln, stderr
+
+Result[int, IoError] r = println[int](42)                 # → stdout
+Result[int, IoError] r2 = writeln[File, String](&stderr, "oops")
+```
+
+Useful when you need to handle `BrokenPipe`, `TimedOut`, etc.
+explicitly; otherwise the builtin `print` stays as the ergonomic
+default (panics on I/O failure, which is fine for most programs).
+
 ---
 
 ## Concurrency
