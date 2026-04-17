@@ -11,7 +11,32 @@
 # - Errors are typed via `IoError`; no stringly-typed `Result[T, String]`
 #   at the I/O boundary.
 
-from std.collections import Vector, File
+from std.collections import Vector
+
+# ── File handle ───────────────────────────────────────────────
+#
+# Thin wrapper around the C `GorgetFile` runtime type (16 bytes:
+# `FILE* handle` + `bool owned`). The single Gorget-level field
+# `_handle` covers both — the runtime constructors populate both
+# slots; the `owned` flag is not surfaced at the Gorget level.
+
+struct File:
+    # Must be named `handle` — matches the C `GorgetFile.handle`
+    # field at the layout level. The second-half `owned` byte of the
+    # C struct is covered by the int's extra bytes (LSB on LE) so the
+    # Gorget-visible 8-byte int spans both C fields. Treat this as
+    # opaque; users never read it.
+    int handle
+
+equip File:
+    extern Result[String, String] read_all() = "gorget_file_read_all"
+    extern "C" void write(String content) = "gorget_file_write"
+    extern void close() = "gorget_file_close"
+    # Byte-oriented primitives. These return the raw bytes-written /
+    # bytes-read count (non-negative) or a negative errno that the
+    # Writer/Reader equip below surfaces as an `IoError` variant.
+    extern int _write_bytes_buf(Vector[byte] buf) = "gorget_file_write_bytes_buf"
+    extern int _read_bytes_buf(Vector[byte] &buf, int max_bytes) = "gorget_file_read_bytes_buf"
 
 # Byte type note: signatures use `Vector[byte]` rather than
 # `Vector[byte]`. `byte` is a lexer-level alias for `uint8` — the
@@ -19,10 +44,32 @@ from std.collections import Vector, File
 # across modules. `Vector[byte]` reads as what it is: a byte buffer
 # with no UTF-8 contract.
 
-# ── Standard file handles (codegen special-cases these) ───────
+# ── Standard-handle + open externs ────────────────────────────
 
-public static File stderr = File(0)
-public static File stdout = File(0)
+extern "Gorget":
+    extern File _stdin_handle() = "gorget_stdin_handle"
+    extern File _stdout_handle() = "gorget_stdout_handle"
+    extern File _stderr_handle() = "gorget_stderr_handle"
+
+extern "C":
+    extern int _file_open_try(cstr path, cstr mode, File &out) = "gorget_file_open_try"
+
+# ── Standard file handles ─────────────────────────────────────
+#
+# Runtime-initialized File values wrapping the C `stdout`/`stderr`/
+# `stdin` streams. The `_handle` field holds `FILE*` as a pointer-
+# sized int; the `owned` flag (not visible at the Gorget level) is
+# false so `close()` is a no-op.
+#
+# The codegen also recognises the identifiers `stdout`/`stderr` as
+# a keyword routing hint for `print(x, file=stderr)`. That path is
+# orthogonal to the Writer impl — `stderr.write_bytes(...)` goes
+# through the runtime call below; `print(..., file=stderr)` stays
+# on the fprintf fast path for now.
+
+public static File stdin = _stdin_handle()
+public static File stdout = _stdout_handle()
+public static File stderr = _stderr_handle()
 
 # ── Legacy cstr-based terminal / stdin helpers ────────────────
 #
@@ -214,11 +261,85 @@ equip String with Writer:
         self.push(chunk)
         return Ok(n)
 
-# File / Socket / TlsSocket / stdout / stderr Writer impls land in a
-# follow-up: they need a runtime `gorget_file_write_bytes_handle`-style
-# function that takes a File handle + byte slice (the existing
-# gorget_file_write takes a path+content pair). Scoped to the next
-# stdlib pass, not this codegen-gap slice.
+# ── errno → IoError mapping ───────────────────────────────────
+#
+# Linux errno values are stable enough for a mechanical mapping.
+# Unknown values fall through to `IoError.Other` with the raw code.
+# This is a private helper — File/Socket/TlsSocket Writer impls all
+# funnel through here so the same errno gets the same variant.
+
+IoError _errno_to_io_error(int code):
+    # ENOENT / EACCES / EEXIST / EPIPE / ECONNREFUSED / ECONNRESET /
+    # ECONNABORTED / ENOTCONN / EADDRINUSE / ETIMEDOUT / EAGAIN /
+    # EINTR / EINVAL — otherwise fall through to Other(code).
+    if code == 2:
+        return IoError.NotFound()
+    if code == 13:
+        return IoError.PermissionDenied()
+    if code == 17:
+        return IoError.AlreadyExists()
+    if code == 32:
+        return IoError.BrokenPipe()
+    if code == 111:
+        return IoError.ConnectionRefused()
+    if code == 104:
+        return IoError.ConnectionReset()
+    if code == 103:
+        return IoError.ConnectionAborted()
+    if code == 107:
+        return IoError.NotConnected()
+    if code == 98:
+        return IoError.AddrInUse()
+    if code == 110:
+        return IoError.TimedOut()
+    if code == 11:
+        return IoError.WouldBlock()
+    if code == 4:
+        return IoError.Interrupted()
+    if code == 22:
+        return IoError.InvalidInput()
+    return IoError.Other(f"errno {code}")
+
+# ── File implements Writer / Reader ───────────────────────────
+#
+# The C runtime helpers return bytes-written (>= 0) on success and
+# a negative errno on failure, so this wrapper is mostly arithmetic:
+# negative → IoError variant, non-negative → Ok(n).
+
+equip File with Writer:
+    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+        # `_write_bytes_buf` is a File-method extern — the compiler
+        # threads `&self` into the C `GorgetFile*` param automatically.
+        int n = self._write_bytes_buf(buf)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
+
+equip File with Reader:
+    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+        # Read up to 4KB per call — callers typically loop via
+        # `reader_drain` / `read_exact` so this chunk size just keeps
+        # any individual call bounded.
+        int n = self._read_bytes_buf(&buf, 4096)
+        if n < 0:
+            return Error(_errno_to_io_error(-n))
+        return Ok(n)
+
+# ── File.open — typed construction ────────────────────────────
+#
+# Path-based file open that returns `Result[File, IoError]`. The
+# existing `read_file(path)` / `write_file(path, content)` free
+# functions in `std.fs` remain as convenient shortcuts; this is the
+# typed-error path for callers that need to handle file errors.
+
+Result[File, IoError] file_open(String path, String mode):
+    File out = File(0)
+    # `extern "C"` takes `cstr` params; passing a `String` here relies
+    # on the compiler's implicit Str→cstr coercion at the call site.
+    int rc = _file_open_try(path, mode, &out)
+    if rc < 0:
+        return Error(_errno_to_io_error(-rc))
+    return Ok(!out)
 
 # ── Derived helpers (free functions, generic over the concrete Writer) ──
 

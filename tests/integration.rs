@@ -2049,6 +2049,14 @@ fn stdlib_io_reader() {
 }
 
 #[test]
+fn stdlib_io_file_writer() {
+    run_gg(
+        "stdlib_io_file_writer.gg",
+        "hello\n6\nfrom writer",
+    );
+}
+
+#[test]
 fn derive_debuggable() {
     run_gg(
         "derive_debuggable.gg",

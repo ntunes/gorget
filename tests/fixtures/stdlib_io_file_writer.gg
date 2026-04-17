@@ -1,0 +1,42 @@
+# File + stdout/stderr implement Writer — Phase 3 (a).
+#
+# Exercises:
+#   1. `stdout` is a real File handle — free-function Writer helpers
+#      (write_str, write_all, write_display) work with it.
+#   2. Opening a file via `file_open` returns `Result[File, IoError]`;
+#      write_str + close round-trip. The content read back matches.
+#   3. stderr is a separate handle that can also be written to. We
+#      print a sentinel on stderr and verify `main` exits cleanly.
+
+from std.io import stdout, stderr, File, IoError, file_open, write_str, write_display, write_all
+from std.fs import read_file, delete_file
+
+int main():
+    # 1. write to stdout
+    Result[int, IoError] r1 = write_str[File](&stdout, "hello\n")
+    match r1:
+        case Ok(n):
+            Result[int, IoError] r2 = write_display[File, int](&stdout, n)
+            Result[int, IoError] r3 = write_str[File](&stdout, "\n")
+        case Error(e):
+            print(e.display())
+
+    # 2. open a file, write via Writer, read back
+    Result[File, IoError] opened = file_open("/tmp/gorget_writer_test.txt", "w")
+    match opened:
+        case Ok(f):
+            File file = !f
+            Result[int, IoError] r4 = write_str[File](&file, "from writer\n")
+            file.close()
+        case Error(e):
+            print(e.display())
+
+    String content = read_file("/tmp/gorget_writer_test.txt")
+    print(content)
+    delete_file("/tmp/gorget_writer_test.txt")
+
+    # 3. write to stderr — routed to stderr stream, not stdout, so
+    # the test captures stdout and sees only the earlier lines
+    Result[int, IoError] r5 = write_str[File](&stderr, "on stderr (not in stdout capture)\n")
+
+    return 0

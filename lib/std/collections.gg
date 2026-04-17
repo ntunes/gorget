@@ -18,10 +18,5 @@ struct HashSet[T]:
 struct Box[T]:
     pass
 
-struct File:
-    pass
-
-equip File:
-    extern Result[String, String] read_all() = "gorget_file_read_all"
-    extern "C" void write(String content) = "gorget_file_write"
-    extern void close() = "gorget_file_close"
+# File moved to std.io — it's an I/O concept, not a collection. The
+# read_all / write / close methods and the type itself now live there.

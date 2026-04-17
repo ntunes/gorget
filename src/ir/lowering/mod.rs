@@ -1690,6 +1690,13 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
             let elem_c = generic_elem_c_type(ty);
             format!("gorget_array_new(sizeof({elem_c}))")
         }
+        // Standard-handle getters from std.io — turn the zero-arg
+        // `_stdout_handle()` / `_stderr_handle()` / `_stdin_handle()`
+        // extern calls into their C-side emitters so the `File` static
+        // global gets a live `GorgetFile` at program start.
+        "File" if callee_name == "_stdout_handle" => "gorget_stdout_handle()".to_string(),
+        "File" if callee_name == "_stderr_handle" => "gorget_stderr_handle()".to_string(),
+        "File" if callee_name == "_stdin_handle"  => "gorget_stdin_handle()".to_string(),
         _ => {
             // Generic struct constructor: if callee matches type name and all
             // args are literals, emit a C compound literal at runtime.

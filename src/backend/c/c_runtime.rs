@@ -6095,6 +6095,89 @@ static inline void gorget_file_write(GorgetFile* f, const char* s) {
     if (s) fputs(s, f->handle);
 }
 
+// ── File byte-oriented writer ───────────────────────────────
+//
+// Writes up to `buf->len` bytes from `buf->data` to the file.
+// Returns the number of bytes actually written (>= 0) on success, or
+// a negative errno on failure so the Gorget-side Writer wrapper can
+// map it to the appropriate `IoError` variant.
+//
+// Short writes are legitimate (sockets/pipes). The caller's
+// `write_all` helper loops until the full buffer is written.
+static inline int64_t gorget_file_write_bytes_buf(GorgetFile* f, const GorgetArray* buf) {
+    if (!f || !f->handle || !buf) return 0;
+    if (!buf->data || buf->len == 0) return 0;
+    clearerr(f->handle);
+    size_t n = fwrite(buf->data, 1, (size_t)buf->len, f->handle);
+    if (n == 0 && ferror(f->handle)) {
+        int e = errno;
+        if (e == 0) e = 5; // EIO
+        return -(int64_t)e;
+    }
+    return (int64_t)n;
+}
+
+// ── File byte-oriented reader ───────────────────────────────
+//
+// Reads up to `max_bytes` bytes from the file and appends them to
+// `buf`. Returns the number of bytes actually read (>= 0), or a
+// negative errno on failure. A return of 0 means EOF.
+static inline int64_t gorget_file_read_bytes_buf(GorgetFile* f, GorgetArray* buf, int64_t max_bytes) {
+    if (!f || !f->handle || !buf || max_bytes <= 0) return 0;
+    size_t old_len = (size_t)buf->len;
+    gorget_array_ensure_capacity(buf, old_len + (size_t)max_bytes, 1);
+    clearerr(f->handle);
+    size_t n = fread((uint8_t*)buf->data + old_len, 1, (size_t)max_bytes, f->handle);
+    if (n == 0) {
+        if (ferror(f->handle)) {
+            int e = errno;
+            if (e == 0) e = 5; // EIO
+            return -(int64_t)e;
+        }
+        return 0; // EOF
+    }
+    buf->len = (int64_t)(old_len + n);
+    return (int64_t)n;
+}
+
+// ── stdout / stderr / stdin handles ─────────────────────────
+//
+// Return a non-owning GorgetFile that wraps the C stdio stream.
+// `owned=false` means `gorget_file_close` will leave the underlying
+// FILE* alone — we never fclose stdout/stderr/stdin.
+static inline GorgetFile gorget_stdout_handle(void) {
+    return (GorgetFile){stdout, false};
+}
+
+static inline GorgetFile gorget_stderr_handle(void) {
+    return (GorgetFile){stderr, false};
+}
+
+static inline GorgetFile gorget_stdin_handle(void) {
+    return (GorgetFile){stdin, false};
+}
+
+// ── File.open — typed Result[File, IoError] ─────────────────
+//
+// Opens a file and writes its handle into `*out`. Returns 0 on
+// success, or a negative errno on failure. Gorget-side wrapper
+// surfaces the result as `Result[File, IoError]`.
+static inline int64_t gorget_file_open_try(const char* path, const char* mode, GorgetFile* out) {
+    if (!out) return -22; // EINVAL
+    out->handle = NULL;
+    out->owned = false;
+    if (!path || !mode) return -22;
+    FILE* f = fopen(path, mode);
+    if (!f) {
+        int e = errno;
+        if (e == 0) e = 5; // EIO
+        return -(int64_t)e;
+    }
+    out->handle = f;
+    out->owned = true;
+    return 0;
+}
+
 // Free functions
 static inline GorgetString gorget_read_file(const char* path) {
     GorgetFile f = gorget_file_open(path, "r");
