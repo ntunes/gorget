@@ -1655,6 +1655,12 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         if info.is_enum:
             ki += 1
             continue
+        # Skip imported types — Rust preamble already provides their
+        # drop/clone functions as `static inline`. Emitting our own would
+        # duplicate the definitions.
+        if gmod.imported_fns.contains("__imported_type__" + type_name):
+            ki += 1
+            continue
         # Check if this struct has any droppable fields
         Vector[FieldDrop] field_drops = []
         int fi = 0
@@ -1685,6 +1691,9 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         String type_name = type_keys.get(ki).unwrap()
         GirTypeInfo info = gmod.type_infos.get(type_name).unwrap()
         if not info.is_enum:
+            ki += 1
+            continue
+        if gmod.imported_fns.contains("__imported_type__" + type_name):
             ki += 1
             continue
         Vector[EnumVariantDrop] variant_drops = []

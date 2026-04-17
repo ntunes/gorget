@@ -5,7 +5,7 @@
 # call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source
-from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
@@ -145,9 +145,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # this lets the lowerer route bare variant constructors
                         # (IntCol, Red, ...) to their parent enum type, and
                         # lir_lower knows to skip emitting standalone variant
-                        # structs. Concrete non-generic only.
+                        # structs. Concrete non-generic only. Mark in
+                        # imported_fns with "__imported_type__" prefix so the
+                        # lir_lower can skip drop/clone emission (Rust preamble
+                        # already provides them via static inline).
                         if edef.type_params.len() == 0:
+                            String ename = edef.name.clone()
                             m.items.push(IEnum(edef))
+                            imported_fns.put("__imported_type__" + ename, true)
                     case IEquip(eqblk):
                         # Filter: real methods have >=2 body stmts, OR expression body,
                         # OR 1 stmt that isn't a string-literal extern stub marker.

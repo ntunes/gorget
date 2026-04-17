@@ -814,6 +814,33 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     pass
             return add_local(&ctx, UNIT_TYPE, NO_NAME)
         case EMethodCall(recv_box, mname, margs, _):
+            # Static method call: receiver is a TYPE name (e.g. Point.default()).
+            # Route to TypeName__method with no self argument.
+            match (*recv_box).expr:
+                case EIdentifier(ident_name):
+                    if gmod.type_infos.contains(ident_name):
+                        Vector[Operand] static_args = []
+                        int smi = 0
+                        while smi < margs.len():
+                            SpannedExpr sma = margs.get(smi).unwrap()
+                            int sma_val = lower_expr(&ctx, sma, &gmod)
+                            static_args.push(OpCopy(sma_val))
+                            smi += 1
+                        String static_name = ident_name + "__" + mname
+                        int static_ret = I64_TYPE
+                        if gmod.fn_sigs.contains(static_name):
+                            static_ret = gmod.fn_sigs.get(static_name).unwrap()
+                        elif mname == "default":
+                            static_ret = lookup_or_register_named(&gmod, ident_name)
+                        else:
+                            int binfer = builtin_call_return_type(static_name, &gmod)
+                            if binfer >= 0:
+                                static_ret = binfer
+                        int sdst = add_local(&ctx, static_ret, NO_NAME)
+                        emit(&ctx, GICallExtern(sdst, static_name, static_args))
+                        return sdst
+                else:
+                    pass
             # unwrap() is a no-op passthrough — the self-host doesn't wrap in Option
             int recv = lower_expr(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or":
