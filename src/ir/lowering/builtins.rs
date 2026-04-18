@@ -208,6 +208,12 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "extend", runtime_callee: Some("gorget_array_extend"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "reserve", runtime_callee: Some("gorget_array_reserve"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: int_param, return_type: ret_void },
         BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_array_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
+        // Order-destroying O(1) removal — moves last element into the hole.
+        BuiltinMethodDecl { name: "swap_remove", runtime_callee: Some("gorget_array_swap_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: int_param, return_type: ret_void },
+        // Swap two elements in place.
+        BuiltinMethodDecl { name: "swap", runtime_callee: Some("gorget_array_swap"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: |_| vec![I64_TYPE, I64_TYPE], return_type: ret_void },
+        // Fill with n copies of a value (drops existing elements).
+        BuiltinMethodDecl { name: "fill", runtime_callee: Some("gorget_array_fill"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_void },
         // Borrowing reads
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_array_safe_get"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: int_param, return_type: ret_option_ref_or_val_elem },
         BuiltinMethodDecl { name: "first", runtime_callee: Some("gorget_array_first"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_option_ref_or_val_elem },

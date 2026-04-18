@@ -4958,6 +4958,71 @@ static inline void* gorget_array_pop(GorgetArray* arr) {
     return (char*)arr->data + arr->len * arr->elem_size;
 }
 
+// Swap-remove: O(1) alternative to `remove(index)` that doesn't shift —
+// moves the last element into the hole. Order-destroying. Panics on
+// out-of-bounds.
+static inline void gorget_array_swap_remove(GorgetArray* arr, size_t index) {
+    if (index >= arr->len) {
+        fprintf(stderr, "gorget: panic: swap_remove index out of bounds: index %zu, length %zu\n", index, arr->len);
+        exit(1);
+    }
+    void* slot = (char*)arr->data + index * arr->elem_size;
+    if (arr->elem_drop) {
+        arr->elem_drop(slot);
+    }
+    size_t last = arr->len - 1;
+    if (index != last) {
+        memcpy(slot, (char*)arr->data + last * arr->elem_size, arr->elem_size);
+    }
+    arr->len--;
+}
+
+// Swap two elements by index. Panics on out-of-bounds.
+static inline void gorget_array_swap(GorgetArray* arr, size_t i, size_t j) {
+    if (i >= arr->len || j >= arr->len) {
+        fprintf(stderr, "gorget: panic: swap index out of bounds\n");
+        exit(1);
+    }
+    if (i == j) return;
+    static _Thread_local char __swap_buf[4096];
+    static _Thread_local char* __swap_heap = NULL;
+    static _Thread_local size_t __swap_heap_cap = 0;
+    char* buf;
+    if (arr->elem_size <= sizeof(__swap_buf)) {
+        buf = __swap_buf;
+    } else {
+        if (arr->elem_size > __swap_heap_cap) {
+            free(__swap_heap);
+            __swap_heap = (char*)malloc(arr->elem_size);
+            __swap_heap_cap = arr->elem_size;
+        }
+        buf = __swap_heap;
+    }
+    void* a = (char*)arr->data + i * arr->elem_size;
+    void* b = (char*)arr->data + j * arr->elem_size;
+    memcpy(buf, a, arr->elem_size);
+    memcpy(a, b, arr->elem_size);
+    memcpy(b, buf, arr->elem_size);
+}
+
+static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed, size_t elem_size);
+
+// Fill an existing array with `n` copies of `val_src`. Callers supply
+// the size of the value (must match elem_size). Drops existing
+// elements. Used as the low-level building block for `Vector.fill(n, v)`.
+static inline void gorget_array_fill(GorgetArray* arr, size_t n, const void* val_src) {
+    if (arr->elem_drop) {
+        for (size_t i = 0; i < arr->len; i++) {
+            arr->elem_drop((char*)arr->data + i * arr->elem_size);
+        }
+    }
+    gorget_array_ensure_capacity(arr, n, arr->elem_size);
+    for (size_t i = 0; i < n; i++) {
+        memcpy((char*)arr->data + i * arr->elem_size, val_src, arr->elem_size);
+    }
+    arr->len = n;
+}
+
 // Pop the last element, returning NULL on empty (safe for Option wrapping).
 static inline void* gorget_array_safe_pop(GorgetArray* arr) {
     if (arr->len == 0) return NULL;

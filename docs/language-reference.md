@@ -3023,6 +3023,9 @@ These methods operate on individual characters within a `String`:
 | `clear()` | `→ void` | Remove all elements (drops resource-type elements) |
 | `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
 | `capacity()` | `→ int` | Current allocated capacity (elements — may exceed `len()`) |
+| `swap(i, j)` | `int, int → void` | Swap two elements in place |
+| `swap_remove(i)` | `int → void` | O(1) removal — moves last element into the hole (order-destroying) |
+| `fill(n, v)` | `int, T → void` | Replace contents with `n` copies of `v` (drops existing) |
 | `sort()` / `sort(cmp)` | `[(T, T) → int] → void` | Sort elements in place (ascending by default, or with custom comparator) |
 | `sorted()` / `sorted(cmp)` | `[(T, T) → int] → Vector[T]` | Return a new sorted copy |
 | `sort_by_key(key_fn)` | `(T) → K → void` | Sort in place by a key function (avoids recomputing the key per comparison) |

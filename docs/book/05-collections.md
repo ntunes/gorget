@@ -140,6 +140,24 @@ Vector[Vector[int]] wins = v.windows(3)
 Vector[Vector[int]] chs = v.chunks(2)
 ```
 
+### Swap and Fill
+
+```gorget
+auto v = [10, 20, 30, 40, 50]
+
+# swap(i, j) — in-place swap.
+v.swap(0, 4)                # [50, 20, 30, 40, 10]
+
+# swap_remove(i) — O(1) removal by moving the last element into the
+# hole. Order-destroying. Prefer over `remove(i)` when order doesn't
+# matter — saves the N-i shift.
+v.swap_remove(1)            # [50, 10, 30, 40] (10 filled the hole)
+
+# fill(n, v) — replace contents with n copies of v. Drops existing.
+Vector[int] zeros = Vector[int]()
+zeros.fill(5, 0)            # [0, 0, 0, 0, 0]
+```
+
 ### Index Access and Ownership
 
 `v[i]` borrows the element — it doesn't remove it from the vector. For simple types like `int` or `bool`, the value is just copied. For resource types like `Vector` or `String`, assigning the result to a variable auto-clones:

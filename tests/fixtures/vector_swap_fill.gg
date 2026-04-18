@@ -1,0 +1,38 @@
+# Vector.swap_remove / swap / fill — Phase 2 stdlib additions.
+#
+# - `swap(i, j)` — in-place swap of two elements.
+# - `swap_remove(i)` — O(1) removal by moving the last element into
+#   the hole. Order-destroying but doesn't shift N-i elements.
+# - `fill(n, val)` — replace contents with n copies of val.
+
+from std.collections import Vector
+
+int main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+
+    # swap(0, 4): [50, 20, 30, 40, 10]
+    v.swap(0, 4)
+    print(v.get(0).unwrap())  # 50
+    print(v.get(4).unwrap())  # 10
+
+    # swap_remove(1): drops 20, moves last (10) into slot 1
+    # Result: [50, 10, 30, 40]
+    v.swap_remove(1)
+    print(v.len())            # 4
+    print(v.get(1).unwrap())  # 10
+
+    # fill(3, 7): replace with [7, 7, 7]
+    Vector[int] filled = Vector[int]()
+    filled.fill(3, 7)
+    print(filled.len())             # 3
+    print(filled.get(0).unwrap())   # 7
+    print(filled.get(2).unwrap())   # 7
+
+    # fill drops existing elements — use it on a non-empty vec
+    Vector[int] reused = [1, 2, 3, 4]
+    reused.fill(2, 99)
+    print(reused.len())             # 2
+    print(reused.get(0).unwrap())   # 99
+    print(reused.get(1).unwrap())   # 99
+
+    return 0

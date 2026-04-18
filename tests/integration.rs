@@ -2015,6 +2015,14 @@ fn stdlib_iter_map_filter() {
 }
 
 #[test]
+fn vector_swap_fill() {
+    run_gg(
+        "vector_swap_fill.gg",
+        "50\n10\n4\n10\n3\n7\n7\n2\n99\n99",
+    );
+}
+
+#[test]
 fn stdlib_io_writer() {
     run_gg(
         "stdlib_io_writer.gg",
