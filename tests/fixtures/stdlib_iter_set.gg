@@ -1,0 +1,50 @@
+# Iterator sugar over Set — free-function constructor `set_iter[T](s)`
+# plus the full adapter chain (`take`, `skip`, `chain`) on the
+# concrete `SetIter[T]` wrapper.
+#
+# `set_iter` materializes the set through its builtin `items()` call,
+# then hands the resulting Vector to the reusable VectorIter state
+# machine. Eager up-front; a bucket-walk lazy variant waits on Phase 2c.
+#
+# Dict iteration is deferred — a DictKeyIter wrapping VectorIter[K]
+# tripped a pre-existing Ptr-ABI codegen panic (see TODO.md). Users
+# iterate through `d.keys()` / `d.values()` / `d.items()` for now.
+
+from std.iter import set_iter, TakeIter, SkipIter, ChainIter, SetIter
+
+int main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(30)
+    s.add(40)
+
+    # Inline for-loop through `set_iter`.
+    for x in set_iter[int](s):
+        print(x)
+
+    print("--")
+
+    # take on SetIter yields TakeIter[T] — same adapter chain as VectorIter.
+    TakeIter[int] t = set_iter[int](s).take(2)
+    for x in t:
+        print(x)
+
+    print("--")
+
+    # skip on SetIter yields SkipIter[T].
+    SkipIter[int] k = set_iter[int](s).skip(2)
+    for x in k:
+        print(x)
+
+    print("--")
+
+    # chain concatenates two SetIters through their VectorIter inner.
+    Set[int] s2 = Set[int]()
+    s2.add(100)
+    s2.add(200)
+    ChainIter[int] c = set_iter[int](s).chain(set_iter[int](s2))
+    for x in c:
+        print(x)
+
+    return 0

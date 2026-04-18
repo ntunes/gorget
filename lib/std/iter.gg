@@ -16,7 +16,7 @@
 # type args at the call site until Gorget's inference propagates
 # closure return types into method generics.
 
-from std.collections import Vector
+from std.collections import Vector, Set
 
 struct VectorIter[T]:
     Vector[T] source
@@ -190,6 +190,55 @@ bool all_iter[T, Iter, F](Iter iter, F pred):
         if not pred(x):
             return false
     return true
+
+# ── Set / Dict iteration ─────────────────────────────────────
+#
+# `SetIter[T]` and `DictKeyIter[K]` / `DictValueIter[V]` wrap a
+# pre-materialized `Vector[T]` / `Vector[K]` / `Vector[V]` so the
+# for-loop protocol and adapter chain reuse the `VectorIter` machinery.
+# That's eager up-front but keeps the state machine trivial — the only
+# runtime cost is the materialization call (`s.items()` / `d.keys()` /
+# `d.values()`) at iterator-construction time.
+#
+# A fully lazy implementation (walking the underlying GorgetMap bucket
+# array) is the proper Phase 2c goal; this shipping sugar covers the
+# 90% case where users want to pipe a set/dict through `take` / `skip` /
+# `chain` adapters or iterate by name.
+#
+# Constructors are free functions (`set_iter` / `dict_iter_keys` /
+# `dict_iter_values`) rather than equip methods because Gorget's
+# method-resolution picks up user equip blocks over the builtin
+# collection protocol, and adding an `.iter()` method on `Set[T]`
+# shadows the builtin `.items()` / `.map()` / `.filter()` surface.
+# Free functions sidestep the shadowing. Once method-protocol merging
+# lands, these convert to `s.iter()` / `d.iter_keys()` trivially.
+
+struct SetIter[T]:
+    VectorIter[T] inner
+
+equip [T] SetIter[T] with Iterator[T]:
+    Option[T] next(&self):
+        return self.inner.next()
+
+SetIter[T] set_iter[T](Set[T] s):
+    return SetIter[T](VectorIter[T](s.items(), 0))
+
+equip [T] SetIter[T]:
+    TakeIter[T] take(self, int n):
+        return TakeIter[T](self.inner, n)
+
+    SkipIter[T] skip(self, int n):
+        return SkipIter[T](self.inner, n)
+
+    ChainIter[T] chain(self, SetIter[T] other):
+        return ChainIter[T](self.inner, other.inner, true)
+
+# Dict key/value iteration is deferred — a `DictKeyIter[K]` / `DictValueIter[V]`
+# wrapping `VectorIter[K]` / `VectorIter[V]` trips the "Ptr ABI received
+# scalar value" panic in `c_lir/emit_types.rs` when the user struct is
+# constructed with a Vector field via a self-pointer access. Tracked in
+# TODO.md (see "User DictIter[K, V] / DictKeyIter[K]"). Callers iterate
+# through `d.keys()` / `d.values()` / `d.items()` until that's fixed.
 
 # Textual join is deferred — the naive `int_to_str`-based version
 # tripped a cross-crate import that force-monomorphized

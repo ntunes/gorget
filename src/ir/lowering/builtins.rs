@@ -361,6 +361,14 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "is_empty", runtime_callee: Some("gorget_set_is_empty"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_set_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_set_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
+        // items() → Vector[T] — materializes the set into an ordered array.
+        // Used by SetIter to iterate lazily via the Vector adapter chain.
+        BuiltinMethodDecl { name: "items", runtime_callee: Some("gorget_set_to_array"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: |_a, ctx| {
+            let vec_name = format!("Vector__{}", ctx.elem_name);
+            (ctx.lookup_type_by_name)(&vec_name)
+                .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
+                .unwrap_or(UNIT_TYPE)
+        }},
         // Set algebra (inline codegen)
         BuiltinMethodDecl { name: "union", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "intersection", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },

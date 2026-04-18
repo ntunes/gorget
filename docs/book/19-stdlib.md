@@ -313,21 +313,41 @@ Min-heap by default. Elements must implement `Comparable`.
 
 ### Lazy Iterators (`std.iter`)
 
-Concrete state-machine iterators composable over `Vector[T]`:
+Concrete state-machine iterators composable over `Vector[T]` and `Set[T]`:
 
 ```gorget
-from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, collect_vec
+from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, SetIter, set_iter, collect_vec
 
 Vector[int] v = [10, 20, 30, 40, 50]
 VectorIter[int] vit = v.iter()
-TakeIter[int] first3 = TakeIter[int](vit, 3)
+TakeIter[int] first3 = vit.take(3)
 Vector[int] out = collect_vec[int, TakeIter[int]](first3)  # [10, 20, 30]
+
+# Adapter chain — take/skip/chain are equip methods on VectorIter,
+# return the concrete adapter by value. No boxing, no trait object
+# dispatch. Each step fuses at the monomorphized layer.
+for x in v.iter().take(2):
+    print(x)
+
+Set[int] s = Set[int]()
+s.add(1)
+s.add(2)
+s.add(3)
+for x in set_iter[int](s).take(2):
+    print(x)
 ```
 
-Adapters: `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`.
+Adapters: `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
+`FilterIter[T, F]`.
 Terminals: `collect_vec[T, Iter]` materializes to a Vector,
-`count_iter[Iter]` counts elements. All generic over the concrete
-iterator type (no trait-object dispatch).
+`count_iter[Iter]` counts, `sum_iter[Iter]` sums, `fold_iter[A, T, Iter, F]`
+folds, `any_iter[T, Iter, F]` / `all_iter[T, Iter, F]` short-circuit.
+All generic over the concrete iterator type (no trait-object dispatch).
+
+Dict key/value iteration goes through `d.keys()` / `d.values()` / `d.items()`
++ `.iter()` on the resulting Vector for now — a direct `DictKeyIter` /
+`DictValueIter` wrapper trips a pre-existing Ptr-ABI codegen issue
+that's tracked for Phase 2c.
 
 ### Byte-shaped I/O (`std.io`)
 
