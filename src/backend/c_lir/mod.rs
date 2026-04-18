@@ -1705,7 +1705,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         | Inst::StructInit { .. }
         | Inst::NamedFieldPtr { .. }
         | Inst::CowClone { .. }
-        | Inst::TraitCall { .. } => {
+        | Inst::TraitCall { .. }
+        | Inst::HofExpand { .. } => {
             unreachable!("canonical LIR op survived BIR lowering — validator should have rejected it");
         }
 

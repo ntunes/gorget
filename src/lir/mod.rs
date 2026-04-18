@@ -211,6 +211,51 @@ impl fmt::Display for CmpOp {
     }
 }
 
+// ── Higher-order collection op ─────────────────────────────────────
+
+/// Which higher-order collection method a `HofExpand` instruction stands for.
+///
+/// Maps 1:1 onto the user-facing method names at the Gorget surface level.
+/// BIR lowering uses this tag to pick the right loop skeleton (early-exit
+/// vs full walk, element accumulator vs index only, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HofOp {
+    /// `v.each(|x| …)` — for side-effects. No dst.
+    Each,
+    /// `v.map(|x| f(x))` — returns `Vector<R>`.
+    Map,
+    /// `v.filter(|x| pred(x))` — returns `Vector<T>`.
+    Filter,
+    /// `v.flat_map(|x| …)` — returns `Vector<R>`.
+    FlatMap,
+    /// `v.fold(init, |acc, x| …)` — returns `R`.
+    Fold,
+    /// `v.reduce(|acc, x| …)` — returns `Option<T>`.
+    Reduce,
+    /// `v.any(|x| pred(x))` — returns `bool`.
+    Any,
+    /// `v.all(|x| pred(x))` — returns `bool`.
+    All,
+    /// `v.find(|x| pred(x))` — returns `Option<T>`.
+    Find,
+    /// `v.find_index(|x| pred(x))` — returns `Option<int>`.
+    FindIndex,
+    /// `v.count(|x| pred(x))` — returns `int`.
+    Count,
+    /// `v.sorted_by(|a, b| cmp(a, b))` — returns new sorted `Vector<T>`.
+    SortedBy,
+    /// `v.sort_by(|a, b| cmp(a, b))` — in-place sort.
+    SortBy,
+    /// `v.sorted_by_key(|x| key(x))`.
+    SortedByKey,
+    /// `v.sort_by_key(|x| key(x))`.
+    SortByKey,
+    /// `v.windows(n)` — iterator of N-sized slices; closure consumes each.
+    Windows,
+    /// `v.chunks(n)` — iterator of N-sized chunks; closure consumes each.
+    Chunks,
+}
+
 // ── Closure dispatch kind ──────────────────────────────────────────────────
 
 /// How a closure value is laid out in memory for `CallClosure`.
@@ -385,6 +430,48 @@ pub enum Inst {
         args: Vec<ValueId>,
         arg_abis: Vec<crate::ir::abi::AbiKind>,
         ret_ty: LirType,
+    },
+
+    /// Canonical-op: expand a higher-order collection op (`filter`, `map`,
+    /// `fold`, `reduce`, `each`, `any`, `all`, `find`, `flat_map`, …) over
+    /// `coll` using `closure`.
+    ///
+    /// BIR lowering generates the explicit loop skeleton — block-args +
+    /// branches + `CallClosure` per element — producing primitive LIR the
+    /// backends already handle uniformly. This replaces the per-collection,
+    /// per-method inline loop generators that today live in both
+    /// `src/backend/llvm/mod.rs` and `src/backend/c_lir/emit_call_extern.rs`
+    /// (≈ 2,100 lines of duplicated logic across Vector / Dict / Set HOFs).
+    ///
+    /// Keeping the HOF visible as one instruction pre-BIR also lets
+    /// LIR-level fusion passes reason about adjacent `HofExpand`s (e.g.
+    /// `filter` → `map` → sum fused into a single walk).
+    ///
+    /// Not yet emitted — scaffolding for the Step 8 migration. See
+    /// `docs/internals/lir-backend-lift-plan.md` for the full specification.
+    HofExpand {
+        /// The collection being iterated (pointer to a `GorgetArray` /
+        /// `GorgetMap` / `GorgetSet`).
+        coll: ValueId,
+        /// Which HOF this is — determines the expansion skeleton.
+        hof_op: HofOp,
+        /// Element type carried in the collection (for `Vector[T]`) or key
+        /// type (for `Dict[K,V]`/`Set[T]`).
+        element_ty: LirType,
+        /// Value type for `Dict[K,V]` HOFs; ignored otherwise.
+        value_ty: Option<LirType>,
+        /// The closure being invoked per element/pair.
+        closure: ValueId,
+        /// How the closure is dispatched (`CallableParam` vs `EscapedClosure`).
+        closure_kind: ClosureDispatchKind,
+        /// Closure return type (used for result-accumulator creation).
+        closure_ret_ty: LirType,
+        /// Per-closure-arg ABI tags (matches `CallClosure.arg_abis`).
+        closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+        /// Destination value (None for `each`; `Option<T>` for `find`; etc.).
+        dst: Option<ValueId>,
+        /// Accumulator seed (for `fold`/`reduce`) — None otherwise.
+        init: Option<ValueId>,
     },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
@@ -573,7 +660,8 @@ impl Inst {
             | Inst::CallExtern { dst, .. }
             | Inst::CallPtr { dst, .. }
             | Inst::CallClosure { dst, .. }
-            | Inst::TraitCall { dst, .. } => *dst,
+            | Inst::TraitCall { dst, .. }
+            | Inst::HofExpand { dst, .. } => *dst,
         }
     }
 
@@ -665,6 +753,11 @@ impl Inst {
             Inst::TraitCall { object, args, .. } => {
                 let mut v = vec![*object];
                 v.extend(args);
+                v
+            }
+            Inst::HofExpand { coll, closure, init, .. } => {
+                let mut v = vec![*coll, *closure];
+                if let Some(i) = init { v.push(*i); }
                 v
             }
         }

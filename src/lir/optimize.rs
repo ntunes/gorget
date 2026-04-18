@@ -1313,6 +1313,11 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
             *object = next(&uses, &mut idx);
             for a in args { *a = next(&uses, &mut idx); }
         }
+        Inst::HofExpand { coll, closure, init, .. } => {
+            *coll = next(&uses, &mut idx);
+            *closure = next(&uses, &mut idx);
+            if let Some(i) = init { *i = next(&uses, &mut idx); }
+        }
     }
 }
 

@@ -193,6 +193,15 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             }
             write!(f, ")")
         }
+        Inst::HofExpand { coll, hof_op, closure, init, dst, .. } => {
+            if let Some(d) = dst {
+                write!(f, "{d} = hof_expand.{hof_op:?} {coll}, closure={closure}")?;
+            } else {
+                write!(f, "hof_expand.{hof_op:?} {coll}, closure={closure}")?;
+            }
+            if let Some(i) = init { write!(f, ", init={i}")?; }
+            Ok(())
+        }
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),

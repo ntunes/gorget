@@ -246,6 +246,7 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::NamedFieldPtr { .. }
                     | Inst::CowClone { .. }
                     | Inst::TraitCall { .. }
+                    | Inst::HofExpand { .. }
             ) {
                 return true;
             }

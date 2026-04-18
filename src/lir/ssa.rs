@@ -560,6 +560,11 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
             sub(object);
             for a in args.iter_mut() { sub(a); }
         }
+        Inst::HofExpand { coll, closure, init, .. } => {
+            sub(coll);
+            sub(closure);
+            if let Some(i) = init { sub(i); }
+        }
         Inst::SlotLoad { .. }
         | Inst::SlotAddr { .. }
         | Inst::IConst { .. }
