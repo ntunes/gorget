@@ -777,7 +777,13 @@ impl Formatter {
     }
 
     fn format_static_decl(&mut self, sd: &StaticDecl) {
-        self.format_visibility(&sd.visibility);
+        // Static globals are private-by-default (opposite of functions / structs
+        // which are public-by-default). Emit `public` explicitly — `format_visibility`
+        // drops it for the regular-item convention, which would silently flip
+        // visibility on round-trip through `gg fmt`.
+        if sd.visibility == Visibility::Public {
+            self.emitter.write("public ");
+        }
         self.emitter.write("static ");
         self.format_type(&sd.type_);
         self.emitter.write(" ");
@@ -2366,6 +2372,24 @@ mod tests {
         let first = fmt(input);
         let second = fmt(&first);
         assert_eq!(first, second, "Formatter is not idempotent");
+    }
+
+    #[test]
+    fn test_static_public_preserved() {
+        // Static globals are private-by-default, so the `public` keyword
+        // is meaningful and must survive formatting — otherwise a
+        // re-parse assigns Private visibility and the global stops being
+        // importable from other modules.
+        let input = "public static int x = 42\n";
+        let output = fmt(input);
+        assert_eq!(output, "public static int x = 42\n");
+    }
+
+    #[test]
+    fn test_static_private_unchanged() {
+        let input = "static int x = 42\n";
+        let output = fmt(input);
+        assert_eq!(output, "static int x = 42\n");
     }
 
     #[test]

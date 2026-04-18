@@ -1179,6 +1179,16 @@ pub fn lower_generic_equip_methods_with_defaults(
 
     for method in &equip.items {
         let method_def = &method.node;
+        // Methods with their own generic params (e.g. `map[U, F]` inside
+        // `equip [T] VectorIter[T]:`) can't be lowered here — the equip-level
+        // subs only cover T, so the return type `MapIter[T, U, F]` would
+        // substitute to `MapIter[int, U, F]` which map_ast_type_mut resolves
+        // to UNIT_TYPE (leaking an undefined-type reference through GIR
+        // validation). These methods are lowered per call-site by the
+        // generic-function specialization pipeline.
+        if method_def.generic_params.is_some() {
+            continue;
+        }
         let method_mangled = format!("{mangled_type_name}__{}", method_def.name.node);
 
         // Use map_ast_type_mut so that generic return types like Option[T] get

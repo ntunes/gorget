@@ -439,13 +439,11 @@ Result[int, IoError] write_display[W, Displayable D](W &w, D v):
 # type. Callers wanting text-mode output to a custom Writer use
 # `writeln[W, D](&my_writer, x)`; stdout shortcuts are below.
 #
-# Implementation note: the newline is appended to the rendered
-# String before a single `write_all` call so the happy-path only
-# makes one round-trip into the underlying Writer. A calling pattern
-# of `display → write_all` followed by a second `write_all` for "\n"
-# (the naive fused form) trips a compiler bug where the second
-# generic call has its return type lost during monomorphization —
-# using a single rendered buffer sidesteps that.
+# Previously this called `write_all` twice — once for the rendered
+# body, once for `"\n"` — but the second generic call's return type
+# was corrupted during monomorphization. That bug has since been
+# fixed upstream; keeping the single-buffer form anyway for the
+# one-syscall happy-path win.
 Result[int, IoError] writeln[W, Displayable D](W &w, D v):
     String rendered = v.display() + "\n"
     return write_all[W](&w, rendered.bytes())

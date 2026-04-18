@@ -705,6 +705,13 @@ impl GenericCollector {
                         }
                         for method in &equip.items {
                             let prev = self.current_generic_params.take();
+                            // `substitute_function_body` preserves any
+                            // method-level generic params that the equip-level
+                            // substitution didn't cover (e.g. `[U, F]` on
+                            // `map[U, F]`). `scan_function` below picks them
+                            // up as the unresolved-params context, so types
+                            // like `MapIter[int, U, F]` are skipped rather
+                            // than registered as phantom concrete structs.
                             let substituted = substitute_function_body(&method.node, &subs);
                             self.scan_function(&substituted);
                             self.current_generic_params = prev;
@@ -946,6 +953,20 @@ impl GenericCollector {
                     let subs = build_equip_type_substitutions(equip, type_args);
                     let mut implemented = Vec::new();
                     for method in &equip.items {
+                        // Methods with their own generic params — e.g.
+                        // `MapIter[T, U, F] map[U, F](self, F f)` — can't be
+                        // fully resolved from the equip-level substitutions
+                        // alone. The `T→int64_t` sub covers the struct param
+                        // but U and F stay abstract, so feeding the return
+                        // type through `substitute_and_map_mut` would mangle
+                        // it to `MapIter__int64_t__U__F` and accidentally
+                        // register that as a concrete struct (with `F f`
+                        // becoming `void f`). The per-call-site monomorphizer
+                        // handles these correctly — skip the eager sig
+                        // registration here.
+                        if method.node.generic_params.is_some() {
+                            continue;
+                        }
                         let method_mangled = format!("{mangled_type_name}__{}", method.node.name.node);
                         let ret_type = substitute_and_map_mut(mapper, registry, &method.node.return_type.node, &subs);
                         let has_self = method.node.params.first()

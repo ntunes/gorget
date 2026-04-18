@@ -79,6 +79,12 @@ pub(super) fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
 
 /// Create a copy of a function definition with all type parameters substituted.
 /// Used for transitive discovery: we substitute concrete types and re-scan the body.
+///
+/// Only the generic params that `subs` actually covers get removed. Method-level
+/// generics on equip methods (`map[U, F]` inside `equip [T] VectorIter[T]:`) are
+/// preserved so the rescan's `scan_function` picks them up as unresolved-param
+/// context — otherwise `MapIter[int, U, F]` in the body would register as a
+/// concrete struct instance with phantom `f: void` fields.
 pub(super) fn substitute_function_body(
     template: &ast::FunctionDef,
     subs: &[(String, Type)],
@@ -89,7 +95,22 @@ pub(super) fn substitute_function_body(
         p.node.type_ = Spanned::dummy(substitute_type(&p.node.type_.node, subs));
     }
     substitute_body_types(&mut func.body, subs);
-    func.generic_params = None;
+    // Retain any generic params that `subs` didn't cover so scan_function keeps
+    // them in the unresolved-params context. If every generic is substituted,
+    // clear the list entirely.
+    let covered: std::collections::HashSet<&str> = subs.iter().map(|(n, _)| n.as_str()).collect();
+    if let Some(ref mut gp) = func.generic_params {
+        gp.node.params.retain(|p| {
+            let name = match &p.node {
+                ast::GenericParam::Type { name, .. } => name.node.as_str(),
+                ast::GenericParam::Const { name, .. } => name.node.as_str(),
+            };
+            !covered.contains(name)
+        });
+        if gp.node.params.is_empty() {
+            func.generic_params = None;
+        }
+    }
     func
 }
 
