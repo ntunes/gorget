@@ -1209,29 +1209,29 @@ impl<'a> FuncLowering<'a> {
             }
 
             Instruction::TupleInit { dst, elements } => {
-                // Tuples are stored as struct slots. Store each element by field index.
+                // Tuples are stored as struct slots. Canonical `Inst::StructInit`
+                // carries the explicit struct_id + (field_index, value) pairs;
+                // BIR expansion produces the same FieldPtr + Store sequence the
+                // open-coded version emitted. Parity with `Instruction::StructInit`.
                 let slot = self.local_to_slot[dst.0 as usize];
                 let base = self.lir_func.next_value();
                 self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
                     dst: base,
                     slot,
                 });
-                // Need the struct_id for the tuple type.
                 let gir_type_id = self.gir_func.locals[dst.0 as usize].type_id;
                 let struct_id = self.resolve_struct_id(gir_type_id);
 
-                for (i, elem) in elements.iter().enumerate() {
-                    let val = self.lower_operand(elem, bb);
-                    let fptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                        dst: fptr,
-                        base,
+                let init_fields: Vec<(u32, ValueId)> = elements.iter()
+                    .enumerate()
+                    .map(|(i, elem)| (i as u32, self.lower_operand(elem, bb)))
+                    .collect();
+
+                if !init_fields.is_empty() {
+                    self.lir_func.block_mut(bb).insts.push(Inst::StructInit {
+                        target: base,
                         struct_id,
-                        field: i as u32,
-                    });
-                    self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                        ptr: fptr,
-                        value: val,
+                        fields: init_fields,
                     });
                 }
             }
