@@ -481,6 +481,46 @@ pub enum Inst {
         /// Accumulator seed (for `fold`/`reduce`) — None otherwise.
         init: Option<ValueId>,
     },
+
+    /// Canonical-op: take the address of an SSA value.
+    ///
+    /// When an extern's `AbiKind::Ptr` param is fed an SSA-value operand
+    /// (scalar or aggregate-by-value), the LIR needs to materialize an
+    /// address. `AddressOf` expresses that intent at a single site, freeing
+    /// callers from deciding "source already slot-backed → SlotAddr" vs
+    /// "SSA register → spill to temp slot, then SlotAddr."
+    ///
+    /// BIR lowering inspects the source: if `value` was produced by a
+    /// `SlotLoad` (its backing slot is still live), emits `SlotAddr` on that
+    /// slot. Otherwise allocates a fresh typed slot, `SlotStore`s the value,
+    /// and `SlotAddr`s the slot.
+    ///
+    /// Step 9 of the BIR lift plan — see `docs/internals/lir-backend-lift-plan.md`.
+    AddressOf {
+        dst: ValueId,
+        value: ValueId,
+        /// Type of the value being addressed; used to size the spill slot.
+        ty: LirType,
+    },
+
+    /// Canonical-op: allocate a `Box[T]` on the heap with an initial value.
+    ///
+    /// BIR lowering expands to:
+    ///   1. `SizeOf(inner_ty)` → size constant
+    ///   2. `CallExtern "__gorget_alloc"(size)` → void* pointer
+    ///   3. `Store` (scalar) / `Memcpy` (aggregate) the value at the pointer
+    ///   4. The allocated pointer is the result value (`dst`).
+    ///
+    /// Eliminates the backend's known-T vs. unknown-T fork on `Box(x)`
+    /// construction — the inner type is explicit on the instruction, one
+    /// expansion path covers every case.
+    ///
+    /// Step 10 of the BIR lift plan.
+    BoxAlloc {
+        dst: ValueId,
+        inner_ty: LirType,
+        value: ValueId,
+    },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
     /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
@@ -670,6 +710,9 @@ impl Inst {
             | Inst::CallClosure { dst, .. }
             | Inst::TraitCall { dst, .. }
             | Inst::HofExpand { dst, .. } => *dst,
+
+            Inst::AddressOf { dst, .. }
+            | Inst::BoxAlloc { dst, .. } => Some(*dst),
         }
     }
 
@@ -768,6 +811,8 @@ impl Inst {
                 if let Some(i) = init { v.push(*i); }
                 v
             }
+            Inst::AddressOf { value, .. } => vec![*value],
+            Inst::BoxAlloc { value, .. } => vec![*value],
         }
     }
 }

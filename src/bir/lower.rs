@@ -54,8 +54,13 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
     // counter locally and write it back when we're done.
     let mut next = func.next_value_raw();
 
-    for block in func.blocks.iter_mut() {
-        let old = std::mem::take(&mut block.insts);
+    // Index-based iteration rather than `func.blocks.iter_mut()` — some
+    // expansions (AddressOf) need to allocate fresh stack slots via
+    // `func.add_slot(...)`, which requires a mutable borrow of `func.slots`
+    // that would conflict with an outstanding `&mut block` borrow.
+    let block_count = func.blocks.len();
+    for bb_idx in 0..block_count {
+        let old = std::mem::take(&mut func.blocks[bb_idx].insts);
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old.len());
         for inst in old {
             match inst {
@@ -189,10 +194,47 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
                     });
                 }
+                Inst::AddressOf { dst, value, ty } => {
+                    // Spill the SSA value into a fresh stack slot, then take
+                    // its address. `dst` is the final address; `SlotAddr`
+                    // binds it directly. For aggregate values arriving from
+                    // elsewhere as pointers, the C/LLVM Store handlers
+                    // dispatch on val_types — same mechanism StructInit/
+                    // EnumInit rely on — so we don't need to special-case.
+                    let slot = func.add_slot(ty.clone(), None);
+                    new_insts.push(Inst::SlotStore {
+                        slot,
+                        value,
+                        is_move: false,
+                    });
+                    new_insts.push(Inst::SlotAddr { dst, slot });
+                }
+                Inst::BoxAlloc { dst, inner_ty, value } => {
+                    // 1) size = sizeof(inner_ty)
+                    let sz = c_sizeof_lir_type(&inner_ty, structs) as i64;
+                    let size_val = alloc_value(&mut next);
+                    new_insts.push(Inst::IConst {
+                        dst: size_val,
+                        ty: LirType::I64,
+                        value: sz,
+                    });
+                    // 2) dst = __gorget_alloc(size) — dst is the heap ptr.
+                    new_insts.push(Inst::CallExtern {
+                        dst: Some(dst),
+                        name: "__gorget_alloc".to_string(),
+                        args: vec![size_val],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
+                    });
+                    // 3) Write the value into *dst. Plain `Store` lets each
+                    //    backend dispatch on val_types (scalar vs aggregate
+                    //    vs Ptr-to-aggregate), matching StructInit/EnumInit.
+                    new_insts.push(Inst::Store { ptr: dst, value });
+                }
                 other => new_insts.push(other),
             }
         }
-        block.insts = new_insts;
+        func.blocks[bb_idx].insts = new_insts;
     }
 
     func.set_next_value_raw(next);
@@ -242,6 +284,8 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::CowClone { .. }
                     | Inst::TraitCall { .. }
                     | Inst::HofExpand { .. }
+                    | Inst::AddressOf { .. }
+                    | Inst::BoxAlloc { .. }
             ) {
                 return true;
             }
@@ -287,4 +331,106 @@ fn emit_store_or_memcpy(
     } else {
         insts.push(Inst::Store { ptr: dst_ptr, value });
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lir::{BlockId, Block, LirFunction, SlotId, StructId, Term};
+
+    fn empty_func() -> LirFunction {
+        let mut f = LirFunction::new("test".to_string(), vec![], LirType::Void);
+        let bb = f.add_block();
+        f.block_mut(bb).terminator = Term::RetVoid;
+        f
+    }
+
+    #[test]
+    fn address_of_spills_then_addresses() {
+        let mut func = empty_func();
+        let value = func.next_value();
+        let dst = func.next_value();
+        let bb = BlockId(0);
+        func.block_mut(bb).insts.push(Inst::IConst {
+            dst: value, ty: LirType::I64, value: 42,
+        });
+        func.block_mut(bb).insts.push(Inst::AddressOf {
+            dst,
+            value,
+            ty: LirType::I64,
+        });
+        let slots_before = func.slots.len();
+        expand_func(&mut func, &[]);
+        // IConst unchanged, AddressOf → SlotStore + SlotAddr.
+        let insts = &func.blocks[0].insts;
+        assert!(matches!(insts[0], Inst::IConst { .. }));
+        assert!(matches!(insts[1], Inst::SlotStore { .. }),
+            "expected SlotStore, got {:?}", insts[1]);
+        assert!(matches!(insts[2], Inst::SlotAddr { dst: d, .. } if d == dst),
+            "expected SlotAddr with dst={:?}, got {:?}", dst, insts[2]);
+        assert_eq!(func.slots.len(), slots_before + 1,
+            "AddressOf expansion should allocate exactly one fresh slot");
+    }
+
+    #[test]
+    fn box_alloc_expands_to_size_alloc_store() {
+        let mut func = empty_func();
+        let value = func.next_value();
+        let dst = func.next_value();
+        let bb = BlockId(0);
+        func.block_mut(bb).insts.push(Inst::IConst {
+            dst: value, ty: LirType::I64, value: 42,
+        });
+        func.block_mut(bb).insts.push(Inst::BoxAlloc {
+            dst,
+            inner_ty: LirType::I64,
+            value,
+        });
+        expand_func(&mut func, &[]);
+        let insts = &func.blocks[0].insts;
+        assert!(matches!(insts[0], Inst::IConst { value: 42, .. }));
+        assert!(matches!(insts[1], Inst::IConst { ty: LirType::I64, value: 8, .. }),
+            "expected sizeof(I64)=8, got {:?}", insts[1]);
+        assert!(matches!(&insts[2], Inst::CallExtern { name, .. } if name == "__gorget_alloc"),
+            "expected __gorget_alloc CallExtern, got {:?}", insts[2]);
+        assert!(matches!(insts[3], Inst::Store { ptr: p, .. } if p == dst),
+            "expected Store ptr=dst, got {:?}", insts[3]);
+    }
+
+    #[test]
+    fn validator_rejects_unexpanded_address_of() {
+        let mut func = empty_func();
+        let value = func.next_value();
+        let dst = func.next_value();
+        func.block_mut(BlockId(0)).insts.push(Inst::AddressOf {
+            dst,
+            value,
+            ty: LirType::I64,
+        });
+        let mut module = crate::lir::LirModule::new();
+        module.functions.push(func);
+        // Validator should reject unexpanded AddressOf.
+        let err = crate::bir::validate::assert_primitives_only(&module);
+        assert!(matches!(err, Err(crate::bir::BirError::UnloweredCanonicalOp { opcode: "AddressOf", .. })));
+    }
+
+    #[test]
+    fn validator_rejects_unexpanded_box_alloc() {
+        let mut func = empty_func();
+        let value = func.next_value();
+        let dst = func.next_value();
+        func.block_mut(BlockId(0)).insts.push(Inst::BoxAlloc {
+            dst,
+            inner_ty: LirType::I64,
+            value,
+        });
+        let mut module = crate::lir::LirModule::new();
+        module.functions.push(func);
+        let err = crate::bir::validate::assert_primitives_only(&module);
+        assert!(matches!(err, Err(crate::bir::BirError::UnloweredCanonicalOp { opcode: "BoxAlloc", .. })));
+    }
+
+    // Unused imports in the test module.
+    #[allow(dead_code)]
+    fn _touch_unused(_: Block, _: SlotId, _: StructId) {}
 }

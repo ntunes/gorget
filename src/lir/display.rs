@@ -203,6 +203,12 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             if let Some(i) = init { write!(f, ", init={i}")?; }
             Ok(())
         }
+        Inst::AddressOf { dst, value, ty } => {
+            write!(f, "{dst}: ptr = address_of {value}: {ty}")
+        }
+        Inst::BoxAlloc { dst, inner_ty, value } => {
+            write!(f, "{dst}: ptr = box_alloc {value}: {inner_ty}")
+        }
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),

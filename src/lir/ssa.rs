@@ -565,6 +565,8 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
             sub(closure);
             if let Some(i) = init { sub(i); }
         }
+        Inst::AddressOf { value, .. } => sub(value),
+        Inst::BoxAlloc { value, .. } => sub(value),
         Inst::SlotLoad { .. }
         | Inst::SlotAddr { .. }
         | Inst::IConst { .. }

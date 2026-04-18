@@ -1318,6 +1318,8 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
             *closure = next(&uses, &mut idx);
             if let Some(i) = init { *i = next(&uses, &mut idx); }
         }
+        Inst::AddressOf { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::BoxAlloc { value, .. } => { *value = next(&uses, &mut idx); }
     }
 }
 

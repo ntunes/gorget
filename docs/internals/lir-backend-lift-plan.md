@@ -408,6 +408,56 @@ change but the type boundary is enforced.**
     C backend's inline injection in SlotStore. Both backends translate to the
     same `gorget_string_copy_cow` call.
 
+### Priority 5 — ABI coercion + heap alloc, added during agent work
+
+These two came from the self-host bootstrap agent's feedback: issues the
+backends could not fix at their layer because the LIR produced ambiguous
+shapes at GIR→LIR time. Both fit the plan's "make the implicit explicit"
+pattern cleanly.
+
+11. **`AddressOf { dst, value, ty }`** — take the address of an SSA value.
+    Replaces the scattered "manually spill to temp slot and SlotAddr" pattern
+    at call sites where an extern's `AbiKind::Ptr` param needs an address but
+    the source operand is an SSA register (scalar) rather than already
+    slot-backed. BIR expansion:
+
+    ```
+    if source already slot-backed:
+        SlotAddr  dst = &source_slot
+    else (scalar SSA value):
+        s_tmp = add_slot(ty)
+        SlotStore s_tmp = value
+        SlotAddr  dst = &s_tmp
+    ```
+
+    Kills the self-host `runtime_arg_needs_addr` name-lookup table —
+    GIR→LIR emits `AddressOf` whenever the declared `AbiKind` requires it,
+    no name matching needed at the consumer.
+
+12. **`BoxAlloc { dst, inner_ty, value }`** — allocate a `Box[T]` on the heap
+    with an initial value. BIR expansion:
+
+    ```
+    %sz = SizeOf(inner_ty)
+    %p  = CallExtern "__gorget_alloc"(sz)     ; returns void*
+    Store / Memcpy *p = value                  ; scalar or aggregate per inner_ty
+    dst = %p
+    ```
+
+    Kills the backend's known-T / unknown-T fork for `Box(x)` calls — the
+    inner type is explicit on the instruction, one expansion covers every
+    case. Small win per commit, clean alignment with SizeOf + canonical
+    enum/struct init.
+
+    *Not recommended: a more general `HeapAlloc` + separate init.* BoxAlloc
+    keeps allocation + initialization atomic, matches the Gorget surface
+    semantics of `Box(value)`, and leaves room for future write-combining /
+    alignment-hint optimizations at the op level.
+
+**Deferred intentionally:** `Deref` as a separate op. `Load { dst, ptr, ty }`
+is already the canonical dereference — adding `Deref` would only rename the
+primitive without unlocking any expansion or optimization.
+
 ## Fundamental Architectural Issue (Addressed)
 
 The LIR design doc says:
@@ -524,9 +574,19 @@ Each step is a single commit, each removes code, each demonstrates payoff:
    generating loop blocks + CallClosure. Remove HOF inlining from both
    backends.
 
-After Step 8, the backends are ~60% smaller and truly dumb. No name-based
-dispatch, no inline loop generation, no sentinel-wrapping logic. Each backend
-is a pure 1:1 translator from BIR to target syntax.
+10. **Step 9** — Add `AddressOf { value, ty }` + BIR expansion. GIR→LIR
+    emits this whenever an `AbiKind::Ptr` extern param is fed an SSA-value
+    operand. Eliminates the backend's "value already in a slot vs. needs
+    spilling" fork plus the self-host `runtime_arg_needs_addr` table.
+
+11. **Step 10** — Add `BoxAlloc { inner_ty, value }` + BIR expansion.
+    GIR→LIR emits this for every `Box(x)` construction. Eliminates the
+    backend's known-T vs. unknown-T fork on Box construction.
+
+After Step 10, the backends are ~60% smaller and truly dumb. No name-based
+dispatch, no inline loop generation, no sentinel-wrapping logic, no runtime
+ABI name lookup, no box-T inference. Each backend is a pure 1:1 translator
+from BIR to target syntax.
 
 ## Expected Outcomes
 
