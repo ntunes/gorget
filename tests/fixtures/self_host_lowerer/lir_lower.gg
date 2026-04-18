@@ -11,7 +11,7 @@ from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal
-from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo
+from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
@@ -1167,6 +1167,15 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if fn_name == "gorget_array_safe_remove" and arg_idx == 1:
         return true
+    # File I/O runtime fns that take aggregate output/buffer structs by pointer.
+    # Previously handled by `runtime_arg_needs_addr` in lir_codegen — hoisted
+    # to the lir_lower boundary so a SlotAddr carries the pointer natively.
+    if fn_name == "gorget_file_open_try" and arg_idx == 2:
+        return true
+    if fn_name == "gorget_file_write_bytes_buf" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_file_read_bytes_buf" and arg_idx == 1:
+        return true
     return false
 
 # Check if a GIR type ID represents a pointer type (Ptr or MutPtr).
@@ -1246,7 +1255,95 @@ String extract_method_name(String name):
         return name.slice(last_pos + 2, name.len())
     return ""
 
+# ── Canonical-op helpers ────────────────────────────────────
+
+# For prelude variant names (Some/None/Ok/Error), return (variant_tag,
+# payload_field_index). payload_field_index = -1 when the variant has no
+# payload. Returns (-1, -1) for non-prelude names.
+struct VariantInfo:
+    int tag
+    int payload_field
+
+VariantInfo prelude_variant_info(String name):
+    if name == "Some":
+        return VariantInfo(0, 1)
+    if name == "None":
+        return VariantInfo(1, -1)
+    if name == "Ok":
+        return VariantInfo(0, 1)
+    if name == "Error":
+        return VariantInfo(1, 2)
+    return VariantInfo(-1, -1)
+
+# Attempt to lower a prelude variant constructor (Some/None/Ok/Error) as a
+# canonical IEnumInit filling the dst slot in place. Returns true on success;
+# false means the caller should fall through to the normal ICallExtern path.
+bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] args, LirFunction &f, int bb, Vector[int] &local_to_slot):
+    if dst_local < 0:
+        return false
+    VariantInfo vi = prelude_variant_info(func_name)
+    if vi.tag < 0:
+        return false
+    int dst_slot = local_to_slot.get(dst_local).unwrap()
+    int slot_ty = f.slots.get(dst_slot).unwrap().ty
+    # Slot must be typed as the parent enum struct. If the self-host lost
+    # the type (scalar placeholder), fall back to the old emission path.
+    if slot_ty < LT_STRUCT_BASE:
+        return false
+    int struct_id = slot_ty - LT_STRUCT_BASE
+    # Payload value (if variant has a payload field).
+    Vector[FieldInit] fields = []
+    if vi.payload_field >= 0 and args.len() >= 1:
+        Operand payload = args.get(0).unwrap()
+        int pval = lower_operand(payload, &f, bb, &local_to_slot)
+        fields.push(FieldInit(vi.payload_field, pval))
+    # Take the slot's address and emit IEnumInit writing in place.
+    int target = lir_fn_next_value(&f)
+    LirBlock blk = f.blocks.get(bb).unwrap()
+    blk.insts.push(ISlotAddr(target, dst_slot))
+    blk.insts.push(IEnumInit(target, struct_id, vi.tag, fields))
+    f.blocks.set(bb, blk)
+    return true
+
 # ── Operand lowering ────────────────────────────────────────
+
+# Returns the LIR type an operand would produce when lowered. Used by
+# canonical-op emitters that need the value's type without lowering it yet.
+int operand_lir_type(Operand op, LirFunction &f, Vector[int] &local_to_slot):
+    match op:
+        case OpConstBool(_):
+            return LT_BOOL
+        case OpConstI32(_):
+            return LT_I32
+        case OpConstI64(_):
+            return LT_I64
+        case OpConstF64(_):
+            return LT_F64
+        case OpConstStr(_):
+            return LT_PTR
+        case OpConstNull():
+            return LT_PTR
+        case OpConstUnit():
+            return LT_I32
+        case OpSizeOf(_):
+            return LT_I64
+        case OpCopy(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            return f.slots.get(slot).unwrap().ty
+        case OpMove(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            return f.slots.get(slot).unwrap().ty
+    return LT_VOID
+
+# Compute the `inner_ty` for IBoxAlloc from an arg operand. By-pointer
+# param slots (typed LT_PTR_TO_BASE+sid) are semantically the struct
+# VALUE being moved into the Box, not the pointer — unwrap so the Box's
+# type inference finds Box__<inner_struct_name>.
+int box_inner_ty_from_operand(Operand op, LirFunction &f, Vector[int] &local_to_slot):
+    int ty = operand_lir_type(op, &f, &local_to_slot)
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return LT_STRUCT_BASE + (ty - LT_PTR_TO_BASE)
+    return ty
 
 int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot):
     match op:
@@ -1386,6 +1483,27 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             f.blocks.set(bb, blk2)
 
         case GICall(dst_local, func_name, args):
+            # Canonical prelude variant constructors: Some/None/Ok/Error fill
+            # the dst slot in place via IEnumInit. Struct id comes from the
+            # slot's type — no codegen-side name inference needed.
+            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
+                return
+            # Canonical Box(x): emit IBoxAlloc with explicit inner_ty (unwrapped
+            # from the operand's pointer-to-struct type if needed) so downstream
+            # Some(Box(x)) resolves to Option__Box__T, not Option__GorgetString.
+            if func_name == "Box" and args.len() == 1 and dst_local >= 0:
+                Operand box_arg = args.get(0).unwrap()
+                int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
+                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot)
+                int box_dst = lir_fn_next_value(&f)
+                LirBlock bblk = f.blocks.get(bb).unwrap()
+                bblk.insts.push(IBoxAlloc(box_dst, box_inner_ty, box_val))
+                f.blocks.set(bb, bblk)
+                int box_dst_slot = local_to_slot.get(dst_local).unwrap()
+                LirBlock bblk2 = f.blocks.get(bb).unwrap()
+                bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
+                f.blocks.set(bb, bblk2)
+                return
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
@@ -1540,6 +1658,23 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     f.blocks.set(bb, blk2)
 
         case GICallExtern(dst_local, func_name, args):
+            # Canonical prelude variants (same as GICall arm).
+            if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
+                return
+            # Canonical Box(x): emit IBoxAlloc, same as in GICall.
+            if func_name == "Box" and args.len() == 1 and dst_local >= 0:
+                Operand box_arg = args.get(0).unwrap()
+                int box_inner_ty = box_inner_ty_from_operand(box_arg, &f, &local_to_slot)
+                int box_val = lower_operand(box_arg, &f, bb, &local_to_slot)
+                int box_dst = lir_fn_next_value(&f)
+                LirBlock bblk = f.blocks.get(bb).unwrap()
+                bblk.insts.push(IBoxAlloc(box_dst, box_inner_ty, box_val))
+                f.blocks.set(bb, bblk)
+                int box_dst_slot = local_to_slot.get(dst_local).unwrap()
+                LirBlock bblk2 = f.blocks.get(bb).unwrap()
+                bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
+                f.blocks.set(bb, bblk2)
+                return
             String mapped_early = map_runtime_name(func_name)
             String effective_name = func_name
             if mapped_early != "":
