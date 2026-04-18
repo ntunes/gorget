@@ -1404,18 +1404,29 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     match arg:
                         case OpCopy(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
-                            int addr = lir_fn_next_value(&f)
-                            LirBlock ablk = f.blocks.get(bb).unwrap()
-                            ablk.insts.push(ISlotAddr(addr, slot))
-                            f.blocks.set(bb, ablk)
-                            lir_args.push(addr)
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                # Slot already holds a pointer — load value.
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
                         case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
-                            int addr = lir_fn_next_value(&f)
-                            LirBlock ablk = f.blocks.get(bb).unwrap()
-                            ablk.insts.push(ISlotAddr(addr, slot))
-                            f.blocks.set(bb, ablk)
-                            lir_args.push(addr)
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
                         else:
                             int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
                             lir_args.push(arg_val)
