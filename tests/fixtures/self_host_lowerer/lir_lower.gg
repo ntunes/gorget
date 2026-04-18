@@ -447,21 +447,44 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
             m.structs.set(psi, opt_sdef)
         elif pname.starts_with("Result__"):
-            # Split "Result__<Ok>__<Err>" — find the __ separator between
-            # the two type args (scan from left, first __ after Result__ start).
+            # Split "Result__<Ok>__<Err>". Ok may itself be compound like
+            # `Vector__byte`, so a naive left-first `__` split fails. Try
+            # each possible `__` position from left to right and accept the
+            # first split where BOTH sides resolve to a registered type.
             String rest = pname.slice(8, pname.len())
-            int split = -1
+            String ok_name = ""
+            String err_name = ""
+            int ok_ty = -1
+            int err_ty = -1
             int si = 0
             while si + 1 < rest.byte_len():
                 if rest.byte_at(si) == 0x5F and rest.byte_at(si + 1) == 0x5F:
-                    split = si
-                    break
+                    String o_try = rest.slice(0, si)
+                    String e_try = rest.slice(si + 2, rest.len())
+                    int ot = resolve_field_lir_type(o_try, &sr)
+                    int et = resolve_field_lir_type(e_try, &sr)
+                    # Accept only if both resolve as non-pointer fallbacks
+                    # (both registered OR scalar). resolve_field_lir_type
+                    # returns LT_PTR for unresolved, which we treat as a miss.
+                    if ot != LT_PTR and et != LT_PTR:
+                        ok_name = o_try
+                        err_name = e_try
+                        ok_ty = ot
+                        err_ty = et
+                        break
                 si += 1
-            if split > 0:
-                String ok_name = rest.slice(0, split)
-                String err_name = rest.slice(split + 2, rest.len())
-                int ok_ty = resolve_field_lir_type(ok_name, &sr)
-                int err_ty = resolve_field_lir_type(err_name, &sr)
+            if ok_name == "":
+                # Fall back to first-underscore split even if one side misses.
+                int si2 = 0
+                while si2 + 1 < rest.byte_len():
+                    if rest.byte_at(si2) == 0x5F and rest.byte_at(si2 + 1) == 0x5F:
+                        ok_name = rest.slice(0, si2)
+                        err_name = rest.slice(si2 + 2, rest.len())
+                        ok_ty = resolve_field_lir_type(ok_name, &sr)
+                        err_ty = resolve_field_lir_type(err_name, &sr)
+                        break
+                    si2 += 1
+            if ok_name != "":
                 Vector[StructField] rfields = []
                 rfields.push(StructField("tag", LT_I32))
                 rfields.push(StructField("Ok_0", ok_ty))

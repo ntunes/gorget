@@ -1333,6 +1333,19 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SVarDecl(stype, name, init_expr, _, _, _):
             int val = lower_expr(&ctx, init_expr, &gmod)
             int var_type = ctx.locals.get(val).unwrap().type_id
+            # Prefer the declared type when it carries more info than the
+            # init expression's inferred type. This recovers the Vector[T]
+            # parametrization from e.g. `Vector[String] cmd_args = args()`
+            # — the init would otherwise type the local as the runtime's
+            # bare GorgetArray, losing the element type.
+            int declared_ty = map_ast_type(stype, &gmod)
+            if declared_ty != I64_TYPE and declared_ty != UNIT_TYPE and declared_ty != var_type:
+                # Accept the declared type if it's a more specific monomorphized
+                # collection (e.g. Vector__GorgetString vs GorgetArray).
+                String declared_name = type_id_to_name(declared_ty, &gmod)
+                String inferred_name = type_id_to_name(var_type, &gmod)
+                if declared_name.contains("__") and not inferred_name.contains("__"):
+                    var_type = declared_ty
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
             emit(&ctx, GIAssign(var_local, OpCopy(val)))
             ctx.named_locals.put(name, var_local)

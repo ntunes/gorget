@@ -907,6 +907,18 @@ String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, in
         if expected == LT_F32 or expected == LT_F64:
             return "0.0"
         return "0"
+    # Ptr/void value at float field — the self-host often lowers float
+    # locals as `void*` when compute_val_types can't pin down the type.
+    # Cast through intptr_t so the initializer is accepted.
+    bool arg_is_ptr = arg_ty == LT_PTR or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE) or arg_ty == LT_VOID
+    if expected == LT_F64 and arg_is_ptr:
+        return "(double)(intptr_t)" + v(arg_id)
+    if expected == LT_F32 and arg_is_ptr:
+        return "(float)(intptr_t)" + v(arg_id)
+    # Aggregate expected, scalar arg — cast via intptr_t then zero-init.
+    if expected >= 0 and lir_is_aggregate(expected) and not lir_is_aggregate(arg_ty):
+        String exp_name = c_type_name(expected, &sn)
+        return "(" + exp_name + "){0}"
     return v(arg_id)
 
 # Find a function by name in a LirModule. Returns its index, or -1.
@@ -1309,6 +1321,9 @@ int infer_inst_type(LirInst &inst, LirModule &m):
     return infer_inst_type_with(&inst, &m, &empty_types)
 
 int infer_inst_type_with(LirInst &inst, LirModule &m, Dict[int, int] &val_types):
+    return infer_inst_type_with_ret(&inst, &m, &val_types, LT_VOID)
+
+int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_types, int func_ret_ty):
     match inst:
         case ISlotLoad(_, _, ty):
             return ty
@@ -1440,6 +1455,13 @@ int infer_inst_type_with(LirInst &inst, LirModule &m, Dict[int, int] &val_types)
                         int psid_q = find_struct_type(eparent, &m)
                         if psid_q >= LT_STRUCT_BASE:
                             return psid_q
+                # None() with no args: fall back to func_ret_ty if it's Option__X.
+                if name == "None" and args_ce.len() == 0 and func_ret_ty >= LT_STRUCT_BASE:
+                    int none_sid = func_ret_ty - LT_STRUCT_BASE
+                    if none_sid < m.structs.len():
+                        String none_nm = m.structs.get(none_sid).unwrap().name
+                        if none_nm.starts_with("Option__"):
+                            return func_ret_ty
                 # Prelude variants Some/None/Ok/Error — compute parametrized
                 # Option/Result type from arg type.
                 if (name == "Some" or name == "None" or name == "Ok" or name == "Error") and args_ce.len() > 0:
@@ -1470,8 +1492,48 @@ int infer_inst_type_with(LirInst &inst, LirModule &m, Dict[int, int] &val_types)
                             int psid_ce = find_struct_type(parent_name_ce, &m)
                             if psid_ce >= LT_STRUCT_BASE:
                                 return psid_ce
-                # Box__TYPE(x) — returns Box__TYPE (typedef void*).
+                    # Fallback: consult the enclosing function's return type.
+                    # If it's Option__X / Result__X__Y, assume the variant is
+                    # being returned.
+                    if func_ret_ty >= LT_STRUCT_BASE:
+                        int frt_sid_inf = func_ret_ty - LT_STRUCT_BASE
+                        if frt_sid_inf < m.structs.len():
+                            String frt_name_inf = m.structs.get(frt_sid_inf).unwrap().name
+                            if (name == "Some" or name == "None") and frt_name_inf.starts_with("Option__"):
+                                return func_ret_ty
+                            if (name == "Ok" or name == "Error") and frt_name_inf.starts_with("Result__"):
+                                return func_ret_ty
+                # Box(x) / Box__TYPE(x) — returns Box__TYPE. Prefer the
+                # registered struct type so val_types carries enough info for
+                # downstream Some(box_val) sites to resolve Option__Box__TYPE.
+                if name == "Box" and args_ce.len() == 1:
+                    int bx_arg = args_ce.get(0).unwrap()
+                    int bx_arg_ty = LT_VOID
+                    if val_types.contains(bx_arg):
+                        bx_arg_ty = val_types.get(bx_arg).unwrap()
+                    int bx_inner_sid = -1
+                    if bx_arg_ty >= LT_STRUCT_BASE:
+                        bx_inner_sid = bx_arg_ty - LT_STRUCT_BASE
+                    elif bx_arg_ty >= LT_PTR_TO_BASE and bx_arg_ty < LT_STRUCT_BASE:
+                        bx_inner_sid = bx_arg_ty - LT_PTR_TO_BASE
+                    if bx_inner_sid >= 0 and bx_inner_sid < m.structs.len():
+                        String arg_sname = m.structs.get(bx_inner_sid).unwrap().name
+                        int bx_sid = find_struct_type("Box__" + arg_sname, &m)
+                        if bx_sid >= LT_STRUCT_BASE:
+                            return bx_sid
+                    return LT_PTR
                 if name.starts_with("Box__"):
+                    int box_sid = find_struct_type(name, &m)
+                    if box_sid >= LT_STRUCT_BASE:
+                        return box_sid
+                    return LT_PTR
+                # Similar for __gorget_box_alloc_TYPE — codegen rewrites
+                # `Box__TYPE(x)` to this, but a direct call also may occur.
+                if name.starts_with("__gorget_box_alloc_"):
+                    String alloc_suffix = name.slice(19, name.len())
+                    int bs2 = find_struct_type("Box__" + alloc_suffix, &m)
+                    if bs2 >= LT_STRUCT_BASE:
+                        return bs2
                     return LT_PTR
                 # Closure construction: __make_closure_N → GorgetClosure struct type
                 if name.starts_with("__make_closure_"):
@@ -1568,13 +1630,14 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
             BlockParam bp = blk.params.get(pi).unwrap()
             types.put(bp.value_id, bp.ty)
             pi += 1
-        # Instructions
+        # Instructions — pass the function's return type so Some/Ok/Error
+        # in `return VariantCtor(x)` positions can resolve the parent.
         int ii = 0
         while ii < blk.insts.len():
             LirInst inst = blk.insts.get(ii).unwrap()
             int dst = inst_dst(&inst)
             if dst >= 0:
-                int ty = infer_inst_type_with(&inst, &m, &types)
+                int ty = infer_inst_type_with_ret(&inst, &m, &types, func.return_type)
                 types.put(dst, ty)
             ii += 1
         bi += 1
@@ -1978,15 +2041,15 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                 # If this is actually an enum variant constructor, route
                 # through emit_call_extern which handles inline struct init.
                 if m.enum_variant_parent.contains(callee.name):
-                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
+                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
                 if callee.name == "Box" or callee.name.starts_with("Box__"):
-                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
+                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 # Prelude Option/Result variant constructors — pulled from
                 # user-code even if unrecognized in type_infos. The codegen
                 # uses dst type to resolve parametrization.
                 if callee.name == "Some" or callee.name == "None" or callee.name == "Ok" or callee.name == "Error":
-                    return emit_call_extern(dst, callee.name, &args, &sn, &val_types, &m)
+                    return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 String fname = c_func_name(callee.name)
                 int gs_ty = find_struct_type("GorgetString", &m)
                 String out = ""
@@ -2022,7 +2085,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             return "/* unknown call */;"
 
         case ICallExtern(dst, name, args, original_name, arg_abis):
-            return emit_call_extern(dst, name, &args, &sn, &val_types, &m)
+            return emit_call_extern_with(dst, name, &args, &sn, &val_types, &m, func.return_type)
 
         case ICallPtr(dst, callee, args):
             String out = ""
@@ -2349,6 +2412,12 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
 
 String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                         Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+    # Forward to the extended helper with no function-return-type hint.
+    return emit_call_extern_with(dst, raw_name, &args, &sn, &val_types, &m, LT_VOID)
+
+String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
+                             Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m,
+                             int func_ret_ty):
     # Map monomorphized names to runtime names.
     String name = map_mono_to_runtime(raw_name, &m)
 
@@ -2626,6 +2695,24 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                         parent_name_pv = "Result__int64_t__" + arg_tname
                     if parent_name_pv != "":
                         parent_sid_pv = find_struct_type(parent_name_pv, &m)
+            # Last-resort fallback: when the enclosing function's return type
+            # is an Option/Result, assume this variant constructor is being
+            # returned and use the function's return type as the parent. This
+            # catches `return Ok(x)` / `return Error(x)` / `return Some(x)`
+            # patterns where neither dst nor arg val_types helped.
+            # `find_struct_type` returns LT_PTR on miss, so the <STRUCT_BASE
+            # check — not < 0 — determines unresolved.
+            if parent_sid_pv < LT_STRUCT_BASE and func_ret_ty >= LT_STRUCT_BASE:
+                int frt_sid = func_ret_ty - LT_STRUCT_BASE
+                if frt_sid < m.structs.len():
+                    LirStructDef frt_sdef = m.structs.get(frt_sid).unwrap()
+                    bool accept = false
+                    if (name == "Some" or name == "None") and frt_sdef.name.starts_with("Option__"):
+                        accept = true
+                    if (name == "Ok" or name == "Error") and frt_sdef.name.starts_with("Result__"):
+                        accept = true
+                    if accept:
+                        parent_sid_pv = func_ret_ty
             # None with no args: pick any Option__X.
             if parent_sid_pv < 0 and (name == "None"):
                 int sdi_pv = 0
@@ -2645,9 +2732,20 @@ String emit_call_extern(int dst, String raw_name, Vector[int] &args,
                     out_pv = v(dst) + " = "
                 out_pv = out_pv + "(" + parent_c_dst + "){.tag = " + int_to_str(pv_tag)
                 if args.len() > 0:
+                    # Collect the parent's payload field types to coerce args
+                    # that the self-host lost type info on (e.g. void* local at
+                    # an F64 field).
+                    LirStructDef pv_pdef = m.structs.get(parent_sid_pv - LT_STRUCT_BASE).unwrap()
+                    Vector[int] pv_field_tys = []
+                    int pv_fi = 1
+                    while pv_fi < pv_pdef.fields.len():
+                        StructField pv_sf = pv_pdef.fields.get(pv_fi).unwrap()
+                        if pv_sf.name.starts_with(name + "_"):
+                            pv_field_tys.push(pv_sf.ty)
+                        pv_fi += 1
                     int pva = 0
                     while pva < args.len():
-                        out_pv = out_pv + ", ." + name + "_" + int_to_str(pva) + " = " + v(args.get(pva).unwrap())
+                        out_pv = out_pv + ", ." + name + "_" + int_to_str(pva) + " = " + emit_variant_arg(args.get(pva).unwrap(), pv_field_tys, pva, &val_types, &sn, &m)
                         pva += 1
                 out_pv = out_pv + "};"
                 return out_pv
