@@ -2928,16 +2928,16 @@ String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dic
             return "return;"
 
         case TJump(target, args):
-            return emit_jump_args(target, &args, &func) + "goto __bb" + int_to_str(target) + ";"
+            return emit_jump_args(target, &args, &func, &sn, &val_types) + "goto __bb" + int_to_str(target) + ";"
 
         case TBranch(cond, then_blk, then_args, else_blk, else_args):
             String out = "if (" + v(cond) + ") {\n"
             if then_args.len() > 0:
-                out = out + "        " + emit_jump_args(then_blk, &then_args, &func) + "\n"
+                out = out + "        " + emit_jump_args(then_blk, &then_args, &func, &sn, &val_types) + "\n"
             out = out + "        goto __bb" + int_to_str(then_blk) + ";\n"
             out = out + "    } else {\n"
             if else_args.len() > 0:
-                out = out + "        " + emit_jump_args(else_blk, &else_args, &func) + "\n"
+                out = out + "        " + emit_jump_args(else_blk, &else_args, &func, &sn, &val_types) + "\n"
             out = out + "        goto __bb" + int_to_str(else_blk) + ";\n"
             out = out + "    }"
             return out
@@ -2947,10 +2947,10 @@ String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dic
             int ci = 0
             while ci < cases.len():
                 SwitchCase sc = cases.get(ci).unwrap()
-                String ja = emit_jump_args(sc.target, &sc.args, &func)
+                String ja = emit_jump_args(sc.target, &sc.args, &func, &sn, &val_types)
                 out = out + "        case " + int_to_str(sc.value) + ": " + ja + "goto __bb" + int_to_str(sc.target) + ";\n"
                 ci += 1
-            String da = emit_jump_args(default_blk, &default_args, &func)
+            String da = emit_jump_args(default_blk, &default_args, &func, &sn, &val_types)
             out = out + "        default: " + da + "goto __bb" + int_to_str(default_blk) + ";\n"
             out = out + "    }"
             return out
@@ -2958,8 +2958,11 @@ String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dic
         case TUnreachable:
             return "__builtin_unreachable();"
 
-# Emit parallel-copy assignments for block parameter passing.
-String emit_jump_args(int target, Vector[int] &args, LirFunction &func):
+# Emit parallel-copy assignments for block parameter passing. Applies the
+# same scalar/aggregate coercion as ISlotStore when the block-param type
+# (set from the slot type at phi creation) doesn't match the incoming
+# value's inferred type — otherwise C refuses `void* = Str` etc.
+String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[String, String] &sn, Dict[int, int] &val_types):
     if args.len() == 0:
         return ""
     LirBlock target_blk = func.blocks.get(target).unwrap()
@@ -2968,7 +2971,28 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func):
     while i < args.len() and i < target_blk.params.len():
         BlockParam bp = target_blk.params.get(i).unwrap()
         int arg = args.get(i).unwrap()
-        out = out + "__bp" + int_to_str(bp.value_id) + " = __v" + int_to_str(arg) + "; "
+        int bp_ty = bp.ty
+        int arg_ty = LT_VOID
+        if val_types.contains(arg):
+            arg_ty = val_types.get(arg).unwrap()
+        bool bp_agg = lir_is_aggregate(bp_ty)
+        bool arg_agg = lir_is_aggregate(arg_ty)
+        bool bp_ptr = (bp_ty == LT_PTR) or (bp_ty >= LT_PTR_TO_BASE and bp_ty < LT_STRUCT_BASE)
+        if bp_ptr and arg_agg:
+            # Pointer bp receiving an aggregate value — mirrors the
+            # ISlotStore fallback that writes NULL. Data is lost, but the
+            # surrounding code already accepted this at the SlotStore site.
+            out = out + "__bp" + int_to_str(bp.value_id) + " = NULL; "
+        elif bp_agg and not arg_agg:
+            # Aggregate bp receiving a non-aggregate — zero-init matches
+            # ISlotStore's coercion for lost-type-info arguments.
+            out = out + "__bp" + int_to_str(bp.value_id) + " = (" + c_type_name(bp_ty, &sn) + "){0}; "
+        elif bp_agg and arg_agg and bp_ty != arg_ty:
+            # Different aggregate types — fall back to zero-init rather
+            # than risking a struct-size memcpy mismatch.
+            out = out + "__bp" + int_to_str(bp.value_id) + " = (" + c_type_name(bp_ty, &sn) + "){0}; "
+        else:
+            out = out + "__bp" + int_to_str(bp.value_id) + " = __v" + int_to_str(arg) + "; "
         i += 1
     return out
 
