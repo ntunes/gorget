@@ -228,10 +228,10 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     closure_ret_ty,
                     closure_arg_abis,
                     dst,
-                    init: _,
+                    init,
                 } => {
                     match hof_op {
-                        HofOp::Each | HofOp::Any | HofOp::All => {
+                        HofOp::Each | HofOp::Any | HofOp::All | HofOp::Fold => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -266,6 +266,21 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     remaining,
                                     orig_term,
                                 ),
+                                HofOp::Fold => expand_fold(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    closure_ret_ty,
+                                    init.expect("fold must carry an init ValueId"),
+                                    dst.expect("fold must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
                                 _ => unreachable!(),
                             }
                             hof_split = true;
@@ -284,7 +299,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                 closure_ret_ty,
                                 closure_arg_abis,
                                 dst,
-                                init: None,
+                                init,
                             });
                         }
                     }
@@ -323,24 +338,42 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
     func.set_next_value_raw(next);
 }
 
-/// Shared scaffold for the HOF loop skeletons.
+/// Shared scaffold for the Vector HOF loop skeletons.
 ///
 /// Emits the `check_bb` / `body_bb` / `done_bb` triple, wires the entry
-/// jump, puts the length check into `check_bb`, and performs the per-
-/// element `ElemPtr` + (optional) `Load` + `CallClosure` in `body_bb`.
-/// Returns the context the caller uses to finish each variant (set
-/// `body_bb`'s terminator, fill `done_bb.insts`/`done_bb.terminator`).
+/// jump, puts the length check into `check_bb`, and does the per-element
+/// `ElemPtr` + (optional) `Load` in `body_bb` up to — but not including —
+/// the `CallClosure`. Variants append the call plus their final
+/// terminators.
 ///
-/// The `check_bb` terminator is NOT set here — `any`/`all` want to pass a
-/// default result as block-arg when they fall through from exhaustion,
-/// while `each` passes nothing. Callers set the terminator explicitly.
+/// `extra_check_inits` adds additional block params to `check_bb` (for
+/// accumulators). The entry jump passes each init value alongside the
+/// counter; variants fetch the matching ValueId out of
+/// `ctx.extra_check_params` to read the accumulator inside `body_bb` and
+/// to pass updates on the back-edge jump.
+///
+/// The `check_bb` and `body_bb` terminators are NOT set here — variants
+/// do that to match their semantics (any/all early-exit, fold accumulator
+/// pass-through, etc.).
+#[allow(dead_code)]
 struct HofLoopCtx {
     check_bb: BlockId,
     body_bb: BlockId,
     done_bb: BlockId,
     cond: ValueId,
-    pred_val: Option<ValueId>,
+    /// Loop-counter block param on `check_bb`. Currently only read by
+    /// variants that thread additional state; kept in the ctx for future
+    /// HOF lowerings that need it.
+    i_val: ValueId,
     next_i: ValueId,
+    /// The per-element arg the variant will feed `CallClosure`. For
+    /// pointer-ABI closures this is a pointer to the element; otherwise
+    /// the element has been `Load`-ed and this is the scalar/struct value.
+    elem_arg: ValueId,
+    /// ABI tag matching `elem_arg`.
+    elem_abi: crate::ir::abi::AbiKind,
+    /// Block-param ValueIds of each entry in `extra_check_inits`, in order.
+    extra_check_params: Vec<ValueId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -351,9 +384,8 @@ fn emit_hof_loop_scaffold(
     structs: &[StructDef],
     coll: ValueId,
     element_ty: &LirType,
-    closure: ValueId,
-    closure_arg_abis: &[crate::ir::abi::AbiKind],
-    closure_ret_ty: LirType,
+    elem_abi_hint: Option<crate::ir::abi::AbiKind>,
+    extra_check_inits: Vec<(LirType, ValueId)>,
 ) -> HofLoopCtx {
     let gorget_array_sid = lookup_struct_id(structs, "GorgetArray")
         .unwrap_or(StructId(0));
@@ -362,19 +394,30 @@ fn emit_hof_loop_scaffold(
     let body_bb = func.add_block();
     let done_bb = func.add_block();
 
-    // check_bb has a single block param — the loop counter.
+    // check_bb block params: (i, extras...).
     let i_val = alloc_value(next);
     func.block_mut(check_bb).params.push((i_val, LirType::I64));
+    let mut extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(check_bb).params.push((p, ty.clone()));
+        extra_check_params.push(p);
+    }
 
-    // current_bb → check_bb(0_i64)
+    // current_bb → check_bb(0, init0, init1, ...)
     let zero = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32)).insts.push(Inst::IConst {
         dst: zero,
         ty: LirType::I64,
         value: 0,
     });
+    let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
+    entry_args.push(zero);
+    for (_, init) in &extra_check_inits {
+        entry_args.push(*init);
+    }
     func.block_mut(BlockId(current_bb as u32)).terminator =
-        Term::Jump(check_bb, vec![zero]);
+        Term::Jump(check_bb, entry_args);
 
     // check_bb: load GorgetArray.len and compare.
     let lenp = alloc_value(next);
@@ -424,14 +467,13 @@ fn emit_hof_loop_scaffold(
 
     // Element ABI: emitter tag wins when present, otherwise fall back to
     // `element_ty.is_aggregate()` (aggregates travel by pointer).
-    let emitter_abi = closure_arg_abis.first().copied();
-    let pass_by_ptr = match emitter_abi {
+    let pass_by_ptr = match elem_abi_hint {
         Some(crate::ir::abi::AbiKind::Ptr) => true,
         Some(crate::ir::abi::AbiKind::ByValue) => false,
         Some(crate::ir::abi::AbiKind::Scalar) => false,
         _ => element_ty.is_aggregate(),
     };
-    let arg_val = if pass_by_ptr {
+    let elem_arg = if pass_by_ptr {
         elemp
     } else {
         let e = alloc_value(next);
@@ -442,26 +484,13 @@ fn emit_hof_loop_scaffold(
         });
         e
     };
-    let arg_abi = if pass_by_ptr {
+    let elem_abi = if pass_by_ptr {
         crate::ir::abi::AbiKind::Ptr
     } else {
         crate::ir::abi::AbiKind::Scalar
     };
 
-    let has_ret = !matches!(closure_ret_ty, LirType::Void);
-    let pred_val = if has_ret { Some(alloc_value(next)) } else { None };
-    func.block_mut(body_bb).insts.push(Inst::CallClosure {
-        dst: pred_val,
-        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
-        closure,
-        args: vec![arg_val],
-        arg_abis: vec![arg_abi],
-        ret_ty: closure_ret_ty,
-    });
-
-    // Precompute next_i = i + 1 (variants that need it jump back to
-    // check_bb via `Jump(check_bb, [next_i])` — keep the allocation here
-    // so variants share the same counter slot).
+    // Precompute next_i = i + 1.
     let next_i = alloc_value(next);
     let one = alloc_value(next);
     func.block_mut(body_bb).insts.push(Inst::IConst {
@@ -477,14 +506,16 @@ fn emit_hof_loop_scaffold(
         overflow: Overflow::Wrap,
     });
 
-    let _ = i_val; // counter is referenced indirectly via check_bb param.
     HofLoopCtx {
         check_bb,
         body_bb,
         done_bb,
         cond,
-        pred_val,
+        i_val,
         next_i,
+        elem_arg,
+        elem_abi,
+        extra_check_params,
     }
 }
 
@@ -517,6 +548,7 @@ fn expand_each(
     remaining: Vec<Inst>,
     orig_term: Term,
 ) {
+    let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
         func,
         current_bb,
@@ -524,10 +556,19 @@ fn expand_each(
         structs,
         coll,
         &element_ty,
-        closure,
-        &closure_arg_abis,
-        LirType::Void,
+        elem_abi_hint,
+        vec![],
     );
+
+    // body_bb: CallClosure(closure, [elem]) returning Void.
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Void,
+    });
 
     // check_bb: cond ? body_bb : done_bb (no args — each has no result).
     func.block_mut(ctx.check_bb).terminator = Term::Branch {
@@ -584,6 +625,7 @@ fn expand_any_all(
         .cloned()
         .unwrap_or(LirType::I64);
 
+    let elem_abi_hint = closure_arg_abis.first().copied();
     let ctx = emit_hof_loop_scaffold(
         func,
         current_bb,
@@ -591,11 +633,20 @@ fn expand_any_all(
         structs,
         coll,
         &element_ty,
-        closure,
-        &closure_arg_abis,
-        LirType::Bool,
+        elem_abi_hint,
+        vec![],
     );
-    let pred = ctx.pred_val.expect("any/all closure must return a value");
+
+    // body_bb: CallClosure(closure, [elem]) returning Bool.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
 
     // Constants for true/false in the dst's declared type.
     let early = alloc_value(next);
@@ -668,6 +719,115 @@ fn expand_any_all(
 
     // cont_bb: jump back to check_bb with incremented counter.
     func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+}
+
+/// Expand `HofExpand { hof_op: Fold, init, dst, … }` into an explicit
+/// loop with a scalar accumulator threaded through `check_bb` as a second
+/// block parameter.
+///
+/// Layout produced:
+/// ```text
+///   current_bb:
+///     <pre-HofExpand insts>
+///     jmp check_bb(0_i64, init)
+///   check_bb(i: i64, acc: T):
+///     len check → body_bb | done_bb(acc)
+///   body_bb:
+///     ElemPtr + (optional Load) + CallClosure(closure, [acc, elem]) → new_acc
+///     jmp check_bb(i + 1, new_acc)
+///   done_bb(result: T):
+///     <remaining insts from original block>
+///     <original terminator>
+/// ```
+#[allow(clippy::too_many_arguments)]
+fn expand_fold(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    init: ValueId,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    // For fold, closure signature is (acc, elem). Acc is at index 0, elem
+    // at index 1 in `closure_arg_abis`.
+    let acc_abi_hint = closure_arg_abis.first().copied();
+    let elem_abi_hint = closure_arg_abis.get(1).copied();
+
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![(closure_ret_ty.clone(), init)],
+    );
+    let acc_val = ctx.extra_check_params[0];
+
+    // Acc ABI: hint first, else aggregate → Ptr, scalar → Scalar.
+    let acc_by_ptr = match acc_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => closure_ret_ty.is_aggregate(),
+    };
+    let acc_arg = if acc_by_ptr {
+        // Spill the block-param struct to a slot and take its address.
+        // AddressOf is expanded later in the same pass, but because the
+        // `while bb_idx < ...` outer loop advances to process new blocks,
+        // we invoke the expansion directly via the canonical op.
+        let p = alloc_value(next);
+        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+            dst: p,
+            value: acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        acc_val
+    };
+    let acc_abi = if acc_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    // body_bb: CallClosure(closure, [acc, elem]) → new_acc.
+    let new_acc = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![acc_arg, ctx.elem_arg],
+        arg_abis: vec![acc_abi, ctx.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+
+    // check_bb: cond ? body_bb : done_bb(acc).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![acc_val],
+    };
+
+    // body_bb: jump back to check_bb with next_i + new_acc.
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i, new_acc]);
+
+    // done_bb(result = dst): remaining + orig_term.
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
 }
 
 fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {

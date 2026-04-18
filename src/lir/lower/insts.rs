@@ -1860,13 +1860,21 @@ impl<'a> FuncLowering<'a> {
         let rest = original_name.strip_prefix("Vector__")?;
         let sep = rest.rfind("__")?;
         let method = &rest[sep + 2..];
-        let (hof_op, closure_ret_ty, produces_result) = match method {
-            "each" => (HofOp::Each, LirType::Void, false),
-            "any" => (HofOp::Any, LirType::Bool, true),
-            "all" => (HofOp::All, LirType::Bool, true),
+        // `closure_ret_ty` for result-producing variants is derived from the
+        // caller's dst declared type (populated below). The `each` variant
+        // sets it to Void since the closure returns nothing.
+        let (hof_op, produces_result, is_fold) = match method {
+            "each" => (HofOp::Each, false, false),
+            "any" => (HofOp::Any, true, false),
+            "all" => (HofOp::All, true, false),
+            "fold" => (HofOp::Fold, true, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
+            return None;
+        }
+        // Fold takes (vec, init, closure): three args.
+        if is_fold && lir_args.len() < 3 {
             return None;
         }
         // Result-producing HOFs must have a destination; `each` must not.
@@ -1892,6 +1900,31 @@ impl<'a> FuncLowering<'a> {
         let elem_c_name = &rest[..sep];
         let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
 
+        // For fold, the closure return type = dst's declared type (the
+        // accumulator type). Derive it from the destination local's GIR
+        // type to match what the caller expects.
+        let closure_ret_ty = if is_fold {
+            let d = dst.as_ref().expect("fold requires dst");
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            self.map_type(&gir_ty)
+        } else if produces_result {
+            LirType::Bool
+        } else {
+            LirType::Void
+        };
+
+        // For fold, gate out aggregate accumulators AND aggregate
+        // elements for now. The closure's `__call` signature decides
+        // per-arg whether it wants the struct by value or by pointer,
+        // and mirroring that choice faithfully requires looking up the
+        // closure's function signature at emit time (not yet wired
+        // through `FuncLowering`). Scalar-only covers the overwhelming
+        // majority of fold call sites; the rest still inline in the
+        // backend handlers.
+        if is_fold && (closure_ret_ty.is_aggregate() || element_ty.is_aggregate()) {
+            return None;
+        }
+
         // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
         // expansion can dispatch via `Inst::CallClosure { EscapedClosure }`.
         let mut lir_args_wrapped = lir_args.to_vec();
@@ -1903,6 +1936,20 @@ impl<'a> FuncLowering<'a> {
             crate::ir::abi::AbiKind::Scalar
         };
 
+        // closure_arg_abis layout depends on the HOF:
+        //   each/any/all: [elem_abi]
+        //   fold:         [acc_abi, elem_abi]
+        let closure_arg_abis = if is_fold {
+            let acc_abi = if closure_ret_ty.is_aggregate() {
+                crate::ir::abi::AbiKind::Ptr
+            } else {
+                crate::ir::abi::AbiKind::Scalar
+            };
+            vec![acc_abi, elem_abi]
+        } else {
+            vec![elem_abi]
+        };
+
         // When a result is produced, allocate a fresh ValueId for the HOF
         // output and plumb it into the caller's local slot. The BIR
         // expansion reuses this ValueId as the `done_bb` block parameter.
@@ -1912,6 +1959,9 @@ impl<'a> FuncLowering<'a> {
             None
         };
 
+        // Fold's init operand lives at `lir_args[1]`.
+        let init_id = if is_fold { Some(lir_args_wrapped[1]) } else { None };
+
         self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
             coll: lir_args_wrapped[0],
             hof_op,
@@ -1920,9 +1970,9 @@ impl<'a> FuncLowering<'a> {
             closure: lir_args_wrapped[closure_idx],
             closure_kind: ClosureDispatchKind::EscapedClosure,
             closure_ret_ty,
-            closure_arg_abis: vec![elem_abi],
+            closure_arg_abis,
             dst: result_id,
-            init: None,
+            init: init_id,
         });
 
         if let (Some(d), Some(r)) = (*dst, result_id) {
