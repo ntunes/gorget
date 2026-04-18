@@ -132,6 +132,11 @@ const int SCHED_SINGLE = 3
 
 # ── Instructions ────────────────────────────────────────────────
 
+# (field_index, value_id) pair used by canonical IStructInit / IEnumInit ops.
+struct FieldInit:
+    int index
+    int value
+
 # Instructions are represented as a tagged enum. Each variant carries
 # its operands as struct fields. dst=-1 means no destination.
 
@@ -187,6 +192,23 @@ enum LirInst:
     IElemPtr(int, int, int, int)      # dst, base, index, elem_size
     IMemset(int, int, int)            # ptr, byte, size
     IMemcpy(int, int, int)            # dst_ptr, src_ptr, size
+
+    # Canonical BIR ops (lowered to concrete memory ops at codegen time).
+    # Dst is a heap Ptr; inner_ty identifies the payload size/layout; value is stored at the pointer.
+    IBoxAlloc(int, int, int)          # dst, inner_ty, value
+
+    # Address-of: spill an SSA value to a function-scope temp and take its address.
+    # Emitted at extern Ptr-ABI arg sites; inner_ty sizes the temp.
+    IAddressOf(int, int, int)         # dst, value, ty
+
+    # Struct in-place init: writes each FieldInit(index, value) into the
+    # struct pointed to by `target`. Field indices are absolute struct slots;
+    # unlisted fields are left untouched. No dst — target is an input pointer.
+    IStructInit(int, int, Vector[FieldInit])        # target, struct_id, fields
+
+    # Enum in-place init: writes tag at field 0, then each payload FieldInit.
+    # Field indices in `fields` are absolute (caller computes 1 + offset + i).
+    IEnumInit(int, int, int, Vector[FieldInit])     # target, struct_id, variant_tag, fields
 
     # Calls
     ICall(int, int, Vector[int])                       # dst (-1=void), func_id, args
