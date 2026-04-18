@@ -544,6 +544,12 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
                 sub(a);
             }
         }
+        Inst::EnumInit { target, payload, .. } => {
+            sub(target);
+            if let Some(p) = payload { sub(p); }
+        }
+        Inst::EnumCheck { value, .. } => sub(value),
+        Inst::EnumExtract { value, .. } => sub(value),
         Inst::SlotLoad { .. }
         | Inst::SlotAddr { .. }
         | Inst::IConst { .. }

@@ -266,6 +266,53 @@ pub enum Inst {
     ///
     /// Step 3 of the BIR lift plan — see `docs/internals/lir-backend-lift-plan.md`.
     SizeOf { dst: ValueId, ty: LirType },
+
+    /// Canonical-op: initialize an enum variant at the given target address.
+    ///
+    /// Writes the tag field (`variant_tag`) and, when `payload` is present,
+    /// stores that value into the per-variant payload field. `variant_idx`
+    /// identifies which payload field to use (field offset = `1 + variant_idx`
+    /// for the default flat layout). BIR lowering expands this to the explicit
+    /// `FieldPtr`/`Store`/`Memcpy` sequence.
+    ///
+    /// Step 4 of the BIR lift plan.
+    EnumInit {
+        target: ValueId,
+        struct_id: StructId,
+        variant_tag: u32,
+        variant_idx: u32,
+        payload: Option<ValueId>,
+    },
+
+    /// Canonical-op: test whether an enum at the given address holds a specific variant.
+    ///
+    /// Produces a bool `dst` that is true iff the enum's tag equals `variant_tag`.
+    /// BIR lowering expands into `FieldPtr` (tag), `Load`, `IConst`, `Cmp`.
+    ///
+    /// Step 4 of the BIR lift plan.
+    EnumCheck {
+        dst: ValueId,
+        value: ValueId,
+        struct_id: StructId,
+        variant_tag: u32,
+    },
+
+    /// Canonical-op: load the payload of a specific enum variant.
+    ///
+    /// Produces `dst` of type `ty` holding the contents of the `payload_field`
+    /// slot on the enum at `value`. Callers are responsible for only emitting
+    /// this on a value that has been checked with `EnumCheck` (or is known
+    /// statically to hold that variant). BIR lowering expands to `FieldPtr`
+    /// plus `Load` (or a `Memcpy` into a temp slot, for aggregate payloads).
+    ///
+    /// Step 4 of the BIR lift plan.
+    EnumExtract {
+        dst: ValueId,
+        value: ValueId,
+        struct_id: StructId,
+        payload_field: u32,
+        ty: LirType,
+    },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
     /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
@@ -404,7 +451,8 @@ impl Inst {
             | Inst::Memcpy { .. } | Inst::BoundsCheck { .. } | Inst::DivCheck { .. }
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
             | Inst::ClosurePack { .. } | Inst::MoveSlot { .. }
-            | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop => None,
+            | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop
+            | Inst::EnumInit { .. } => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -414,6 +462,8 @@ impl Inst {
             | Inst::BoolConst { dst, .. }
             | Inst::NullPtr { dst }
             | Inst::SizeOf { dst, .. }
+            | Inst::EnumCheck { dst, .. }
+            | Inst::EnumExtract { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::NamedFuncAddr { dst, .. }
             | Inst::GlobalAddr { dst, .. }
@@ -520,6 +570,14 @@ impl Inst {
                 v.extend(args);
                 v
             }
+
+            Inst::EnumInit { target, payload, .. } => {
+                let mut v = vec![*target];
+                if let Some(p) = payload { v.push(*p); }
+                v
+            }
+            Inst::EnumCheck { value, .. } => vec![*value],
+            Inst::EnumExtract { value, .. } => vec![*value],
         }
     }
 }
@@ -675,6 +733,18 @@ impl LirFunction {
     /// The total number of values allocated.
     pub fn value_count(&self) -> u32 {
         self.next_value
+    }
+
+    /// Raw access to the ValueId counter — for passes (e.g. BIR lowering)
+    /// that need to allocate values while holding a mutable borrow of
+    /// `self.blocks`, which would conflict with `self.next_value()`.
+    pub fn next_value_raw(&self) -> u32 {
+        self.next_value
+    }
+
+    /// Write back the ValueId counter after a pass has manually allocated values.
+    pub fn set_next_value_raw(&mut self, next: u32) {
+        self.next_value = next;
     }
 
     /// Add a stack slot, returning its SlotId.

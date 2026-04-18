@@ -1297,6 +1297,12 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         Inst::Fprintf { fd, args, .. } => {
             *fd = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
         }
+        Inst::EnumInit { target, payload, .. } => {
+            *target = next(&uses, &mut idx);
+            if let Some(p) = payload { *p = next(&uses, &mut idx); }
+        }
+        Inst::EnumCheck { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::EnumExtract { value, .. } => { *value = next(&uses, &mut idx); }
     }
 }
 

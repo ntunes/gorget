@@ -1698,8 +1698,11 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         // Canonical ops — must have been expanded away by bir::lower before reaching here.
         // The BirModule newtype + validator guarantee this, but keep an explicit arm so
         // the pattern match stays exhaustive.
-        Inst::SizeOf { .. } => {
-            unreachable!("Inst::SizeOf survived BIR lowering — validator should have rejected it");
+        Inst::SizeOf { .. }
+        | Inst::EnumInit { .. }
+        | Inst::EnumCheck { .. }
+        | Inst::EnumExtract { .. } => {
+            unreachable!("canonical LIR op survived BIR lowering — validator should have rejected it");
         }
 
         // Constants

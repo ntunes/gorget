@@ -154,6 +154,19 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         }
         Inst::BoolConst { dst, value } => write!(f, "{dst}: bool = bconst {value}"),
         Inst::SizeOf { dst, ty } => write!(f, "{dst}: i64 = sizeof {ty}"),
+        Inst::EnumInit { target, struct_id, variant_tag, variant_idx, payload } => {
+            if let Some(p) = payload {
+                write!(f, "enum_init {target}, struct{}, tag={variant_tag}, idx={variant_idx}, payload={p}", struct_id.0)
+            } else {
+                write!(f, "enum_init {target}, struct{}, tag={variant_tag}, idx={variant_idx}", struct_id.0)
+            }
+        }
+        Inst::EnumCheck { dst, value, struct_id, variant_tag } => {
+            write!(f, "{dst}: bool = enum_check {value}, struct{}, tag={variant_tag}", struct_id.0)
+        }
+        Inst::EnumExtract { dst, value, struct_id, payload_field, ty } => {
+            write!(f, "{dst}: {ty} = enum_extract {value}, struct{}, field={payload_field}", struct_id.0)
+        }
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),

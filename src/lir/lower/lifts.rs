@@ -137,21 +137,15 @@ impl<'a> FuncLowering<'a> {
             else_block: none_bb, else_args: vec![],
         };
 
-        // 5. Some branch: reload raw_ptr from slot, set tag=0, store payload
+        // 5. Some branch: reload raw_ptr from slot, materialize the payload
+        // value, then EnumInit with tag=0.
         let raw_in_some = self.lir_func.next_value();
         self.lir_func.block_mut(some_bb).insts.push(Inst::SlotLoad {
             dst: raw_in_some, slot: raw_slot, ty: LirType::Ptr,
         });
-        self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
-        let payload_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-            dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
-        });
 
-        if payload_is_ptr {
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: raw_in_some,
-            });
+        let payload_val: ValueId = if payload_is_ptr {
+            raw_in_some
         } else if let Some(clone_fn) = self.resource_clone_fn_for_payload(&payload_ty, consuming) {
             let cloned = self.lir_func.next_value();
             self.ensure_extern(&clone_fn, &[LirType::Ptr], &payload_ty);
@@ -162,29 +156,46 @@ impl<'a> FuncLowering<'a> {
                 args: vec![raw_in_some],
                 original_name: None, arg_abis: abis,
             });
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: cloned,
-            });
+            if payload_ty.is_aggregate() {
+                // Clone returns an aggregate by value — stash in a slot so
+                // EnumInit can Memcpy from its address.
+                let slot = self.lir_func.add_slot(payload_ty.clone(), None);
+                self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+                    slot, value: cloned, is_move: true,
+                });
+                let addr = self.lir_func.next_value();
+                self.lir_func.block_mut(some_bb).insts.push(Inst::SlotAddr {
+                    dst: addr, slot,
+                });
+                addr
+            } else {
+                cloned
+            }
         } else if payload_ty.is_aggregate() {
-            let sz = c_sizeof_lir_type(&payload_ty, self.module_structs) as i64;
-            let sz_val = self.emit_i64_const(some_bb, sz);
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Memcpy {
-                dst_ptr: payload_ptr, src_ptr: raw_in_some, size: sz_val,
-            });
+            // EnumInit's BIR expansion issues a Memcpy for aggregate payloads
+            // when `payload` is a ptr to the aggregate. `raw_in_some` IS that ptr.
+            raw_in_some
         } else {
             let loaded = self.lir_func.next_value();
             self.lir_func.block_mut(some_bb).insts.push(Inst::Load {
                 dst: loaded, ptr: raw_in_some, ty: payload_ty.clone(),
             });
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: loaded,
-            });
-        }
+            loaded
+        };
 
+        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 0, variant_idx: 0,
+            payload: Some(payload_val),
+        });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
-        // 5. None branch: tag=1
-        self.emit_enum_tag_store(slot_addr, opt_sid, 1, none_bb);
+        // 5. None branch: tag=1 (no payload)
+        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 1, variant_idx: 0,
+            payload: None,
+        });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 6. Post-call zeros in merge block
@@ -243,12 +254,15 @@ impl<'a> FuncLowering<'a> {
             else_block: none_bb, else_args: vec![],
         };
 
-        // 4. Some branch: tag=0, wrap cstr via gorget_str_from_cstr → Some_0
-        self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
+        // 4. Some branch: wrap cstr via gorget_str_from_cstr, then EnumInit
+        // with tag=0, payload=wrapped.
         let str_ty = self.struct_reg.lookup("GorgetString")
             .map(LirType::Struct).unwrap_or(LirType::Ptr);
         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
         let abis = self.lookup_arg_abis("gorget_str_from_cstr");
+        // gorget_str_from_cstr returns a GorgetString by value; stash it in a
+        // temp slot so we can pass its address to EnumInit (aggregate payloads
+        // are copied via Memcpy from a ptr).
         let wrapped = self.lir_func.next_value();
         self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
             dst: Some(wrapped),
@@ -256,16 +270,27 @@ impl<'a> FuncLowering<'a> {
             args: vec![raw_ptr],
             original_name: None, arg_abis: abis,
         });
-        let payload_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-            dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
+        let wrapped_slot = self.lir_func.add_slot(str_ty.clone(), None);
+        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+            slot: wrapped_slot, value: wrapped, is_move: true,
         });
-        self.emit_value_to_field(wrapped, payload_ptr, &str_ty, some_bb);
-
+        let wrapped_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotAddr {
+            dst: wrapped_addr, slot: wrapped_slot,
+        });
+        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 0, variant_idx: 0,
+            payload: Some(wrapped_addr),
+        });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 5. None branch: tag=1
-        self.emit_enum_tag_store(slot_addr, opt_sid, 1, none_bb);
+        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 1, variant_idx: 0,
+            payload: None,
+        });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 6. Post-call zeros
@@ -342,8 +367,8 @@ impl<'a> FuncLowering<'a> {
             else_block: ok_bb, else_args: vec![],
         };
 
-        // 5. Error branch: tag=1, wrap error string
-        self.emit_enum_tag_store(slot_addr, result_sid, 1, err_bb);
+        // 5. Error branch: wrap error cstr, then EnumInit with tag=1, variant_idx=1.
+        //    (Result layout: field 0 = tag, field 1 = Ok payload, field 2 = Error payload.)
         let str_ty = self.struct_reg.lookup("GorgetString")
             .map(LirType::Struct).unwrap_or(LirType::Ptr);
         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
@@ -355,21 +380,42 @@ impl<'a> FuncLowering<'a> {
             args: vec![err_ptr],
             original_name: None, arg_abis: abis,
         });
-        // Store error string into Error_0 field (field 2)
-        let err_field_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(err_bb).insts.push(Inst::FieldPtr {
-            dst: err_field_ptr, base: slot_addr, struct_id: result_sid, field: 2,
+        let err_slot = self.lir_func.add_slot(str_ty.clone(), None);
+        self.lir_func.block_mut(err_bb).insts.push(Inst::SlotStore {
+            slot: err_slot, value: err_str, is_move: true,
         });
-        self.emit_value_to_field(err_str, err_field_ptr, &str_ty, err_bb);
+        let err_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(err_bb).insts.push(Inst::SlotAddr {
+            dst: err_addr, slot: err_slot,
+        });
+        self.lir_func.block_mut(err_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: result_sid,
+            variant_tag: 1, variant_idx: 1,
+            payload: Some(err_addr),
+        });
         self.lir_func.block_mut(err_bb).terminator = Term::Jump(merge_bb, vec![]);
 
-        // 6. Ok branch: tag=0, store raw value
-        self.emit_enum_tag_store(slot_addr, result_sid, 0, ok_bb);
-        let ok_field_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(ok_bb).insts.push(Inst::FieldPtr {
-            dst: ok_field_ptr, base: slot_addr, struct_id: result_sid, field: 1,
+        // 6. Ok branch: EnumInit with tag=0, variant_idx=0, payload=raw_result.
+        //    For aggregate ok types, raw_result is the aggregate value — stash
+        //    it in a slot so EnumInit can Memcpy from its address.
+        let ok_payload: ValueId = if ok_ty.is_aggregate() {
+            let ok_slot = self.lir_func.add_slot(ok_ty.clone(), None);
+            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotStore {
+                slot: ok_slot, value: raw_result, is_move: true,
+            });
+            let ok_addr = self.lir_func.next_value();
+            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotAddr {
+                dst: ok_addr, slot: ok_slot,
+            });
+            ok_addr
+        } else {
+            raw_result
+        };
+        self.lir_func.block_mut(ok_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: result_sid,
+            variant_tag: 0, variant_idx: 0,
+            payload: Some(ok_payload),
         });
-        self.emit_value_to_field(raw_result, ok_field_ptr, &ok_ty, ok_bb);
         self.lir_func.block_mut(ok_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 7. Post-call zeros
@@ -432,32 +478,30 @@ impl<'a> FuncLowering<'a> {
                 else_block: none_bb, else_args: vec![],
             };
 
-            // Some branch: tag=0, store value
-            self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
-            let payload_ptr = self.lir_func.next_value();
-            self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-                dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
-            });
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: raw_val,
+            // Some branch: EnumInit { tag=0, payload=raw_val }
+            self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+                target: slot_addr, struct_id: opt_sid,
+                variant_tag: 0, variant_idx: 0,
+                payload: Some(raw_val),
             });
             self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
-            // None branch: tag=1
-            self.emit_enum_tag_store(slot_addr, opt_sid, 1, none_bb);
+            // None branch: EnumInit { tag=1 }
+            self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+                target: slot_addr, struct_id: opt_sid,
+                variant_tag: 1, variant_idx: 0,
+                payload: None,
+            });
             self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
             self.emit_post_call_zeros(args, merge_bb);
             merge_bb
         } else {
             // Unsigned/float: always Some (this case is rare)
-            self.emit_enum_tag_store(slot_addr, opt_sid, 0, bb);
-            let payload_ptr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
-            });
-            self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: raw_val,
+            self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                target: slot_addr, struct_id: opt_sid,
+                variant_tag: 0, variant_idx: 0,
+                payload: Some(raw_val),
             });
             self.emit_post_call_zeros(args, bb);
             bb
@@ -570,21 +614,21 @@ impl<'a> FuncLowering<'a> {
             else_block: none_bb, else_args: vec![],
         };
 
-        // 5. Some: tag=0, memcpy match struct into payload
-        self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
-        let payload_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-            dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
-        });
-        let sz = c_sizeof_lir_type(&match_ty, self.module_structs) as i64;
-        let sz_val = self.emit_i64_const(some_bb, sz);
-        self.lir_func.block_mut(some_bb).insts.push(Inst::Memcpy {
-            dst_ptr: payload_ptr, src_ptr: match_addr, size: sz_val,
+        // 5. Some: EnumInit with payload = ptr to match struct (aggregate → Memcpy).
+        let _ = match_ty; // payload field type is looked up by struct_id in EnumInit
+        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 0, variant_idx: 0,
+            payload: Some(match_addr),
         });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 6. None: tag=1
-        self.emit_enum_tag_store(slot_addr, opt_sid, 1, none_bb);
+        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 1, variant_idx: 0,
+            payload: None,
+        });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         self.emit_post_call_zeros(args, merge_bb);
@@ -646,27 +690,22 @@ impl<'a> FuncLowering<'a> {
             else_block: none_bb, else_args: vec![],
         };
 
-        // 4. Some: tag=0, store value
-        self.emit_enum_tag_store(slot_addr, opt_sid, 0, some_bb);
-        let payload_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-            dst: payload_ptr, base: slot_addr, struct_id: opt_sid, field: 1,
+        // 4. Some: EnumInit (tag=0, payload=raw_ptr). For aggregate payload types,
+        //    raw_ptr is a ptr to the aggregate and BIR expansion will Memcpy.
+        let _ = payload_ty; // payload type is carried via struct_id in EnumInit
+        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 0, variant_idx: 0,
+            payload: Some(raw_ptr),
         });
-        if payload_ty.is_aggregate() {
-            let sz = c_sizeof_lir_type(&payload_ty, self.module_structs) as i64;
-            let sz_val = self.emit_i64_const(some_bb, sz);
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Memcpy {
-                dst_ptr: payload_ptr, src_ptr: raw_ptr, size: sz_val,
-            });
-        } else {
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                ptr: payload_ptr, value: raw_ptr,
-            });
-        }
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 5. None: tag=1
-        self.emit_enum_tag_store(slot_addr, opt_sid, 1, none_bb);
+        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+            target: slot_addr, struct_id: opt_sid,
+            variant_tag: 1, variant_idx: 0,
+            payload: None,
+        });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         self.emit_post_call_zeros(args, merge_bb);
@@ -720,6 +759,7 @@ impl<'a> FuncLowering<'a> {
     /// Store a value into a struct field pointer, handling aggregate types correctly.
     /// For aggregates with known size > 0, stores to a temp slot then memcpy.
     /// For scalars or zero-size aggregates (opaque types), uses direct Store.
+    #[allow(dead_code)]
     pub(super) fn emit_value_to_field(
         &mut self,
         value: ValueId,
