@@ -663,28 +663,55 @@ impl GenericCollector {
     /// Phase 2b: Transitively discover generic usages inside monomorphized function bodies.
     /// When `tensor_neg[int]` calls `tensor_zeros[T]`, the initial scan skips it (T is abstract).
     /// This phase substitutes T→int in the template body and re-scans to discover `tensor_zeros[int]`.
+    ///
+    /// Also walks **equip method bodies** for each monomorphized struct/enum instance:
+    /// when `Vector[int]` is instantiated, its `iter()` method body is scanned with T→int
+    /// substitution so that nested struct constructions like `VectorIter[T](self, 0)` get
+    /// registered as `VectorIter[int]`. Without this, generic equip methods that construct
+    /// other generic types silently skip the dependent type's monomorphization and the
+    /// GIR validator later panics on "reference to undefined type".
     pub fn discover_transitive(&mut self) {
         let mut i = 0;
         while i < self.instances.len() {
             let (base_name, type_args, _, kind) = self.instances[i].clone();
             i += 1;
-            if !matches!(kind, TemplateKind::Function) {
-                continue;
+            match kind {
+                TemplateKind::Function => {
+                    let template = match self.fn_templates.get(&base_name) {
+                        Some(t) => t.clone(),
+                        None => continue,
+                    };
+                    let subs = build_type_substitutions(template.generic_params.as_ref(), &type_args);
+                    if subs.is_empty() {
+                        continue;
+                    }
+                    // Substitute types in the template body and re-scan (with no generic params context,
+                    // so all discovered usages are concrete).
+                    let prev = self.current_generic_params.take();
+                    let substituted = substitute_function_body(&template, &subs);
+                    self.scan_function(&substituted);
+                    self.current_generic_params = prev;
+                }
+                TemplateKind::Struct | TemplateKind::Enum => {
+                    // Clone the equip blocks so we can walk them while self.instances grows.
+                    let equip_blocks = match self.equip_templates.get(&base_name) {
+                        Some(blocks) => blocks.clone(),
+                        None => continue,
+                    };
+                    for equip in &equip_blocks {
+                        let subs = build_equip_type_substitutions(equip, &type_args);
+                        if subs.is_empty() {
+                            continue;
+                        }
+                        for method in &equip.items {
+                            let prev = self.current_generic_params.take();
+                            let substituted = substitute_function_body(&method.node, &subs);
+                            self.scan_function(&substituted);
+                            self.current_generic_params = prev;
+                        }
+                    }
+                }
             }
-            let template = match self.fn_templates.get(&base_name) {
-                Some(t) => t.clone(),
-                None => continue,
-            };
-            let subs = build_type_substitutions(template.generic_params.as_ref(), &type_args);
-            if subs.is_empty() {
-                continue;
-            }
-            // Substitute types in the template body and re-scan (with no generic params context,
-            // so all discovered usages are concrete).
-            let prev = self.current_generic_params.take();
-            let substituted = substitute_function_body(&template, &subs);
-            self.scan_function(&substituted);
-            self.current_generic_params = prev;
         }
     }
 
