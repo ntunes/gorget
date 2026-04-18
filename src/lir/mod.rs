@@ -314,19 +314,27 @@ pub enum Inst {
 
     /// Canonical-op: initialize an enum variant at the given target address.
     ///
-    /// Writes the tag field (`variant_tag`) and, when `payload` is present,
-    /// stores that value into the per-variant payload field. `variant_idx`
-    /// identifies which payload field to use (field offset = `1 + variant_idx`
-    /// for the default flat layout). BIR lowering expands this to the explicit
-    /// `FieldPtr`/`Store`/`Memcpy` sequence.
+    /// Writes the tag field (field 0) to `variant_tag`, then writes each
+    /// `(field_index, value)` in `fields` to the corresponding payload field.
+    /// Field indices are the absolute struct field positions (computed by the
+    /// caller from the variant's field_offset in the parent enum layout —
+    /// i.e., `1 + offset + i` for the i-th payload field of the variant).
+    ///
+    /// Unit variants (e.g. `None`, `Error` with no payload) pass an empty
+    /// `fields` vector. Single-payload variants (e.g. `Some(x)`, `Ok(x)`)
+    /// pass one entry. Multi-field variants (e.g. `Event.Click(x, y)`) pass
+    /// one entry per payload field.
+    ///
+    /// BIR lowering expands this into `FieldPtr(tag) + IConst + Store` for
+    /// the tag plus `FieldPtr + Store` (or `Memcpy` for aggregate payloads)
+    /// per field entry.
     ///
     /// Step 4 of the BIR lift plan.
     EnumInit {
         target: ValueId,
         struct_id: StructId,
         variant_tag: u32,
-        variant_idx: u32,
-        payload: Option<ValueId>,
+        fields: Vec<(u32, ValueId)>,
     },
 
     /// Canonical-op: test whether an enum at the given address holds a specific variant.
@@ -735,9 +743,9 @@ impl Inst {
                 v
             }
 
-            Inst::EnumInit { target, payload, .. } => {
+            Inst::EnumInit { target, fields, .. } => {
                 let mut v = vec![*target];
-                if let Some(p) = payload { v.push(*p); }
+                for (_, val) in fields { v.push(*val); }
                 v
             }
             Inst::EnumCheck { value, .. } => vec![*value],

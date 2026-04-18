@@ -154,12 +154,13 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         }
         Inst::BoolConst { dst, value } => write!(f, "{dst}: bool = bconst {value}"),
         Inst::SizeOf { dst, ty } => write!(f, "{dst}: i64 = sizeof {ty}"),
-        Inst::EnumInit { target, struct_id, variant_tag, variant_idx, payload } => {
-            if let Some(p) = payload {
-                write!(f, "enum_init {target}, struct{}, tag={variant_tag}, idx={variant_idx}, payload={p}", struct_id.0)
-            } else {
-                write!(f, "enum_init {target}, struct{}, tag={variant_tag}, idx={variant_idx}", struct_id.0)
+        Inst::EnumInit { target, struct_id, variant_tag, fields } => {
+            write!(f, "enum_init {target}, struct{}, tag={variant_tag}, fields=[", struct_id.0)?;
+            for (i, (idx, val)) in fields.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write!(f, "{idx}={val}")?;
             }
+            write!(f, "]")
         }
         Inst::EnumCheck { dst, value, struct_id, variant_tag } => {
             write!(f, "{dst}: bool = enum_check {value}, struct{}, tag={variant_tag}", struct_id.0)

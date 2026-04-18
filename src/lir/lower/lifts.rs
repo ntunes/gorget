@@ -185,16 +185,14 @@ impl<'a> FuncLowering<'a> {
 
         self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 0, variant_idx: 0,
-            payload: Some(payload_val),
+            variant_tag: 0, fields: vec![(1, payload_val)],
         });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 5. None branch: tag=1 (no payload)
         self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 1, variant_idx: 0,
-            payload: None,
+            variant_tag: 1, fields: vec![],
         });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -280,16 +278,14 @@ impl<'a> FuncLowering<'a> {
         });
         self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 0, variant_idx: 0,
-            payload: Some(wrapped_addr),
+            variant_tag: 0, fields: vec![(1, wrapped_addr)],
         });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 5. None branch: tag=1
         self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 1, variant_idx: 0,
-            payload: None,
+            variant_tag: 1, fields: vec![],
         });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -390,8 +386,7 @@ impl<'a> FuncLowering<'a> {
         });
         self.lir_func.block_mut(err_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: result_sid,
-            variant_tag: 1, variant_idx: 1,
-            payload: Some(err_addr),
+            variant_tag: 1, fields: vec![(2, err_addr)],
         });
         self.lir_func.block_mut(err_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -413,8 +408,7 @@ impl<'a> FuncLowering<'a> {
         };
         self.lir_func.block_mut(ok_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: result_sid,
-            variant_tag: 0, variant_idx: 0,
-            payload: Some(ok_payload),
+            variant_tag: 0, fields: vec![(1, ok_payload)],
         });
         self.lir_func.block_mut(ok_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -481,16 +475,14 @@ impl<'a> FuncLowering<'a> {
             // Some branch: EnumInit { tag=0, payload=raw_val }
             self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
-                variant_tag: 0, variant_idx: 0,
-                payload: Some(raw_val),
+                variant_tag: 0, fields: vec![(1, raw_val)],
             });
             self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
             // None branch: EnumInit { tag=1 }
             self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
-                variant_tag: 1, variant_idx: 0,
-                payload: None,
+                variant_tag: 1, fields: vec![],
             });
             self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -500,8 +492,7 @@ impl<'a> FuncLowering<'a> {
             // Unsigned/float: always Some (this case is rare)
             self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
-                variant_tag: 0, variant_idx: 0,
-                payload: Some(raw_val),
+                variant_tag: 0, fields: vec![(1, raw_val)],
             });
             self.emit_post_call_zeros(args, bb);
             bb
@@ -618,16 +609,14 @@ impl<'a> FuncLowering<'a> {
         let _ = match_ty; // payload field type is looked up by struct_id in EnumInit
         self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 0, variant_idx: 0,
-            payload: Some(match_addr),
+            variant_tag: 0, fields: vec![(1, match_addr)],
         });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 6. None: tag=1
         self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 1, variant_idx: 0,
-            payload: None,
+            variant_tag: 1, fields: vec![],
         });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 
@@ -695,16 +684,14 @@ impl<'a> FuncLowering<'a> {
         let _ = payload_ty; // payload type is carried via struct_id in EnumInit
         self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 0, variant_idx: 0,
-            payload: Some(raw_ptr),
+            variant_tag: 0, fields: vec![(1, raw_ptr)],
         });
         self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
         // 5. None: tag=1
         self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
-            variant_tag: 1, variant_idx: 0,
-            payload: None,
+            variant_tag: 1, fields: vec![],
         });
         self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
 

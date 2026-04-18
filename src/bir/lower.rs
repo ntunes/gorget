@@ -63,7 +63,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     let value = c_sizeof_lir_type(&ty, structs) as i64;
                     new_insts.push(Inst::IConst { dst, ty: LirType::I64, value });
                 }
-                Inst::EnumInit { target, struct_id, variant_tag, variant_idx, payload } => {
+                Inst::EnumInit { target, struct_id, variant_tag, fields } => {
                     // 1) Write tag field (field 0).
                     let tag_ptr = alloc_value(&mut next);
                     new_insts.push(Inst::FieldPtr {
@@ -80,9 +80,16 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     });
                     new_insts.push(Inst::Store { ptr: tag_ptr, value: tag_val });
 
-                    // 2) Write payload (field 1 + variant_idx) if provided.
-                    if let Some(payload_val) = payload {
-                        let field_idx = 1 + variant_idx;
+                    // 2) Write each payload field via a plain `Store`. Each
+                    //    backend's Store handler already dispatches on
+                    //    `val_types` to pick scalar-store vs aggregate-memcpy —
+                    //    same mechanism `StructInit` relies on. EnumInit's
+                    //    payload values come from heterogeneous sources
+                    //    (`lower_operand` returns a scalar or aggregate value;
+                    //    wrap helpers pass pointers from slot-addr); letting
+                    //    the backend Store decide keeps the single source of
+                    //    truth at the val_types layer.
+                    for (field_idx, payload_val) in fields {
                         let payload_ptr = alloc_value(&mut next);
                         new_insts.push(Inst::FieldPtr {
                             dst: payload_ptr,
@@ -90,19 +97,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                             struct_id,
                             field: field_idx,
                         });
-                        let payload_ty = structs
-                            .get(struct_id.0 as usize)
-                            .and_then(|s| s.fields.get(field_idx as usize))
-                            .map(|(_, t)| t.clone())
-                            .unwrap_or(LirType::I64);
-                        emit_store_or_memcpy(
-                            &mut new_insts,
-                            &mut next,
-                            structs,
-                            payload_ptr,
-                            payload_val,
-                            &payload_ty,
-                        );
+                        new_insts.push(Inst::Store { ptr: payload_ptr, value: payload_val });
                     }
                 }
                 Inst::EnumCheck { dst, value, struct_id, variant_tag } => {

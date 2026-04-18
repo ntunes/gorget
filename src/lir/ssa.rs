@@ -544,9 +544,9 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
                 sub(a);
             }
         }
-        Inst::EnumInit { target, payload, .. } => {
+        Inst::EnumInit { target, fields, .. } => {
             sub(target);
-            if let Some(p) = payload { sub(p); }
+            for (_, v) in fields.iter_mut() { sub(v); }
         }
         Inst::EnumCheck { value, .. } => sub(value),
         Inst::EnumExtract { value, .. } => sub(value),

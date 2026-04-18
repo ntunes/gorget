@@ -663,8 +663,7 @@ impl<'a> FuncLowering<'a> {
                                     target: fptr,
                                     struct_id: field_enum_sid,
                                     variant_tag: tag_ordinal as u32,
-                                    variant_idx: 0,
-                                    payload: None,
+                                    fields: vec![],
                                 });
                                 continue;
                             }
@@ -1037,52 +1036,54 @@ impl<'a> FuncLowering<'a> {
                     slot,
                 });
 
-                // Store tag (field 0).
                 let tag_ordinal = self.resolve_variant_ordinal(type_name, variant);
-                let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
-                let tag_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                    dst: tag_ptr,
-                    base,
-                    struct_id,
-                    field: 0,
-                });
-                self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                    ptr: tag_ptr,
-                    value: tag_val,
-                });
-
-                // Store variant fields (offset: 1 + sum of preceding variant fields).
                 let field_offset = self.resolve_variant_field_offset(type_name, variant);
                 // Look up field types for Null → enum promotion (same as StructInit).
                 let variant_field_types = self.resolve_variant_field_types(type_name, variant);
+
+                // Collect payload (field_index, value) pairs for canonical
+                // `Inst::EnumInit`. `Null`-for-nested-enum fields are handled
+                // inline by emitting a per-field `FieldPtr + EnumInit` pair —
+                // those nested inits write their own tag byte into the parent
+                // struct's zero-initialized slot, so they must stay separate.
+                let mut init_fields: Vec<(u32, ValueId)> = Vec::with_capacity(fields.len());
+                let mut nested_null_inits: Vec<(u32, StructId, u32)> = Vec::new();
+
                 for (i, field_op) in fields.iter().enumerate() {
-                    // Special-case: Null field for an enum type (e.g. Some(None)).
+                    let abs_field_idx = (field_offset + i) as u32;
                     if matches!(field_op, Operand::Constant(Constant::Null)) {
                         if let Some(Some(fty)) = variant_field_types.get(i) {
                             if let Some((field_enum_sid, fld_tag_ordinal)) = self.find_enum_null_variant(*fty) {
-                                let fptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                                    dst: fptr, base, struct_id,
-                                    field: (field_offset + i) as u32,
-                                });
-                                self.emit_enum_tag_store(fptr, field_enum_sid, fld_tag_ordinal, bb);
+                                nested_null_inits.push((abs_field_idx, field_enum_sid, fld_tag_ordinal as u32));
                                 continue;
                             }
                         }
                     }
-
                     let val = self.lower_operand(field_op, bb);
+                    init_fields.push((abs_field_idx, val));
+                }
+
+                // Emit the canonical EnumInit — writes tag + all non-Null payload fields.
+                self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                    target: base,
+                    struct_id,
+                    variant_tag: tag_ordinal as u32,
+                    fields: init_fields,
+                });
+
+                // For Null-for-nested-enum fields: emit FieldPtr to the payload
+                // slot, then a unit EnumInit to set the nested enum's tag byte.
+                for (abs_field_idx, nested_sid, nested_tag) in nested_null_inits {
                     let fptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                        dst: fptr,
-                        base,
-                        struct_id,
-                        field: (field_offset + i) as u32,
+                        dst: fptr, base, struct_id,
+                        field: abs_field_idx,
                     });
-                    self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                        ptr: fptr,
-                        value: val,
+                    self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                        target: fptr,
+                        struct_id: nested_sid,
+                        variant_tag: nested_tag,
+                        fields: vec![],
                     });
                 }
 
