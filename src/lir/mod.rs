@@ -357,6 +357,35 @@ pub enum Inst {
         src: ValueId,
         ty: LirType,
     },
+
+    /// Canonical-op: dynamic dispatch through a trait object's vtable.
+    ///
+    /// `object` is a pointer to the `{trait}_TraitObj` fat-struct
+    /// (`{ data, vtable }`). `trait_name` and `method` identify the vtable
+    /// slot. BIR lowering expands into:
+    ///
+    /// ```text
+    ///   FieldPtr  %vtbl_ptr = &object.vtable        ; field 1
+    ///   Load      %vtbl     = *vtbl_ptr             ; ptr to vtable
+    ///   FieldPtr  %fnp_ptr  = &vtbl.{method}        ; per-trait layout
+    ///   Load      %fnp      = *fnp_ptr
+    ///   FieldPtr  %data_ptr = &object.data          ; field 0
+    ///   Load      %data     = *data_ptr
+    ///   CallPtr   dst = %fnp(%data, args...)        ; arg_abis applied
+    /// ```
+    ///
+    /// Not yet emitted — scaffolding for the follow-up commit that lifts
+    /// the per-concrete-type direct `Call(fid)` path and the via-delegation
+    /// stubs into a single canonical op. Step 7 of the BIR lift plan.
+    TraitCall {
+        dst: Option<ValueId>,
+        object: ValueId,
+        trait_name: String,
+        method: String,
+        args: Vec<ValueId>,
+        arg_abis: Vec<crate::ir::abi::AbiKind>,
+        ret_ty: LirType,
+    },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
     /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
@@ -543,7 +572,8 @@ impl Inst {
             Inst::Call { dst, .. }
             | Inst::CallExtern { dst, .. }
             | Inst::CallPtr { dst, .. }
-            | Inst::CallClosure { dst, .. } => *dst,
+            | Inst::CallClosure { dst, .. }
+            | Inst::TraitCall { dst, .. } => *dst,
         }
     }
 
@@ -632,6 +662,11 @@ impl Inst {
             }
             Inst::NamedFieldPtr { base, .. } => vec![*base],
             Inst::CowClone { src, .. } => vec![*src],
+            Inst::TraitCall { object, args, .. } => {
+                let mut v = vec![*object];
+                v.extend(args);
+                v
+            }
         }
     }
 }

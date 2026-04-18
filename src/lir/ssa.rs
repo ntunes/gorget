@@ -556,6 +556,10 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         }
         Inst::NamedFieldPtr { base, .. } => sub(base),
         Inst::CowClone { src, .. } => sub(src),
+        Inst::TraitCall { object, args, .. } => {
+            sub(object);
+            for a in args.iter_mut() { sub(a); }
+        }
         Inst::SlotLoad { .. }
         | Inst::SlotAddr { .. }
         | Inst::IConst { .. }

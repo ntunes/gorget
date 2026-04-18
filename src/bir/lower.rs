@@ -245,6 +245,7 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::StructInit { .. }
                     | Inst::NamedFieldPtr { .. }
                     | Inst::CowClone { .. }
+                    | Inst::TraitCall { .. }
             ) {
                 return true;
             }

@@ -1309,6 +1309,10 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         }
         Inst::NamedFieldPtr { base, .. } => { *base = next(&uses, &mut idx); }
         Inst::CowClone { src, .. } => { *src = next(&uses, &mut idx); }
+        Inst::TraitCall { object, args, .. } => {
+            *object = next(&uses, &mut idx);
+            for a in args { *a = next(&uses, &mut idx); }
+        }
     }
 }
 

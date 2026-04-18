@@ -2327,7 +2327,8 @@ fn emit_inst(
         | Inst::EnumExtract { .. }
         | Inst::StructInit { .. }
         | Inst::NamedFieldPtr { .. }
-        | Inst::CowClone { .. } => {
+        | Inst::CowClone { .. }
+        | Inst::TraitCall { .. } => {
             unreachable!("canonical LIR op survived BIR lowering — validator should have rejected it");
         }
 

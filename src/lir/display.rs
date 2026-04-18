@@ -181,6 +181,18 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::CowClone { dst, src, ty } => {
             write!(f, "{dst}: {ty} = cow_clone {src}")
         }
+        Inst::TraitCall { dst, object, trait_name, method, args, ret_ty, .. } => {
+            if let Some(d) = dst {
+                write!(f, "{d}: {ret_ty} = trait_call {object}, {trait_name}::{method}(")?;
+            } else {
+                write!(f, "trait_call {object}, {trait_name}::{method}(")?;
+            }
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write!(f, "{a}")?;
+            }
+            write!(f, ")")
+        }
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),
