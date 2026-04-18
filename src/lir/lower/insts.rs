@@ -1166,38 +1166,49 @@ impl<'a> FuncLowering<'a> {
                 let struct_id = self.resolve_struct_id(gir_type_id);
                 let type_name = self.resolve_type_name(gir_type_id);
                 let field_offset = self.resolve_variant_field_offset(&type_name, variant);
+                let payload_field_idx = (field_offset + *field as usize) as u32;
 
-
-                let fptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                    dst: fptr,
-                    base: base_val,
-                    struct_id,
-                    field: (field_offset + *field as usize) as u32,
-                });
-                // If destination is Ptr(T), return field address as pointer reference.
+                // If destination is Ptr(T), return the field address (not value).
                 // This happens when the scrutinee is a borrowed enum (Ptr param).
                 let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
                 if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                    let fptr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        dst: fptr,
+                        base: base_val,
+                        struct_id,
+                        field: payload_field_idx,
+                    });
                     self.store_to_local(*dst, fptr, bb);
                 } else {
-                    let result = self.lir_func.next_value();
                     let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
-                    // Check BEFORE field_ty is moved into the Load instruction.
+                    // Check BEFORE field_ty is moved into the EnumExtract instruction.
                     let is_str_field = matches!(&field_ty, LirType::Struct(sid) if
                         self.module_structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    // Canonical `Inst::EnumExtract` — carries the struct_id +
+                    // payload_field + declared field type explicitly. BIR
+                    // expands to `FieldPtr + Load` (same as before).
+                    let result = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::EnumExtract {
                         dst: result,
-                        ptr: fptr,
+                        value: base_val,
+                        struct_id,
+                        payload_field: payload_field_idx,
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
                     // Thin-pointer String: zero the source field after extraction
-                    // to prevent double-free. With 32-byte Str structs, extraction
-                    // was a value copy (independent cap). With char* thin pointers,
-                    // extraction copies the pointer — both source and dest point to
-                    // the same header+data. Zeroing the source transfers ownership.
+                    // to prevent double-free. With char* thin pointers, extraction
+                    // copies the pointer — both source and dest point to the same
+                    // header+data. Zeroing the source transfers ownership.
                     if is_str_field {
+                        let fptr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                            dst: fptr,
+                            base: base_val,
+                            struct_id,
+                            field: payload_field_idx,
+                        });
                         let null_val = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
                         self.lir_func.block_mut(bb).insts.push(Inst::Store {
