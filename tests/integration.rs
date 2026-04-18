@@ -1977,6 +1977,17 @@ missing ok
 }
 
 #[test]
+fn set_user_key_hashable() {
+    run_gg(
+        "set_user_key_hashable.gg",
+        "\
+finds alice
+missing ok
+2",
+    );
+}
+
+#[test]
 fn sigil_type_args() {
     run_gg("sigil_type_args.gg", "6\nada\nbob\n30");
 }

@@ -1662,6 +1662,39 @@ pub(super) fn emit_call_extern(
                             write!(out, " {dv}.elem_materialize = (__gorget_drop_fn){mat_fn};").unwrap();
                         }
                     }
+                    // Set/HashSet constructor: wire Hashable/Equatable bridges
+                    // + key_drop / key_clone for user-type elements. GorgetSet
+                    // is the same struct as GorgetMap with val_size=0, so the
+                    // same `hash_fn` / `eq_fn` / `key_*` fields apply. The
+                    // regular elem_drop/clone on the set's data array is
+                    // handled via the Dict-style wiring below since
+                    // `gorget_ordered_set_new` / `gorget_set_new` both return
+                    // a GorgetMap.
+                    if (name.starts_with("gorget_ordered_set_new") || name.starts_with("gorget_set_new"))
+                        && (orig.starts_with("Set__") || orig.starts_with("HashSet__"))
+                    {
+                        let prefix = if orig.starts_with("Set__") { "Set__" } else { "HashSet__" };
+                        if let Some(rest) = orig.strip_prefix(prefix) {
+                            // Set constructor mangling is `Set__T__new` /
+                            // `Set__T__new_str` / `Set__T__with_capacity` /
+                            // `Set__T` (bare). Strip the method suffix if
+                            // present; whatever remains is the element type.
+                            let elem_type = rest.strip_suffix("__new_str")
+                                .or_else(|| rest.strip_suffix("__new"))
+                                .or_else(|| rest.strip_suffix("__with_capacity"))
+                                .unwrap_or(rest);
+                            if is_user_hashable_key(elem_type, module) {
+                                write!(out, " {dv}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{elem_type};").unwrap();
+                                write!(out, " {dv}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{elem_type};").unwrap();
+                                if module.recursive_drop_structs.contains_key(elem_type)
+                                    || module.recursive_drop_enums.contains_key(elem_type)
+                                {
+                                    write!(out, " {dv}.key_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
+                                    write!(out, " {dv}.key_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
+                                }
+                            }
+                        }
+                    }
                     // Dict/HashMap constructor: set val_drop + val_clone
                     if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
                         && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))

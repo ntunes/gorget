@@ -1,0 +1,42 @@
+# Set keyed by a user struct with a String field.
+#
+# Mirror of `dict_user_key_hashable.gg` for the Set runtime path.
+# Sets use the same `GorgetMap` substrate with `val_size=0`, so the
+# `hash_fn` / `eq_fn` / `key_*` bridges wired in `c_lir/mod.rs` do the
+# same job: membership checks go through the user's `@derive(Hashable)`
+# + `@derive(Equatable)` methods instead of byte-FNV + memcmp.
+#
+# An explicit `hash_of` + `==` keeps the derived methods reachable —
+# IR-level reachability otherwise prunes them since the Set's runtime
+# lookup isn't a Gorget-level call.
+
+from std.hash import hash_of
+
+@derive(Equatable, Hashable)
+struct Named:
+    int id
+    String name
+
+int main():
+    int _h = hash_of[Named](Named(0, "x"))
+    Named probe = Named(0, "x")
+    if probe == probe:
+        _h = _h + 0
+
+    Set[Named] s = Set[Named]()
+    s.add(Named(1, "alice"))
+    s.add(Named(2, "bob"))
+
+    # Fresh String allocation with the same content — byte-FNV / memcmp
+    # without wiring would miss this.
+    String alice2 = "alice"
+    if s.contains(Named(1, alice2)):
+        print("finds alice")
+    else:
+        print("MISSED alice")
+
+    if not s.contains(Named(99, "nobody")):
+        print("missing ok")
+
+    print(s.len())
+    return 0

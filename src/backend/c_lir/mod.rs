@@ -155,12 +155,15 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
         for block in &func.blocks {
             for inst in &block.insts {
                 if let Inst::CallExtern { name, original_name, .. } = inst {
-                    // Constructors may appear either as the still-mangled
-                    // `Dict__K__V` name (handled by `emit_collection_constructor`)
-                    // or already mapped to `gorget_dict_new` with the original
-                    // name preserved in `original_name` (handled by the post-call
-                    // val_drop/clone path). Cover both forms.
-                    let lookup_name = match (name.as_str(), original_name) {
+                    // The original_name (when present) captures the
+                    // still-mangled Dict__K__V or Set__T constructor. The
+                    // direct `name` path captures calls that haven't been
+                    // re-routed yet. Cover both.
+                    //
+                    // Constructor names end with `__new` / `__new_str` /
+                    // `__with_capacity` on the mapped form, or are bare
+                    // `Dict__K__V` / `Set__T` on the pre-map form.
+                    let (is_mapped_constructor, lookup_name) = match (name.as_str(), original_name) {
                         ("gorget_dict_new", Some(orig))
                         | ("gorget_map_new", Some(orig))
                         | ("gorget_dict_new_str", Some(orig))
@@ -168,8 +171,8 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
                         | ("gorget_set_new", Some(orig))
                         | ("gorget_set_with_capacity", Some(orig))
                         | ("gorget_ordered_set_new", Some(orig))
-                        | ("gorget_ordered_set_new_str", Some(orig)) => orig.as_str(),
-                        _ => name.as_str(),
+                        | ("gorget_ordered_set_new_str", Some(orig)) => (true, orig.as_str()),
+                        _ => (false, name.as_str()),
                     };
                     let (prefix, is_set) = if lookup_name.starts_with("Dict__") {
                         ("Dict__", false)
@@ -186,17 +189,25 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
                         Some(r) => r,
                         None => continue,
                     };
-                    // Strip the trailing `__new` / `__new_str` method segment
-                    // (present on the mapped names) before peeling the key.
-                    let rest = rest.strip_suffix("__new_str")
-                        .or_else(|| rest.strip_suffix("__new"))
-                        .unwrap_or(rest);
-                    // Skip method calls like `Dict__K__V__put` — only the
-                    // constructor form needs key-type extraction.
-                    let last = rest.rsplit("__").next().unwrap_or("");
-                    if !is_collection_type_constructor(last) {
-                        continue;
-                    }
+                    // On the mapped form, rest looks like `Named__new` /
+                    // `Named__new_str` / `Named__with_capacity`; strip the
+                    // method-suffix to leave the element / key type. On the
+                    // pre-map form rest IS the type (`Named` or `K__V`).
+                    let rest = if is_mapped_constructor {
+                        rest.strip_suffix("__new_str")
+                            .or_else(|| rest.strip_suffix("__new"))
+                            .or_else(|| rest.strip_suffix("__with_capacity"))
+                            .unwrap_or(rest)
+                    } else {
+                        // Pre-map: the last `__` segment must be a collection
+                        // type constructor (primitive name) — otherwise this
+                        // is a method call like `Dict__K__V__put` and we skip.
+                        let last = rest.rsplit("__").next().unwrap_or("");
+                        if !is_collection_type_constructor(last) {
+                            continue;
+                        }
+                        rest
+                    };
                     let key = if is_set {
                         rest.to_string()
                     } else {
