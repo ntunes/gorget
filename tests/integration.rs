@@ -2015,6 +2015,11 @@ fn stdlib_iter_map_filter() {
 }
 
 #[test]
+fn iter_method_sugar() {
+    run_gg("iter_method_sugar.gg", "1\n2\n3");
+}
+
+#[test]
 fn vector_swap_fill() {
     run_gg(
         "vector_swap_fill.gg",

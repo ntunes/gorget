@@ -1,0 +1,31 @@
+# Iterator method sugar — `v.iter().take(n)` works end-to-end.
+#
+# Previously tripped two compiler bugs:
+#
+#   1. `discover_transitive` only walked Function-kind instances, so nested
+#      generic types inside equip method bodies (e.g. VectorIter[int]
+#      inside Vector[int].iter()) were never discovered.
+#
+#   2. Forward reference in monomorphization order: TakeIter[int] (from
+#      type annotation) gets registered before VectorIter[int] (from
+#      equip body). TakeIter's `inner: VectorIter[T]` field then resolved
+#      to UNIT_TYPE → void at the struct level, producing illegal
+#      `*(void *)` derefs downstream.
+#
+# Fixed by (1) extending discover_transitive to walk equip method bodies
+# and (2) running monomorphization in two passes — first registers names,
+# second fills in field types so forward references resolve.
+
+from std.collections import Vector
+from std.iter import VectorIter, TakeIter
+
+equip [T] VectorIter[T]:
+    TakeIter[T] take(self, int n):
+        return TakeIter[T](self, n)
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+    TakeIter[int] t = v.iter().take(3)
+    for x in t:
+        print(x)
+    return 0

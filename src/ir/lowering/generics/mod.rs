@@ -717,17 +717,71 @@ impl GenericCollector {
 
     /// Phase 3: Monomorphize all discovered instantiations.
     /// Creates TypeDefs for generic structs/enums and registers them in TypeMapper/TypeRegistry.
+    ///
+    /// The instance order is discovery order (type annotations first, then
+    /// transitively through bodies). That order can have forward references:
+    /// `TakeIter[int]` (seen from a let-type annotation) gets registered
+    /// before `VectorIter[int]` (only discovered via Vector's iter() equip
+    /// method body), yet `TakeIter[T]` has `inner: VectorIter[T]`. On the
+    /// first pass, TakeIter[int]'s field resolves to UNIT_TYPE because
+    /// VectorIter[int] isn't in `named_types` yet.
+    ///
+    /// We fix this by running the struct/enum monomorphization pass twice.
+    /// The first pass registers every user-generic struct/enum name (even
+    /// if some fields are UNIT_TYPE). The second pass overwrites each
+    /// TypeDef with correctly-resolved fields now that all names are
+    /// available.
+    ///
+    /// Two passes is enough for any DAG — circular references between
+    /// user generic structs would be a separate design issue (they'd need
+    /// pointer-indirection anyway to terminate the layout). Option / Result
+    /// and Collection aliases are single-pass (their TypeDefs depend only
+    /// on their type args, which resolve immediately).
     pub fn monomorphize_types(
         &self,
         mapper: &mut TypeMapper,
         registry: &mut TypeRegistry,
     ) {
+        // First pass: register names (fields may have forward-ref UNIT_TYPE).
+        self.monomorphize_types_once(mapper, registry, /*force_rebuild=*/ false);
+        // Second pass: re-build user struct/enum TypeDefs with all names now
+        // in `named_types`. Forward references resolve correctly this time.
+        self.monomorphize_types_once(mapper, registry, /*force_rebuild=*/ true);
+    }
+
+    fn monomorphize_types_once(
+        &self,
+        mapper: &mut TypeMapper,
+        registry: &mut TypeRegistry,
+        force_rebuild: bool,
+    ) {
         for (base_name, type_args, mangled_name, kind) in &self.instances {
+            // Runtime collection types (Vector, Dict, etc.) are declared as
+            // `struct Vector[T]: pass` in std.collections so they land in
+            // `struct_templates`, but their real layout is the opaque
+            // GorgetArray / GorgetMap / … runtime structs. Skip the
+            // second-pass rebuild for them — their "fields" are always
+            // empty anyway, and re-running the rebuild has been observed
+            // to perturb downstream FieldPtr resolution on unrelated
+            // types (self-host lowerer hits `FieldPtr on Str` OOB without
+            // this guard).
+            let is_runtime_collection = matches!(
+                base_name.as_str(),
+                "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box"
+                    | "Channel" | "RWLock" | "Shared" | "Weak" | "Heap"
+                    | "Mutex" | "Guard" | "ReadGuard" | "WriteGuard"
+            );
             match kind {
                 TemplateKind::Struct => {
                     if let Some(template) = self.struct_templates.get(base_name) {
-                        monomorphize_struct(template, type_args, mangled_name, mapper, registry);
-                    } else if matches!(base_name.as_str(), "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
+                        if force_rebuild {
+                            if !is_runtime_collection {
+                                remonomorphize_struct_fields(template, type_args, mangled_name, mapper, registry);
+                            }
+                        } else {
+                            monomorphize_struct(template, type_args, mangled_name, mapper, registry);
+                        }
+                    } else if is_runtime_collection {
                         // Runtime collection types — no template to monomorphize, register alias
                         if !mapper.named_types.contains_key(mangled_name) {
                             super::types::register_collection_alias(mapper, registry, base_name, type_args, mangled_name);
@@ -736,7 +790,11 @@ impl GenericCollector {
                 }
                 TemplateKind::Enum => {
                     if let Some(template) = self.enum_templates.get(base_name) {
-                        monomorphize_enum(template, type_args, mangled_name, mapper, registry);
+                        if force_rebuild {
+                            remonomorphize_enum_fields(template, type_args, mangled_name, mapper, registry);
+                        } else {
+                            monomorphize_enum(template, type_args, mangled_name, mapper, registry);
+                        }
                     }
                 }
                 TemplateKind::Function => {
@@ -1156,6 +1214,85 @@ fn monomorphize_enum(
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
+}
+
+/// Re-monomorphize a generic struct's fields after all user-generic names
+/// have been registered in the first pass. This is the fix-up pass for
+/// forward references (e.g. `TakeIter[int].inner: VectorIter[int]` where
+/// `VectorIter[int]` wasn't yet in `named_types` on the first pass).
+///
+/// Builds a fresh TypeDef and registers it via `add_type_def` — since
+/// `name_to_def` is a map, the new entry replaces the old one for lookup
+/// purposes. Existing TypeIds that resolve to `GirType::Named(mangled_name)`
+/// will now see the corrected fields.
+fn remonomorphize_struct_fields(
+    template: &ast::StructDef,
+    type_args: &[Spanned<Type>],
+    mangled_name: &str,
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+) {
+    // Only re-mono if a first-pass TypeDef exists. If first pass skipped this
+    // (e.g. collection alias branch), nothing to fix up.
+    if registry.get_type_def(mangled_name).is_none() {
+        return;
+    }
+
+    let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
+    let mut fields: Vec<StructField> = Vec::new();
+    for f in &template.fields {
+        let field_type = substitute_and_map_mut(mapper, registry, &f.node.type_.node, &subs);
+        fields.push(StructField {
+            name: f.node.name.node.clone(),
+            type_id: field_type,
+        });
+    }
+
+    // Update the existing TypeDef in place — `add_type_def` would push a
+    // duplicate entry, which the validator rejects.
+    if let Some(td) = registry.get_type_def_mut(mangled_name) {
+        td.kind = TypeDefKind::Struct(StructDef { fields });
+    }
+}
+
+/// Re-monomorphize a generic enum's variant fields after all names are
+/// registered. Mirror of `remonomorphize_struct_fields`.
+fn remonomorphize_enum_fields(
+    template: &ast::EnumDef,
+    type_args: &[Spanned<Type>],
+    mangled_name: &str,
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+) {
+    if registry.get_type_def(mangled_name).is_none() {
+        return;
+    }
+    let subs = build_type_substitutions(template.generic_params.as_ref(), type_args);
+    let mut variants: Vec<EnumVariant> = Vec::new();
+    for v in &template.variants {
+        let fields = match &v.node.fields {
+            ast::VariantFields::Unit => vec![],
+            ast::VariantFields::Tuple(types) => {
+                let mut fs = Vec::new();
+                for (i, t) in types.iter().enumerate() {
+                    let field_type = substitute_and_map_mut(mapper, registry, &t.node, &subs);
+                    fs.push(StructField {
+                        name: format!("_{i}"),
+                        type_id: field_type,
+                    });
+                }
+                fs
+            }
+        };
+        variants.push(EnumVariant {
+            name: v.node.name.node.clone(),
+            fields,
+        });
+    }
+
+    if let Some(td) = registry.get_type_def_mut(mangled_name) {
+        td.kind = TypeDefKind::Enum(EnumDef { variants });
+    }
 }
 
 /// Build a substitution map from generic param names to concrete AST types.
