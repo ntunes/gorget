@@ -10,7 +10,7 @@
 # 5. At merge points → insert block parameters (phis), patch terminators.
 # 6. Apply value substitutions across all instructions/terminators.
 
-from lir import LirFunction, LirBlock, LirInst, LirTerm, LirSlot, BlockParam, SwitchCase
+from lir import LirFunction, LirBlock, LirInst, LirTerm, LirSlot, BlockParam, SwitchCase, FieldInit
 from lir import lir_is_scalar, lir_fn_next_value
 from lir import LT_BOOL, LT_F32, LT_F64, LT_PTR
 from std.collections import Vector, Dict
@@ -310,6 +310,26 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
             return ILoad(dst, sub_val(ptr, &subst), ty)
         case IStore(ptr, val):
             return IStore(sub_val(ptr, &subst), sub_val(val, &subst))
+        case IBoxAlloc(dst, inner_ty, val):
+            return IBoxAlloc(dst, inner_ty, sub_val(val, &subst))
+        case IAddressOf(dst, val, ty):
+            return IAddressOf(dst, sub_val(val, &subst), ty)
+        case IStructInit(target, sid, fields):
+            Vector[FieldInit] sub_fields = []
+            int fii = 0
+            while fii < fields.len():
+                FieldInit fi = fields.get(fii).unwrap()
+                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, &subst)))
+                fii += 1
+            return IStructInit(sub_val(target, &subst), sid, sub_fields)
+        case IEnumInit(target, sid, tag, fields):
+            Vector[FieldInit] sub_fields = []
+            int fii = 0
+            while fii < fields.len():
+                FieldInit fi = fields.get(fii).unwrap()
+                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, &subst)))
+                fii += 1
+            return IEnumInit(sub_val(target, &subst), sid, tag, sub_fields)
         case IFieldPtr(dst, base, sid, field):
             return IFieldPtr(dst, sub_val(base, &subst), sid, field)
         case IElemPtr(dst, base, idx, esz):

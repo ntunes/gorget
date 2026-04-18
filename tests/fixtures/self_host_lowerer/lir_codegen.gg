@@ -8,7 +8,7 @@
 
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot
 from lir import LirStructDef, LirExtern, LirGlobal, LirSpawnedFn, LirTestFn, LirBenchFn
-from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo
+from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
@@ -1400,6 +1400,23 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
             return LT_PTR
         case IElemPtr(_, _, _, _):
             return LT_PTR
+        case IBoxAlloc(_, inner_ty, _):
+            # Prefer the registered Box__<inner_struct_name> so downstream
+            # Some(Box(x)) resolves to Option__Box__T rather than falling
+            # through to Option__GorgetString. If inner is scalar or the
+            # Box struct isn't registered, fall back to a typed pointer
+            # (LT_PTR_TO_BASE + inner_sid) or bare LT_PTR.
+            if inner_ty >= LT_STRUCT_BASE:
+                int inner_sid = inner_ty - LT_STRUCT_BASE
+                if inner_sid < m.structs.len():
+                    String inner_name = m.structs.get(inner_sid).unwrap().name
+                    int box_sid = find_struct_type("Box__" + inner_name, &m)
+                    if box_sid >= LT_STRUCT_BASE:
+                        return box_sid
+                return LT_PTR_TO_BASE + inner_sid
+            return LT_PTR
+        case IAddressOf(_, _, _):
+            return LT_PTR
         case ICall(dst, fid, args):
             if dst >= 0 and fid >= 0 and fid < m.functions.len():
                 LirFunction callee = m.functions.get(fid).unwrap()
@@ -1728,6 +1745,14 @@ int inst_dst(LirInst &inst):
             return -1
         case IStore(_, _):
             return -1
+        case IBoxAlloc(dst, _, _):
+            return dst
+        case IAddressOf(dst, _, _):
+            return dst
+        case IStructInit(_, _, _):
+            return -1
+        case IEnumInit(_, _, _, _):
+            return -1
         case IBoundsCheck(_, _):
             return -1
         case IDivCheck(_):
@@ -1757,6 +1782,52 @@ int inst_dst(LirInst &inst):
 
 String v(int id): "__v" + int_to_str(id)
 String s(int id): "__s" + int_to_str(id)
+
+# Build the C lvalue expression for `base->field` given a struct id and
+# field index. Mirrors IFieldPtr's address-of logic but returns the lvalue
+# itself (no `&`), so composable into stores.
+String field_access_lvalue(String base, int struct_id, int field, LirModule &m, Dict[String, String] &sn):
+    if struct_id >= 0 and struct_id < m.structs.len():
+        LirStructDef sdef = m.structs.get(struct_id).unwrap()
+        String sname = c_type_name(LT_STRUCT_BASE + struct_id, &sn)
+        if field < sdef.fields.len():
+            StructField f = sdef.fields.get(field).unwrap()
+            String fname = c_field_name(f.name)
+            if sdef.is_union_layout and field > 0:
+                String vprefix = field_variant_prefix(f.name)
+                int vcount = 0
+                int fi = 1
+                while fi < sdef.fields.len():
+                    StructField sf = sdef.fields.get(fi).unwrap()
+                    if field_variant_prefix(sf.name) == vprefix:
+                        vcount += 1
+                    fi += 1
+                if vcount > 1:
+                    return "((" + sname + " *)(" + base + "))->data." + c_field_name(vprefix) + "." + fname
+                return "((" + sname + " *)(" + base + "))->data." + fname
+            return "((" + sname + " *)(" + base + "))->" + fname
+    return "*((void**)((char*)(" + base + ") + " + int_to_str(field) + " * sizeof(void*)))"
+
+# Emit a single field store: `lvalue = value;` or memcpy for aggregates.
+# Used by IStructInit / IEnumInit expansion.
+String emit_field_store(String target_v, int struct_id, int field, int value, LirModule &m, Dict[String, String] &sn, Dict[int, int] &val_types):
+    String lval = field_access_lvalue(target_v, struct_id, field, &m, &sn)
+    int vty = LT_VOID
+    if val_types.contains(value):
+        vty = val_types.get(value).unwrap()
+    if lir_is_aggregate(vty):
+        return "memcpy(&" + lval + ", &" + v(value) + ", sizeof(" + v(value) + "));"
+    int field_ty = LT_I64
+    if struct_id >= 0 and struct_id < m.structs.len():
+        LirStructDef sdef = m.structs.get(struct_id).unwrap()
+        if field < sdef.fields.len():
+            field_ty = sdef.fields.get(field).unwrap().ty
+    if lir_is_scalar(field_ty):
+        String ft_name = c_type_name(field_ty, &sn)
+        return lval + " = (" + ft_name + ")" + v(value) + ";"
+    if field_ty == LT_PTR or (field_ty >= LT_PTR_TO_BASE and field_ty < LT_STRUCT_BASE):
+        return lval + " = (void*)" + v(value) + ";"
+    return lval + " = " + v(value) + ";"
 
 String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, String] &sn,
                  Dict[int, int] &val_types, Dict[String, int] &slit_map):
@@ -1998,6 +2069,52 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             elif vty == LT_PTR:
                 return "*(void**)(" + v(ptr) + ") = " + v(value) + ";"
             return "*(void**)(" + v(ptr) + ") = " + v(value) + ";"
+
+        # Canonical box-alloc: heap-allocate sizeof(inner_ty), store value there.
+        # Expands to the same scalar/aggregate dispatch IStore uses, with the
+        # allocation + store fused into one statement.
+        case IBoxAlloc(dst, inner_ty, value):
+            String ty_name = c_type_name(inner_ty, &sn)
+            if lir_is_aggregate(inner_ty):
+                return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); memcpy(" + v(dst) + ", &" + v(value) + ", sizeof(" + ty_name + "));"
+            return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); *(" + ty_name + "*)(" + v(dst) + ") = (" + ty_name + ")" + v(value) + ";"
+
+        # Canonical address-of: copy value into the function-scope __at<dst>
+        # temp declared in the prologue, then take its address.
+        case IAddressOf(dst, value, ty):
+            String at_name = "__at" + int_to_str(dst)
+            String ty_name = c_type_name(ty, &sn)
+            if lir_is_aggregate(ty):
+                return "memcpy(&" + at_name + ", &" + v(value) + ", sizeof(" + ty_name + ")); " + v(dst) + " = &" + at_name + ";"
+            return at_name + " = (" + ty_name + ")" + v(value) + "; " + v(dst) + " = &" + at_name + ";"
+
+        # Canonical struct-init: write each (field_idx, value) into *target.
+        # No dst; emits one field store per entry. Unlisted fields untouched.
+        case IStructInit(target, struct_id, fields):
+            String target_v = v(target)
+            String out = ""
+            int fi = 0
+            while fi < fields.len():
+                FieldInit finit = fields.get(fi).unwrap()
+                if fi > 0:
+                    out = out + " "
+                out = out + emit_field_store(target_v, struct_id, finit.index, finit.value, &m, &sn, &val_types)
+                fi += 1
+            if out == "":
+                out = "/* empty struct init */;"
+            return out
+
+        # Canonical enum-init: write tag at field 0, then each payload field.
+        case IEnumInit(target, struct_id, variant_tag, fields):
+            String target_v = v(target)
+            String tag_lval = field_access_lvalue(target_v, struct_id, 0, &m, &sn)
+            String out = tag_lval + " = (int32_t)" + int_to_str(variant_tag) + ";"
+            int fi = 0
+            while fi < fields.len():
+                FieldInit finit = fields.get(fi).unwrap()
+                out = out + " " + emit_field_store(target_v, struct_id, finit.index, finit.value, &m, &sn, &val_types)
+                fi += 1
+            return out
 
         case IFieldPtr(dst, base, struct_id, field):
             if struct_id >= 0 and struct_id < m.structs.len():
@@ -3088,6 +3205,30 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
             String ty_str = c_type_name(bp.ty, &sn)
             out = out + "    " + ty_str + " __bp" + int_to_str(bp.value_id) + ";\n"
             pi += 1
+        bi += 1
+
+    # IAddressOf spill temps — one function-scope typed storage per AddressOf
+    # dst so the &__at<dst> address stays valid for the rest of the function.
+    bi = 0
+    while bi < func.blocks.len():
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        int ii = 0
+        while ii < blk.insts.len():
+            LirInst inst = blk.insts.get(ii).unwrap()
+            match inst:
+                case IAddressOf(dst, _, ty):
+                    String ty_str = c_type_name(ty, &sn)
+                    if ty_str == "void":
+                        ty_str = "void*"
+                    out = out + "    " + ty_str + " __at" + int_to_str(dst)
+                    if lir_is_scalar(ty):
+                        out = out + " = 0"
+                    else:
+                        out = out + " = {0}"
+                    out = out + ";\n"
+                else:
+                    pass
+            ii += 1
         bi += 1
 
     out = out + "\n"
