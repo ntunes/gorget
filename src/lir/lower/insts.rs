@@ -1863,16 +1863,17 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index) =
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter) =
             match method {
-                "each" => (HofOp::Each, false, false, false, false, false, false),
-                "any" => (HofOp::Any, true, false, false, false, false, false),
-                "all" => (HofOp::All, true, false, false, false, false, false),
-                "fold" => (HofOp::Fold, true, true, false, false, false, false),
-                "reduce" => (HofOp::Reduce, true, false, true, false, false, false),
-                "count" => (HofOp::Count, true, false, false, true, false, false),
-                "find" => (HofOp::Find, true, false, false, false, true, false),
-                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true),
+                "each" => (HofOp::Each, false, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false),
+                "filter" => (HofOp::Filter, true, false, false, false, false, false, true),
                 _ => return None,
             };
         if lir_args.len() < 2 {
@@ -1920,7 +1921,7 @@ impl<'a> FuncLowering<'a> {
         } else {
             LirType::Void
         };
-        let _ = (is_count, is_find_index);
+        let _ = (is_count, is_find_index, is_filter);
 
         // Gate out aggregate accumulators AND aggregate elements for
         // fold/reduce/count. The closure's `__call` signature decides
@@ -1943,6 +1944,14 @@ impl<'a> FuncLowering<'a> {
         // backend inliner until AddressOf + Memcpy for the payload is
         // added here.
         if (is_find || is_find_index) && element_ty.is_aggregate() {
+            return None;
+        }
+        // `filter` passes `elem_ptr` to `gorget_array_push` directly
+        // (works for both scalar and aggregate elements), but the
+        // per-element closure call still needs a faithful ABI. For
+        // aggregate elements the closure's `__call` signature isn't
+        // reachable from here — fall through to the backend inliner.
+        if is_filter && element_ty.is_aggregate() {
             return None;
         }
 
