@@ -106,7 +106,7 @@ pub fn collect_top_level(
     let mut ctx = ResolveContext::new();
     // Register built-in core traits.
     for trait_name in &[
-        "Displayable", "Debuggable", "Equatable", "Cloneable", "Hashable", "Drop", "Iterator", "Iterable",
+        "Displayable", "Debuggable", "Equatable", "Cloneable", "Hashable", "Hasher", "Drop", "Iterator", "Iterable",
         "Add", "Sub", "Mul", "Div", "Rem", "Mod", "Neg", "Comparable", "Index", "IndexMut",
         "Default", "From", "TryFrom", "Measurable", "Parseable", "One", "Numeric",
     ] {
@@ -117,7 +117,7 @@ pub fn collect_top_level(
     // Register built-in collection types as Import placeholders so they're always
     // available for type resolution (e.g. Result[Vector[uint8], str] in synthetic modules).
     // The real struct definitions from std.collections replace these when imported.
-    for type_name in &["Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task", "Channel", "Shared", "Weak", "Mutex", "Guard", "TaskGroup"] {
+    for type_name in &["Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task", "Channel", "Shared", "Weak", "Mutex", "Guard", "TaskGroup", "FxHasher"] {
         let _ = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy());
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.

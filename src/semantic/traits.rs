@@ -351,10 +351,44 @@ fn register_builtin_traits(
             });
             m
         }),
-        // Hashable: int hash(self)
+        // Hashable: void hash(self, FxHasher &h) — state-based hashing.
+        // The `FxHasher &h` param is erased to `error_id` so validation
+        // skips the type check (we don't have the FxHasher TypeId at
+        // built-in-registration time; it comes from std.hash).
         ("Hashable", {
             let mut m = FxHashMap::default();
             m.insert("hash".into(), FunctionSig {
+                params: vec![types.error_id],
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: None,
+            });
+            m
+        }),
+        // Hasher: narrow-waist role trait for hash state accumulators.
+        // Implementors provide write_int / write_bytes / write_string /
+        // finish. The concrete FxHasher lives in std.hash.
+        ("Hasher", {
+            let mut m = FxHashMap::default();
+            m.insert("write_int".into(), FunctionSig {
+                params: vec![types.int_id],
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: Some(Ownership::MutableBorrow),
+            });
+            m.insert("write_bytes".into(), FunctionSig {
+                params: vec![types.error_id], // Vector[byte] placeholder
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: Some(Ownership::MutableBorrow),
+            });
+            m.insert("write_string".into(), FunctionSig {
+                params: vec![types.owned_string_id],
+                return_type: types.void_id,
+                has_self: true,
+                self_ownership: Some(Ownership::MutableBorrow),
+            });
+            m.insert("finish".into(), FunctionSig {
                 params: vec![],
                 return_type: types.int_id,
                 has_self: true,
@@ -1281,8 +1315,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 25 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 26);
+        // 26 built-in traits + 1 user-defined trait
+        assert_eq!(registry.traits.len(), 27);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }

@@ -1,0 +1,94 @@
+# std.hash — Hasher/Hashable narrow-waist for content-based hashing.
+#
+# State-based hashing composes: a struct forwards each field into the
+# same Hasher without reinventing the combine step. The concrete
+# algorithm is chosen at the consumer, not at the implementor.
+#
+# `Hasher` is the role trait (write typed chunks of state, produce a
+# final int). `Hashable` is the capability trait implemented by any
+# type that can feed itself into a Hasher.
+#
+# v1 ships a single concrete `FxHasher` — the Hashable trait signature
+# names `FxHasher` directly rather than a generic `H: Hasher` bound so
+# we keep things monomorphic without tripping method-level-generic
+# dispatch, which isn't yet wired through. When that path is fixed,
+# the signature generalizes without breaking callers.
+
+# ── Hasher trait ──────────────────────────────────────────────
+
+trait Hasher:
+    void write_int(&self, int v)
+    void write_bytes(&self, Vector[byte] bytes)
+    void write_string(&self, String s)
+    int finish(self)
+
+# ── FxHasher — default Hasher implementation ─────────────────
+#
+# Simple multiplicative mix (state *% 31 +% input). Fast, well
+# distributed for small inputs, not DoS-resistant. Starts at zero so
+# single-int values hash to themselves.
+#
+# Inherent methods live in an un-qualified `equip FxHasher:` block —
+# those are the names the compiler emits for primitive `.hash(&h)`
+# lowerings (e.g. `FxHasher__write_int`). The `equip FxHasher with
+# Hasher:` block forwards to them so trait-bound code can dispatch
+# through the Hasher vtable.
+
+struct FxHasher:
+    int state
+
+equip FxHasher:
+    void write_int(&self, int v):
+        self.state = self.state *% 31 +% v
+
+    void write_bytes(&self, Vector[byte] bytes):
+        int i = 0
+        int n = bytes.len()
+        while i < n:
+            self.state = self.state *% 31 +% (bytes.get(i).unwrap() as int)
+            i = i + 1
+
+    void write_string(&self, String s):
+        # Hash the raw UTF-8 bytes. Same shape as `write_bytes` but
+        # skips materializing a `Vector[byte]` intermediate.
+        int i = 0
+        int n = s.byte_len()
+        while i < n:
+            self.state = self.state *% 31 +% (s.byte_at(i) as int)
+            i = i + 1
+
+    int finish(self):
+        return self.state
+
+equip FxHasher with Hasher:
+    void write_int(&self, int v):
+        self.state = self.state *% 31 +% v
+
+    void write_bytes(&self, Vector[byte] bytes):
+        int i = 0
+        int n = bytes.len()
+        while i < n:
+            self.state = self.state *% 31 +% (bytes.get(i).unwrap() as int)
+            i = i + 1
+
+    void write_string(&self, String s):
+        int i = 0
+        int n = s.byte_len()
+        while i < n:
+            self.state = self.state *% 31 +% (s.byte_at(i) as int)
+            i = i + 1
+
+    int finish(self):
+        return self.state
+
+# ── hash_of — one-shot convenience ────────────────────────────
+#
+# Computes the hash of a Hashable value using the default FxHasher.
+# Replaces old `.hash()` one-shot callers. Generic code can still do
+# `FxHasher h = FxHasher(0); v.hash(&h); h.finish()` to feed multiple
+# values into a single hasher.
+
+int hash_of[Hashable T](T v):
+    FxHasher h = FxHasher(0)
+    v.hash(&h)
+    return h.finish()

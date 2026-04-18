@@ -136,6 +136,101 @@ fn build_struct_names(module: &LirModule) -> HashMap<u32, String> {
 }
 
 /// Returns true for monomorphized wrapper types that need typedefs to runtime types.
+/// Emit the `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` bridges
+/// for every user type that has both `T__hash` (Hashable) and `T__eq`
+/// (Equatable) impls. The bridges adapt the Gorget-side method ABI to
+/// the runtime's `hash_fn(const void*) -> uint64_t` / `eq_fn(const void*,
+/// const void*) -> bool` signatures so `GorgetMap` can dispatch into
+/// user code at lookup time.
+///
+/// Scans every Dict/Set constructor name in the LIR to know which types
+/// actually end up as keys — wrappers for unused types would be dead
+/// code.
+fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
+    use std::collections::BTreeSet;
+    use std::fmt::Write;
+    use crate::lir::Inst;
+    let mut key_types: BTreeSet<String> = BTreeSet::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::CallExtern { name, original_name, .. } = inst {
+                    // Constructors may appear either as the still-mangled
+                    // `Dict__K__V` name (handled by `emit_collection_constructor`)
+                    // or already mapped to `gorget_dict_new` with the original
+                    // name preserved in `original_name` (handled by the post-call
+                    // val_drop/clone path). Cover both forms.
+                    let lookup_name = match (name.as_str(), original_name) {
+                        ("gorget_dict_new", Some(orig))
+                        | ("gorget_map_new", Some(orig))
+                        | ("gorget_dict_new_str", Some(orig))
+                        | ("gorget_map_new_str", Some(orig))
+                        | ("gorget_set_new", Some(orig))
+                        | ("gorget_set_with_capacity", Some(orig))
+                        | ("gorget_ordered_set_new", Some(orig))
+                        | ("gorget_ordered_set_new_str", Some(orig)) => orig.as_str(),
+                        _ => name.as_str(),
+                    };
+                    let (prefix, is_set) = if lookup_name.starts_with("Dict__") {
+                        ("Dict__", false)
+                    } else if lookup_name.starts_with("HashMap__") {
+                        ("HashMap__", false)
+                    } else if lookup_name.starts_with("Set__") {
+                        ("Set__", true)
+                    } else if lookup_name.starts_with("HashSet__") {
+                        ("HashSet__", true)
+                    } else {
+                        continue;
+                    };
+                    let rest = match lookup_name.strip_prefix(prefix) {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    // Strip the trailing `__new` / `__new_str` method segment
+                    // (present on the mapped names) before peeling the key.
+                    let rest = rest.strip_suffix("__new_str")
+                        .or_else(|| rest.strip_suffix("__new"))
+                        .unwrap_or(rest);
+                    // Skip method calls like `Dict__K__V__put` — only the
+                    // constructor form needs key-type extraction.
+                    let last = rest.rsplit("__").next().unwrap_or("");
+                    if !is_collection_type_constructor(last) {
+                        continue;
+                    }
+                    let key = if is_set {
+                        rest.to_string()
+                    } else {
+                        rest.splitn(2, "__").next().unwrap_or("").to_string()
+                    };
+                    if key.is_empty() { continue; }
+                    if helpers::is_user_hashable_key(&key, module) {
+                        key_types.insert(key);
+                    }
+                }
+            }
+        }
+    }
+    if key_types.is_empty() { return; }
+    writeln!(out, "\n// ── Hashable/Equatable runtime bridges for user-type Dict/Set keys ──").unwrap();
+    for ty in &key_types {
+        let (hash_name, eq_name) = match helpers::hashable_key_fn_names(ty, module) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        writeln!(out,
+            "static uint64_t __gorget_ktable_hash__{ty}(const void* __kp) {{ \
+               __gg_FxHasher __h; __h.state = 0; \
+               {hash_name}(__kp, &__h); \
+               return (uint64_t)__h.state; }}").unwrap();
+        // The Equatable impl's bool eq(self, Self other) takes self by value
+        // through an inout pointer — deref the raw bytes on both sides.
+        writeln!(out,
+            "static bool __gorget_ktable_eq__{ty}(const void* __a, const void* __b) {{ \
+               return {eq_name}(__a, __b); }}").unwrap();
+    }
+    writeln!(out).unwrap();
+}
+
 fn is_monomorphized_wrapper_type(name: &str) -> bool {
     name.starts_with("Channel__")
         || name.starts_with("Shared__")
@@ -750,6 +845,19 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     }
     emit_enum_drop_fns(&mut out, module, &struct_names);
     emit_type_drop_fns(&mut out, module, &struct_names);
+
+    // ── Runtime Hashable/Equatable key bridges ───────────────────
+    //
+    // For every user type that implements both Hashable and Equatable
+    // and appears as a Dict/Set key, emit a `__gorget_ktable_hash__T`
+    // wrapper that constructs an FxHasher, forwards into `T__hash`,
+    // and returns the state, plus a `__gorget_ktable_eq__T` wrapper
+    // that forwards into `T__eq`. `emit_collection_constructor` wires
+    // these into `GorgetMap.hash_fn` / `eq_fn` for user-keyed
+    // constructors — without them the map falls back to byte-FNV +
+    // memcmp which is incorrect for keys holding pointer fields
+    // (String, Vector, …).
+    emit_hashable_key_bridges(&mut out, module);
 
     // Function definitions (skipped in wrappers-only mode — bodies live in LLVM IR)
     if !wrappers_only {

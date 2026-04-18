@@ -3462,7 +3462,8 @@ trait Displayable       # .display() — human-readable representation
 trait Cloneable         # .clone() — deep copy
 trait Comparable        # .compare() — total ordering (enables <, >, <=, >=)
 trait Equatable         # .eq() — equality (enables ==, !=)
-trait Hashable          # .hash() — hash value for HashMap/HashSet
+trait Hashable          # .hash(&h) — state-based hashing into a FxHasher (std.hash)
+trait Hasher            # write_int / write_bytes / write_string / finish — hash state accumulator
 trait Default           # .default() — default value (static method)
 trait Iterable          # .iter() — produce an Iterator
 trait From[T]           # .from(T) — infallible type conversion (static method)

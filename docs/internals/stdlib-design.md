@@ -95,10 +95,14 @@ trait Reader:
     # `buf` is borrowed — the Reader writes into the caller's buffer.
 
 trait Hasher:
-    void write(&self, Str bytes)
+    void write_int(&self, int v)
+    void write_bytes(&self, Vector[byte] bytes)
+    void write_string(&self, String s)
     int finish(self)
     # Hash state. Hashable types forward field bytes into a Hasher; the
     # concrete algorithm (SipHash, FxHash, ...) is chosen by the consumer.
+    # Typed write methods (write_int / write_string) let primitives feed
+    # state without a Vector[byte] round-trip.
 ```
 
 ### Capability Traits (-able / -ible)
@@ -125,7 +129,14 @@ trait Comparable:
 trait Hashable:
     # State-based hashing: composes — struct impls forward field hashes
     # into the same Hasher without re-inventing combine logic.
-    void hash(self, Hasher &h)
+    #
+    # v1 ships a single concrete `FxHasher` and the Hashable signature
+    # names it directly (`void hash(self, FxHasher &h)`). Generalizing
+    # to `void hash[H: Hasher](self, H &h)` is blocked on method-level
+    # generic dispatch through trait methods — tracked in TODO.md.
+    # Swapping in a different Hasher works today via subclass-by-field
+    # composition (wrap FxHasher) until the generic path lands.
+    void hash(self, FxHasher &h)
 
 trait Displayable:
     # User-facing representation. Hand-written, not derived.

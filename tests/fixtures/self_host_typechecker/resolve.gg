@@ -158,6 +158,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("Equatable")
     trait_names.push("Cloneable")
     trait_names.push("Hashable")
+    trait_names.push("Hasher")
     trait_names.push("Drop")
     trait_names.push("Iterator")
     trait_names.push("Iterable")

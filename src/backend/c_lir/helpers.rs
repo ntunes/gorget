@@ -860,6 +860,7 @@ pub(super) fn emit_collection_constructor(
     args: &[ValueId],
     _val_types: &[Option<LirType>],
     _sn: &HashMap<u32, String>,
+    module: &crate::lir::LirModule,
 ) {
     use std::fmt::Write;
     let v = |vid: ValueId| format!("__v{}", vid.0);
@@ -892,6 +893,17 @@ pub(super) fn emit_collection_constructor(
         } else {
             write!(out, "gorget_set_with_capacity(sizeof({elem_type}), {});", v(args[0])).unwrap();
         }
+        // User-type keys with Hashable+Equatable impls: wire the runtime
+        // hash_fn / eq_fn through the synthetic `__gorget_ktable_*` bridges
+        // emitted in `generate_c_inner_impl`. Without this, Set falls back
+        // to byte-FNV / memcmp — correct for POD structs, wrong for any key
+        // with a pointer field (String, Vector, etc.).
+        if is_user_hashable_key(elem_type, module) {
+            if let Some(d) = dst {
+                write!(out, " {}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{elem_type};", v(*d)).unwrap();
+                write!(out, " {}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{elem_type};", v(*d)).unwrap();
+            }
+        }
     } else if name.starts_with("Dict__") || name.starts_with("HashMap__") {
         // Dict__K__V or HashMap__K__V — extract key/value types
         let prefix = if name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
@@ -912,10 +924,67 @@ pub(super) fn emit_collection_constructor(
                 write!(out, " {}.val_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
             }
         }
+        // Wire the Hashable/Equatable bridges for user-type keys (see
+        // comment on Set path above).
+        if is_user_hashable_key(key_type, module) {
+            if let Some(d) = dst {
+                write!(out, " {}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{key_type};", v(*d)).unwrap();
+                write!(out, " {}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{key_type};", v(*d)).unwrap();
+            }
+        }
     } else {
         // Fallback — shouldn't happen
         write!(out, "/* unknown constructor: {name} */ {{0}};").unwrap();
     }
+}
+
+/// Whether `type_c` is a user struct/enum used as a Dict/Set key that has
+/// both `T__hash` (Hashable) and `T__eq` (Equatable) methods in the LIR.
+/// Primitive types (int64_t, double, etc.), `Str` / `GorgetString`, and
+/// monomorphized collection types return false — they have their own
+/// runtime paths (byte-FNV for POD scalars, `_str` constructors for strings).
+pub(super) fn is_user_hashable_key(type_c: &str, module: &crate::lir::LirModule) -> bool {
+    // Skip primitives and runtime types — their hashing is handled by
+    // the runtime directly.
+    if matches!(type_c,
+        "int64_t" | "int32_t" | "int16_t" | "int8_t"
+        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
+        | "double" | "float" | "bool" | "_Bool"
+        | "Str" | "GorgetString"
+    ) {
+        return false;
+    }
+    // Skip monomorphized wrapper types (Option__T, Result__T__E, Vector__T, …).
+    if type_c.contains("__") {
+        return false;
+    }
+    hashable_key_fn_names(type_c, module).is_some()
+}
+
+/// Returns the concrete C function name for `{type}.hash(&h)` / `{type}.eq(other)`
+/// as emitted by the IR lowerer. Trait-impl methods use the `Trait_for_Type`
+/// prefix; direct inherent methods use just `Type__method`. Both forms are
+/// checked so the bridge targets the correct symbol.
+pub(super) fn hashable_key_fn_names(type_c: &str, module: &crate::lir::LirModule) -> Option<(String, String)> {
+    let direct_hash = format!("{type_c}__hash");
+    let direct_eq = format!("{type_c}__eq");
+    let trait_hash = format!("Hashable_for_{type_c}__hash");
+    let trait_eq = format!("Equatable_for_{type_c}__eq");
+    let hash_name = if module.functions.iter().any(|f| f.name == direct_hash) {
+        direct_hash
+    } else if module.functions.iter().any(|f| f.name == trait_hash) {
+        trait_hash
+    } else {
+        return None;
+    };
+    let eq_name = if module.functions.iter().any(|f| f.name == direct_eq) {
+        direct_eq
+    } else if module.functions.iter().any(|f| f.name == trait_eq) {
+        trait_eq
+    } else {
+        return None;
+    };
+    Some((hash_name, eq_name))
 }
 
 /// Maps a runtime function name to its thread-local error check function.

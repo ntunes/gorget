@@ -1,5 +1,7 @@
 # Test @derive attributes on structs
 
+from std.hash import hash_of
+
 # 1. Multiple derives with different field types
 @derive(Equatable, Displayable, Cloneable, Hashable, Default)
 struct Person:
@@ -55,11 +57,11 @@ void main():
     print(d.active)
 
     # --- Hashable ---
-    int h1 = a.hash()
-    int h2 = b.hash()
+    int h1 = hash_of[Person](a)
+    int h2 = hash_of[Person](b)
     if h1 == h2:
         print("hash: same fields same hash")
-    int h3 = c.hash()
+    int h3 = hash_of[Person](c)
     if h1 != h3:
         print("hash: diff fields diff hash")
 

@@ -395,25 +395,23 @@ fn generate_struct_cloneable(type_name: &str, gs: &str, fields: &[(&str, &str)])
 }
 
 fn generate_struct_hashable(type_name: &str, gs: &str, fields: &[(&str, &str)]) -> String {
+    // State-based Hashable: forward each field's hash into the caller's
+    // Hasher. Empty structs write a sentinel so empty-struct keys still
+    // perturb the state (otherwise `Empty()` would hash to the initial
+    // state and collide with every other empty-struct key).
     let body = if fields.is_empty() {
-        "        return 0".to_string()
-    } else if fields.len() == 1 {
-        format!("        return self.{}.hash()", fields[0].0)
+        "        h.write_int(0)".to_string()
     } else {
-        let mut lines = vec![format!(
-            "        int h = self.{}.hash()",
-            fields[0].0
-        )];
-        for (name, _) in &fields[1..] {
-            lines.push(format!("        h = h *% 31 +% self.{name}.hash()"));
-        }
-        lines.push("        return h".to_string());
+        let lines: Vec<String> = fields
+            .iter()
+            .map(|(name, _)| format!("        self.{name}.hash(&h)"))
+            .collect();
         lines.join("\n")
     };
 
     let gp = equip_generic_prefix(gs);
     format!(
-        "equip {gp}{type_name}{gs} with Hashable:\n    int hash(self):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Hashable:\n    void hash(self, FxHasher &h):\n{body}\n"
     )
 }
 
@@ -1093,6 +1091,9 @@ fn generate_enum_cloneable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 }
 
 fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
+    // State-based enum Hashable: feed the variant's ordinal into the
+    // Hasher first (so sibling variants with identical payloads
+    // distinguish themselves), then forward each payload field.
     let gp = equip_generic_prefix(gs);
     let pfx = variant_prefix(type_name, e);
     let mut arms = String::new();
@@ -1112,26 +1113,20 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
             format!("{pfx}{vname}({})", bindings.join(", "))
         };
 
-        let hash_body = if field_count == 0 {
-            format!("return {idx}")
-        } else {
-            let mut lines = vec![format!("int h = {idx}")];
-            for b in &bindings {
-                lines.push(format!("                h = h *% 31 +% {b}.hash()"));
-            }
-            lines.push("                return h".to_string());
-            lines.join("\n")
-        };
+        let mut lines = vec![format!("                h.write_int({idx})")];
+        for b in &bindings {
+            lines.push(format!("                {b}.hash(&h)"));
+        }
+        let hash_body = lines.join("\n");
 
         arms.push_str(&format!(
-            "            case {pattern}:\n\
-             \x20               {hash_body}\n"
+            "            case {pattern}:\n{hash_body}\n"
         ));
     }
 
     format!(
         "equip {gp}{type_name}{gs} with Hashable:\n\
-         \x20   int hash(self):\n\
+         \x20   void hash(self, FxHasher &h):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -1380,21 +1375,21 @@ void main():
     fn test_struct_hashable() {
         let src = generate_struct_hashable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("equip Point with Hashable"));
-        assert!(src.contains("int hash(self)"));
-        assert!(src.contains("self.x.hash()"));
-        assert!(src.contains("h *% 31 +% self.y.hash()"));
+        assert!(src.contains("void hash(self, FxHasher &h)"));
+        assert!(src.contains("self.x.hash(&h)"));
+        assert!(src.contains("self.y.hash(&h)"));
     }
 
     #[test]
     fn test_struct_hashable_single_field() {
         let src = generate_struct_hashable("Wrapper", "", &[("val", "int")]);
-        assert!(src.contains("return self.val.hash()"));
+        assert!(src.contains("self.val.hash(&h)"));
     }
 
     #[test]
     fn test_struct_hashable_no_fields() {
         let src = generate_struct_hashable("Empty", "", &[]);
-        assert!(src.contains("return 0"));
+        assert!(src.contains("h.write_int(0)"));
     }
 
     #[test]

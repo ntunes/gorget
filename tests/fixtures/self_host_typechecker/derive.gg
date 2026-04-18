@@ -340,21 +340,15 @@ String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fie
 
 String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
-    src = src + "    int hash(self):\n"
+    src = src + "    void hash(self, FxHasher &h):\n"
     if fields.len() == 0:
-        src = src + "        return 0\n"
-    elif fields.len() == 1:
-        Param f0 = fields.get(0).unwrap()
-        src = src + "        return self." + f0.param_name + ".hash()\n"
+        src = src + "        h.write_int(0)\n"
     else:
-        Param f0 = fields.get(0).unwrap()
-        src = src + "        int h = self." + f0.param_name + ".hash()\n"
-        int i = 1
+        int i = 0
         while i < fields.len():
             Param f = fields.get(i).unwrap()
-            src = src + "        h = h *% 31 +% self." + f.param_name + ".hash()\n"
+            src = src + "        self." + f.param_name + ".hash(&h)\n"
             i = i + 1
-        src = src + "        return h\n"
     return src
 
 String gen_struct_default(String name, String gs, String gp, Vector[Param] fields):
@@ -556,7 +550,7 @@ String gen_enum_cloneable(String name, String gs, String gp, Vector[EnumVariant]
 
 String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
-    src = src + "    int hash(self):\n"
+    src = src + "    void hash(self, FxHasher &h):\n"
     src = src + "        match self:\n"
     int vi = 0
     while vi < variants.len():
@@ -570,17 +564,12 @@ String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] 
             binds = binds + "a" + int_to_str(fi)
             fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
-        if fc == 0:
-            src = src + "            case " + pat + ":\n"
-            src = src + "                return " + int_to_str(vi) + "\n"
-        else:
-            src = src + "            case " + pat + ":\n"
-            src = src + "                int h = " + int_to_str(vi) + "\n"
-            int hi = 0
-            while hi < fc:
-                src = src + "                h = h *% 31 +% a" + int_to_str(hi) + ".hash()\n"
-                hi = hi + 1
-            src = src + "                return h\n"
+        src = src + "            case " + pat + ":\n"
+        src = src + "                h.write_int(" + int_to_str(vi) + ")\n"
+        int hi = 0
+        while hi < fc:
+            src = src + "                a" + int_to_str(hi) + ".hash(&h)\n"
+            hi = hi + 1
         vi = vi + 1
     return src
 

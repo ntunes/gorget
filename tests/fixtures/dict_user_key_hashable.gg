@@ -1,0 +1,48 @@
+# Dict keyed by a user struct with a String field.
+#
+# Without runtime wiring of `hash_fn` / `eq_fn` the Dict falls back to
+# byte-FNV on the key bytes plus memcmp — correct for POD structs but
+# wrong for keys carrying pointer fields (two Named values with the
+# same `name` string allocated independently hash/compare differently).
+#
+# The bridges emitted in `c_lir/mod.rs::emit_hashable_key_bridges` wire
+# the user's `@derive(Hashable)` + `@derive(Equatable)` methods into the
+# map so membership checks go through value equality.
+#
+# The method-emission is gated by IR-level reachability: the derived
+# methods are only lowered to C when they're referenced from Gorget
+# code. A single explicit `hash_of` + `==` comparison keeps both
+# methods alive so the bridges can target them.
+
+from std.hash import hash_of
+
+@derive(Equatable, Hashable)
+struct Named:
+    int id
+    String name
+
+int main():
+    # Keep the derived Hashable + Equatable methods reachable.
+    int _h = hash_of[Named](Named(0, "x"))
+    Named probe = Named(0, "x")
+    if probe == probe:
+        _h = _h + 0
+
+    Dict[Named, int] d = Dict[Named, int]()
+    d.put(Named(1, "alice"), 100)
+    d.put(Named(2, "bob"), 200)
+
+    # A new String allocation with the same content — byte-FNV/memcmp
+    # without wiring would miss this; the Hashable/Equatable bridges
+    # should find it.
+    String alice2 = "alice"
+    if d.contains(Named(1, alice2)):
+        print("finds alice")
+    else:
+        print("MISSED alice")
+
+    if not d.contains(Named(5, "nobody")):
+        print("missing ok")
+
+    print(d.len())
+    return 0

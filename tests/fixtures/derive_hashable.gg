@@ -1,3 +1,5 @@
+from std.hash import hash_of
+
 @derive(Hashable)
 struct Point:
     int x
@@ -10,33 +12,33 @@ enum Color:
     Blue(int)
 
 void main():
-    # Primitive .hash()
-    int h1 = 42.hash()
-    int h2 = 42.hash()
+    # Primitive hash_of
+    int h1 = hash_of[int](42)
+    int h2 = hash_of[int](42)
     if h1 == h2:
         print("int hash consistent")
 
     String s = "hello"
-    int sh = s.hash()
+    int sh = hash_of[String](s)
     if sh != 0:
         print("str hash nonzero")
 
     # Struct hash equality
     Point a = Point(1, 2)
     Point b = Point(1, 2)
-    if a.hash() == b.hash():
+    if hash_of[Point](a) == hash_of[Point](b):
         print("same fields same hash")
 
     # Struct hash difference
     Point c = Point(3, 4)
-    if a.hash() != c.hash():
+    if hash_of[Point](a) != hash_of[Point](c):
         print("diff fields diff hash")
 
     # Enum variant hashes differ
     Color r = Red()
     Color g = Green()
     Color bl = Blue(42)
-    if r.hash() != g.hash():
+    if hash_of[Color](r) != hash_of[Color](g):
         print("red != green")
-    if r.hash() != bl.hash():
+    if hash_of[Color](r) != hash_of[Color](bl):
         print("red != blue")

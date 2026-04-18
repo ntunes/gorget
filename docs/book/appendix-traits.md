@@ -52,10 +52,31 @@ Enables `<`, `>`, `<=`, `>=` operators. Returns `-1`, `0`, or `1`.
 
 ```gorget
 trait Hashable:
-    int hash(self)
+    void hash(self, FxHasher &h)
 ```
 
-Required for use as `Dict` keys or `Set` elements.
+Required for use as `Dict` keys or `Set` elements. Hashable is
+state-based: an implementation forwards each field into the caller's
+`FxHasher` rather than producing a standalone `int`. Struct
+implementations compose automatically — `self.x.hash(&h);
+self.y.hash(&h)` — with no combine logic to maintain. For one-shot
+callers (e.g. asserting two values hash equally in a test), use
+`hash_of[T](v)` from `std.hash`.
+
+### Hasher
+
+```gorget
+trait Hasher:
+    void write_int(&self, int v)
+    void write_bytes(&self, Vector[byte] bytes)
+    void write_string(&self, String s)
+    int finish(self)
+```
+
+Accumulates hash state. `std.hash` ships one concrete implementation,
+`FxHasher`, which uses a simple multiplicative mix suitable for most
+in-process keyed collections. Swap in a different Hasher implementation
+when DoS-resistance matters.
 
 ### Ordinal
 

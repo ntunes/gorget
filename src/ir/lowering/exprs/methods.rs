@@ -329,18 +329,65 @@ pub(super) fn lower_method_call(
         return FunctionBuilder::copy(dst);
     }
 
-    if method_name == "hash" {
+    // Hashable.hash(self, FxHasher &h) — state-based hashing.
+    //
+    // Primitives don't carry a user-written `equip T with Hashable`
+    // block (the C backend chokes on it, see history), so the IR
+    // lowers `x.hash(&h)` on scalar/bool/String/byte receivers
+    // directly to the matching `FxHasher.write_*` method. The one-arg
+    // form is the trait method; the no-arg legacy form is gone —
+    // callers use `hash_of(x)` (in `std.hash`) for the one-shot.
+    if method_name == "hash" && args.len() == 1 {
         let recv_type = infer_operand_type_full(ctx, &recv, builder);
-        if recv_type == I64_TYPE || recv_type == I32_TYPE {
-            let dst = builder.call_extern("__gorget_hash_int", vec![recv], I64_TYPE);
-            return FunctionBuilder::copy(dst);
+        // Unwrap Ptr(T) to T — inside a monomorphized generic body the
+        // receiver arrives as Ptr(GorgetString) / Ptr(int64_t) because
+        // the formerly-generic T param is passed by pointer ABI. The
+        // primitive-hash path still applies to the pointee type.
+        let recv_type_unwrapped = match ctx.type_registry.get(recv_type) {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+            _ => recv_type,
+        };
+        let is_int_like = recv_type_unwrapped == I64_TYPE || recv_type_unwrapped == I32_TYPE
+            || recv_type_unwrapped == I16_TYPE || recv_type_unwrapped == I8_TYPE
+            || recv_type_unwrapped == U64_TYPE || recv_type_unwrapped == U32_TYPE
+            || recv_type_unwrapped == U16_TYPE || recv_type_unwrapped == U8_TYPE;
+        let is_string = ctx.type_mapper.is_string_type(recv_type_unwrapped);
+        if is_int_like || recv_type_unwrapped == BOOL_TYPE || is_string {
+            // FxHasher__write_int takes (void* h, int64_t v) — first arg is
+            // a pointer ABI param. Lowering args[0] directly is fine since
+            // it's already borrowed with `&h` at the call site.
+            let h = lower_call_arg(ctx, builder, &args[0], None, "FxHasher__write_int", 0);
+            // If the receiver arrived as Ptr(T) (generic-param pointer ABI),
+            // dereference it before passing to the FxHasher method. This
+            // keeps the call flat: FxHasher__write_int((void*)h, int64_t v).
+            let recv_was_ptr = matches!(
+                ctx.type_registry.get(recv_type),
+                Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+            );
+            let deref_recv = if recv_was_ptr {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+                    let loaded = builder.load_ref(place.clone(), recv_type_unwrapped);
+                    FunctionBuilder::copy(loaded)
+                } else {
+                    recv
+                }
+            } else {
+                recv
+            };
+            if is_string {
+                builder.call_void("FxHasher__write_string", vec![h, deref_recv]);
+            } else if recv_type_unwrapped == BOOL_TYPE {
+                let cast = builder.cast(I64_TYPE, deref_recv);
+                builder.call_void("FxHasher__write_int", vec![h, FunctionBuilder::copy(cast)]);
+            } else if recv_type_unwrapped == I64_TYPE {
+                builder.call_void("FxHasher__write_int", vec![h, deref_recv]);
+            } else {
+                let cast = builder.cast(I64_TYPE, deref_recv);
+                builder.call_void("FxHasher__write_int", vec![h, FunctionBuilder::copy(cast)]);
+            }
+            return Operand::Constant(Constant::Unit);
         }
-        if recv_type == BOOL_TYPE {
-            let cast = builder.cast(I64_TYPE, recv);
-            let dst = builder.call_extern("__gorget_hash_int", vec![FunctionBuilder::copy(cast)], I64_TYPE);
-            return FunctionBuilder::copy(dst);
-        }
-        // Str.hash() is handled by the normal method dispatch path below
+        // Fall through to normal dispatch for user-defined types.
     }
 
     // Primitive .clone() is a no-op — POD types copy by assignment, so cloning

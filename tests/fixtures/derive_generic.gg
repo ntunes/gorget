@@ -1,3 +1,5 @@
+from std.hash import hash_of
+
 @derive(Equatable, Displayable, Cloneable)
 struct Pair[T]:
     T first
@@ -25,5 +27,5 @@ void main():
         print("wrapper not equal")
     print(f"{w}")
     print(f"{e}")
-    int h = w.hash()
+    int h = hash_of[Wrapper[int]](w)
     print("hash ok")

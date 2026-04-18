@@ -305,12 +305,25 @@ Point copy = p.clone()
 
 ### Hashable
 
-Enables use as `Dict` keys and `Set` elements:
+Enables use as `Dict` keys and `Set` elements. State-based:
+implementations forward each field into the caller's `FxHasher`
+(imported from `std.hash`) instead of producing a standalone int.
 
 ```gorget
+from std.hash import FxHasher
+
 equip Point with Hashable:
-    int hash(self):
-        return int(self.x) * 31 + int(self.y)
+    void hash(self, FxHasher &h):
+        self.x.hash(&h)
+        self.y.hash(&h)
+```
+
+For a one-shot int digest (e.g. in tests), use `hash_of[T](v)`:
+
+```gorget
+from std.hash import hash_of
+
+int h = hash_of[Point](p)
 ```
 
 ### Ordinal
@@ -422,7 +435,7 @@ Config c = Config.default()    # Config(0, 0, false, "")
 | `Displayable` | `String display(self)` | f-string interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `==` and `!=` |
 | `Comparable` | `int compare(self, Self other)` | `<`, `>`, `<=`, `>=` |
-| `Hashable` | `int hash(self)` | `Dict` keys, `Set` elements |
+| `Hashable` | `void hash(self, FxHasher &h)` | `Dict` keys, `Set` elements |
 | `Ordinal` | `int ordinal(self)` | Zero-based variant index (enums only) |
 | `Cloneable` | `Self clone(self)` | Deep copying |
 | `Drop` | `void drop(!self)` | Auto-cleanup on scope exit |

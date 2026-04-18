@@ -2529,7 +2529,7 @@ The compiler automatically registers the following core traits. They cannot be r
 |---|---|---|---|
 | `Displayable` | `String display(self)` | `String` | String interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `bool` | `==` and `!=` operators |
-| `Hashable` | `int hash(self)` | `int` | `Dict` keys, `Set` elements |
+| `Hashable` | `void hash(self, FxHasher &h)` | `void` | `Dict` keys, `Set` elements |
 | `Ordinal` | `int ordinal(self)` | `int` | Zero-based variant index (enums only) |
 | `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
 | `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
@@ -2587,15 +2587,25 @@ if p1 == p2:
 
 #### Hashable
 
-Required for types used as `Dict` keys or `Set` elements. Should return a consistent integer hash.
+Required for types used as `Dict` keys or `Set` elements. State-based:
+the implementation forwards each field into the caller's `FxHasher`
+instead of returning a standalone integer. Struct implementations
+compose — field-by-field calls to `.hash(&h)` — with no combine
+logic.
 
 ```gorget
-equip Point with Hashable:
-    int hash(self):
-        return self.x * 31 + self.y
+from std.hash import FxHasher, hash_of
 
-Set[Point] points = {}
+equip Point with Hashable:
+    void hash(self, FxHasher &h):
+        self.x.hash(&h)
+        self.y.hash(&h)
+
+Set[Point] points = Set[Point]()
 points.add(Point(1.0, 2.0))
+
+# One-shot int digest (rarely needed — Dict/Set handle this internally):
+int h = hash_of[Point](Point(1.0, 2.0))
 ```
 
 #### Ordinal

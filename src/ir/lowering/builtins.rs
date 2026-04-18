@@ -567,7 +567,11 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
         // Queries
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_str_codepoint_count"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "capacity", runtime_callee: Some("gorget_str_capacity"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
-        BuiltinMethodDecl { name: "hash", runtime_callee: Some("gorget_str_hash"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
+        // Note: String's one-shot .hash() returning int was removed when
+        // Hashable migrated to state-based `hash(self, FxHasher &h)`.
+        // One-shot callers go through `hash_of(s)` in std.hash; the
+        // Hashable impl on String is synthesized at IR-lowering time in
+        // `lower_method_call` (calls FxHasher__write_string).
         BuiltinMethodDecl { name: "ord", runtime_callee: Some("gorget_str_ord"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
         // View operations → return cap=0 Str borrowing from receiver's buffer.
         // The compiler tracks ViewOf(receiver) and auto-materializes on source mutation.

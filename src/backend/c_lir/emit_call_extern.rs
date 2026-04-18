@@ -364,7 +364,7 @@ pub(super) fn emit_call_extern(
                 // Check if it's a constructor (name is just a type, no method suffix)
                 let last_part = name.rsplit("__").next().unwrap_or("");
                 if is_collection_type_constructor(last_part) {
-                    emit_collection_constructor(out, name, dst, args, val_types, sn);
+                    emit_collection_constructor(out, name, dst, args, val_types, sn, module);
                     return;
                 }
             }
@@ -1672,6 +1672,7 @@ pub(super) fn emit_call_extern(
                                 .or_else(|| rest.strip_suffix("__new"))
                                 .unwrap_or(rest);
                             if let Some(pos) = rest_stripped.find("__") {
+                                let key_type = &rest_stripped[..pos];
                                 let val_type = &rest_stripped[pos + 2..];
                                 if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
                                     write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
@@ -1689,6 +1690,25 @@ pub(super) fn emit_call_extern(
                                 }
                                 if val_type == "GorgetString" {
                                     write!(out, " {dv}.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
+                                }
+                                // User-type key with Hashable+Equatable: wire the
+                                // runtime bridges so Dict membership uses the user's
+                                // hash/eq rather than byte-FNV/memcmp (see
+                                // `emit_hashable_key_bridges` in c_lir/mod.rs).
+                                if is_user_hashable_key(key_type, module) {
+                                    write!(out, " {dv}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{key_type};").unwrap();
+                                    write!(out, " {dv}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{key_type};").unwrap();
+                                    // User key types often hold resource fields
+                                    // (String / Vector / …). Wire the same
+                                    // clone/drop the Dict uses for values so the
+                                    // key slot is reclaimed on remove/drop and
+                                    // duplicated on put.
+                                    if module.recursive_drop_structs.contains_key(key_type)
+                                        || module.recursive_drop_enums.contains_key(key_type)
+                                    {
+                                        write!(out, " {dv}.key_drop = (__gorget_drop_fn){key_type}__drop;").unwrap();
+                                        write!(out, " {dv}.key_clone = (__gorget_drop_fn){key_type}__clone_inplace;").unwrap();
+                                    }
                                 }
                             }
                         }
