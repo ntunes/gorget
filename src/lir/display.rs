@@ -167,6 +167,20 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::EnumExtract { dst, value, struct_id, payload_field, ty } => {
             write!(f, "{dst}: {ty} = enum_extract {value}, struct{}, field={payload_field}", struct_id.0)
         }
+        Inst::StructInit { target, struct_id, fields } => {
+            write!(f, "struct_init {target}, struct{}, fields=[", struct_id.0)?;
+            for (i, (idx, val)) in fields.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write!(f, "{idx}={val}")?;
+            }
+            write!(f, "]")
+        }
+        Inst::NamedFieldPtr { dst, base, struct_name, field_name } => {
+            write!(f, "{dst}: ptr = named_field_ptr {base}, {struct_name}.{field_name}")
+        }
+        Inst::CowClone { dst, src, ty } => {
+            write!(f, "{dst}: {ty} = cow_clone {src}")
+        }
         Inst::NullPtr { dst } => write!(f, "{dst}: ptr = null"),
         Inst::FuncAddr { dst, func } => write!(f, "{dst}: ptr = func_addr {func}"),
         Inst::NamedFuncAddr { dst, name } => write!(f, "{dst}: ptr = named_func_addr @{name}"),

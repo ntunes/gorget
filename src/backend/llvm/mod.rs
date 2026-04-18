@@ -2357,7 +2357,10 @@ fn emit_inst(
         Inst::SizeOf { .. }
         | Inst::EnumInit { .. }
         | Inst::EnumCheck { .. }
-        | Inst::EnumExtract { .. } => {
+        | Inst::EnumExtract { .. }
+        | Inst::StructInit { .. }
+        | Inst::NamedFieldPtr { .. }
+        | Inst::CowClone { .. } => {
             unreachable!("canonical LIR op survived BIR lowering — validator should have rejected it");
         }
 

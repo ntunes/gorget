@@ -1303,6 +1303,12 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         }
         Inst::EnumCheck { value, .. } => { *value = next(&uses, &mut idx); }
         Inst::EnumExtract { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::StructInit { target, fields, .. } => {
+            *target = next(&uses, &mut idx);
+            for (_, v) in fields.iter_mut() { *v = next(&uses, &mut idx); }
+        }
+        Inst::NamedFieldPtr { base, .. } => { *base = next(&uses, &mut idx); }
+        Inst::CowClone { src, .. } => { *src = next(&uses, &mut idx); }
     }
 }
 

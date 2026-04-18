@@ -637,6 +637,11 @@ impl<'a> FuncLowering<'a> {
                     })
                     .unwrap_or_else(|| vec![None; fields.len()]);
 
+                // Collect field-index/value pairs that StructInit will write.
+                // Null-for-enum-field needs special handling (nested EnumInit) and
+                // is emitted inline; everything else flows through StructInit.
+                let mut init_fields: Vec<(u32, ValueId)> = Vec::with_capacity(fields.len());
+
                 for (i, field_op) in fields.iter().enumerate() {
                     // Special-case: Null operand for an enum-typed field (e.g. Option<T> = None).
                     // Instead of emitting NullPtr (memcpy from NULL → segfault), properly
@@ -645,8 +650,8 @@ impl<'a> FuncLowering<'a> {
                         if let Some(Some(fty)) = field_type_ids.get(i) {
                             if let Some((field_enum_sid, tag_ordinal)) = self.find_enum_null_variant(*fty) {
                                 // The parent struct slot is zero-initialized (= {0}), so the
-                                // payload bytes are already zero.  We only need to set the tag
-                                // to the null-variant ordinal (e.g. None=1).
+                                // payload bytes are already zero. We only need to initialize the
+                                // nested enum's tag — emit FieldPtr + EnumInit (payload=None).
                                 let fptr = self.lir_func.next_value();
                                 self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                                     dst: fptr,
@@ -654,17 +659,12 @@ impl<'a> FuncLowering<'a> {
                                     struct_id,
                                     field: i as u32,
                                 });
-                                let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
-                                let tag_ptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                                    dst: tag_ptr,
-                                    base: fptr,
+                                self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                                    target: fptr,
                                     struct_id: field_enum_sid,
-                                    field: 0,
-                                });
-                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                                    ptr: tag_ptr,
-                                    value: tag_val,
+                                    variant_tag: tag_ordinal as u32,
+                                    variant_idx: 0,
+                                    payload: None,
                                 });
                                 continue;
                             }
@@ -679,16 +679,14 @@ impl<'a> FuncLowering<'a> {
                     }
 
                     let val = self.lower_operand(field_op, bb);
-                    let fptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                        dst: fptr,
-                        base,
+                    init_fields.push((i as u32, val));
+                }
+
+                if !init_fields.is_empty() {
+                    self.lir_func.block_mut(bb).insts.push(Inst::StructInit {
+                        target: base,
                         struct_id,
-                        field: i as u32,
-                    });
-                    self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                        ptr: fptr,
-                        value: val,
+                        fields: init_fields,
                     });
                 }
             }

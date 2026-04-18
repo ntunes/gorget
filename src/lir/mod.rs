@@ -313,6 +313,50 @@ pub enum Inst {
         payload_field: u32,
         ty: LirType,
     },
+
+    /// Canonical-op: initialize a struct's fields in-place.
+    ///
+    /// Writes each `(field_index, value)` in `fields` to the corresponding
+    /// field of the struct at `target`. BIR lowering expands into one
+    /// `FieldPtr` + `Store` / `Memcpy` per entry. Fields absent from the
+    /// list are left untouched (caller is expected to have zeroed the slot
+    /// beforehand if required).
+    ///
+    /// Step 5 of the BIR lift plan.
+    StructInit {
+        target: ValueId,
+        struct_id: StructId,
+        fields: Vec<(u32, ValueId)>,
+    },
+
+    /// Canonical-op: symbolic access to a named field on an opaque runtime
+    /// struct (e.g. `Str.data`, `Str.len`, `GorgetArray.cap`).
+    ///
+    /// Resolves through the shared runtime-layout table during BIR lowering
+    /// so backends don't hardcode `getelementptr i8, ptr %x, i64 8`-style
+    /// offsets. Expanded into `FieldPtr { field: <resolved-index> }`.
+    ///
+    /// Step 5 of the BIR lift plan.
+    NamedFieldPtr {
+        dst: ValueId,
+        base: ValueId,
+        struct_name: String,
+        field_name: String,
+    },
+
+    /// Canonical-op: explicit copy-on-write materialization for a string
+    /// or other cap-0 view type.
+    ///
+    /// Emits a call to the runtime's `gorget_string_copy_cow` (or equivalent
+    /// for other types) that realizes a view into an owning copy. BIR
+    /// lowering expands into the concrete `CallExtern` sequence.
+    ///
+    /// Step 5 of the BIR lift plan.
+    CowClone {
+        dst: ValueId,
+        src: ValueId,
+        ty: LirType,
+    },
     FuncAddr { dst: ValueId, func: FuncId },
     /// Address of a function by name (module or extern). Produces a Ptr.
     /// Used to store function pointers in collection structs (elem_drop, elem_clone, etc.).
@@ -452,7 +496,7 @@ impl Inst {
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
             | Inst::ClosurePack { .. } | Inst::MoveSlot { .. }
             | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop
-            | Inst::EnumInit { .. } => None,
+            | Inst::EnumInit { .. } | Inst::StructInit { .. } => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -464,6 +508,8 @@ impl Inst {
             | Inst::SizeOf { dst, .. }
             | Inst::EnumCheck { dst, .. }
             | Inst::EnumExtract { dst, .. }
+            | Inst::NamedFieldPtr { dst, .. }
+            | Inst::CowClone { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::NamedFuncAddr { dst, .. }
             | Inst::GlobalAddr { dst, .. }
@@ -578,6 +624,14 @@ impl Inst {
             }
             Inst::EnumCheck { value, .. } => vec![*value],
             Inst::EnumExtract { value, .. } => vec![*value],
+
+            Inst::StructInit { target, fields, .. } => {
+                let mut v = vec![*target];
+                for (_, val) in fields { v.push(*val); }
+                v
+            }
+            Inst::NamedFieldPtr { base, .. } => vec![*base],
+            Inst::CowClone { src, .. } => vec![*src],
         }
     }
 }

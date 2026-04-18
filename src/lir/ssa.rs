@@ -550,6 +550,12 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         }
         Inst::EnumCheck { value, .. } => sub(value),
         Inst::EnumExtract { value, .. } => sub(value),
+        Inst::StructInit { target, fields, .. } => {
+            sub(target);
+            for (_, v) in fields.iter_mut() { sub(v); }
+        }
+        Inst::NamedFieldPtr { base, .. } => sub(base),
+        Inst::CowClone { src, .. } => sub(src),
         Inst::SlotLoad { .. }
         | Inst::SlotAddr { .. }
         | Inst::IConst { .. }

@@ -71,6 +71,21 @@ fn check_inst(inst: &Inst, fn_name: &str, block_id: u32) -> Result<(), BirError>
             block_id,
             opcode: "EnumExtract",
         }),
+        Inst::StructInit { .. } => Err(BirError::UnloweredCanonicalOp {
+            fn_name: fn_name.to_string(),
+            block_id,
+            opcode: "StructInit",
+        }),
+        Inst::NamedFieldPtr { .. } => Err(BirError::UnloweredCanonicalOp {
+            fn_name: fn_name.to_string(),
+            block_id,
+            opcode: "NamedFieldPtr",
+        }),
+        Inst::CowClone { .. } => Err(BirError::UnloweredCanonicalOp {
+            fn_name: fn_name.to_string(),
+            block_id,
+            opcode: "CowClone",
+        }),
 
         // === Primitives — the catch-all (default) ===
         _ => Ok(()),
