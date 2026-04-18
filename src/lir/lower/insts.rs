@@ -1863,12 +1863,13 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce) = match method {
-            "each" => (HofOp::Each, false, false, false),
-            "any" => (HofOp::Any, true, false, false),
-            "all" => (HofOp::All, true, false, false),
-            "fold" => (HofOp::Fold, true, true, false),
-            "reduce" => (HofOp::Reduce, true, false, true),
+        let (hof_op, produces_result, is_fold, is_reduce, is_count) = match method {
+            "each" => (HofOp::Each, false, false, false, false),
+            "any" => (HofOp::Any, true, false, false, false),
+            "all" => (HofOp::All, true, false, false, false),
+            "fold" => (HofOp::Fold, true, true, false, false),
+            "reduce" => (HofOp::Reduce, true, false, true, false),
+            "count" => (HofOp::Count, true, false, false, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
@@ -1905,7 +1906,7 @@ impl<'a> FuncLowering<'a> {
         // For fold/reduce, the closure return type = dst's declared
         // type (the accumulator type). Derive it from the destination
         // local's GIR type to match what the caller expects. For
-        // `any`/`all` it's Bool; for `each` it's Void.
+        // `any`/`all`/`count` it's Bool; for `each` it's Void.
         let closure_ret_ty = if is_fold || is_reduce {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
@@ -1915,18 +1916,22 @@ impl<'a> FuncLowering<'a> {
         } else {
             LirType::Void
         };
+        let _ = is_count;
 
-        // For fold/reduce, gate out aggregate accumulators AND
-        // aggregate elements for now. The closure's `__call` signature
-        // decides per-arg whether it wants the struct by value or by
-        // pointer, and mirroring that choice faithfully requires
-        // looking up the closure's function signature at emit time
-        // (not yet wired through `FuncLowering`). Scalar-only covers
-        // the overwhelming majority of fold/reduce call sites; the
-        // rest still inline in the backend handlers.
+        // Gate out aggregate accumulators AND aggregate elements for
+        // fold/reduce/count. The closure's `__call` signature decides
+        // per-arg whether it wants the struct by value or by pointer,
+        // and mirroring that choice faithfully requires looking up the
+        // closure's function signature at emit time (not yet wired
+        // through `FuncLowering`). Scalar-only covers the overwhelming
+        // majority of these call sites; the rest still inline in the
+        // backend handlers.
         if (is_fold || is_reduce)
             && (closure_ret_ty.is_aggregate() || element_ty.is_aggregate())
         {
+            return None;
+        }
+        if is_count && element_ty.is_aggregate() {
             return None;
         }
 

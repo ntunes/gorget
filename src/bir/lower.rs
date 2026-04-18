@@ -235,7 +235,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::Any
                         | HofOp::All
                         | HofOp::Fold
-                        | HofOp::Reduce => {
+                        | HofOp::Reduce
+                        | HofOp::Count => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -296,6 +297,19 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     closure_arg_abis,
                                     closure_ret_ty,
                                     dst.expect("reduce must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::Count => expand_count(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    dst.expect("count must carry a dst ValueId"),
                                     remaining,
                                     orig_term,
                                 ),
@@ -999,6 +1013,96 @@ fn expand_reduce(
     func.block_mut(ctx.body_bb).terminator =
         Term::Jump(ctx.check_bb, vec![ctx.next_i, new_acc]);
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: Count, dst, … }` — count elements for
+/// which the predicate returns true.
+///
+/// Threads an i64 accumulator through `check_bb` as the second block
+/// param, incrementing it by `(Bool→I64) IntCast` of the closure's
+/// result on each iteration. This matches the prior backend behaviour
+/// of `zext i1 pred to i64; add i64 cnt, inc`.
+#[allow(clippy::too_many_arguments)]
+fn expand_count(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let elem_abi_hint = closure_arg_abis.first().copied();
+
+    // Accumulator init = 0_i64. Park the constant in current_bb.
+    let zero = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::IConst {
+            dst: zero,
+            ty: LirType::I64,
+            value: 0,
+        });
+
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![(LirType::I64, zero)],
+        None,
+    );
+    let cnt_val = ctx.extra_check_params[0];
+
+    // body_bb: CallClosure(closure, [elem]) → pred: Bool.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+    // inc = (i64) pred.
+    let inc = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::IntCast {
+        dst: inc,
+        value: pred,
+        to: LirType::I64,
+    });
+    // cnt_new = cnt + inc.
+    let cnt_new = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::Add {
+        dst: cnt_new,
+        ty: LirType::I64,
+        lhs: cnt_val,
+        rhs: inc,
+        overflow: Overflow::Wrap,
+    });
+
+    // check_bb: cond ? body_bb : done_bb(cnt).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![cnt_val],
+    };
+    // body_bb: jump back with next_i + cnt_new.
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i, cnt_new]);
+    // done_bb: param = dst.
+    func.block_mut(ctx.done_bb).params.push((dst, LirType::I64));
     func.block_mut(ctx.done_bb).insts = remaining;
     func.block_mut(ctx.done_bb).terminator = orig_term;
 }
