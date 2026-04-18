@@ -1,12 +1,16 @@
-# std.iter — minimal lazy iterator support (Phase 2 placeholder)
+# std.iter — lazy iterator support.
 #
 # Provides `VectorIter[T]` and `Vector.iter()` so a Vector can be iterated
-# lazily through the `Iterator[T]` protocol. Adapters: TakeIter[T],
-# SkipIter[T]. Terminal: `collect_vec` materializes back to Vector.
+# lazily through the `Iterator[T]` protocol. Concrete adapters:
+# `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
+# `FilterIter[T, F]` — each is a state-machine struct, no trait-object
+# dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
+# `any_iter`, `all_iter`, `fold_iter`, `join_iter`.
 #
-# NOTE: Adapter-method sugar (`.take(n)` / `.skip(n)`) on VectorIter is
-# not yet wired because it trips a monomorphization ordering bug —
-# users construct adapters with `TakeIter[int](v.iter(), n)` for now.
+# NOTE: Adapter-method sugar (`.take(n)` / `.map(f)` / `.filter(p)`)
+# on VectorIter is not yet wired because it trips a monomorphization
+# ordering bug — users construct adapters directly with
+# `TakeIter[int](v.iter(), n)`, `MapIter[int, int, F](v.iter(), f)` etc.
 
 from std.collections import Vector
 
@@ -71,20 +75,102 @@ equip [T] ChainIter[T] with Iterator[T]:
                     self.on_first = false
         return self.b.next()
 
-# Terminal — materialize any iterator of type Iter into a Vector[T] using
-# the for-loop protocol. `Iter` must implement `Iterator[T]`.
+# ── Map / Filter adapters ────────────────────────────────────
+#
+# Stream-transform iterators. The upstream iterator is stored by
+# value (no boxing); the closure / predicate likewise inlined.
+# Monomorphization over the concrete source type + closure type
+# keeps the chain fused.
+
+struct MapIter[T, U, F]:
+    VectorIter[T] inner
+    F f
+
+equip [T, U, F] MapIter[T, U, F] with Iterator[U]:
+    Option[U] next(&self):
+        Option[T] v = self.inner.next()
+        match v:
+            case Some(x):
+                # Hoist the closure out of the field access before
+                # calling — `self.f(x)` is parsed as a method call on
+                # the field and link-fails. Storing in a local turns
+                # it into a closure call.
+                F cb = self.f
+                return Some(cb(!x))
+            case None:
+                return None
+
+struct FilterIter[T, F]:
+    VectorIter[T] inner
+    F pred
+
+equip [T, F] FilterIter[T, F] with Iterator[T]:
+    Option[T] next(&self):
+        while true:
+            Option[T] v = self.inner.next()
+            match v:
+                case Some(x):
+                    F cb = self.pred
+                    if cb(x):
+                        return Some(!x)
+                case None:
+                    return None
+        return None
+
+# ── Terminals ────────────────────────────────────────────────
+#
+# All terminals take the concrete iterator type as a type param
+# to avoid trait-object dispatch.
+
+# Materialize any iterator of type Iter into a Vector[T] using the
+# for-loop protocol. `Iter` must implement `Iterator[T]`.
 Vector[T] collect_vec[T, Iter](Iter iter):
     Vector[T] out = Vector[T]()
     for x in iter:
         out.push(x)
     return !out
 
-# Terminal — count the elements produced by any Iterator-shaped iter.
-# Explicitly generic over the concrete iterator type to avoid trait
-# object dispatch; callers write `count_iter[VectorIter[int]](vit)`.
+# Count the elements produced by any Iterator-shaped iter.
 int count_iter[Iter](Iter iter):
     int n = 0
     for _ in iter:
         n = n + 1
     return n
+
+# Sum all elements of an int-iterator.
+int sum_iter[Iter](Iter iter):
+    int acc = 0
+    for x in iter:
+        acc = acc + x
+    return acc
+
+# Left fold with an initial accumulator.
+# `f` takes `(acc, element)` and returns the next acc.
+A fold_iter[A, T, Iter, F](Iter iter, A init, F f):
+    A acc = init
+    for x in iter:
+        acc = f(acc, x)
+    return acc
+
+# Short-circuiting terminals: return as soon as the predicate
+# decides the result.
+bool any_iter[T, Iter, F](Iter iter, F pred):
+    for x in iter:
+        if pred(x):
+            return true
+    return false
+
+bool all_iter[T, Iter, F](Iter iter, F pred):
+    for x in iter:
+        if not pred(x):
+            return false
+    return true
+
+# Textual join is deferred — the naive `int_to_str`-based version
+# tripped a cross-crate import that force-monomorphized
+# `VectorIter[uint8]` in modules that don't otherwise use it,
+# causing a forward-reference during validation. Callers materialize
+# to a Vector via `collect_vec` and join through `String.join` for
+# now; a Displayable-bound `join_iter` lands when the generic-HOF
+# closure propagation is sorted (tracked as Phase 2c follow-up).
 

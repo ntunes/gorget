@@ -1,0 +1,41 @@
+# std.iter — MapIter / FilterIter + sum / any / all terminals.
+#
+# Constructs adapters directly (MapIter[T, U, F] / FilterIter[T, F])
+# because method-sugar on VectorIter tripping the monomorphization
+# ordering gap is still open. Terminal functions are generic over
+# the concrete iterator type to avoid trait-object dispatch.
+
+from std.collections import Vector
+from std.iter import VectorIter, MapIter, FilterIter, collect_vec, sum_iter, any_iter, all_iter
+
+int doubled(int x):
+    return x * 2
+
+bool is_big(int x):
+    return x > 2
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+
+    # map → [2, 4, 6, 8, 10]
+    VectorIter[int] it1 = v.iter()
+    MapIter[int, int, int(int)] mi = MapIter[int, int, int(int)](it1, doubled)
+    Vector[int] m = collect_vec[int, MapIter[int, int, int(int)]](mi)
+    print(m.len())
+    print(m.get(0).unwrap())
+    print(m.get(4).unwrap())
+
+    # filter → [3, 4, 5]
+    VectorIter[int] it2 = v.iter()
+    FilterIter[int, bool(int)] fi = FilterIter[int, bool(int)](it2, is_big)
+    Vector[int] f = collect_vec[int, FilterIter[int, bool(int)]](fi)
+    print(f.len())
+
+    # sum (terminal)
+    print(sum_iter[VectorIter[int]](v.iter()))
+
+    # any / all (short-circuiting terminals)
+    print(any_iter[int, VectorIter[int], bool(int)](v.iter(), is_big))
+    print(all_iter[int, VectorIter[int], bool(int)](v.iter(), is_big))
+
+    return 0

@@ -2007,6 +2007,14 @@ fn stdlib_iter_collect() {
 }
 
 #[test]
+fn stdlib_iter_map_filter() {
+    run_gg(
+        "stdlib_iter_map_filter.gg",
+        "5\n2\n10\n3\n15\ntrue\nfalse",
+    );
+}
+
+#[test]
 fn stdlib_io_writer() {
     run_gg(
         "stdlib_io_writer.gg",
