@@ -1895,12 +1895,28 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
 
         // Memory
         Inst::Load { dst, ptr, ty } => {
-            // Load from a pointer — always shallow deref.  The GIR drop elaborator
+            // Load from a pointer — always shallow deref. The GIR drop elaborator
             // already determines ownership: if the loaded value needs freeing, it
-            // emits a Drop/MoveZero.  Cloning resource types here would leak if no
+            // emits a Drop/MoveZero. Cloning resource types here would leak if no
             // corresponding Drop exists (which is the common case for collection
             // element reads — the collection owns the data).
-            write!(out, "{} = *({} *)({});", v(*dst), c_type_named(ty, sn), v(*ptr)).unwrap();
+            //
+            // Trust `ty` when concrete; if it's `LirType::Void` (which would emit
+            // illegal C `*(void *)(ptr)`), fall back to the pointer's pointee type
+            // from `ptr_pointee` — that table is populated by `compute_pointer_pointees`
+            // and reflects the actual FieldPtr/SlotAddr struct_id info the LIR carries.
+            // This keeps the backend "dumb" — it reads declared facts, never re-infers —
+            // but fills in when the LIR lowerer emitted an under-specified `Load.ty`.
+            let effective_ty: LirType = if matches!(ty, LirType::Void) {
+                ptr_pointee
+                    .get(ptr.0 as usize)
+                    .and_then(|t| t.as_ref())
+                    .cloned()
+                    .unwrap_or(LirType::Void)
+            } else {
+                ty.clone()
+            };
+            write!(out, "{} = *({} *)({});", v(*dst), c_type_named(&effective_ty, sn), v(*ptr)).unwrap();
         }
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.

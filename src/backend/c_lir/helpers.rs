@@ -1624,7 +1624,19 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
         | Inst::Bitcast { to, .. } => Some(to.clone()),
         Inst::PtrCast { .. } => Some(LirType::Ptr),
 
-        Inst::Load { ty, .. } => Some(ty.clone()),
+        Inst::Load { ty, ptr, .. } => {
+            // Trust the declared type; when the LIR lowerer emitted an
+            // under-specified `Load.ty = Void`, fall back to the pointer's
+            // pointee type from `ptr_pointee`. This keeps val_types usable
+            // downstream when the LIR lowerer didn't propagate a concrete
+            // field/element type onto the Load instruction itself.
+            if matches!(ty, LirType::Void) {
+                if let Some(Some(pt)) = ptr_pointee.get(ptr.0 as usize) {
+                    return Some(pt.clone());
+                }
+            }
+            Some(ty.clone())
+        }
         Inst::FieldPtr { .. } | Inst::ElemPtr { .. } => Some(LirType::Ptr),
 
         Inst::Call { func, .. } => {
