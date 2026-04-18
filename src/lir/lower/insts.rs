@@ -1838,6 +1838,77 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// If `original_name` is a `Vector__<elem>__each` HOF call, emit
+    /// `Inst::HofExpand` in place of the generic extern call and return the
+    /// (possibly updated) block id. Returns `None` when the call doesn't
+    /// match, leaving the caller to dispatch normally.
+    ///
+    /// The closure argument is packed into a `GorgetClosure` pointer via
+    /// `wrap_closure_call_args` so the BIR expansion can dispatch it through
+    /// `Inst::CallClosure { kind: EscapedClosure }`. Closure arg ABI is set
+    /// from the element type (aggregates → Ptr, scalars → Scalar); BIR
+    /// expansion uses this to decide whether to Load the element pointer.
+    fn try_emit_vector_each_hof(
+        &mut self,
+        original_name: &str,
+        args: &[Operand],
+        lir_args: &[ValueId],
+        bb: BlockId,
+    ) -> Option<BlockId> {
+        let rest = original_name.strip_prefix("Vector__")?;
+        let sep = rest.rfind("__")?;
+        let method = &rest[sep + 2..];
+        if method != "each" {
+            return None;
+        }
+        if lir_args.len() < 2 {
+            return None;
+        }
+        let closure_idx = lir_args.len() - 1;
+        // Only handle closures the wrapper can pack today (FuncRef constant
+        // or a local of type `__Closure_…`). Callable parameters and other
+        // shapes fall through to the backend inliners for now.
+        let closure_gir = args.get(closure_idx)?;
+        let wrappable = match closure_gir {
+            Operand::Constant(Constant::FuncRef(_)) => true,
+            Operand::Copy(_) | Operand::Move(_) => self
+                .operand_gir_type_name(closure_gir)
+                .map_or(false, |n| n.starts_with("__Closure_")),
+            _ => false,
+        };
+        if !wrappable {
+            return None;
+        }
+
+        let elem_c_name = &rest[..sep];
+        let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
+
+        // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
+        // expansion can dispatch via `Inst::CallClosure { EscapedClosure }`.
+        let mut lir_args_wrapped = lir_args.to_vec();
+        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+
+        let elem_abi = if element_ty.is_aggregate() {
+            crate::ir::abi::AbiKind::Ptr
+        } else {
+            crate::ir::abi::AbiKind::Scalar
+        };
+
+        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+            coll: lir_args_wrapped[0],
+            hof_op: HofOp::Each,
+            element_ty,
+            value_ty: None,
+            closure: lir_args_wrapped[closure_idx],
+            closure_kind: ClosureDispatchKind::EscapedClosure,
+            closure_ret_ty: LirType::Void,
+            closure_arg_abis: vec![elem_abi],
+            dst: None,
+            init: None,
+        });
+        Some(bb)
+    }
+
     /// Shared extern-call emitter used by both `Instruction::Call` (unresolved)
     /// and `Instruction::CallExtern`.  Handles sizeof synthesis for collection
     /// and concurrency constructors, and struct-return rewriting for mutex lock /
@@ -1851,6 +1922,15 @@ impl<'a> FuncLowering<'a> {
         mut lir_args: Vec<ValueId>,
         bb: BlockId,
     ) -> BlockId {
+        // ── Step 8 of BIR lift plan: HOF intercept ──
+        // Vector.each pathfinder — emit `Inst::HofExpand` and let BIR lowering
+        // generate the loop skeleton. Other HOF variants still flow through the
+        // per-backend inline expanders until they are migrated.
+        if let Some(bb2) = self.try_emit_vector_each_hof(original_name, args, &lir_args, bb) {
+            self.emit_post_call_zeros(args, bb2);
+            return bb2;
+        }
+
         // Guard/ReadGuard/WriteGuard get/get_ptr: inline as FieldPtr + Load
         // instead of calling the runtime function. This preserves the concrete
         // inner type through the LIR so the c_lir backend emits correct code.

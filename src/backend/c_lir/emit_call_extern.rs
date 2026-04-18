@@ -696,7 +696,11 @@ pub(super) fn emit_call_extern(
             };
 
             if let Some((elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                if dst.is_some() || method == "find" || method == "each" || method == "sort" || method == "sort_by" || method == "sort_by_key" {
+                // `each` is lowered upstream via `Inst::HofExpand`; other
+                // HOFs still inline here.
+                if (dst.is_some() || method == "find" || method == "sort" || method == "sort_by" || method == "sort_by_key")
+                    && method != "each"
+                {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
                         .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
@@ -818,13 +822,6 @@ pub(super) fn emit_call_extern(
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
                                 if (!{call_fn}({fn_ref}, {er}__elem)) {{ __all_r = false; break; }} \
                                 }} __all_r; }});").unwrap();
-                        }
-                        "each" => {
-                            write!(out, "{{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                {call_fn}({fn_ref}, {er}__elem); \
-                                }} }}").unwrap();
                         }
                         "sorted" => {
                             let cmp = compare_fn_for_elem(&elem_c);

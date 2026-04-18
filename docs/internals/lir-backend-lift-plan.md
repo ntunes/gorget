@@ -574,6 +574,14 @@ Each step is a single commit, each removes code, each demonstrates payoff:
    generating loop blocks + CallClosure. Remove HOF inlining from both
    backends.
 
+   **Migration status:**
+   - Vector: `each` ✓ (pathfinder). `map`, `filter`, `flat_map`, `fold`,
+     `reduce`, `any`, `all`, `find`, `find_index`, `count`, `sorted`,
+     `sort_by`, `sorted_by`, `sort_by_key`, `sorted_by_key`, `windows`,
+     `chunks`, `unique` — still inline in backends.
+   - Dict: all variants still inline in backends.
+   - Set: all variants still inline in backends.
+
 10. **Step 9** — Add `AddressOf { value, ty }` + BIR expansion. GIR→LIR
     emits this whenever an `AbiKind::Ptr` extern param is fed an SSA-value
     operand. Eliminates the backend's "value already in a slot vs. needs

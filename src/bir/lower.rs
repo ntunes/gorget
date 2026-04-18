@@ -22,7 +22,10 @@
 
 use crate::bir::BirError;
 use crate::lir::lower::types::c_sizeof_lir_type;
-use crate::lir::{Inst, LirFunction, LirModule, LirType, StructDef, ValueId};
+use crate::lir::{
+    BlockId, CmpOp, HofOp, Inst, LirFunction, LirModule, LirType, Overflow, StructDef, StructId,
+    Term, ValueId,
+};
 
 /// Expand all canonical-level ops in `module` into primitive instructions.
 ///
@@ -58,11 +61,17 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
     // expansions (AddressOf) need to allocate fresh stack slots via
     // `func.add_slot(...)`, which requires a mutable borrow of `func.slots`
     // that would conflict with an outstanding `&mut block` borrow.
-    let block_count = func.blocks.len();
-    for bb_idx in 0..block_count {
+    //
+    // `while bb_idx < func.blocks.len()` (not `for bb_idx in 0..block_count`)
+    // so that blocks appended by HOF expansion (check/body/done) get processed
+    // on subsequent iterations — a `done` block may contain nested HofExpands.
+    let mut bb_idx = 0;
+    while bb_idx < func.blocks.len() {
         let old = std::mem::take(&mut func.blocks[bb_idx].insts);
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old.len());
-        for inst in old {
+        let mut iter = old.into_iter();
+        let mut hof_split = false;
+        while let Some(inst) = iter.next() {
             match inst {
                 Inst::SizeOf { dst, ty } => {
                     let value = c_sizeof_lir_type(&ty, structs) as i64;
@@ -209,6 +218,64 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     });
                     new_insts.push(Inst::SlotAddr { dst, slot });
                 }
+                Inst::HofExpand {
+                    coll,
+                    hof_op,
+                    element_ty,
+                    value_ty: _,
+                    closure,
+                    closure_kind,
+                    closure_ret_ty: _,
+                    closure_arg_abis,
+                    dst: _,
+                    init: _,
+                } => {
+                    if hof_op != HofOp::Each {
+                        // Only Vector.each is migrated in this commit; the
+                        // rest still flow through the backend inliners.
+                        // Preserve the instruction and let the validator
+                        // reject unexpanded ops if they ever reach BIR
+                        // for a non-Each HOF (which would be a bug in
+                        // the emitter).
+                        new_insts.push(Inst::HofExpand {
+                            coll,
+                            hof_op,
+                            element_ty,
+                            value_ty: None,
+                            closure,
+                            closure_kind,
+                            closure_ret_ty: LirType::Void,
+                            closure_arg_abis,
+                            dst: None,
+                            init: None,
+                        });
+                        continue;
+                    }
+                    // Capture remaining insts-after-HofExpand and the
+                    // block's original terminator — they move to `done_bb`.
+                    let remaining: Vec<Inst> = iter.by_ref().collect();
+                    let orig_term = std::mem::replace(
+                        &mut func.blocks[bb_idx].terminator,
+                        Term::Unreachable,
+                    );
+                    // Install the pre-HofExpand insts into the current
+                    // block; `expand_each` appends the check-jump terminator.
+                    func.blocks[bb_idx].insts = std::mem::take(&mut new_insts);
+                    expand_each(
+                        func,
+                        bb_idx,
+                        &mut next,
+                        structs,
+                        coll,
+                        element_ty,
+                        closure,
+                        closure_arg_abis,
+                        remaining,
+                        orig_term,
+                    );
+                    hof_split = true;
+                    break;
+                }
                 Inst::BoxAlloc { dst, inner_ty, value } => {
                     // 1) size = sizeof(inner_ty)
                     let sz = c_sizeof_lir_type(&inner_ty, structs) as i64;
@@ -234,10 +301,190 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                 other => new_insts.push(other),
             }
         }
-        func.blocks[bb_idx].insts = new_insts;
+        if !hof_split {
+            func.blocks[bb_idx].insts = new_insts;
+        }
+        bb_idx += 1;
     }
 
     func.set_next_value_raw(next);
+}
+
+/// Expand a `HofExpand { hof_op: Each, … }` into an explicit loop.
+///
+/// Layout produced:
+/// ```text
+///   current_bb:
+///     <pre-HofExpand insts>
+///     jmp check_bb(0_i64)
+///   check_bb(i: i64):
+///     lenp = FieldPtr(coll, GorgetArray, 2)
+///     len  = Load(lenp, i64)
+///     cond = Cmp(Lt, i, len)
+///     branch cond, body_bb, done_bb
+///   body_bb:
+///     datap_ptr = FieldPtr(coll, GorgetArray, 0)
+///     datap     = Load(datap_ptr, ptr)
+///     elemp     = ElemPtr(datap, i, elem_size)
+///     (scalar:) elem = Load(elemp, element_ty); arg = elem
+///     (aggregate:) arg = elemp
+///     CallClosure { dst: None, kind: EscapedClosure, closure, args: [arg], … }
+///     next_i = Add(i, 1_i64)
+///     jmp check_bb(next_i)
+///   done_bb:
+///     <remaining insts from original block>
+///     <original terminator>
+/// ```
+#[allow(clippy::too_many_arguments)]
+fn expand_each(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let gorget_array_sid = lookup_struct_id(structs, "GorgetArray")
+        .unwrap_or(StructId(0));
+
+    // Allocate new blocks (check, body, done).
+    let check_bb = func.add_block();
+    let body_bb = func.add_block();
+    let done_bb = func.add_block();
+
+    // Block param on check_bb carries the loop counter.
+    let i_val = alloc_value(next);
+    func.block_mut(check_bb).params.push((i_val, LirType::I64));
+
+    // current_bb → check_bb(0_i64)
+    let zero = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).insts.push(Inst::IConst {
+        dst: zero,
+        ty: LirType::I64,
+        value: 0,
+    });
+    func.block_mut(BlockId(current_bb as u32)).terminator =
+        Term::Jump(check_bb, vec![zero]);
+
+    // check_bb: length check.
+    let lenp = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+        dst: lenp,
+        base: coll,
+        struct_id: gorget_array_sid,
+        field: 2, // GorgetArray.len (see thin-pointer-string layout)
+    });
+    let len = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Load {
+        dst: len,
+        ptr: lenp,
+        ty: LirType::I64,
+    });
+    let cond = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Cmp {
+        dst: cond,
+        op: CmpOp::Lt,
+        lhs: i_val,
+        rhs: len,
+    });
+    func.block_mut(check_bb).terminator = Term::Branch {
+        cond,
+        then_block: body_bb,
+        then_args: vec![],
+        else_block: done_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: load element pointer, call closure, increment, re-loop.
+    let datap_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+        dst: datap_ptr,
+        base: coll,
+        struct_id: gorget_array_sid,
+        field: 0, // GorgetArray.data
+    });
+    let datap = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Load {
+        dst: datap,
+        ptr: datap_ptr,
+        ty: LirType::Ptr,
+    });
+    let elem_size = c_sizeof_lir_type(&element_ty, structs) as u32;
+    let elemp = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: elemp,
+        base: datap,
+        index: i_val,
+        elem_size,
+    });
+
+    // Choose element ABI. The emitter supplies `closure_arg_abis[0]` when it
+    // knows the closure's param layout; otherwise fall back to a decision
+    // based on element_ty (aggregates travel by pointer, scalars by value).
+    let emitter_abi = closure_arg_abis.first().copied();
+    let pass_by_ptr = match emitter_abi {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => element_ty.is_aggregate(),
+    };
+
+    let arg_val = if pass_by_ptr {
+        elemp
+    } else {
+        let e = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Load {
+            dst: e,
+            ptr: elemp,
+            ty: element_ty.clone(),
+        });
+        e
+    };
+    let arg_abi = if pass_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    func.block_mut(body_bb).insts.push(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![arg_val],
+        arg_abis: vec![arg_abi],
+        ret_ty: LirType::Void,
+    });
+
+    let next_i = alloc_value(next);
+    let one = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::IConst {
+        dst: one,
+        ty: LirType::I64,
+        value: 1,
+    });
+    func.block_mut(body_bb).insts.push(Inst::Add {
+        dst: next_i,
+        ty: LirType::I64,
+        lhs: i_val,
+        rhs: one,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(body_bb).terminator = Term::Jump(check_bb, vec![next_i]);
+
+    // done_bb: move the tail of the original block here.
+    func.block_mut(done_bb).insts = remaining;
+    func.block_mut(done_bb).terminator = orig_term;
+}
+
+fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {
+    structs
+        .iter()
+        .position(|s| s.name == name)
+        .map(|i| StructId(i as u32))
 }
 
 /// Canonical field-index table for opaque runtime structs.

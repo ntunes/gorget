@@ -2007,14 +2007,13 @@ fn emit_function(
                         let is_str_clear = name == "gorget_str_clear";
                         let is_str_push_line_direct = name == "gorget_string_push_line";
 
-                        // Detect Vector HOF calls that create inline loops (labels)
+                        // Detect Vector HOF calls that create inline loops (labels).
+                        // `each` is lowered upstream via `Inst::HofExpand`; other
+                        // HOFs still inline here (and therefore need a `dst`).
                         let is_vector_hof = parse_vector_hof(name).is_some();
                         let vector_hof_needs_inline = if is_vector_hof {
                             let (_, method) = parse_vector_hof(name).unwrap();
-                            match method {
-                                "each" => true,
-                                _ => dst.is_some(),
-                            }
+                            method != "each" && dst.is_some()
                         } else { false };
 
                         // Detect Dict/Set HOF calls that create inline loops
@@ -3010,8 +3009,9 @@ fn emit_inst(
             // different site would invoke the wrong function.
             if let Some((elem_c, method)) = parse_vector_hof(name) {
                 let has_dst = dst.is_some();
+                // `each` is migrated to `Inst::HofExpand` upstream — other
+                // HOFs still inline here until Step 8's full migration lands.
                 let needs_inline = match method {
-                    "each" => true,
                     "filter" | "map" | "flat_map" | "fold" | "reduce"
                     | "any" | "all" | "find" | "find_index" | "count" => has_dst,
                     _ => false,
@@ -3179,31 +3179,6 @@ fn emit_inst(
                                 writeln!(out, "  br label %{pfx}.skip").unwrap();
                                 writeln!(out, "{pfx}.skip:").unwrap();
                                 // Increment
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            "each" => {
-                                // Loop without collecting results
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.body]").unwrap();
-                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
-                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr {
-                                    writeln!(out, "  call void @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
-                                } else {
-                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
-                                    writeln!(out, "  call void @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
-                                }
                                 writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
                                 writeln!(out, "{pfx}.done:").unwrap();
