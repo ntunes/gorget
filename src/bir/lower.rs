@@ -225,56 +225,69 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     value_ty: _,
                     closure,
                     closure_kind,
-                    closure_ret_ty: _,
+                    closure_ret_ty,
                     closure_arg_abis,
-                    dst: _,
+                    dst,
                     init: _,
                 } => {
-                    if hof_op != HofOp::Each {
-                        // Only Vector.each is migrated in this commit; the
-                        // rest still flow through the backend inliners.
-                        // Preserve the instruction and let the validator
-                        // reject unexpanded ops if they ever reach BIR
-                        // for a non-Each HOF (which would be a bug in
-                        // the emitter).
-                        new_insts.push(Inst::HofExpand {
-                            coll,
-                            hof_op,
-                            element_ty,
-                            value_ty: None,
-                            closure,
-                            closure_kind,
-                            closure_ret_ty: LirType::Void,
-                            closure_arg_abis,
-                            dst: None,
-                            init: None,
-                        });
-                        continue;
+                    match hof_op {
+                        HofOp::Each | HofOp::Any | HofOp::All => {
+                            // Capture the tail of the block; it moves to done_bb.
+                            let remaining: Vec<Inst> = iter.by_ref().collect();
+                            let orig_term = std::mem::replace(
+                                &mut func.blocks[bb_idx].terminator,
+                                Term::Unreachable,
+                            );
+                            func.blocks[bb_idx].insts = std::mem::take(&mut new_insts);
+                            match hof_op {
+                                HofOp::Each => expand_each(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::Any | HofOp::All => expand_any_all(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    hof_op,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    dst.expect("any/all must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                _ => unreachable!(),
+                            }
+                            hof_split = true;
+                            break;
+                        }
+                        _ => {
+                            // Not yet migrated — keep as-is. If it ever
+                            // leaks into BIR the validator will flag it.
+                            new_insts.push(Inst::HofExpand {
+                                coll,
+                                hof_op,
+                                element_ty,
+                                value_ty: None,
+                                closure,
+                                closure_kind,
+                                closure_ret_ty,
+                                closure_arg_abis,
+                                dst,
+                                init: None,
+                            });
+                        }
                     }
-                    // Capture remaining insts-after-HofExpand and the
-                    // block's original terminator — they move to `done_bb`.
-                    let remaining: Vec<Inst> = iter.by_ref().collect();
-                    let orig_term = std::mem::replace(
-                        &mut func.blocks[bb_idx].terminator,
-                        Term::Unreachable,
-                    );
-                    // Install the pre-HofExpand insts into the current
-                    // block; `expand_each` appends the check-jump terminator.
-                    func.blocks[bb_idx].insts = std::mem::take(&mut new_insts);
-                    expand_each(
-                        func,
-                        bb_idx,
-                        &mut next,
-                        structs,
-                        coll,
-                        element_ty,
-                        closure,
-                        closure_arg_abis,
-                        remaining,
-                        orig_term,
-                    );
-                    hof_split = true;
-                    break;
                 }
                 Inst::BoxAlloc { dst, inner_ty, value } => {
                     // 1) size = sizeof(inner_ty)
@@ -310,53 +323,46 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
     func.set_next_value_raw(next);
 }
 
-/// Expand a `HofExpand { hof_op: Each, … }` into an explicit loop.
+/// Shared scaffold for the HOF loop skeletons.
 ///
-/// Layout produced:
-/// ```text
-///   current_bb:
-///     <pre-HofExpand insts>
-///     jmp check_bb(0_i64)
-///   check_bb(i: i64):
-///     lenp = FieldPtr(coll, GorgetArray, 2)
-///     len  = Load(lenp, i64)
-///     cond = Cmp(Lt, i, len)
-///     branch cond, body_bb, done_bb
-///   body_bb:
-///     datap_ptr = FieldPtr(coll, GorgetArray, 0)
-///     datap     = Load(datap_ptr, ptr)
-///     elemp     = ElemPtr(datap, i, elem_size)
-///     (scalar:) elem = Load(elemp, element_ty); arg = elem
-///     (aggregate:) arg = elemp
-///     CallClosure { dst: None, kind: EscapedClosure, closure, args: [arg], … }
-///     next_i = Add(i, 1_i64)
-///     jmp check_bb(next_i)
-///   done_bb:
-///     <remaining insts from original block>
-///     <original terminator>
-/// ```
+/// Emits the `check_bb` / `body_bb` / `done_bb` triple, wires the entry
+/// jump, puts the length check into `check_bb`, and performs the per-
+/// element `ElemPtr` + (optional) `Load` + `CallClosure` in `body_bb`.
+/// Returns the context the caller uses to finish each variant (set
+/// `body_bb`'s terminator, fill `done_bb.insts`/`done_bb.terminator`).
+///
+/// The `check_bb` terminator is NOT set here — `any`/`all` want to pass a
+/// default result as block-arg when they fall through from exhaustion,
+/// while `each` passes nothing. Callers set the terminator explicitly.
+struct HofLoopCtx {
+    check_bb: BlockId,
+    body_bb: BlockId,
+    done_bb: BlockId,
+    cond: ValueId,
+    pred_val: Option<ValueId>,
+    next_i: ValueId,
+}
+
 #[allow(clippy::too_many_arguments)]
-fn expand_each(
+fn emit_hof_loop_scaffold(
     func: &mut LirFunction,
     current_bb: usize,
     next: &mut u32,
     structs: &[StructDef],
     coll: ValueId,
-    element_ty: LirType,
+    element_ty: &LirType,
     closure: ValueId,
-    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
-    remaining: Vec<Inst>,
-    orig_term: Term,
-) {
+    closure_arg_abis: &[crate::ir::abi::AbiKind],
+    closure_ret_ty: LirType,
+) -> HofLoopCtx {
     let gorget_array_sid = lookup_struct_id(structs, "GorgetArray")
         .unwrap_or(StructId(0));
 
-    // Allocate new blocks (check, body, done).
     let check_bb = func.add_block();
     let body_bb = func.add_block();
     let done_bb = func.add_block();
 
-    // Block param on check_bb carries the loop counter.
+    // check_bb has a single block param — the loop counter.
     let i_val = alloc_value(next);
     func.block_mut(check_bb).params.push((i_val, LirType::I64));
 
@@ -370,13 +376,13 @@ fn expand_each(
     func.block_mut(BlockId(current_bb as u32)).terminator =
         Term::Jump(check_bb, vec![zero]);
 
-    // check_bb: length check.
+    // check_bb: load GorgetArray.len and compare.
     let lenp = alloc_value(next);
     func.block_mut(check_bb).insts.push(Inst::FieldPtr {
         dst: lenp,
         base: coll,
         struct_id: gorget_array_sid,
-        field: 2, // GorgetArray.len (see thin-pointer-string layout)
+        field: 2, // GorgetArray.len
     });
     let len = alloc_value(next);
     func.block_mut(check_bb).insts.push(Inst::Load {
@@ -391,15 +397,9 @@ fn expand_each(
         lhs: i_val,
         rhs: len,
     });
-    func.block_mut(check_bb).terminator = Term::Branch {
-        cond,
-        then_block: body_bb,
-        then_args: vec![],
-        else_block: done_bb,
-        else_args: vec![],
-    };
+    // Caller sets `check_bb.terminator`.
 
-    // body_bb: load element pointer, call closure, increment, re-loop.
+    // body_bb: get data ptr and element ptr.
     let datap_ptr = alloc_value(next);
     func.block_mut(body_bb).insts.push(Inst::FieldPtr {
         dst: datap_ptr,
@@ -413,7 +413,7 @@ fn expand_each(
         ptr: datap_ptr,
         ty: LirType::Ptr,
     });
-    let elem_size = c_sizeof_lir_type(&element_ty, structs) as u32;
+    let elem_size = c_sizeof_lir_type(element_ty, structs) as u32;
     let elemp = alloc_value(next);
     func.block_mut(body_bb).insts.push(Inst::ElemPtr {
         dst: elemp,
@@ -422,9 +422,8 @@ fn expand_each(
         elem_size,
     });
 
-    // Choose element ABI. The emitter supplies `closure_arg_abis[0]` when it
-    // knows the closure's param layout; otherwise fall back to a decision
-    // based on element_ty (aggregates travel by pointer, scalars by value).
+    // Element ABI: emitter tag wins when present, otherwise fall back to
+    // `element_ty.is_aggregate()` (aggregates travel by pointer).
     let emitter_abi = closure_arg_abis.first().copied();
     let pass_by_ptr = match emitter_abi {
         Some(crate::ir::abi::AbiKind::Ptr) => true,
@@ -432,7 +431,6 @@ fn expand_each(
         Some(crate::ir::abi::AbiKind::Scalar) => false,
         _ => element_ty.is_aggregate(),
     };
-
     let arg_val = if pass_by_ptr {
         elemp
     } else {
@@ -450,15 +448,20 @@ fn expand_each(
         crate::ir::abi::AbiKind::Scalar
     };
 
+    let has_ret = !matches!(closure_ret_ty, LirType::Void);
+    let pred_val = if has_ret { Some(alloc_value(next)) } else { None };
     func.block_mut(body_bb).insts.push(Inst::CallClosure {
-        dst: None,
+        dst: pred_val,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
         args: vec![arg_val],
         arg_abis: vec![arg_abi],
-        ret_ty: LirType::Void,
+        ret_ty: closure_ret_ty,
     });
 
+    // Precompute next_i = i + 1 (variants that need it jump back to
+    // check_bb via `Jump(check_bb, [next_i])` — keep the allocation here
+    // so variants share the same counter slot).
     let next_i = alloc_value(next);
     let one = alloc_value(next);
     func.block_mut(body_bb).insts.push(Inst::IConst {
@@ -473,11 +476,198 @@ fn expand_each(
         rhs: one,
         overflow: Overflow::Wrap,
     });
-    func.block_mut(body_bb).terminator = Term::Jump(check_bb, vec![next_i]);
+
+    let _ = i_val; // counter is referenced indirectly via check_bb param.
+    HofLoopCtx {
+        check_bb,
+        body_bb,
+        done_bb,
+        cond,
+        pred_val,
+        next_i,
+    }
+}
+
+/// Expand a `HofExpand { hof_op: Each, … }` into an explicit loop.
+///
+/// Layout produced:
+/// ```text
+///   current_bb:
+///     <pre-HofExpand insts>
+///     jmp check_bb(0_i64)
+///   check_bb(i: i64):
+///     len check → body_bb | done_bb
+///   body_bb:
+///     ElemPtr + (optional Load) + CallClosure(closure, [elem])
+///     jmp check_bb(i + 1)
+///   done_bb:
+///     <remaining insts from original block>
+///     <original terminator>
+/// ```
+#[allow(clippy::too_many_arguments)]
+fn expand_each(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        closure,
+        &closure_arg_abis,
+        LirType::Void,
+    );
+
+    // check_bb: cond ? body_bb : done_bb (no args — each has no result).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: jump back to check_bb with incremented counter.
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: move the tail of the original block here.
-    func.block_mut(done_bb).insts = remaining;
-    func.block_mut(done_bb).terminator = orig_term;
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: Any | All, dst, … }` into an explicit loop
+/// with early exit.
+///
+/// For `any`, the loop exits early with `true` when the predicate returns
+/// true; if no element matches, `done_bb` is entered with `false`. For
+/// `all`, the logic is inverted: early exit with `false` on any
+/// false-predicate element, otherwise fall through with `true`.
+///
+/// The result type on `done_bb` matches the caller's declared type for
+/// the dst ValueId (from `func.value_types`): some frontends lift Bool
+/// into I64, so the expansion emits I64 constants in that case and Bool
+/// constants otherwise.
+#[allow(clippy::too_many_arguments)]
+fn expand_any_all(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    op: HofOp,
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let is_any = matches!(op, HofOp::Any);
+    // Resolve the dst's declared type. value_types is populated after SSA
+    // construction; BIR lowering runs after both, so this lookup is valid.
+    let dst_ty = func
+        .value_types
+        .get(dst.0 as usize)
+        .and_then(|t| t.as_ref())
+        .cloned()
+        .unwrap_or(LirType::I64);
+
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        closure,
+        &closure_arg_abis,
+        LirType::Bool,
+    );
+    let pred = ctx.pred_val.expect("any/all closure must return a value");
+
+    // Constants for true/false in the dst's declared type.
+    let early = alloc_value(next);
+    let fall = alloc_value(next);
+    let (early_value, fall_value) = if is_any { (1, 0) } else { (0, 1) };
+    let const_inst = |d, v| match &dst_ty {
+        LirType::Bool => Inst::BoolConst {
+            dst: d,
+            value: v != 0,
+        },
+        _ => Inst::IConst {
+            dst: d,
+            ty: dst_ty.clone(),
+            value: v,
+        },
+    };
+
+    // Allocate cont_bb (loop-continue block). The done_bb block param
+    // carries the result; we reuse the caller-supplied `dst` as the
+    // block-param ValueId so instructions in `remaining` that reference
+    // `dst` see the block argument transparently.
+    let cont_bb = func.add_block();
+
+    // done_bb(result: dst_ty): <remaining> <orig_term>
+    func.block_mut(ctx.done_bb).params.push((dst, dst_ty.clone()));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+
+    // Synthesize the "early" constant. We park it in the current block
+    // so both branches that reach done_bb can read the same ValueId.
+    //
+    // But SSA requires the value to dominate all uses. The simpler fix
+    // is to create two constants: `early` parked wherever its user lives.
+    // For `any`, `early=true` flows from body_bb (found branch);
+    // `fall=false` flows from check_bb (exhaustion branch).
+    //
+    // Emit `early` at the top of body_bb (after the CallClosure) and
+    // `fall` at the top of check_bb (before the Cmp).
+    // The scaffold already ran, so we insert into the back of the blocks
+    // (before their terminators which are still unset).
+    func.block_mut(ctx.body_bb).insts.push(const_inst(early, early_value));
+    // check_bb already has insts (FieldPtr, Load, Cmp). Append `fall`
+    // before we set its terminator.
+    func.block_mut(ctx.check_bb).insts.push(const_inst(fall, fall_value));
+
+    // check_bb: cond ? body_bb : done_bb(fall)
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![fall],
+    };
+
+    // body_bb: predicate match?
+    //   any: if pred → done_bb(true), else → cont_bb
+    //   all: if pred → cont_bb, else → done_bb(false)
+    let (then_block, then_args, else_block, else_args) = if is_any {
+        (ctx.done_bb, vec![early], cont_bb, vec![])
+    } else {
+        (cont_bb, vec![], ctx.done_bb, vec![early])
+    };
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block,
+        then_args,
+        else_block,
+        else_args,
+    };
+
+    // cont_bb: jump back to check_bb with incremented counter.
+    func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 }
 
 fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {

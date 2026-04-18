@@ -1838,10 +1838,11 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
-    /// If `original_name` is a `Vector__<elem>__each` HOF call, emit
-    /// `Inst::HofExpand` in place of the generic extern call and return the
-    /// (possibly updated) block id. Returns `None` when the call doesn't
-    /// match, leaving the caller to dispatch normally.
+    /// If `original_name` is a `Vector__<elem>__<method>` HOF we've
+    /// migrated (each, any, all), emit `Inst::HofExpand` in place of the
+    /// generic extern call and return the (possibly updated) block id.
+    /// Returns `None` when the call doesn't match, leaving the caller to
+    /// dispatch normally.
     ///
     /// The closure argument is packed into a `GorgetClosure` pointer via
     /// `wrap_closure_call_args` so the BIR expansion can dispatch it through
@@ -1851,6 +1852,7 @@ impl<'a> FuncLowering<'a> {
     fn try_emit_vector_each_hof(
         &mut self,
         original_name: &str,
+        dst: &Option<ir::types::LocalId>,
         args: &[Operand],
         lir_args: &[ValueId],
         bb: BlockId,
@@ -1858,10 +1860,17 @@ impl<'a> FuncLowering<'a> {
         let rest = original_name.strip_prefix("Vector__")?;
         let sep = rest.rfind("__")?;
         let method = &rest[sep + 2..];
-        if method != "each" {
+        let (hof_op, closure_ret_ty, produces_result) = match method {
+            "each" => (HofOp::Each, LirType::Void, false),
+            "any" => (HofOp::Any, LirType::Bool, true),
+            "all" => (HofOp::All, LirType::Bool, true),
+            _ => return None,
+        };
+        if lir_args.len() < 2 {
             return None;
         }
-        if lir_args.len() < 2 {
+        // Result-producing HOFs must have a destination; `each` must not.
+        if produces_result && dst.is_none() {
             return None;
         }
         let closure_idx = lir_args.len() - 1;
@@ -1894,18 +1903,31 @@ impl<'a> FuncLowering<'a> {
             crate::ir::abi::AbiKind::Scalar
         };
 
+        // When a result is produced, allocate a fresh ValueId for the HOF
+        // output and plumb it into the caller's local slot. The BIR
+        // expansion reuses this ValueId as the `done_bb` block parameter.
+        let result_id = if produces_result {
+            Some(self.lir_func.next_value())
+        } else {
+            None
+        };
+
         self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
             coll: lir_args_wrapped[0],
-            hof_op: HofOp::Each,
+            hof_op,
             element_ty,
             value_ty: None,
             closure: lir_args_wrapped[closure_idx],
             closure_kind: ClosureDispatchKind::EscapedClosure,
-            closure_ret_ty: LirType::Void,
+            closure_ret_ty,
             closure_arg_abis: vec![elem_abi],
-            dst: None,
+            dst: result_id,
             init: None,
         });
+
+        if let (Some(d), Some(r)) = (*dst, result_id) {
+            self.store_to_local(d, r, bb);
+        }
         Some(bb)
     }
 
@@ -1923,10 +1945,10 @@ impl<'a> FuncLowering<'a> {
         bb: BlockId,
     ) -> BlockId {
         // ── Step 8 of BIR lift plan: HOF intercept ──
-        // Vector.each pathfinder — emit `Inst::HofExpand` and let BIR lowering
-        // generate the loop skeleton. Other HOF variants still flow through the
-        // per-backend inline expanders until they are migrated.
-        if let Some(bb2) = self.try_emit_vector_each_hof(original_name, args, &lir_args, bb) {
+        // Vector `each` / `any` / `all` — emit `Inst::HofExpand` and let BIR
+        // lowering generate the loop skeleton. Other HOF variants still flow
+        // through the per-backend inline expanders until they are migrated.
+        if let Some(bb2) = self.try_emit_vector_each_hof(original_name, dst, args, &lir_args, bb) {
             self.emit_post_call_zeros(args, bb2);
             return bb2;
         }

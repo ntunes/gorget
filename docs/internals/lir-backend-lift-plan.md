@@ -575,10 +575,10 @@ Each step is a single commit, each removes code, each demonstrates payoff:
    backends.
 
    **Migration status:**
-   - Vector: `each` ✓ (pathfinder). `map`, `filter`, `flat_map`, `fold`,
-     `reduce`, `any`, `all`, `find`, `find_index`, `count`, `sorted`,
-     `sort_by`, `sorted_by`, `sort_by_key`, `sorted_by_key`, `windows`,
-     `chunks`, `unique` — still inline in backends.
+   - Vector: `each` ✓ (pathfinder), `any` ✓, `all` ✓. `map`, `filter`,
+     `flat_map`, `fold`, `reduce`, `find`, `find_index`, `count`,
+     `sorted`, `sort_by`, `sorted_by`, `sort_by_key`, `sorted_by_key`,
+     `windows`, `chunks`, `unique` — still inline in backends.
    - Dict: all variants still inline in backends.
    - Set: all variants still inline in backends.
 
