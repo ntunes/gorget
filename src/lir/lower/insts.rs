@@ -2080,11 +2080,33 @@ impl<'a> FuncLowering<'a> {
             self.ensure_extern(&unique_name, &arg_types, &ret_ty);
             let call_arg_abis = self.lookup_arg_abis(&unique_name);
             // Skip the closure arg's ABI — only user args need annotation.
-            let user_abis = if call_arg_abis.len() > 1 {
+            let mut user_abis = if call_arg_abis.len() > 1 {
                 call_arg_abis[1..].to_vec()
             } else {
                 vec![]
             };
+            while user_abis.len() < user_args.len() {
+                user_abis.push(crate::ir::abi::AbiKind::Auto);
+            }
+            // Step 6 of the BIR lift plan: annotate small-aggregate-by-value args
+            // with `AbiKind::ByValue`. The LLVM backend formerly decided this by
+            // scanning for `SlotAddr` producers of each arg (the heuristic in
+            // commit 3a858bcb). Declared LIR signatures are authoritative here —
+            // `operand_lir_type` returns the closure's declared param type, and
+            // `is_small_aggregate` gives the same threshold the backend uses.
+            let user_arg_types = if arg_types.len() > 1 { &arg_types[1..] } else { &arg_types[..0] };
+            for (i, ty) in user_arg_types.iter().enumerate().take(user_abis.len()) {
+                if user_abis[i] == crate::ir::abi::AbiKind::Auto {
+                    if let LirType::Struct(sid) = ty {
+                        let sdef = &self.module_structs[sid.0 as usize];
+                        if !sdef.is_union_layout
+                            && super::types::is_small_aggregate(ty, self.module_structs)
+                        {
+                            user_abis[i] = crate::ir::abi::AbiKind::ByValue;
+                        }
+                    }
+                }
+            }
             let is_void_ret = matches!(ret_ty, LirType::Void);
             let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
             self.lir_func.block_mut(bb).insts.push(Inst::CallClosure {

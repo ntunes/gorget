@@ -304,6 +304,33 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
     Some(sz)
 }
 
+/// Returns true if a struct type is small enough to be returned / passed
+/// in registers (≤16 bytes on aarch64, ≤8 bytes on x86-64). Used by both
+/// backends to decide sret vs direct-return and, via the `ByValue` ABI
+/// tag on closure calls, whether to `load` the struct before the call.
+///
+/// Kept in sync with the `is_small_aggregate` shim in `src/backend/llvm/mod.rs`,
+/// which is a thin re-export.
+pub fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
+    if let LirType::Struct(sid) = ty {
+        let sdef = match structs.get(sid.0 as usize) {
+            Some(s) => s,
+            None => return false,
+        };
+        if let Some(sz) = opaque_runtime_size(&sdef.name) {
+            return sz <= 16;
+        }
+        let size = if let Some(cs) = sdef.computed_c_size {
+            cs
+        } else {
+            c_sizeof_lir_type(ty, structs)
+        };
+        size <= 16
+    } else {
+        false
+    }
+}
+
 /// Compute sizeof for an LirType.
 pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
     match ty {

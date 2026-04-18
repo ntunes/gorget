@@ -16,43 +16,10 @@ fn needs_sret(ty: &LirType, structs: &[StructDef]) -> bool {
     ty.is_aggregate() && !is_small_aggregate(ty, structs)
 }
 
-/// Returns true if a struct type is small enough to be returned in registers
-/// (≤16 bytes on aarch64, ≤8 bytes on x86-64). If true, DO NOT use sret convention.
-fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
-    if let LirType::Struct(sid) = ty {
-        let sdef = &structs[sid.0 as usize];
-        // Shared opaque runtime-struct table (see src/lir/lower/types.rs).
-        if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&sdef.name) {
-            return sz <= 16;
-        }
-        // Use computed_c_size if available, otherwise estimate from fields.
-        let size = if let Some(cs) = sdef.computed_c_size {
-            cs
-        } else {
-            // Rough estimate: sum field sizes with 8-byte alignment.
-            let mut size: usize = 0;
-            for (_, fty) in &sdef.fields {
-                let fsz = match fty {
-                    LirType::I8 | LirType::U8 | LirType::Bool => 1,
-                    LirType::I16 | LirType::U16 => 2,
-                    LirType::I32 | LirType::U32 => 4,
-                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
-                    LirType::F32 => 4,
-                    LirType::Struct(_) => 64, // conservatively large
-                    _ => 8,
-                };
-                // Align to field size (simplified)
-                let align = if fsz > 8 { 8 } else { fsz };
-                size = (size + align - 1) & !(align - 1);
-                size += fsz;
-            }
-            size
-        };
-        size <= 16
-    } else {
-        false
-    }
-}
+/// Shared `is_small_aggregate` lives in `src/lir/lower/types.rs` so the
+/// GIR→LIR pass and the backends all agree on the register-vs-memory
+/// threshold. Importing it here preserves the many local call sites.
+use crate::lir::lower::types::is_small_aggregate;
 
 impl super::Backend for LlvmBackend {
     fn name(&self) -> &str {
@@ -6084,7 +6051,7 @@ fn emit_inst(
         // ── MoveSlot (consumed by drop elaboration) ────────────────
         Inst::MoveSlot { .. } => {}
 
-        Inst::CallClosure { dst, kind, closure, args, ret_ty, .. } => {
+        Inst::CallClosure { dst, kind, closure, args, ret_ty, arg_abis } => {
             let uid = *trap_counter;
             *trap_counter += 1;
             let pfx = format!("cc.{block_id}.{uid}");
@@ -6105,41 +6072,27 @@ fn emit_inst(
                 }
             }
             // Build arg list: env first, then user args.
-            // The C ABI passes small aggregates (≤16 bytes) in registers while
-            // pointers fit in one register — the two are not interchangeable.
-            // Some closure bodies take struct args by value (`Callable[void(Entity, T)]`)
-            // and others take by reference (`Callable[int(&Counter)]`). The call site
-            // can't always tell which from val_types alone, so we only load when
-            // the arg's value came directly from a `load` of the struct type, which
-            // indicates the LIR already materialised the struct — a subsequent call
-            // to a by-value closure expects the value, not the pointer.
             //
-            // Heuristic: if the arg value is the result of a `SlotLoad` whose slot
-            // holds the aggregate itself (not a `PtrTo` reference), load it here.
+            // Step 6 of the BIR lift plan: the GIR→LIR lowering tags each
+            // small-aggregate-by-value user arg with `AbiKind::ByValue` (see
+            // `CallClosure` emission in `src/lir/lower/insts.rs`). When we
+            // see that tag, load the struct from the slot-addr pointer before
+            // the call. This replaces the older SlotAddr-scanning heuristic
+            // that inferred the same decision structurally.
             let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
             for (ai, a) in args.iter().enumerate() {
                 let vt = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                // Only load when the arg's producing instruction was a SlotAddr of
-                // a slot whose type is a small aggregate — which signals the call
-                // site treats the struct as a value being shuttled through a slot.
-                // A SlotAddr of a struct slot followed by CallClosure with that arg
-                // matches the by-value-closure pattern (ecs_basics `ns.each(...)`).
-                let small_agg_slot = if let Some(LirType::PtrTo(sid)) = vt {
-                    let s_ty = LirType::Struct(*sid);
-                    let via_slot_addr = func.blocks.iter()
-                        .flat_map(|b| b.insts.iter())
-                        .any(|i| matches!(i, Inst::SlotAddr { dst, slot }
-                            if dst.0 == a.0
-                            && matches!(&func.slots[slot.0 as usize].ty,
-                                LirType::Struct(sid2) if sid2 == sid)));
-                    if via_slot_addr
-                        && is_small_aggregate(&s_ty, &module.structs)
-                        && !module.structs[sid.0 as usize].is_union_layout
-                    {
-                        Some(*sid)
-                    } else { None }
-                } else { None };
-                if let Some(sid) = small_agg_slot {
+                let abi = arg_abis.get(ai).copied().unwrap_or_default();
+                let by_value_sid = if abi == crate::ir::abi::AbiKind::ByValue {
+                    // Arg should be a ptr (from SlotAddr); load the aggregate.
+                    match vt {
+                        Some(LirType::PtrTo(sid)) => Some(*sid),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                if let Some(sid) = by_value_sid {
                     let s_ty = LirType::Struct(sid);
                     let struct_ty_str = llvm_type_full(&s_ty, snames);
                     let tmp = format!("{pfx}.arg{ai}");
