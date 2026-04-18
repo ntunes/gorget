@@ -584,17 +584,23 @@ impl<'a> FuncLowering<'a> {
 
         let (struct_id, tag_ordinal) = self.find_enum_null_variant(gir_ty)?;
 
-        if dst.projections.is_empty() {
+        let base = if dst.projections.is_empty() {
             // Simple local: write tag into the local's slot.
             let slot = self.local_to_slot[local_idx];
             let base = self.lir_func.next_value();
             self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
-            self.emit_enum_tag_store(base, struct_id, tag_ordinal, bb);
+            base
         } else {
             // Projected field: compute the field address, then write tag there.
-            let base = self.lower_place_addr(dst, bb);
-            self.emit_enum_tag_store(base, struct_id, tag_ordinal, bb);
-        }
+            self.lower_place_addr(dst, bb)
+        };
+        // Canonical `Inst::EnumInit` — unit variant with explicit parent type.
+        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+            target: base,
+            struct_id,
+            variant_tag: tag_ordinal as u32,
+            fields: vec![],
+        });
         Some(())
     }
 
@@ -888,33 +894,23 @@ impl<'a> FuncLowering<'a> {
             original_name: None, arg_abis: abis,
         });
 
-        // 2. Set tag = 0 (Ok/Some is always variant 0).
-        self.emit_enum_tag_store(slot_addr, slot_sid, 0, bb);
-
-        // 3. Store payload into the Ok_0/Some_0 field.
-        let payload_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-            dst: payload_ptr, base: slot_addr, struct_id: slot_sid,
-            field: payload_field_idx,
-        });
-        self.lir_func.block_mut(bb).insts.push(Inst::Store {
-            ptr: payload_ptr, value: val,
+        // 2. Emit canonical `Inst::EnumInit` for the Ok(val) / Some(val) wrap.
+        //    The parent struct id (Result__T__E or Option__T) is explicit on the
+        //    instruction, so backends don't need to infer the parent enum type
+        //    from dst or surrounding context — they read it off the inst.
+        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+            target: slot_addr,
+            struct_id: slot_sid,
+            variant_tag: 0,
+            fields: vec![(payload_field_idx, val)],
         });
 
         true
     }
 
-    /// Emit instructions to set the tag field of an enum at `base` address.
-    pub(super) fn emit_enum_tag_store(&mut self, base: ValueId, struct_id: StructId, tag_ordinal: usize, bb: BlockId) {
-        let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
-        let tag_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-            dst: tag_ptr, base, struct_id, field: 0,
-        });
-        self.lir_func.block_mut(bb).insts.push(Inst::Store {
-            ptr: tag_ptr, value: tag_val,
-        });
-    }
+    // `emit_enum_tag_store` was removed — all enum-tag writes now go through
+    // the canonical `Inst::EnumInit` op with `fields: vec![]` for unit
+    // variants. BIR lowering expands the tag-write sequence uniformly.
 
     /// Resolve the GIR type of a Place by walking projections.
     pub(super) fn resolve_projected_gir_type(&self, place: &Place) -> Option<GirTypeId> {
@@ -1000,16 +996,14 @@ impl<'a> FuncLowering<'a> {
         let base = self.lir_func.next_value();
         self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
 
-        // Zero-init the slot first (memset 0).
-        let _zero = self.emit_i32_const(bb, 0);
-        // Set the tag field to the null variant ordinal.
-        let tag_val = self.emit_i32_const(bb, tag_ordinal as i64);
-        let tag_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-            dst: tag_ptr, base, struct_id, field: 0,
-        });
-        self.lir_func.block_mut(bb).insts.push(Inst::Store {
-            ptr: tag_ptr, value: tag_val,
+        // Canonical `Inst::EnumInit` — no payload, just the tag for the null
+        // variant. BIR expansion writes the tag field; the rest of the slot
+        // stays zero from the slot's zero-init.
+        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+            target: base,
+            struct_id,
+            variant_tag: tag_ordinal as u32,
+            fields: vec![],
         });
         Some(base)
     }

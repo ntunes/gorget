@@ -262,6 +262,7 @@ fn alloc_value(next: &mut u32) -> ValueId {
 /// For aggregate-valued payloads, `value` is expected to be a pointer to
 /// the source aggregate (this matches how the LIR lifts pass aggregate
 /// values around — via slot addresses).
+#[allow(dead_code)]
 fn emit_store_or_memcpy(
     insts: &mut Vec<Inst>,
     next: &mut u32,
