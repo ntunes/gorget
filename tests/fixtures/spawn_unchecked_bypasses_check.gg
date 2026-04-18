@@ -1,0 +1,15 @@
+# `spawn unchecked` with a String capture that would normally be
+# rejected by the spawn-capture safety checker (§3.10 in the
+# concurrency chapter — closures can't capture borrowed resource
+# types across a spawn boundary). The `unchecked` form opts out.
+#
+# Compile-only: the test only verifies the program builds without
+# spawn-capture errors. The actual child task reads a String
+# capture but `main` awaits it before the String goes out of scope,
+# so at runtime there's no dangling-reference issue.
+
+async void main():
+    String msg = "captured by copy under unchecked"
+    Task[void] t = spawn unchecked ((): print(msg))()
+    t.await()
+    print("done")

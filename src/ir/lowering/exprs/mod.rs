@@ -597,7 +597,7 @@ fn lower_expr_inner(
 
         // Spawn: emit __gorget_spawn_<fn>(args) call, which creates a pthread.
         // Task result locals are tracked in spawn_result_locals for await dispatch.
-        Expr::Spawn { expr } => {
+        Expr::Spawn { expr, .. } => {
             if let Expr::Call { callee, args: call_args, .. } = &expr.node {
                 // ── Case A: spawn c(args) where c is a local closure variable ──
                 if let Expr::Identifier(fn_name) = &callee.node {
@@ -902,7 +902,7 @@ fn lower_expr_inner(
         }
 
         // spawn blocking fn(args) — runs on the expandable blocking pool
-        Expr::SpawnBlocking { expr } => {
+        Expr::SpawnBlocking { expr, .. } => {
             if let Expr::Call { callee, args: call_args, .. } = &expr.node {
                 if let Expr::Identifier(fn_name) = &callee.node {
                     let c_name = ctx.extern_bindings.get(fn_name.as_str())

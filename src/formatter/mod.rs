@@ -1946,12 +1946,12 @@ impl Formatter {
                 self.format_expr(expr);
                 self.emitter.write(".await()");
             }
-            Expr::Spawn { expr } => {
-                self.emitter.write("spawn ");
+            Expr::Spawn { expr, unchecked } => {
+                self.emitter.write(if *unchecked { "spawn unchecked " } else { "spawn " });
                 self.format_expr(expr);
             }
-            Expr::SpawnBlocking { expr } => {
-                self.emitter.write("spawn blocking ");
+            Expr::SpawnBlocking { expr, unchecked } => {
+                self.emitter.write(if *unchecked { "spawn blocking unchecked " } else { "spawn blocking " });
                 self.format_expr(expr);
             }
             Expr::Is {

@@ -1,0 +1,25 @@
+# `spawn unchecked` — escape hatch for the spawn-capture safety check.
+#
+# Without `unchecked`, the borrow checker rejects a closure that
+# captures a borrowed resource type (String here) because the child
+# task could outlive the capture's lifetime. With `unchecked`, the
+# programmer guarantees manual synchronization and the compiler
+# trusts them. Stays grep-able across the codebase.
+#
+# This fixture uses a Copy-typed capture (int) that would pass the
+# regular check anyway — the point is to exercise the syntax path
+# and confirm `unchecked` round-trips through the formatter and the
+# safety checker.
+
+async void main():
+    int x = 7
+
+    # Regular spawn with a Copy capture — always legal.
+    Task[void] t1 = spawn ((): print(f"plain {x}"))()
+    t1.await()
+
+    # `spawn unchecked` — same Copy capture, different syntax path.
+    Task[void] t2 = spawn unchecked ((): print(f"unchecked {x}"))()
+    t2.await()
+
+    print("done")

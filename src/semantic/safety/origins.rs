@@ -296,7 +296,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::MutableBorrow { expr: inner } => self.compute_expr_origin(inner),
 
             // Await/spawn propagate from inner expression
-            Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
+            Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
                 self.compute_expr_origin(inner)
             }
 

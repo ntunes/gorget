@@ -1594,7 +1594,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::Spawn { expr: inner } => {
+            Expr::Spawn { expr: inner, .. } => {
                 let inner_type = self.infer_expr(inner);
                 let resolved = self.resolve_type(inner_type);
                 let future_type = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
@@ -1626,7 +1626,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::SpawnBlocking { expr: inner } => {
+            Expr::SpawnBlocking { expr: inner, .. } => {
                 let inner_type = self.infer_expr(inner);
                 // spawn blocking works with ANY function call — not required to be async.
                 // If it's a Future[T], unwrap to T; otherwise use the return type directly.

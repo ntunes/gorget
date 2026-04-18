@@ -56,8 +56,8 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Unary
         Expr::UnaryOp { operand, .. } => contains_it(operand),
         Expr::Move { expr } | Expr::MutableBorrow { expr }
-        | Expr::Deref { expr } | Expr::Await { expr } | Expr::Spawn { expr }
-        | Expr::SpawnBlocking { expr } => contains_it(expr),
+        | Expr::Deref { expr } | Expr::Await { expr }
+        | Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => contains_it(expr),
 
         // Binary
         Expr::BinaryOp { left, right, .. } => contains_it(left) || contains_it(right),
@@ -460,16 +460,27 @@ impl Parser {
                 ))
             }
 
-            // Spawn / Spawn blocking
+            // Spawn / Spawn blocking — optionally preceded by `unchecked`.
+            // Accepted shapes: `spawn foo()`, `spawn blocking foo()`,
+            // `spawn unchecked foo()`, `spawn blocking unchecked foo()`,
+            // `spawn unchecked blocking foo()`.
             Token::Keyword(Keyword::Spawn) => {
                 self.advance();
-                let is_blocking = self.match_keyword(Keyword::Blocking);
+                let mut is_blocking = self.match_keyword(Keyword::Blocking);
+                let mut unchecked = self.match_keyword(Keyword::Unchecked);
+                if !is_blocking {
+                    // Allow `unchecked` before `blocking` as well.
+                    is_blocking = self.match_keyword(Keyword::Blocking);
+                }
+                if !unchecked {
+                    unchecked = self.match_keyword(Keyword::Unchecked);
+                }
                 let operand = self.parse_expr_bp(2)?;
                 let end = operand.span;
                 let expr_node = if is_blocking {
-                    Expr::SpawnBlocking { expr: Box::new(operand) }
+                    Expr::SpawnBlocking { expr: Box::new(operand), unchecked }
                 } else {
-                    Expr::Spawn { expr: Box::new(operand) }
+                    Expr::Spawn { expr: Box::new(operand), unchecked }
                 };
                 Ok(Spanned::new(expr_node, start.merge(end)))
             }

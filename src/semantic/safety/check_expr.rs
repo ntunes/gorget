@@ -521,8 +521,17 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::Spawn { expr: inner } => {
+            Expr::Spawn { expr: inner, unchecked } => {
                 self.check_expr(inner);
+                // `spawn unchecked` is the programmer-opt-out escape hatch:
+                // skip all spawn-capture safety checks below. The inner
+                // expression was still recursed into above for normal
+                // checks (move/borrow semantics within the argument
+                // expression); only the cross-boundary capture rules
+                // are bypassed.
+                if *unchecked {
+                    return;
+                }
                 // spawn supports:
                 //   1. Direct function calls: `spawn fn_name(args)`
                 //   2. Closure variable calls: `spawn c(args)` where c is a closure variable
@@ -599,8 +608,11 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::SpawnBlocking { expr: inner } => {
+            Expr::SpawnBlocking { expr: inner, unchecked } => {
                 self.check_expr(inner);
+                if *unchecked {
+                    return;
+                }
                 if let Expr::Call { callee, args, .. } = &inner.node {
                     if matches!(&callee.node, Expr::Identifier(_)) {
                         self.check_spawn_args(args);

@@ -2116,7 +2116,7 @@ pub fn expr_has_await(expr: &crate::parser::ast::Expr) -> bool {
             || expr_has_await(&then_branch.node)
             || else_branch.as_ref().map_or(false, |eb| expr_has_await(&eb.node))
         }
-        Expr::Spawn { expr } => expr_has_await(&expr.node),
+        Expr::Spawn { expr, .. } => expr_has_await(&expr.node),
         Expr::TupleLiteral(elems) => elems.iter().any(|e| expr_has_await(&e.node)),
         Expr::Index { object, index, .. } => {
             expr_has_await(&object.node) || expr_has_await(&index.node)

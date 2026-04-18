@@ -488,7 +488,7 @@ fn purity_walk_expr(
                 purity_walk_expr(&arg.node.value, scopes, resolution_map, acc, callees);
             }
         }
-        Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
+        Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
             acc.accesses_shared();
             purity_walk_expr(inner, scopes, resolution_map, acc, callees);
         }
@@ -547,7 +547,7 @@ fn visit_expr_children(expr: &Spanned<Expr>, mut visit: impl FnMut(&Spanned<Expr
             visit(receiver);
             for arg in args { visit(&arg.node.value); }
         }
-        Expr::Await { expr: inner } | Expr::Spawn { expr: inner } | Expr::SpawnBlocking { expr: inner } => {
+        Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
             visit(inner);
         }
         Expr::Match { scrutinee, arms, else_arm } => {

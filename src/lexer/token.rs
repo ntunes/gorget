@@ -297,6 +297,7 @@ pub enum Keyword {
     Await,
     Spawn,
     Blocking,
+    Unchecked,
     Select,
     Shared,
 
@@ -425,6 +426,7 @@ impl Keyword {
             Keyword::Await => "await",
             Keyword::Spawn => "spawn",
             Keyword::Blocking => "blocking",
+            Keyword::Unchecked => "unchecked",
             Keyword::Select => "select",
             Keyword::Shared => "shared",
             Keyword::Unsafe => "unsafe",
@@ -513,6 +515,7 @@ impl Keyword {
             "await" => Some(Keyword::Await),
             "spawn" => Some(Keyword::Spawn),
             "blocking" => Some(Keyword::Blocking),
+            "unchecked" => Some(Keyword::Unchecked),
             "select" => Some(Keyword::Select),
             "shared" => Some(Keyword::Shared),
             "unsafe" => Some(Keyword::Unsafe),

@@ -488,6 +488,28 @@ The compiler likewise rejects closures that capture a `shared` directly (use `sh
 inside the closure body instead) or capture mutably (`&`-bound). Reading a Copy value
 (int, bool, etc.) by capture is always safe.
 
+### Escape Hatch — `spawn unchecked`
+
+When you know the child task's lifetime is bounded by the parent (e.g., you await the
+task before the capture goes out of scope, or you manage the synchronization manually),
+you can opt out of the spawn-capture safety check with `spawn unchecked`:
+
+```gorget
+async void main():
+    String msg = "hello"
+    Task[void] t = spawn unchecked ((): print(msg))()
+    t.await()    # await before msg goes out of scope
+    print("done")
+```
+
+`unchecked` works with `spawn blocking` too: `spawn blocking unchecked fn()` or
+`spawn unchecked blocking fn()`. The keyword is grep-able so audits can find every
+opt-out in a codebase.
+
+This is an escape hatch, not a shortcut — prefer `shared T` or a channel over
+`unchecked`. Reach for it only when the safety check rejects a pattern you've proven
+safe by another means.
+
 ---
 
 ## Choosing the Right Primitive

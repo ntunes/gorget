@@ -652,10 +652,16 @@ pub enum Expr {
     // ── Spawn ──
     Spawn {
         expr: Box<Spanned<Expr>>,
+        /// `spawn unchecked <call_expr>` — opt out of the borrow
+        /// checker's spawn-capture safety checks. The programmer
+        /// guarantees manual synchronization. Grep-able escape hatch.
+        unchecked: bool,
     },
     /// `spawn blocking <call_expr>` — run on the expandable blocking pool.
     SpawnBlocking {
         expr: Box<Spanned<Expr>>,
+        /// Same opt-out as `Expr::Spawn::unchecked`.
+        unchecked: bool,
     },
 
     // ── Is pattern test ──

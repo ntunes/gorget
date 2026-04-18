@@ -7821,7 +7821,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
         Expr::Await { expr } => {
             format!("{}.await()", format_expr_canonical(&expr.node))
         }
-        Expr::Spawn { expr } => {
+        Expr::Spawn { expr, .. } => {
             format!("spawn {}", format_expr_canonical(&expr.node))
         }
         Expr::OptionalChain { object, field } => {
@@ -7882,7 +7882,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             )
         }
         Expr::MetaOpToken(op) => format!("meta {:?}", op),
-        Expr::SpawnBlocking { expr } => format!("spawn blocking {}", format_expr_canonical(&expr.node)),
+        Expr::SpawnBlocking { expr, .. } => format!("spawn blocking {}", format_expr_canonical(&expr.node)),
         Expr::Rethrow { expr, error_binding, transform } => {
             if let Some((error_type, error_name)) = error_binding {
                 format!(
@@ -11613,6 +11613,27 @@ fn spawn_closure_inline() {
         "spawn_closure_inline.gg",
         "\
 7
+done",
+    );
+}
+
+#[test]
+fn spawn_unchecked() {
+    run_gg(
+        "spawn_unchecked.gg",
+        "\
+plain 7
+unchecked 7
+done",
+    );
+}
+
+#[test]
+fn spawn_unchecked_bypasses_check() {
+    run_gg(
+        "spawn_unchecked_bypasses_check.gg",
+        "\
+captured by copy under unchecked
 done",
     );
 }
