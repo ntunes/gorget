@@ -222,7 +222,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     coll,
                     hof_op,
                     element_ty,
-                    value_ty: _,
+                    value_ty: value_ty_inner,
                     closure,
                     closure_kind,
                     closure_ret_ty,
@@ -236,7 +236,9 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::All
                         | HofOp::Fold
                         | HofOp::Reduce
-                        | HofOp::Count => {
+                        | HofOp::Count
+                        | HofOp::Find
+                        | HofOp::FindIndex => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -313,6 +315,58 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     remaining,
                                     orig_term,
                                 ),
+                                HofOp::FindIndex => expand_find_index(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    dst.expect("find_index must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::Find => {
+                                    // The dst's declared type (`Struct(Option__T)`)
+                                    // is carried on HofExpand.value_ty by the emitter
+                                    // so the expansion can allocate a slot of the
+                                    // right layout without reaching back into GIR.
+                                    let d = dst.expect("find must carry a dst ValueId");
+                                    let option_sid = match &value_ty_inner {
+                                        Some(LirType::Struct(sid)) => *sid,
+                                        _ => {
+                                            new_insts.push(Inst::HofExpand {
+                                                coll,
+                                                hof_op,
+                                                element_ty,
+                                                value_ty: value_ty_inner,
+                                                closure,
+                                                closure_kind,
+                                                closure_ret_ty,
+                                                closure_arg_abis,
+                                                dst,
+                                                init,
+                                            });
+                                            continue;
+                                        }
+                                    };
+                                    expand_find(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        option_sid,
+                                        d,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
                                 _ => unreachable!(),
                             }
                             hof_split = true;
@@ -325,7 +379,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                 coll,
                                 hof_op,
                                 element_ty,
-                                value_ty: None,
+                                value_ty: value_ty_inner,
                                 closure,
                                 closure_kind,
                                 closure_ret_ty,
@@ -1104,6 +1158,215 @@ fn expand_count(
     // done_bb: param = dst.
     func.block_mut(ctx.done_bb).params.push((dst, LirType::I64));
     func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: FindIndex, dst, … }` — returns the index of
+/// the first element for which the predicate returns true, or `-1`
+/// when no element matches. The caller's `dst` is an `i64`; the
+/// existing upstream Option-wrapping machinery converts the sentinel
+/// into an `Option[int]` at use sites that need it (same semantics as
+/// the prior backend inliner).
+#[allow(clippy::too_many_arguments)]
+fn expand_find_index(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![],
+        None,
+    );
+
+    // body_bb: CallClosure(closure, [elem]) → pred: Bool.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+
+    // Sentinel `-1` produced in check_bb (taken on exhaustion).
+    let neg_one = alloc_value(next);
+    func.block_mut(ctx.check_bb).insts.push(Inst::IConst {
+        dst: neg_one,
+        ty: LirType::I64,
+        value: -1,
+    });
+
+    // check_bb: cond ? body_bb : done_bb(-1).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![neg_one],
+    };
+    // body_bb: pred ? done_bb(i) : cont_bb.
+    let cont_bb = func.add_block();
+    // `i_val` is the counter block-param of check_bb; we thread it as
+    // the result when the predicate matches on the current element.
+    let i_val = ctx.i_val;
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block: ctx.done_bb,
+        then_args: vec![i_val],
+        else_block: cont_bb,
+        else_args: vec![],
+    };
+    // cont_bb: jump back with next_i.
+    func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+
+    // done_bb(result: i64): remaining + orig_term.
+    func.block_mut(ctx.done_bb).params.push((dst, LirType::I64));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: Find, dst, … }` — returns `Some(elem)` for
+/// the first matching element, or `None` if no element matches.
+///
+/// The `dst` slot is typed `Option[T]`. Rather than thread an aggregate
+/// through SSA block args, the expansion uses a fresh stack slot of
+/// `Option[T]`, writes the tag + payload into it during the loop, then
+/// `SlotLoad`s it at `done_bb` into `dst`. This matches the C and LLVM
+/// backends' current behavior (both use alloca + memcpy on match).
+///
+/// For now, element types must be scalar — the `Store` into the payload
+/// field assumes a scalar value. Aggregate-element `find` still flows
+/// through the backend handler.
+#[allow(clippy::too_many_arguments)]
+fn expand_find(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    option_sid: StructId,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    // Allocate the Option[T] result slot.
+    let option_ty = LirType::Struct(option_sid);
+    let option_slot = func.add_slot(option_ty.clone(), None);
+    let cur = BlockId(current_bb as u32);
+
+    // current_bb: init slot to None (tag=1) via primitive FieldPtr + Store
+    // rather than Inst::EnumInit — the BIR pass won't re-scan current_bb
+    // for canonical ops after this point.
+    let out_addr = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::SlotAddr {
+        dst: out_addr,
+        slot: option_slot,
+    });
+    let tag_ptr0 = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::FieldPtr {
+        dst: tag_ptr0,
+        base: out_addr,
+        struct_id: option_sid,
+        field: 0,
+    });
+    let none_tag = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::IConst {
+        dst: none_tag,
+        ty: LirType::I32,
+        value: 1, // None
+    });
+    func.block_mut(cur).insts.push(Inst::Store {
+        ptr: tag_ptr0,
+        value: none_tag,
+    });
+
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![],
+        None,
+    );
+
+    // body_bb: CallClosure(closure, [elem]) → pred: Bool.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+
+    // check_bb: cond ? body_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: pred ? found_bb : cont_bb.
+    let found_bb = func.add_block();
+    let cont_bb = func.add_block();
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block: found_bb,
+        then_args: vec![],
+        else_block: cont_bb,
+        else_args: vec![],
+    };
+
+    // found_bb: mutate the option slot via Inst::EnumInit (tag=0, payload=elem).
+    // EnumInit lives in a fresh block so the BIR outer loop revisits it
+    // and expands the canonical op.
+    func.block_mut(found_bb).insts.push(Inst::EnumInit {
+        target: out_addr,
+        struct_id: option_sid,
+        variant_tag: 0,
+        fields: vec![(1, ctx.elem_arg)],
+    });
+    func.block_mut(found_bb).terminator = Term::Jump(ctx.done_bb, vec![]);
+
+    // cont_bb: jump back to check with next_i.
+    func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+
+    // done_bb: SlotLoad the option result into dst.
+    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+        dst,
+        slot: option_slot,
+        ty: option_ty,
+    });
+    func.block_mut(ctx.done_bb)
+        .insts
+        .extend(remaining);
     func.block_mut(ctx.done_bb).terminator = orig_term;
 }
 

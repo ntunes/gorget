@@ -576,12 +576,13 @@ Each step is a single commit, each removes code, each demonstrates payoff:
 
    **Migration status:**
    - Vector: `each` ✓ (pathfinder), `any` ✓, `all` ✓, `fold` ✓,
-     `reduce` ✓, `count` ✓ (fold/reduce/count are scalar-element
-     only; aggregate forms still fall through to backend handlers
-     pending a closure-signature lookup at emit time). `map`,
-     `filter`, `flat_map`, `find`, `find_index`, `sorted`,
-     `sort_by`, `sorted_by`, `sort_by_key`, `sorted_by_key`,
-     `windows`, `chunks`, `unique` — still inline in backends.
+     `reduce` ✓, `count` ✓, `find` ✓, `find_index` ✓ (fold, reduce,
+     count, find, find_index are scalar-element only; aggregate
+     forms still fall through to backend handlers pending a
+     closure-signature lookup at emit time). `map`, `filter`,
+     `flat_map`, `sorted`, `sort_by`, `sorted_by`, `sort_by_key`,
+     `sorted_by_key`, `windows`, `chunks`, `unique` — still inline
+     in backends.
    - Dict: all variants still inline in backends.
    - Set: all variants still inline in backends.
 

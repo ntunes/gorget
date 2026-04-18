@@ -1863,15 +1863,18 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count) = match method {
-            "each" => (HofOp::Each, false, false, false, false),
-            "any" => (HofOp::Any, true, false, false, false),
-            "all" => (HofOp::All, true, false, false, false),
-            "fold" => (HofOp::Fold, true, true, false, false),
-            "reduce" => (HofOp::Reduce, true, false, true, false),
-            "count" => (HofOp::Count, true, false, false, true),
-            _ => return None,
-        };
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index) =
+            match method {
+                "each" => (HofOp::Each, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true),
+                _ => return None,
+            };
         if lir_args.len() < 2 {
             return None;
         }
@@ -1906,7 +1909,8 @@ impl<'a> FuncLowering<'a> {
         // For fold/reduce, the closure return type = dst's declared
         // type (the accumulator type). Derive it from the destination
         // local's GIR type to match what the caller expects. For
-        // `any`/`all`/`count` it's Bool; for `each` it's Void.
+        // `any`/`all`/`count`/`find`/`find_index` the closure returns
+        // Bool (predicate). `each` closure returns Void.
         let closure_ret_ty = if is_fold || is_reduce {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
@@ -1916,7 +1920,7 @@ impl<'a> FuncLowering<'a> {
         } else {
             LirType::Void
         };
-        let _ = is_count;
+        let _ = (is_count, is_find_index);
 
         // Gate out aggregate accumulators AND aggregate elements for
         // fold/reduce/count. The closure's `__call` signature decides
@@ -1932,6 +1936,13 @@ impl<'a> FuncLowering<'a> {
             return None;
         }
         if is_count && element_ty.is_aggregate() {
+            return None;
+        }
+        // `find` / `find_index` use EnumInit-style scalar `Store` for
+        // the payload path; aggregate elements still go through the
+        // backend inliner until AddressOf + Memcpy for the payload is
+        // added here.
+        if (is_find || is_find_index) && element_ty.is_aggregate() {
             return None;
         }
 
@@ -1972,11 +1983,23 @@ impl<'a> FuncLowering<'a> {
         // Fold's init operand lives at `lir_args[1]`.
         let init_id = if is_fold { Some(lir_args_wrapped[1]) } else { None };
 
+        // For `find`, `value_ty` carries the declared dst type
+        // (typically `Struct(Option__T)`) so the BIR expansion can
+        // allocate a slot of the right layout without needing to
+        // reach back into GIR.
+        let value_ty = if is_find {
+            let d = dst.as_ref().expect("find requires dst");
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            Some(self.map_type(&gir_ty))
+        } else {
+            None
+        };
+
         self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
             coll: lir_args_wrapped[0],
             hof_op,
             element_ty,
-            value_ty: None,
+            value_ty,
             closure: lir_args_wrapped[closure_idx],
             closure_kind: ClosureDispatchKind::EscapedClosure,
             closure_ret_ty,

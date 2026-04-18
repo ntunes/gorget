@@ -2008,9 +2008,15 @@ fn emit_function(
                         let is_str_push_line_direct = name == "gorget_string_push_line";
 
                         // Detect Vector HOF calls that create inline loops (labels).
-                        // `each` / `any` / `all` are lowered upstream via
-                        // `Inst::HofExpand`; other HOFs still inline here
-                        // (and therefore need a `dst`).
+                        // `each` / `any` / `all` / `fold` / `reduce` / `count`
+                        // / `find` / `find_index` are (partially) lowered
+                        // upstream via `Inst::HofExpand`. For fold/reduce/
+                        // count/find/find_index the intercept gates on
+                        // scalar-only, so the backend still inlines the
+                        // aggregate cases — this detection keeps reserving a
+                        // `pfx` slot for those uncertain cases by triggering
+                        // the counter for every method name, not just the
+                        // ones that always inline.
                         let is_vector_hof = parse_vector_hof(name).is_some();
                         let vector_hof_needs_inline = if is_vector_hof {
                             let (_, method) = parse_vector_hof(name).unwrap();
