@@ -231,7 +231,11 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     init,
                 } => {
                     match hof_op {
-                        HofOp::Each | HofOp::Any | HofOp::All | HofOp::Fold => {
+                        HofOp::Each
+                        | HofOp::Any
+                        | HofOp::All
+                        | HofOp::Fold
+                        | HofOp::Reduce => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -278,6 +282,20 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     closure_ret_ty,
                                     init.expect("fold must carry an init ValueId"),
                                     dst.expect("fold must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::Reduce => expand_reduce(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    closure_ret_ty,
+                                    dst.expect("reduce must carry a dst ValueId"),
                                     remaining,
                                     orig_term,
                                 ),
@@ -386,6 +404,7 @@ fn emit_hof_loop_scaffold(
     element_ty: &LirType,
     elem_abi_hint: Option<crate::ir::abi::AbiKind>,
     extra_check_inits: Vec<(LirType, ValueId)>,
+    start_counter: Option<ValueId>,
 ) -> HofLoopCtx {
     let gorget_array_sid = lookup_struct_id(structs, "GorgetArray")
         .unwrap_or(StructId(0));
@@ -404,15 +423,20 @@ fn emit_hof_loop_scaffold(
         extra_check_params.push(p);
     }
 
-    // current_bb → check_bb(0, init0, init1, ...)
-    let zero = alloc_value(next);
-    func.block_mut(BlockId(current_bb as u32)).insts.push(Inst::IConst {
-        dst: zero,
-        ty: LirType::I64,
-        value: 0,
+    // current_bb → check_bb(start_counter, init0, init1, ...)
+    let start = start_counter.unwrap_or_else(|| {
+        let z = alloc_value(next);
+        func.block_mut(BlockId(current_bb as u32))
+            .insts
+            .push(Inst::IConst {
+                dst: z,
+                ty: LirType::I64,
+                value: 0,
+            });
+        z
     });
     let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
-    entry_args.push(zero);
+    entry_args.push(start);
     for (_, init) in &extra_check_inits {
         entry_args.push(*init);
     }
@@ -558,6 +582,7 @@ fn expand_each(
         &element_ty,
         elem_abi_hint,
         vec![],
+        None,
     );
 
     // body_bb: CallClosure(closure, [elem]) returning Void.
@@ -635,6 +660,7 @@ fn expand_any_all(
         &element_ty,
         elem_abi_hint,
         vec![],
+        None,
     );
 
     // body_bb: CallClosure(closure, [elem]) returning Bool.
@@ -769,6 +795,7 @@ fn expand_fold(
         &element_ty,
         elem_abi_hint,
         vec![(closure_ret_ty.clone(), init)],
+        None,
     );
     let acc_val = ctx.extra_check_params[0];
 
@@ -825,6 +852,152 @@ fn expand_fold(
         Term::Jump(ctx.check_bb, vec![ctx.next_i, new_acc]);
 
     // done_bb(result = dst): remaining + orig_term.
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: Reduce, dst, … }` — like `fold` but the
+/// initial accumulator is `coll[0]` and the loop starts at `i = 1`.
+///
+/// Matches the prior backend semantics: on an empty collection this
+/// reads whatever bytes sit at `coll.data + 0`, which is the same
+/// undefined behavior the C and LLVM backends produce today. Callers
+/// expected to check `.len() > 0` themselves; we preserve that contract
+/// rather than silently adding a guard.
+#[allow(clippy::too_many_arguments)]
+fn expand_reduce(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let gorget_array_sid =
+        lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
+
+    // current_bb: pre-load first element as the initial accumulator.
+    //   datap = *FieldPtr(coll, data)
+    //   first_elem = *ElemPtr(datap, 0, elem_size)     (scalar only)
+    //   i0 = 1_i64
+    let datap_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::FieldPtr {
+            dst: datap_ptr,
+            base: coll,
+            struct_id: gorget_array_sid,
+            field: 0,
+        });
+    let datap = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::Load {
+            dst: datap,
+            ptr: datap_ptr,
+            ty: LirType::Ptr,
+        });
+    let elem_size = c_sizeof_lir_type(&element_ty, structs) as u32;
+    let zero_i64 = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::IConst {
+            dst: zero_i64,
+            ty: LirType::I64,
+            value: 0,
+        });
+    let first_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::ElemPtr {
+            dst: first_ptr,
+            base: datap,
+            index: zero_i64,
+            elem_size,
+        });
+    let first_elem = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::Load {
+            dst: first_elem,
+            ptr: first_ptr,
+            ty: element_ty.clone(),
+        });
+    let one_i64 = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::IConst {
+            dst: one_i64,
+            ty: LirType::I64,
+            value: 1,
+        });
+
+    // Scaffold with start=1 and acc init = first_elem. From here the
+    // structure mirrors fold.
+    let acc_abi_hint = closure_arg_abis.first().copied();
+    let elem_abi_hint = closure_arg_abis.get(1).copied();
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![(closure_ret_ty.clone(), first_elem)],
+        Some(one_i64),
+    );
+    let acc_val = ctx.extra_check_params[0];
+
+    let acc_by_ptr = match acc_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => closure_ret_ty.is_aggregate(),
+    };
+    let acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+            dst: p,
+            value: acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        acc_val
+    };
+    let acc_abi = if acc_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    let new_acc = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![acc_arg, ctx.elem_arg],
+        arg_abis: vec![acc_abi, ctx.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![acc_val],
+    };
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i, new_acc]);
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
     func.block_mut(ctx.done_bb).insts = remaining;
     func.block_mut(ctx.done_bb).terminator = orig_term;

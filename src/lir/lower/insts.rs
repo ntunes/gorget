@@ -1863,11 +1863,12 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold) = match method {
-            "each" => (HofOp::Each, false, false),
-            "any" => (HofOp::Any, true, false),
-            "all" => (HofOp::All, true, false),
-            "fold" => (HofOp::Fold, true, true),
+        let (hof_op, produces_result, is_fold, is_reduce) = match method {
+            "each" => (HofOp::Each, false, false, false),
+            "any" => (HofOp::Any, true, false, false),
+            "all" => (HofOp::All, true, false, false),
+            "fold" => (HofOp::Fold, true, true, false),
+            "reduce" => (HofOp::Reduce, true, false, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
@@ -1877,6 +1878,7 @@ impl<'a> FuncLowering<'a> {
         if is_fold && lir_args.len() < 3 {
             return None;
         }
+        let _ = is_reduce;
         // Result-producing HOFs must have a destination; `each` must not.
         if produces_result && dst.is_none() {
             return None;
@@ -1900,11 +1902,12 @@ impl<'a> FuncLowering<'a> {
         let elem_c_name = &rest[..sep];
         let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
 
-        // For fold, the closure return type = dst's declared type (the
-        // accumulator type). Derive it from the destination local's GIR
-        // type to match what the caller expects.
-        let closure_ret_ty = if is_fold {
-            let d = dst.as_ref().expect("fold requires dst");
+        // For fold/reduce, the closure return type = dst's declared
+        // type (the accumulator type). Derive it from the destination
+        // local's GIR type to match what the caller expects. For
+        // `any`/`all` it's Bool; for `each` it's Void.
+        let closure_ret_ty = if is_fold || is_reduce {
+            let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
         } else if produces_result {
@@ -1913,15 +1916,17 @@ impl<'a> FuncLowering<'a> {
             LirType::Void
         };
 
-        // For fold, gate out aggregate accumulators AND aggregate
-        // elements for now. The closure's `__call` signature decides
-        // per-arg whether it wants the struct by value or by pointer,
-        // and mirroring that choice faithfully requires looking up the
-        // closure's function signature at emit time (not yet wired
-        // through `FuncLowering`). Scalar-only covers the overwhelming
-        // majority of fold call sites; the rest still inline in the
-        // backend handlers.
-        if is_fold && (closure_ret_ty.is_aggregate() || element_ty.is_aggregate()) {
+        // For fold/reduce, gate out aggregate accumulators AND
+        // aggregate elements for now. The closure's `__call` signature
+        // decides per-arg whether it wants the struct by value or by
+        // pointer, and mirroring that choice faithfully requires
+        // looking up the closure's function signature at emit time
+        // (not yet wired through `FuncLowering`). Scalar-only covers
+        // the overwhelming majority of fold/reduce call sites; the
+        // rest still inline in the backend handlers.
+        if (is_fold || is_reduce)
+            && (closure_ret_ty.is_aggregate() || element_ty.is_aggregate())
+        {
             return None;
         }
 
@@ -1937,9 +1942,9 @@ impl<'a> FuncLowering<'a> {
         };
 
         // closure_arg_abis layout depends on the HOF:
-        //   each/any/all: [elem_abi]
-        //   fold:         [acc_abi, elem_abi]
-        let closure_arg_abis = if is_fold {
+        //   each/any/all:  [elem_abi]
+        //   fold / reduce: [acc_abi, elem_abi]
+        let closure_arg_abis = if is_fold || is_reduce {
             let acc_abi = if closure_ret_ty.is_aggregate() {
                 crate::ir::abi::AbiKind::Ptr
             } else {
