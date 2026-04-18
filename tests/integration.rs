@@ -2016,7 +2016,10 @@ fn stdlib_iter_map_filter() {
 
 #[test]
 fn iter_method_sugar() {
-    run_gg("iter_method_sugar.gg", "1\n2\n3");
+    run_gg(
+        "iter_method_sugar.gg",
+        "1\n2\n3\n--\n3\n4\n5\n--\n1\n2\n3\n4\n5\n100\n200",
+    );
 }
 
 #[test]

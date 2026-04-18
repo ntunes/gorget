@@ -1,31 +1,38 @@
-# Iterator method sugar — `v.iter().take(n)` works end-to-end.
+# Iterator method sugar — `.take()` / `.skip()` / `.chain()` as equip
+# methods on VectorIter.
 #
-# Previously tripped two compiler bugs:
+# Each adapter method constructs the concrete state-machine struct
+# (TakeIter / SkipIter / ChainIter) and returns it by value. No
+# trait-object dispatch, no boxing — the chain fuses at the
+# monomorphized layer.
 #
-#   1. `discover_transitive` only walked Function-kind instances, so nested
-#      generic types inside equip method bodies (e.g. VectorIter[int]
-#      inside Vector[int].iter()) were never discovered.
-#
-#   2. Forward reference in monomorphization order: TakeIter[int] (from
-#      type annotation) gets registered before VectorIter[int] (from
-#      equip body). TakeIter's `inner: VectorIter[T]` field then resolved
-#      to UNIT_TYPE → void at the struct level, producing illegal
-#      `*(void *)` derefs downstream.
-#
-# Fixed by (1) extending discover_transitive to walk equip method bodies
-# and (2) running monomorphization in two passes — first registers names,
-# second fills in field types so forward references resolve.
+# Method sugar with method-level generic params (`.map[U, F]` /
+# `.filter[F]`) is not wired yet — see iter.gg.
 
 from std.collections import Vector
-from std.iter import VectorIter, TakeIter
-
-equip [T] VectorIter[T]:
-    TakeIter[T] take(self, int n):
-        return TakeIter[T](self, n)
+from std.iter import VectorIter, TakeIter, SkipIter, ChainIter
 
 int main():
     Vector[int] v = [1, 2, 3, 4, 5]
+
+    # take(n)
     TakeIter[int] t = v.iter().take(3)
     for x in t:
         print(x)
+
+    print("--")
+
+    # skip(n)
+    SkipIter[int] s = v.iter().skip(2)
+    for x in s:
+        print(x)
+
+    print("--")
+
+    # chain(other)
+    Vector[int] w = [100, 200]
+    ChainIter[int] c = v.iter().chain(w.iter())
+    for x in c:
+        print(x)
+
     return 0

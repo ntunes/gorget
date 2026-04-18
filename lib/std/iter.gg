@@ -5,12 +5,16 @@
 # `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
 # `FilterIter[T, F]` — each is a state-machine struct, no trait-object
 # dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
-# `any_iter`, `all_iter`, `fold_iter`, `join_iter`.
+# `any_iter`, `all_iter`, `fold_iter`.
 #
-# NOTE: Adapter-method sugar (`.take(n)` / `.map(f)` / `.filter(p)`)
-# on VectorIter is not yet wired because it trips a monomorphization
-# ordering bug — users construct adapters directly with
-# `TakeIter[int](v.iter(), n)`, `MapIter[int, int, F](v.iter(), f)` etc.
+# Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` and
+# `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` construct the
+# corresponding concrete adapter. Each returns a value — no boxing,
+# no trait-object dispatch. Chains like `v.iter().take(3)` or
+# `VectorIter[int] prefix = v.iter().take(3)` work end to end; the
+# generic-on-generic closure cases (`map` / `filter`) need explicit
+# type args at the call site until Gorget's inference propagates
+# closure return types into method generics.
 
 from std.collections import Vector
 
@@ -29,6 +33,27 @@ equip [T] VectorIter[T] with Iterator[T]:
 equip [T] Vector[T]:
     VectorIter[T] iter(self):
         return VectorIter[T](self, 0)
+
+# Method-style adapter sugar on VectorIter. Each method constructs the
+# corresponding concrete adapter struct and returns it by value.
+# Callers chain with `v.iter().take(n)` / `v.iter().skip(2).chain(w.iter())` etc.
+#
+# Note: `.map(f)` / `.filter(p)` — adapter methods with their own
+# method-level generic params (`map[U, F]` / `filter[F]`) — are not
+# wired here. They trip a monomorphization issue where the partially-
+# substituted return type (`MapIter[int, U, F]` with T→int done but
+# U / F still abstract) gets accidentally registered as a concrete
+# type. Users construct these via `MapIter[T, U, F](v.iter(), f)` /
+# `FilterIter[T, F](v.iter(), pred)` until that's resolved.
+equip [T] VectorIter[T]:
+    TakeIter[T] take(self, int n):
+        return TakeIter[T](self, n)
+
+    SkipIter[T] skip(self, int n):
+        return SkipIter[T](self, n)
+
+    ChainIter[T] chain(self, VectorIter[T] other):
+        return ChainIter[T](self, other, true)
 
 struct TakeIter[T]:
     VectorIter[T] inner
