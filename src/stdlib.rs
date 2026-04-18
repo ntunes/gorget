@@ -240,10 +240,6 @@ mod tests {
         assert!(names.contains(&"Dict".to_string()));
         assert!(names.contains(&"Set".to_string()));
         assert!(names.contains(&"Box".to_string()));
-        assert!(names.contains(&"File".to_string()));
-        // File equip block should exist
-        let equip_count = m.items.iter().filter(|i| matches!(&i.node, Item::Equip(_))).count();
-        assert!(equip_count >= 1);
     }
 
     #[test]
@@ -523,7 +519,7 @@ mod tests {
         }
         assert!(struct_names.contains(&"Socket".to_string()));
         assert!(struct_names.contains(&"ServerSocket".to_string()));
-        assert_eq!(equip_count, 2); // Socket + ServerSocket
+        assert_eq!(equip_count, 4); // Socket (intrinsic + Writer + Reader) + ServerSocket
     }
 
     #[test]
@@ -872,7 +868,7 @@ mod tests {
         }
         assert!(struct_names.contains(&"TlsSocket".to_string()));
         assert!(struct_names.contains(&"TlsServerSocket".to_string()));
-        assert_eq!(equip_count, 2); // TlsSocket + TlsServerSocket
+        assert_eq!(equip_count, 4); // TlsSocket (intrinsic + Writer + Reader) + TlsServerSocket
     }
 
     #[test]
@@ -959,7 +955,7 @@ mod tests {
 
     #[test]
     fn file_methods_are_extern() {
-        let source = builtin_module_source(&["std".into(), "collections".into()]).unwrap();
+        let source = builtin_module_source(&["std".into(), "io".into()]).unwrap();
         let mut parser = crate::parser::Parser::new(source);
         let m = parser.parse_module();
         assert!(parser.errors.is_empty());
