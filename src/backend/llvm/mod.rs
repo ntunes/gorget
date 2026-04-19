@@ -2033,10 +2033,10 @@ fn emit_function(
                         // Detect Dict/Set HOF calls that create inline loops
                         let dict_hof_needs_inline = if parse_dict_hof(name).is_some() {
                             let (_, _, method) = parse_dict_hof(name).unwrap();
-                            match method { "each" => true, _ => dst.is_some() }
+                            matches!(method, "filter" | "map") && dst.is_some()
                         } else if parse_set_hof(name).is_some() {
                             let (_, method) = parse_set_hof(name).unwrap();
-                            match method { "each" => true, _ => dst.is_some() }
+                            matches!(method, "filter" | "map") && dst.is_some()
                         } else { false };
 
                         // Detect Option/Result combinator calls that generate branches
@@ -3743,7 +3743,7 @@ fn emit_inst(
                     } else { None };
                     let closure_info = closure_arg.and_then(|ca| resolve_closure_call_fn(ca, val_types, module));
 
-                    if let Some((call_fn, ret_ty, params_are_ptr)) = closure_info {
+                    if let Some((call_fn, _ret_ty, params_are_ptr)) = closure_info {
                         let closure_val = closure_arg.unwrap();
 
                         // GorgetMap layout: keys=0, cap=8, values=16, states=24, key_size=40, val_size=48
@@ -3756,125 +3756,6 @@ fn emit_inst(
                         writeln!(out, "  %{pfx}.states = load ptr, ptr %{pfx}.statesp").unwrap();
 
                         match method {
-                            "fold" if args.len() >= 3 => {
-                                let d = dst.unwrap();
-                                let acc_arg = args[1];
-                                let acc_ty = val_types.get(d.0 as usize)
-                                    .and_then(|t| t.as_ref()).cloned().unwrap_or(LirType::I64);
-                                let acc_llvm = llvm_type_full(&acc_ty, snames);
-                                let acc_is_agg = acc_llvm.starts_with('%');
-                                let acc_phi_ty = if acc_is_agg { "ptr" } else { &acc_llvm };
-
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.call]").unwrap();
-                                writeln!(out, "  %{pfx}.acc = phi {acc_phi_ty} [%v{}, %{current_label}], [%{pfx}.acc, %{pfx}.skip], [%{pfx}.accnew, %{pfx}.call]", acc_arg.0).unwrap();
-                                // NOTE: %{pfx}.next is defined in body block (before the occ branch)
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  %{pfx}.sp = getelementptr i8, ptr %{pfx}.states, i64 %{pfx}.i").unwrap();
-                                writeln!(out, "  %{pfx}.st = load i8, ptr %{pfx}.sp").unwrap();
-                                writeln!(out, "  %{pfx}.occ = icmp eq i8 %{pfx}.st, 1").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.occ, label %{pfx}.call, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.call:").unwrap();
-                                writeln!(out, "  %{pfx}.koff = mul i64 %{pfx}.i, {key_size}").unwrap();
-                                writeln!(out, "  %{pfx}.kp = getelementptr i8, ptr %{pfx}.keys, i64 %{pfx}.koff").unwrap();
-                                writeln!(out, "  %{pfx}.voff = mul i64 %{pfx}.i, {val_size}").unwrap();
-                                writeln!(out, "  %{pfx}.vp = getelementptr i8, ptr %{pfx}.valsp, i64 %{pfx}.voff").unwrap();
-
-                                let acc_ref = params_are_ptr.first().copied().unwrap_or(false);
-                                let key_ref = params_are_ptr.get(1).copied().unwrap_or(false);
-                                let val_ref = params_are_ptr.get(2).copied().unwrap_or(false);
-
-                                let acc_param = if acc_is_agg || acc_ref {
-                                    format!("ptr %{pfx}.acc")
-                                } else {
-                                    format!("{acc_llvm} %{pfx}.acc")
-                                };
-                                let key_param = if key_ref || (key_llvm.starts_with('%') && key_size > 16) {
-                                    format!("ptr %{pfx}.kp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.key = load {key_llvm}, ptr %{pfx}.kp").unwrap();
-                                    format!("{key_llvm} %{pfx}.key")
-                                };
-                                let val_param = if val_ref || (val_llvm.starts_with('%') && val_size > 16) {
-                                    format!("ptr %{pfx}.vp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.val = load {val_llvm}, ptr %{pfx}.vp").unwrap();
-                                    format!("{val_llvm} %{pfx}.val")
-                                };
-
-                                let fold_ret_llvm = llvm_type_full(&ret_ty, snames);
-                                let fold_ret_sret = needs_sret(&ret_ty, &module.structs);
-                                let fold_ret_small = ret_ty.is_aggregate() && is_small_aggregate(&ret_ty, &module.structs);
-                                if fold_ret_sret {
-                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
-                                    writeln!(out, "  call void @{call_fn}(ptr sret({fold_ret_llvm}) %{pfx}.accnew, ptr %v{}, {acc_param}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                } else if fold_ret_small {
-                                    writeln!(out, "  %{pfx}.accret = call {fold_ret_llvm} @{call_fn}(ptr %v{}, {acc_param}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
-                                    writeln!(out, "  store {fold_ret_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
-                                } else {
-                                    writeln!(out, "  %{pfx}.accnew = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                }
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.skip:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                writeln!(out, "  %v{} = phi {acc_phi_ty} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            "each" => {
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.call]").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  %{pfx}.sp = getelementptr i8, ptr %{pfx}.states, i64 %{pfx}.i").unwrap();
-                                writeln!(out, "  %{pfx}.st = load i8, ptr %{pfx}.sp").unwrap();
-                                writeln!(out, "  %{pfx}.occ = icmp eq i8 %{pfx}.st, 1").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.occ, label %{pfx}.call, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.call:").unwrap();
-                                writeln!(out, "  %{pfx}.koff = mul i64 %{pfx}.i, {key_size}").unwrap();
-                                writeln!(out, "  %{pfx}.kp = getelementptr i8, ptr %{pfx}.keys, i64 %{pfx}.koff").unwrap();
-                                writeln!(out, "  %{pfx}.voff = mul i64 %{pfx}.i, {val_size}").unwrap();
-                                writeln!(out, "  %{pfx}.vp = getelementptr i8, ptr %{pfx}.valsp, i64 %{pfx}.voff").unwrap();
-
-                                let key_ref = params_are_ptr.first().copied().unwrap_or(false);
-                                let val_ref = params_are_ptr.get(1).copied().unwrap_or(false);
-                                let key_param = if key_ref || (key_llvm.starts_with('%') && key_size > 16) {
-                                    format!("ptr %{pfx}.kp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.key = load {key_llvm}, ptr %{pfx}.kp").unwrap();
-                                    format!("{key_llvm} %{pfx}.key")
-                                };
-                                let val_param = if val_ref || (val_llvm.starts_with('%') && val_size > 16) {
-                                    format!("ptr %{pfx}.vp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.val = load {val_llvm}, ptr %{pfx}.vp").unwrap();
-                                    format!("{val_llvm} %{pfx}.val")
-                                };
-                                writeln!(out, "  call void @{call_fn}(ptr %v{}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.skip:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
                             "filter" => {
                                 let d = dst.unwrap();
                                 // Create new Dict/Map — need to call the correct constructor
@@ -3939,65 +3820,6 @@ fn emit_inst(
                                 *current_label = format!("{pfx}.done");
                                 return;
                             }
-                            "any" | "all" => {
-                                let d = dst.unwrap();
-                                let is_any = method == "any";
-                                let (init_val, early_val) = if is_any { ("0", "1") } else { ("1", "0") };
-
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.cont]").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  %{pfx}.sp = getelementptr i8, ptr %{pfx}.states, i64 %{pfx}.i").unwrap();
-                                writeln!(out, "  %{pfx}.st = load i8, ptr %{pfx}.sp").unwrap();
-                                writeln!(out, "  %{pfx}.occ = icmp eq i8 %{pfx}.st, 1").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.occ, label %{pfx}.test, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.test:").unwrap();
-                                writeln!(out, "  %{pfx}.koff = mul i64 %{pfx}.i, {key_size}").unwrap();
-                                writeln!(out, "  %{pfx}.kp = getelementptr i8, ptr %{pfx}.keys, i64 %{pfx}.koff").unwrap();
-                                writeln!(out, "  %{pfx}.voff = mul i64 %{pfx}.i, {val_size}").unwrap();
-                                writeln!(out, "  %{pfx}.vp = getelementptr i8, ptr %{pfx}.valsp, i64 %{pfx}.voff").unwrap();
-
-                                let key_ref = params_are_ptr.first().copied().unwrap_or(false);
-                                let val_ref = params_are_ptr.get(1).copied().unwrap_or(false);
-                                let key_param = if key_ref || (key_llvm.starts_with('%') && key_size > 16) {
-                                    format!("ptr %{pfx}.kp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.key = load {key_llvm}, ptr %{pfx}.kp").unwrap();
-                                    format!("{key_llvm} %{pfx}.key")
-                                };
-                                let val_param = if val_ref || (val_llvm.starts_with('%') && val_size > 16) {
-                                    format!("ptr %{pfx}.vp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.val = load {val_llvm}, ptr %{pfx}.vp").unwrap();
-                                    format!("{val_llvm} %{pfx}.val")
-                                };
-                                writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                if is_any {
-                                    writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.early, label %{pfx}.cont").unwrap();
-                                } else {
-                                    writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.cont, label %{pfx}.early").unwrap();
-                                }
-
-                                writeln!(out, "{pfx}.cont:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.early:").unwrap();
-                                writeln!(out, "  br label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.skip:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                writeln!(out, "  %v{} = phi i1 [{init_val}, %{pfx}.check], [{early_val}, %{pfx}.early]", d.0).unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
                             _ => {
                                 writeln!(out, "  ; TODO: dict hof {method}").unwrap();
                             }
@@ -4006,14 +3828,11 @@ fn emit_inst(
                 }
             }
 
-            // ── Inline Set higher-order methods (fold/each/filter/any/all) ──
+            // ── Inline Set higher-order methods (filter/map) ──
             // Same as Dict but only iterates keys (no values).
             if let Some((elem_c, method)) = parse_set_hof(name) {
                 let has_dst = dst.is_some();
-                let needs_inline = match method {
-                    "each" => true,
-                    _ => has_dst,
-                };
+                let needs_inline = matches!(method, "filter" | "map") && has_dst;
                 if needs_inline && !args.is_empty() {
                     let uid = *trap_counter;
                     *trap_counter += 1;
@@ -4021,14 +3840,12 @@ fn emit_inst(
                     let map_arg = args[0];
                     let (key_llvm, key_size) = elem_c_to_llvm(elem_c, module, snames);
 
-                    let closure_arg = if method == "fold" && args.len() >= 3 {
-                        Some(args[2])
-                    } else if args.len() >= 2 {
+                    let closure_arg = if args.len() >= 2 {
                         Some(*args.last().unwrap())
                     } else { None };
                     let closure_info = closure_arg.and_then(|ca| resolve_closure_call_fn(ca, val_types, module));
 
-                    if let Some((call_fn, ret_ty, params_are_ptr)) = closure_info {
+                    if let Some((call_fn, _ret_ty, params_are_ptr)) = closure_info {
                         let closure_val = closure_arg.unwrap();
 
                         // GorgetSet = GorgetMap. keys=0, cap=8, states=24, key_size=40
@@ -4039,99 +3856,25 @@ fn emit_inst(
                         writeln!(out, "  %{pfx}.states = load ptr, ptr %{pfx}.statesp").unwrap();
 
                         match method {
-                            "fold" if args.len() >= 3 => {
-                                let d = dst.unwrap();
-                                let acc_arg = args[1];
-                                let acc_ty = val_types.get(d.0 as usize)
-                                    .and_then(|t| t.as_ref()).cloned().unwrap_or(LirType::I64);
-                                let acc_llvm = llvm_type_full(&acc_ty, snames);
-                                let acc_is_agg = acc_llvm.starts_with('%');
-                                let acc_phi_ty = if acc_is_agg { "ptr" } else { &acc_llvm };
-
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.call]").unwrap();
-                                writeln!(out, "  %{pfx}.acc = phi {acc_phi_ty} [%v{}, %{current_label}], [%{pfx}.acc, %{pfx}.skip], [%{pfx}.accnew, %{pfx}.call]", acc_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  %{pfx}.sp = getelementptr i8, ptr %{pfx}.states, i64 %{pfx}.i").unwrap();
-                                writeln!(out, "  %{pfx}.st = load i8, ptr %{pfx}.sp").unwrap();
-                                writeln!(out, "  %{pfx}.occ = icmp eq i8 %{pfx}.st, 1").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.occ, label %{pfx}.call, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.call:").unwrap();
-                                writeln!(out, "  %{pfx}.koff = mul i64 %{pfx}.i, {key_size}").unwrap();
-                                writeln!(out, "  %{pfx}.kp = getelementptr i8, ptr %{pfx}.keys, i64 %{pfx}.koff").unwrap();
-
-                                let acc_ref = params_are_ptr.first().copied().unwrap_or(false);
-                                let key_ref = params_are_ptr.get(1).copied().unwrap_or(false);
-                                let acc_param = if acc_is_agg || acc_ref {
-                                    format!("ptr %{pfx}.acc")
-                                } else {
-                                    format!("{acc_llvm} %{pfx}.acc")
-                                };
-                                let key_param = if key_ref || (key_llvm.starts_with('%') && key_size > 16) {
-                                    format!("ptr %{pfx}.kp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.key = load {key_llvm}, ptr %{pfx}.kp").unwrap();
-                                    format!("{key_llvm} %{pfx}.key")
-                                };
-
-                                let fold_ret_llvm = llvm_type_full(&ret_ty, snames);
-                                let fold_ret_sret = needs_sret(&ret_ty, &module.structs);
-                                let fold_ret_small = ret_ty.is_aggregate() && is_small_aggregate(&ret_ty, &module.structs);
-                                if fold_ret_sret {
-                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
-                                    writeln!(out, "  call void @{call_fn}(ptr sret({fold_ret_llvm}) %{pfx}.accnew, ptr %v{}, {acc_param}, {key_param})", closure_val.0).unwrap();
-                                } else if fold_ret_small {
-                                    writeln!(out, "  %{pfx}.accret = call {fold_ret_llvm} @{call_fn}(ptr %v{}, {acc_param}, {key_param})", closure_val.0).unwrap();
-                                    writeln!(out, "  %{pfx}.accnew = alloca {fold_ret_llvm}").unwrap();
-                                    writeln!(out, "  store {fold_ret_llvm} %{pfx}.accret, ptr %{pfx}.accnew").unwrap();
-                                } else {
-                                    writeln!(out, "  %{pfx}.accnew = call {acc_llvm} @{call_fn}(ptr %v{}, {acc_param}, {key_param})", closure_val.0).unwrap();
-                                }
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.skip:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                writeln!(out, "  %v{} = phi {acc_phi_ty} [%{pfx}.acc, %{pfx}.check]", d.0).unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            "each" | "filter" | "any" | "all" => {
-                                // For these methods, use the same pattern as Dict but with only key param
+                            "filter" => {
                                 let d_opt = dst;
-                                let is_filter = method == "filter";
-                                let is_any = method == "any";
-                                let is_all = method == "all";
-
-                                if is_filter {
-                                    if let Some(d) = d_opt {
-                                        let is_set = name.starts_with("Set__");
-                                        let ctor = if is_set { "gorget_set_new" } else { "gorget_ordered_set_new" };
-                                        let ctor_fn = if elem_c == "GorgetString" {
-                                            format!("{ctor}_str")
-                                        } else { ctor.to_string() };
-                                        writeln!(out, "  %v{} = alloca %GorgetSet", d.0).unwrap();
-                                        if elem_c == "GorgetString" {
-                                            writeln!(out, "  call void @{ctor_fn}(ptr sret(%GorgetSet) %v{})", d.0).unwrap();
-                                        } else {
-                                            writeln!(out, "  call void @{ctor_fn}(ptr sret(%GorgetSet) %v{}, i64 {key_size})", d.0).unwrap();
-                                        }
+                                if let Some(d) = d_opt {
+                                    let is_set = name.starts_with("Set__");
+                                    let ctor = if is_set { "gorget_set_new" } else { "gorget_ordered_set_new" };
+                                    let ctor_fn = if elem_c == "GorgetString" {
+                                        format!("{ctor}_str")
+                                    } else { ctor.to_string() };
+                                    writeln!(out, "  %v{} = alloca %GorgetSet", d.0).unwrap();
+                                    if elem_c == "GorgetString" {
+                                        writeln!(out, "  call void @{ctor_fn}(ptr sret(%GorgetSet) %v{})", d.0).unwrap();
+                                    } else {
+                                        writeln!(out, "  call void @{ctor_fn}(ptr sret(%GorgetSet) %v{}, i64 {key_size})", d.0).unwrap();
                                     }
                                 }
 
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
                                 writeln!(out, "{pfx}.check:").unwrap();
-                                if is_any || is_all {
-                                    writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.cont]").unwrap();
-                                } else {
-                                    let back2 = if is_filter { "insert" } else { "call" };
-                                    writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.{back2}]").unwrap();
-                                }
+                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.insert]").unwrap();
                                 writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
                                 writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
 
@@ -4154,41 +3897,18 @@ fn emit_inst(
                                     format!("{key_llvm} %{pfx}.key")
                                 };
 
-                                if method == "each" {
-                                    writeln!(out, "  call void @{call_fn}(ptr %v{}, {key_param})", closure_val.0).unwrap();
-                                    writeln!(out, "  br label %{pfx}.check").unwrap();
-                                } else if is_filter {
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {key_param})", closure_val.0).unwrap();
-                                    writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.insert, label %{pfx}.skip").unwrap();
-                                    writeln!(out, "{pfx}.insert:").unwrap();
-                                    if let Some(d) = d_opt {
-                                        writeln!(out, "  call void @gorget_set_add(ptr %v{}, ptr %{pfx}.kp)", d.0).unwrap();
-                                    }
-                                    writeln!(out, "  br label %{pfx}.check").unwrap();
-                                } else {
-                                    // any / all
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {key_param})", closure_val.0).unwrap();
-                                    if is_any {
-                                        writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.early, label %{pfx}.cont").unwrap();
-                                    } else {
-                                        writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.cont, label %{pfx}.early").unwrap();
-                                    }
-                                    writeln!(out, "{pfx}.cont:").unwrap();
-                                    writeln!(out, "  br label %{pfx}.check").unwrap();
-                                    writeln!(out, "{pfx}.early:").unwrap();
-                                    writeln!(out, "  br label %{pfx}.done").unwrap();
+                                writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {key_param})", closure_val.0).unwrap();
+                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.insert, label %{pfx}.skip").unwrap();
+                                writeln!(out, "{pfx}.insert:").unwrap();
+                                if let Some(d) = d_opt {
+                                    writeln!(out, "  call void @gorget_set_add(ptr %v{}, ptr %{pfx}.kp)", d.0).unwrap();
                                 }
+                                writeln!(out, "  br label %{pfx}.check").unwrap();
 
                                 writeln!(out, "{pfx}.skip:").unwrap();
                                 writeln!(out, "  br label %{pfx}.check").unwrap();
 
                                 writeln!(out, "{pfx}.done:").unwrap();
-                                if is_any || is_all {
-                                    let (init_val, early_val) = if is_any { ("0", "1") } else { ("1", "0") };
-                                    if let Some(d) = d_opt {
-                                        writeln!(out, "  %v{} = phi i1 [{init_val}, %{pfx}.check], [{early_val}, %{pfx}.early]", d.0).unwrap();
-                                    }
-                                }
                                 *current_label = format!("{pfx}.done");
                                 return;
                             }
