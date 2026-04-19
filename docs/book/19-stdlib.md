@@ -19,7 +19,7 @@ without any import:
 
 | Function | Description |
 |----------|-------------|
-| `print(s)` | Print to stdout with newline |
+| `print(x, terminator="\n", file=stdout)` | Print `x` (Displayable) to stdout or stderr. Pass `terminator=""` for no newline, `terminator="\t"` for TSV, `terminator=", "` for CSV. |
 | `len(x)` | Length of any `Measurable` |
 | `range(start, end)` | Create an integer range (also `0..5` syntax) |
 | `enumerate(collection)` | Iterate with `(index, element)` pairs |
@@ -395,17 +395,17 @@ loops on top.
 `write_string(path, content)`, `write_all_bytes(path, buf)` wrap the
 common patterns.
 
-**`println` / `writeln`** — typed-error alternatives to the builtin
-`print`:
+**Typed-error stdout writes** — the Writer primitives work on the
+`stdout` handle just like any other File:
 
 ```gorget
-from std.io import println, writeln, stderr
+from std.io import stdout, stderr, IoError, write_display, write_str, write_all
 
-Result[int, IoError] r = println[int](42)                 # → stdout
-Result[int, IoError] r2 = writeln[File, String](&stderr, "oops")
+Result[int, IoError] r = write_display[File, int](&stdout, 42)
+Result[int, IoError] r2 = write_str[File](&stderr, "oops\n")
 ```
 
-Useful when you need to handle `BrokenPipe`, `TimedOut`, etc.
+Use these when you need to handle `BrokenPipe`, `TimedOut`, etc.
 explicitly; otherwise the builtin `print` stays as the ergonomic
 default (panics on I/O failure, which is fine for most programs).
 

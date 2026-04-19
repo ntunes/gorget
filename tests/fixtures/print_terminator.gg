@@ -1,0 +1,28 @@
+# `print(x, terminator=...)` kwarg — Python / Swift-style terminator
+# control. Default is `"\n"`; pass any string (including `""` to
+# suppress the newline, `"\t"` for TSV, `", "` for CSV).
+
+int main():
+    # Default: newline appended.
+    print("hello")
+
+    # Custom terminator — inline CSV-style output.
+    print("a", terminator=", ")
+    print("b", terminator=", ")
+    print("c")
+
+    # Tab-separated.
+    print("x", terminator="\t")
+    print("y", terminator="\t")
+    print("z")
+
+    # Empty terminator — suppresses the newline.
+    print("no-newline", terminator="")
+    print(" <- continues")
+
+    # Interpolated content with custom terminator.
+    int x = 42
+    print(f"x = {x}", terminator=" | ")
+    print("done")
+
+    return 0

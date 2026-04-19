@@ -6160,6 +6160,15 @@ static inline void gorget_file_write(GorgetFile* f, const char* s) {
     if (s) fputs(s, f->handle);
 }
 
+// Flush the C stdio buffer attached to this file. Returns 0 on success,
+// -errno on failure (mirroring gorget_file_write_bytes_buf's convention).
+// Callers in Gorget land wrap via `File.flush() -> Result[void, IoError]`.
+static inline int64_t gorget_file_flush(GorgetFile* f) {
+    if (!f->handle) return 0;
+    if (fflush(f->handle) == 0) return 0;
+    return -errno;
+}
+
 // ── File byte-oriented writer ───────────────────────────────
 //
 // Writes up to `buf->len` bytes from `buf->data` to the file.

@@ -1082,6 +1082,12 @@ pub(super) fn lower_call(
 }
 
 /// Lower a `print(...)` call to a `printf` extern call.
+///
+/// Kwargs:
+///  - `terminator: String` (default `"\n"`) — string appended after the
+///    printed value. Use `""` to suppress the newline; `"\t"` or `", "`
+///    for tabular / CSV-style output.
+///  - `file: stderr` — route to stderr instead of stdout.
 pub fn lower_print_call(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -1094,15 +1100,25 @@ pub fn lower_print_call(
         return;
     }
 
-    // Check for named arguments: newline=false, file=stderr
-    let mut add_newline = true;
+    // Check for named arguments: terminator="…", file=stderr
+    let mut terminator: String = "\n".to_string();
     let mut use_stderr = false;
     for arg in args.iter().skip(1) {
         if let Some(ref name) = arg.node.name {
             match name.node.as_str() {
-                "newline" => {
-                    if let Expr::BoolLiteral(false) = &arg.node.value.node {
-                        add_newline = false;
+                "terminator" => {
+                    // Accept a plain (non-interpolated) string literal — the
+                    // terminator has to be known at compile time to splice
+                    // into the printf format string. Empty string (""),
+                    // single-segment literals, and escapes all flow through
+                    // `as_plain_text`. Interpolation segments are silently
+                    // dropped; a user passing `terminator=f"{x}"` would only
+                    // see the literal chunks, but that's not a real use case.
+                    if let Expr::StringLiteral(lit) = &arg.node.value.node {
+                        let has_interp = lit.segments.iter().any(|s| matches!(s, StringSegment::Interpolation(_, _)));
+                        if !has_interp {
+                            terminator = lit.as_plain_text();
+                        }
                     }
                 }
                 "file" => {
@@ -1136,9 +1152,7 @@ pub fn lower_print_call(
                 }
             }
 
-            if add_newline {
-                format_str.push('\n');
-            }
+            format_str.push_str(&terminator);
 
             let mut all_args = Vec::new();
             if use_stderr {
@@ -1157,8 +1171,7 @@ pub fn lower_print_call(
             let val = lower_expr(ctx, builder, arg_expr);
             let type_id = infer_operand_type_full(ctx, &val, builder);
             let (spec, extra_args) = format_for_printf(ctx, builder, type_id, val, None);
-            let nl = if add_newline { "\n" } else { "" };
-            let fmt = format!("{spec}{nl}");
+            let fmt = format!("{spec}{terminator}");
             let fmt_op = Operand::Constant(Constant::Str(fmt));
             let mut all_args = Vec::new();
             if use_stderr {

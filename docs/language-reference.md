@@ -2510,8 +2510,7 @@ The following functions are available without import:
 
 | Function      | Signature               | Description                     |
 |---------------|-------------------------|---------------------------------|
-| `print`       | `void(String)`          | Print to stdout with newline    |
-| `println`     | `void(String)`          | Print to stdout with newline    |
+| `print`       | `void(T, terminator: String = "\n", file: File = stdout)` | Print `T` (Displayable) to stdout/stderr. `terminator=` overrides the trailing string (Python `end=` / Swift `terminator:`); pass `""` to suppress the newline, `"\t"` for TSV, `", "` for CSV. Infallible — panics on I/O failure. |
 | `len`         | `int(Measurable)`       | Length — delegates to `x.len()` |
 | `range`       | `Range(int, int)`       | Create a range                  |
 | `enumerate`   | `Iterator(Collection)`  | Iterate with index              |
@@ -2552,7 +2551,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Parseable` | `Option[Self] parse(String s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
 | `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
 | `Debuggable` | `String debug(self)` | `String` | `@derive(Debuggable)` + developer-facing debug representation |
-| `Writer` | `Result[int, IoError] write_bytes(&self, Vector[byte] buf)` | `Result[int, IoError]` | Byte sinks — std.io `write_all`, `write_display`, `writeln`, `println` |
+| `Writer` | `Result[int, IoError] write_bytes(&self, Vector[byte] buf)` + default `flush(&self)` | `Result[int, IoError]` | Byte sinks — std.io `write_all`, `write_display`, `write_str`. Default `flush` is a no-op; `File` overrides to push the stdio buffer. |
 | `Reader` | `Result[int, IoError] read_bytes(&self, Vector[byte] &buf)` | `Result[int, IoError]` | Byte sources — std.io `reader_drain`, `read_exact` |
 | `Error` | `Option[String] source(&self)` (extends `Displayable & Debuggable`) | `Option[String]` | Narrow error trait; every stdlib error type (`IoError`, `ParseError`, …) implements it |
 
@@ -3277,9 +3276,6 @@ The following functions are available via `import`:
 | `write_all[W]` | `Result[int, IoError](W &w, Vector[byte] buf)` | Generic short-write loop |
 | `write_str[W]` | `Result[int, IoError](W &w, String s)` | Text shortcut over `write_all` |
 | `write_display[W, D: Displayable]` | `Result[int, IoError](W &w, D v)` | Format + write |
-| `writeln[W, D: Displayable]` | `Result[int, IoError](W &w, D v)` | Formatted write + `"\n"` |
-| `println[D: Displayable]` | `Result[int, IoError](D v)` | `writeln[File, D](&stdout, v)` shortcut |
-| `println_str` | `Result[int, IoError](String s)` | Text shortcut over `println` |
 | `reader_drain[R]` | `Result[Vector[byte], IoError](R &reader)` | Read to EOF |
 | `read_exact[R]` | `Result[Vector[byte], IoError](R &reader, int n)` | Read exactly `n` bytes |
 | `from_string_error[T]` | `Result[T, IoError](Result[T, String])` | Adapt legacy stringly-typed errors |

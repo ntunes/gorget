@@ -216,6 +216,8 @@ an `Iterator`, then calls `next()` repeatedly.
 ```gorget
 trait Writer:
     Result[int, IoError] write_bytes(&self, Vector[byte] buf)
+    Result[int, IoError] flush(&self):   # default: no-op
+        return Ok(0)
 ```
 
 Narrow output interface. Returns the byte count actually written; a
@@ -225,6 +227,11 @@ arbitrary byte sequences. Callers with a `String` source convert via
 `.bytes()` at the boundary. `write_all(w, buf)` from `std.io` wraps
 this with a loop that guarantees completion; `write_str(w, s)` and
 `write_display(w, v)` are the text/Displayable convenience adapters.
+
+`flush()` has a default no-op body — in-memory writers (`String`,
+`Vector[byte]`) have nothing to flush. `File` overrides to push the
+underlying stdio buffer, so progress bars and REPL prompts can force
+output before the buffer fills.
 
 ### Reader
 

@@ -1001,29 +1001,29 @@ demand, not shipped speculatively.
   `write_str` / `write_all`. The `_bytes` suffix was only a
   name-collision shim during migration; the final narrow-waist names
   on `Writer` / `Reader` are `write` and `read`.
-- **Retire `println` / `writeln`; keep `print` infallible.** Resolution
-  of the earlier open question (2026-04-19): `print` stays as the
-  infallible compiler builtin with `newline=` / `file=` kwargs —
-  script ergonomics matter more than a uniform Result return, and
-  the typed-error path is already available via `stdout.write_display(v)`
-  / `write_all` on the Writer trait. `println` and `writeln` add a
-  parallel surface for no new semantics and are retired; callers
-  wanting a typed-error printf use the Writer primitives directly.
-- **Upgrade `print`'s `newline=bool` to `terminator=String`.** Python's
-  `end=` / Swift's `terminator:` — with the bool form, callers who
-  want e.g. TSV-style output (`print("col1", terminator="\t")`) must
-  pre-embed the tab in the string. A `terminator: String = "\n"` kwarg
-  subsumes the bool (`newline=false` ≡ `terminator=""`) and covers
-  the tab / custom-separator case cleanly. Minor change to `print`'s
-  signature; keep `newline=bool` as sugar if we want backward compat.
-- **Add `Writer.flush(&self) -> Result[void, IoError]`.** Today
-  there's no way to force a buffered writer (stdout when piped,
-  BufWriter, etc.) to commit bytes before the buffer fills. Progress
-  bars, REPLs, competitive programming output all hit this. Default
-  impl on the trait is a no-op; File / BufWriter override. Rust has
-  `io::Write::flush`; Python has `file.flush()`; Gorget doesn't yet.
-  Not blocking Phase 3 close but a genuine gap in the Writer
-  surface.
+- ✅ **Retired `println` / `writeln` / `println_str`** (2026-04-19).
+  `print` stays as the infallible compiler builtin with `terminator=` /
+  `file=` kwargs (script ergonomics). Typed-error callers use
+  `write_display[File, D](&stdout, v)` / `write_str[File](&stdout, s)`
+  / `write_all[File](&stdout, buf)` directly on the Writer primitives.
+  Old fixture `stdlib_io_println.gg` replaced by
+  `stdlib_io_stdout_typed.gg` exercising the same surface through the
+  Writer primitives.
+- ✅ **Upgraded `print`'s signature with `terminator=String` kwarg**
+  (2026-04-19). Default `"\n"`. Covers TSV / CSV / custom-separator
+  output without pre-embedding the separator in the string; pass `""`
+  to suppress the newline. The old `newline=bool` sugar was dropped
+  in the same change — terminator-as-String subsumes it and having
+  two kwargs for the same intent adds noise. Fixture
+  `print_terminator.gg`.
+- ✅ **Added `Writer.flush(&self) -> Result[int, IoError]` with a
+  default no-op body** (2026-04-19). In-memory writers (`String`,
+  `Vector[byte]`) inherit the default; `File` overrides via
+  `gorget_file_flush` to push the stdio buffer. Return type is
+  `Result[int, IoError]` matching `write_bytes`'s shape; the int is
+  unused on success (always `0`). Socket / TlsSocket could add an
+  SSL-flush override later but TCP writes go straight to the kernel
+  send buffer so the default is correct today.
 
 ### Phase 4: Concurrency-model enforcement
 

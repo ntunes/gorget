@@ -1,0 +1,29 @@
+# Typed-error stdout writes — the replacement for the retired
+# `println` / `writeln` / `println_str` shortcuts. Callers who want
+# Result-returning output on stdout use the Writer primitives
+# (`write_display`, `write_str`, `write_all`) directly, composing a
+# trailing newline in the rendered buffer when needed.
+#
+# This fixture mirrors what the old `stdlib_io_println.gg` covered —
+# same output, proves the Writer stack (File → errno → IoError) is
+# still exercised end to end without the parallel helper surface.
+
+from std.io import stdout, IoError, write_str, write_display, write_all
+
+int main():
+    # Equivalent to old `println[int](42)`:
+    Result[int, IoError] r1 = write_display[File, int](&stdout, 42)
+    Result[int, IoError] n1 = write_str[File](&stdout, "\n")
+
+    # Equivalent to old `println[String]("hello")`:
+    Result[int, IoError] r2 = write_display[File, String](&stdout, "hello")
+    Result[int, IoError] n2 = write_str[File](&stdout, "\n")
+
+    # Equivalent to old `println[int](-7)`:
+    Result[int, IoError] r3 = write_display[File, int](&stdout, -7)
+    Result[int, IoError] n3 = write_str[File](&stdout, "\n")
+
+    # Equivalent to old `println_str("direct text")`:
+    Result[int, IoError] r4 = write_all[File](&stdout, ("direct text\n").bytes())
+
+    return 0

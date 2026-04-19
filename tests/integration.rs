@@ -2080,6 +2080,30 @@ fn stdlib_io_writer() {
 }
 
 #[test]
+fn stdlib_io_flush() {
+    run_gg(
+        "stdlib_io_flush.gg",
+        "progress: flushed\nstring flush returned Ok(0)",
+    );
+}
+
+#[test]
+fn print_terminator() {
+    run_gg(
+        "print_terminator.gg",
+        "hello\na, b, c\nx\ty\tz\nno-newline <- continues\nx = 42 | done",
+    );
+}
+
+#[test]
+fn stdlib_io_stdout_typed() {
+    run_gg(
+        "stdlib_io_stdout_typed.gg",
+        "42\nhello\n-7\ndirect text",
+    );
+}
+
+#[test]
 fn equip_on_primitive() {
     run_gg("equip_on_primitive.gg", "5\ninvalid input\n42\ntrue\nfalse\n1\n0");
 }
@@ -2126,14 +2150,6 @@ fn static_global_method_call() {
     run_gg(
         "static_global_method_call.gg",
         "counter: 1 2 3\ndirect\nwrote 7",
-    );
-}
-
-#[test]
-fn stdlib_io_println() {
-    run_gg(
-        "stdlib_io_println.gg",
-        "42\nhello\n-7\ndirect text",
     );
 }
 

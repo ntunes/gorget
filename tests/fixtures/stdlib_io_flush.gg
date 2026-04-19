@@ -1,0 +1,35 @@
+# `Writer.flush()` — default no-op on the trait, overridden by File
+# to push the underlying stdio buffer.
+#
+# Progress-bar pattern: write inline text (no newline) then flush so
+# the caller sees output before the buffer fills. On TTY stdout is
+# line-buffered so the flush is a no-op in practice; when stdout is
+# piped stdio block-buffers, and the flush actually commits bytes.
+#
+# This fixture exercises both paths:
+#   - File (stdout) — real flush via `gorget_file_flush`.
+#   - String (in-memory builder) — default trait no-op returning Ok(0).
+
+from std.io import stdout, IoError, write_str
+
+int main():
+    # File path: inline write + flush, then a trailing line.
+    Result[int, IoError] _w = write_str[File](&stdout, "progress:")
+    Result[int, IoError] fr = stdout.flush()
+    match fr:
+        case Ok(_):
+            print(" flushed")
+        case Error(e):
+            print(f" flush error: {e.debug()}")
+
+    # Default trait impl — String flush is a no-op returning Ok(0).
+    String buf = String()
+    buf.push("hello")
+    Result[int, IoError] sr = buf.flush()
+    match sr:
+        case Ok(n):
+            print(f"string flush returned Ok({n})")
+        case Error(e):
+            print(f"string flush error: {e.debug()}")
+
+    return 0

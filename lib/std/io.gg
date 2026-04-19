@@ -37,6 +37,13 @@ equip File:
     # Writer/Reader equip below surfaces as an `IoError` variant.
     extern int _write_bytes_buf(Vector[byte] buf) = "gorget_file_write_bytes_buf"
     extern int _read_bytes_buf(Vector[byte] &buf, int max_bytes) = "gorget_file_read_bytes_buf"
+    # Push any buffered output through the underlying stdio buffer.
+    # Returns 0 on success, negative errno on failure. Named
+    # `_flush_buffer` (leading underscore) to match the convention
+    # used by `_write_bytes_buf` / `_read_bytes_buf` — self-host's
+    # method-name resolution relies on the underscore prefix for
+    # private extern methods.
+    extern int _flush_buffer() = "gorget_file_flush"
 
 # Byte type note: signatures use `Vector[byte]` rather than
 # `Vector[byte]`. `byte` is a lexer-level alias for `uint8` — the
@@ -238,6 +245,13 @@ equip IoError with Error:
 
 trait Writer:
     Result[int, IoError] write_bytes(&self, Vector[byte] buf)
+    # Force buffered output to commit. Default is no-op — for
+    # in-memory writers (String) the bytes are already "committed"
+    # the moment `write_bytes` returns. File / Socket / TlsSocket
+    # override to push through stdio / TCP / SSL buffers. Callers:
+    # progress bars, REPLs, interactive CLI prompts.
+    Result[int, IoError] flush(&self):
+        return Ok(0)
 
 # ── Reader ────────────────────────────────────────────────────
 #
@@ -314,6 +328,12 @@ equip File with Writer:
         if n < 0:
             return Error(_errno_to_io_error(-n))
         return Ok(n)
+
+    Result[int, IoError] flush(&self):
+        int rc = self._flush_buffer()
+        if rc < 0:
+            return Error(_errno_to_io_error(-rc))
+        return Ok(0)
 
 equip File with Reader:
     Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
@@ -434,32 +454,14 @@ Result[int, IoError] write_str[W](W &w, String s):
 Result[int, IoError] write_display[W, Displayable D](W &w, D v):
     return write_all[W](&w, v.display().bytes())
 
-# Render `v` + newline to `w`. Narrow-waist equivalent of Gorget's
-# builtin `print(v)` but explicit about the destination and return
-# type. Callers wanting text-mode output to a custom Writer use
-# `writeln[W, D](&my_writer, x)`; stdout shortcuts are below.
-#
-# Previously this called `write_all` twice — once for the rendered
-# body, once for `"\n"` — but the second generic call's return type
-# was corrupted during monomorphization. That bug has since been
-# fixed upstream; keeping the single-buffer form anyway for the
-# one-syscall happy-path win.
-Result[int, IoError] writeln[W, Displayable D](W &w, D v):
-    String rendered = v.display() + "\n"
-    return write_all[W](&w, rendered.bytes())
-
-# Narrow-waist `println(v)` — shortcut for `writeln[File, D](&stdout, v)`.
-# Equivalent to the builtin `print(v)` but routes through the Writer
-# trait so Writer wiring is exercised end-to-end. Use `writeln` for
-# non-stdout targets.
-Result[int, IoError] println[Displayable D](D v):
-    return writeln[File, D](&stdout, v)
-
-# Text-only println (no Displayable bound — just bytes through). Same
-# shape as `println` but skips the display step; useful when you
-# already have the rendered String.
-Result[int, IoError] println_str(String s):
-    return write_all[File](&stdout, (s + "\n").bytes())
+# `println` / `writeln` / `println_str` retired 2026-04-19. Callers
+# that want typed-error stdout use `write_display[File, D](&stdout, v)`
+# (or `write_str` for raw text) and compose a trailing newline by
+# rendering into a String and routing through `write_all`. The
+# infallible `print(x, terminator=…)` builtin covers the script case;
+# having both `print` and `println` added a parallel surface for no
+# new semantics. See `docs/internals/stdlib-design.md` §10 Phase 3
+# follow-ups for the resolution.
 
 # Read all available bytes from `r` into a fresh buffer. Loops calling
 # `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
