@@ -1,0 +1,102 @@
+# Exercise the newly-added iterator terminals on top of
+# `std.iter` — `find_iter`, `for_each_iter`, `product_iter`,
+# `min_iter`, `max_iter`. Plus a sanity pass on the already-shipped
+# `any_iter` / `all_iter` / `count_iter` / `sum_iter` / `fold_iter`.
+
+from std.iter import find_iter, for_each_iter, product_iter, min_iter, max_iter
+from std.iter import any_iter, all_iter, count_iter, sum_iter, fold_iter
+from std.collections import Vector
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool gt_five(int x):
+    return x > 5
+
+int add(int a, int b):
+    return a + b
+
+void print_int(int x):
+    print(x)
+
+int main():
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(1)
+    v.push(4)
+    v.push(1)
+    v.push(5)
+    v.push(9)
+    v.push(2)
+    v.push(6)
+
+    # find_iter — first even, first > 5, none-match.
+    Option[int] first_even = find_iter[int, VectorIter[int], bool(int)](v.iter(), is_even)
+    match first_even:
+        case Some(n):
+            print(f"first_even={n}")
+        case None:
+            print("first_even=none")
+
+    Option[int] first_gt5 = find_iter[int, VectorIter[int], bool(int)](v.iter(), gt_five)
+    match first_gt5:
+        case Some(n):
+            print(f"first_gt5={n}")
+        case None:
+            print("first_gt5=none")
+
+    Vector[int] empty = Vector[int]()
+    Option[int] none_hit = find_iter[int, VectorIter[int], bool(int)](empty.iter(), is_even)
+    match none_hit:
+        case Some(n):
+            print(f"none_hit={n}")
+        case None:
+            print("none_hit=none")
+
+    # for_each_iter — side-effecting iteration.
+    print("each:")
+    for_each_iter[int, VectorIter[int], void(int)](v.iter(), print_int)
+
+    # product_iter — small set to avoid overflow.
+    Vector[int] pv = Vector[int]()
+    pv.push(2)
+    pv.push(3)
+    pv.push(5)
+    pv.push(7)
+    int prod = product_iter[VectorIter[int]](pv.iter())
+    print(f"product={prod}")
+
+    int empty_prod = product_iter[VectorIter[int]](empty.iter())
+    print(f"empty_product={empty_prod}")
+
+    # min_iter / max_iter — v has 1..9 elements.
+    Option[int] lo = min_iter[VectorIter[int]](v.iter())
+    match lo:
+        case Some(n):
+            print(f"min={n}")
+        case None:
+            print("min=none")
+
+    Option[int] hi = max_iter[VectorIter[int]](v.iter())
+    match hi:
+        case Some(n):
+            print(f"max={n}")
+        case None:
+            print("max=none")
+
+    Option[int] empty_min = min_iter[VectorIter[int]](empty.iter())
+    match empty_min:
+        case Some(n):
+            print(f"empty_min={n}")
+        case None:
+            print("empty_min=none")
+
+    # Already-shipped terminals — quick re-verification to prove the
+    # adapters still compose alongside the new ones.
+    print(f"any_gt5={any_iter[int, VectorIter[int], bool(int)](v.iter(), gt_five)}")
+    print(f"all_gt5={all_iter[int, VectorIter[int], bool(int)](v.iter(), gt_five)}")
+    print(f"count={count_iter[VectorIter[int]](v.iter())}")
+    print(f"sum={sum_iter[VectorIter[int]](v.iter())}")
+    print(f"fold={fold_iter[int, int, VectorIter[int], int(int, int)](v.iter(), 0, add)}")
+
+    return 0

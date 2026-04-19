@@ -233,11 +233,23 @@ terminals in `std.iter`:
 
 ```gorget
 from std.iter import collect_vec, count_iter, sum_iter, fold_iter
+from std.iter import product_iter, min_iter, max_iter
+from std.iter import find_iter, any_iter, all_iter, for_each_iter
 
 Vector[int] first3 = collect_vec[int, TakeIter[int]](v.iter().take(3))
 int total = sum_iter[VectorIter[int]](v.iter())       # 150
-int prod = fold_iter[int, int, VectorIter[int], int(int, int)](
-    v.iter(), 1, (acc, x): acc * x)                   # 120000000
+int prod = product_iter[VectorIter[int]](v.iter())    # element product
+Option[int] lo = min_iter[VectorIter[int]](v.iter())  # Some(lowest)
+
+# Search / short-circuiting
+Option[int] first_big = find_iter[int, VectorIter[int], bool(int)](
+    v.iter(), (x): x > 100)
+bool any_big = any_iter[int, VectorIter[int], bool(int)](
+    v.iter(), (x): x > 100)
+
+# Custom aggregation
+int folded = fold_iter[int, int, VectorIter[int], int(int, int)](
+    v.iter(), 1, (acc, x): acc * x)
 ```
 
 Sets iterate through the same machinery — `set_iter[T](s)` returns a

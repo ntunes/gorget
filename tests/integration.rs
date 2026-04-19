@@ -2064,6 +2064,14 @@ fn stdlib_iter_set() {
 }
 
 #[test]
+fn stdlib_iter_terminals() {
+    run_gg(
+        "stdlib_iter_terminals.gg",
+        "first_even=4\nfirst_gt5=9\nnone_hit=none\neach:\n3\n1\n4\n1\n5\n9\n2\n6\nproduct=210\nempty_product=1\nmin=1\nmax=9\nempty_min=none\nany_gt5=true\nall_gt5=false\ncount=8\nsum=31\nfold=31",
+    );
+}
+
+#[test]
 fn vector_swap_fill() {
     run_gg(
         "vector_swap_fill.gg",

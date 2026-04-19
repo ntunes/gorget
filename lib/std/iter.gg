@@ -5,7 +5,8 @@
 # `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
 # `FilterIter[T, F]` — each is a state-machine struct, no trait-object
 # dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
-# `any_iter`, `all_iter`, `fold_iter`.
+# `product_iter`, `any_iter`, `all_iter`, `fold_iter`, `find_iter`,
+# `for_each_iter`, `min_iter`, `max_iter`.
 #
 # Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` and
 # `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` construct the
@@ -190,6 +191,52 @@ bool all_iter[T, Iter, F](Iter iter, F pred):
         if not pred(x):
             return false
     return true
+
+# Find the first element matching `pred`. Returns None if the iterator
+# is exhausted without a match. Short-circuiting.
+Option[T] find_iter[T, Iter, F](Iter iter, F pred):
+    for x in iter:
+        if pred(x):
+            return Some(x)
+    return None
+
+# Run `f` on every element for side effects; no return value. Sibling of
+# `fold_iter` for the case where the accumulator would be `void`.
+void for_each_iter[T, Iter, F](Iter iter, F f):
+    for x in iter:
+        f(x)
+
+# Product of int elements. Identity is 1 — an empty iterator returns 1.
+int product_iter[Iter](Iter iter):
+    int acc = 1
+    for x in iter:
+        acc = acc * x
+    return acc
+
+# Minimum of an int-iterator. Returns None for an empty iterator; the
+# caller decides whether "no elements" is an error.
+Option[int] min_iter[Iter](Iter iter):
+    Option[int] out = None
+    for x in iter:
+        match out:
+            case None:
+                out = Some(x)
+            case Some(prev):
+                if x < prev:
+                    out = Some(x)
+    return !out
+
+# Maximum of an int-iterator.
+Option[int] max_iter[Iter](Iter iter):
+    Option[int] out = None
+    for x in iter:
+        match out:
+            case None:
+                out = Some(x)
+            case Some(prev):
+                if x > prev:
+                    out = Some(x)
+    return !out
 
 # ── Set / Dict iteration ─────────────────────────────────────
 #
