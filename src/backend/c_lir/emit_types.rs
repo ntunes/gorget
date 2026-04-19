@@ -5,10 +5,10 @@ use super::*;
 
 /// Higher-order collection methods that the old C backend generates inline.
 pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
-    "filter", "map", "flat_map", "fold", "reduce", "any", "all",
-    "each", "find", "find_index", "sorted_by", "sort_by",
+    "sorted_by", "sort_by",
     "sorted_by_key", "sort_by_key",
-    "count",
+    // Most HOF methods (filter, map, fold, reduce, any, all, each, flat_map,
+    // find, find_index, count) are now migrated to `Inst::HofExpand` upstream.
     // `sort` / `sorted` / `unique` / `windows` / `chunks` all go through
     // runtime stubs dispatched in `map_monomorphized_to_runtime` — no
     // inline helper needed. Only the qsort TLS trampoline variants
@@ -18,13 +18,15 @@ pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
 pub(super) const DICT_INLINE_METHODS: &[&str] = &[
-    "filter", "fold", "each", "any", "all", "map", "get_or", "get_or_put",
+    "filter", "map", "get_or", "get_or_put",
+    // `fold` / `each` / `any` / `all` are migrated to `Inst::HofExpand`.
     // `update` routes to generic runtime stub `gorget_map_update`
     // dispatched via `map_monomorphized_to_runtime`.
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
-    "filter", "fold", "each", "any", "all", "map",
+    "filter", "map",
     "union", "intersection", "difference", "symmetric_difference",
+    // `fold` / `each` / `any` / `all` are migrated to `Inst::HofExpand`.
     // `is_subset` / `is_superset` / `is_disjoint` route to generic
     // runtime stubs (`gorget_set_is_{subset,superset,disjoint}`)
     // dispatched via `map_monomorphized_to_runtime` — no per-type
@@ -154,12 +156,7 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
     }
 }
 
-/// Resolve the accumulator type for a fold by looking up the closure's return type.
-fn resolve_fold_acc_type(call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) -> Option<String> {
-    closure_call_return_type(module, call_fn, sn)
-}
-
-pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) {
+pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, _closure_ty: &str, call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) {
     // Skip closure-dependent helpers when we can't resolve the closure call function.
     // Methods that don't use closures (sort, sorted, unique, count, windows, chunks) always emit.
     let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count" | "windows" | "chunks");
@@ -168,90 +165,7 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
     }
     // Determine which closure params need & prefix (Ptr ABI for resource types)
     let needs_ref = closure_params_need_ref(module, call_fn);
-    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
     match method {
-        "filter" => {
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof({elem_c}));").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_array_push(&__result, &__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "map" => {
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    __typeof__({call_fn}(&__fn, {er}({elem_c}){{0}})) __map_out;").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof(__map_out));").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __map_out = {call_fn}(&__fn, {er}__elem);").unwrap();
-            writeln!(out, "        gorget_array_push(&__result, &__map_out);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "fold" => {
-            // Use the closure's return type for the accumulator — resolve from closure call fn.
-            // Falls back to int64_t for cross-type folds where closure returns a different type.
-            let acc_c = resolve_fold_acc_type(call_fn, module, sn).unwrap_or_else(|| "int64_t".into());
-            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-            writeln!(out, "static inline {acc_c} {full_name}(void* __arr_ptr, {acc_c} __acc_init, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    {acc_c} __acc = __acc_init;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __acc;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "any" => {
-            writeln!(out, "static inline bool {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return true;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return false;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "all" => {
-            writeln!(out, "static inline bool {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, {er}__elem)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "each" => {
-            writeln!(out, "static inline void {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, {er}__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "reduce" => {
-            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-            writeln!(out, "static inline {elem_c} {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    {elem_c} __acc = GORGET_ARRAY_AT({elem_c}, __src, 0);").unwrap();
-            writeln!(out, "    for (size_t __i = 1; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __acc;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
         "sort_by" | "sorted_by" => {
             // Closure-based sort: use thread-local closure pointer + static comparator.
             // The TLS is saved/restored to support nested sort_by calls.
@@ -333,53 +247,6 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
                 writeln!(out, "}}").unwrap();
             }
         }
-        "find" => {
-            // find(pred) → Option[T]  (returns first matching element)
-            writeln!(out, "static inline void {full_name}(void* __arr_ptr, {closure_ty} __fn, void* __out) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    size_t __payload_off = (sizeof(int32_t) + (_Alignof({elem_c}) - 1)) & ~(_Alignof({elem_c}) - 1);").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) {{ *(int32_t*)__out = 0; memcpy((char*)__out + __payload_off, &__elem, sizeof({elem_c})); return; }}").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    *(int32_t*)__out = 1;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "find_index" => {
-            // find_index(pred) → int64_t (-1 if not found)
-            writeln!(out, "static inline int64_t {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return (int64_t)__i;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return -1LL;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "flat_map" => {
-            // flat_map(fn(T) → GorgetArray) → GorgetArray
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_new(sizeof({elem_c}));").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        GorgetArray __sub = {call_fn}(&__fn, {er}__elem);").unwrap();
-            writeln!(out, "        gorget_array_extend(&__result, &__sub);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "count" => {
-            writeln!(out, "static inline int64_t {full_name}(void* __arr_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    int64_t __count = 0;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i++) {{").unwrap();
-            writeln!(out, "        {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i);").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) __count++;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __count;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
         _ => {
             writeln!(out, "// TODO: {full_name} not yet implemented in c_lir").unwrap();
         }
@@ -425,53 +292,6 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) gorget_map_put_cloned(&__result, &__key, &__val);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "fold" => {
-            // fold(init, closure(acc, K, V) → acc) → acc_type
-            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-            let kr2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-            let vr2 = if needs_ref.get(2).copied().unwrap_or(false) { "&" } else { "" };
-            writeln!(out, "static inline int64_t {full_name}(void* __map_ptr, int64_t __acc, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {key_read}").unwrap();
-            writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {kr2}__key, {vr2}__val);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __acc;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "each" => {
-            writeln!(out, "static inline void {full_name}(void* __map_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {key_read}").unwrap();
-            writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, {kr}__key, {vr}__val);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "any" => {
-            writeln!(out, "static inline bool {full_name}(void* __map_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {key_read}").unwrap();
-            writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) return true;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return false;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "all" => {
-            writeln!(out, "static inline bool {full_name}(void* __map_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {key_read}").unwrap();
-            writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, {kr}__key, {vr}__val)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "get_or" => {
@@ -544,47 +364,6 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "fold" => {
-            let ar = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-            let er2 = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-            writeln!(out, "static inline int64_t {full_name}(void* __set_ptr, int64_t __acc, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        __acc = {call_fn}(&__fn, {ar}__acc, {er2}__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __acc;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "each" => {
-            writeln!(out, "static inline void {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        {call_fn}(&__fn, {er}__elem);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "any" => {
-            writeln!(out, "static inline bool {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) return true;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return false;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "all" => {
-            writeln!(out, "static inline bool {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!{call_fn}(&__fn, {er}__elem)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "union" => {
