@@ -2530,6 +2530,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Displayable` | `String display(self)` | `String` | String interpolation, `print()` |
 | `Equatable` | `bool eq(self, Self other)` | `bool` | `==` and `!=` operators |
 | `Hashable` | `void hash(self, FxHasher &h)` | `void` | `Dict` keys, `Set` elements |
+| `Hasher` | `void write_int(&self, int v)` / `write_bytes(&self, Vector[byte])` / `write_string(&self, String)` / `int finish(self)` | — | Role trait for hash state accumulators; `FxHasher` in `std.hash` is the shipping implementor |
 | `Ordinal` | `int ordinal(self)` | `int` | Zero-based variant index (enums only) |
 | `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
 | `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |

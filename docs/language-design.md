@@ -807,10 +807,29 @@ Gorget doesn't enforce trait naming rules, but following consistent conventions 
 
 | Category | Suffix | Examples | Reads with `is` / `equip...with` |
 |----------|--------|----------|-----------------------------------|
-| Capabilities | `-able` / `-ible` | `Hashable`, `Equatable`, `Displayable`, `Serializable`, `Cloneable` | `is Hashable` / `equip Point with Hashable` |
-| Behaviors / roles | `-er` / `-or` | `Iterator`, `Handler`, `Formatter`, `Greeter` | `is Iterator` / `equip Vec with Iterator` |
-| Operators / conversions | bare verb/noun | `Add`, `Sub`, `From`, `Into`, `Index`, `Copy`, `Default` | `is Add` / `equip Point with Add` |
+| Capabilities | `-able` / `-ible` | `Hashable`, `Equatable`, `Displayable`, `Debuggable`, `Serializable`, `Cloneable`, `Iterable` | `is Hashable` / `equip Point with Hashable` |
+| Behaviors / roles | `-er` / `-or` | `Iterator`, `Writer`, `Reader`, `Hasher`, `Handler`, `Formatter` | `is Writer` / `equip File with Writer` |
+| Operators / conversions | bare verb/noun | `Add`, `Sub`, `From`, `Into`, `Index`, `Copy`, `Default`, `Error` | `is Add` / `equip Point with Add` |
 | Domain abstractions | bare noun | `Shape`, `Animal`, `Collection` | `is Shape` / `equip Circle with Shape` |
+
+**The I/O pair — byte-shaped roles.** `Writer` and `Reader` are canonical
+`-er` role traits: a type *is a* Writer / Reader — it's not an incidental
+capability, it's the type's job. The method set is minimal (one
+`write_bytes` / `read_bytes` + derived helpers) so any byte-producing
+source (File, String builder, Socket, TlsSocket) plugs in with one
+equip block.
+
+**The hashing split — role + capability.** `Hashable` (capability —
+"can be hashed") takes a `Hasher` (role — "accumulates hash state")
+and forwards field bytes into it. The split is deliberate: hash
+algorithms vary (FxHash, SipHash, …) and belong behind a role trait;
+what each type contributes to that state is a fixed capability.
+
+**Debuggable vs Displayable.** Both -able, but distinct categories:
+`Displayable.display(self)` is user-facing (`{v}` in f-strings, Error
+messages), `Debuggable.debug(self)` is developer-facing (`{v:?}` in
+f-strings, panic traces). `@derive(Debuggable)` auto-generates
+field-by-field output; `Displayable` is typically hand-written.
 
 **Guidelines:**
 
