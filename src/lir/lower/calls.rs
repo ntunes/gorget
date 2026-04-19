@@ -663,8 +663,14 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
     if name.starts_with("Set__") || name.starts_with("HashSet__") || name.starts_with("GorgetSet__") {
         let method = name.rsplit("__").next()?;
         match method {
-            "filter" | "fold" | "each" | "any" | "all" | "map"
-            | "union" | "intersection" | "difference" | "symmetric_difference" => return None,
+            "filter" | "fold" | "each" | "any" | "all" | "map" => return None,
+            // Set-ops route to generic runtime stubs that walk the
+            // sets' own cap/states/key_size fields and construct a
+            // fresh result via `gorget_set_new_like`. Type-independent:
+            // one stub per op covers every element type.
+            "union" | "intersection" | "difference" | "symmetric_difference" => {
+                return Some(format!("gorget_set_{method}"));
+            }
             // Read-only set predicates route to generic runtime stubs
             // that walk the sets' own cap/states/key_size fields —
             // type-independent, one stub per op covers every T.

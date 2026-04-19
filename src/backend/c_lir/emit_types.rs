@@ -25,12 +25,14 @@ pub(super) const DICT_INLINE_METHODS: &[&str] = &[
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
     "filter", "map",
-    "union", "intersection", "difference", "symmetric_difference",
     // `fold` / `each` / `any` / `all` are migrated to `Inst::HofExpand`.
     // `is_subset` / `is_superset` / `is_disjoint` route to generic
     // runtime stubs (`gorget_set_is_{subset,superset,disjoint}`)
     // dispatched via `map_monomorphized_to_runtime` — no per-type
     // inline helper needed.
+    // `union` / `intersection` / `difference` / `symmetric_difference`
+    // also route to generic runtime stubs (`gorget_set_union` etc.),
+    // using `gorget_set_new_like` to mirror src's config.
 ];
 
 /// Parse a monomorphized name like `Dict__Str__int64_t__filter` into
@@ -362,76 +364,6 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    {iter_loop}").unwrap();
             writeln!(out, "        {elem_read}").unwrap();
             writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "union" => {
-            // union: combine all elements from self and other
-            writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            if is_ordered {
-                writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
-                writeln!(out, "        size_t __i2 = __other.order[__j2];").unwrap();
-                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
-            } else {
-                writeln!(out, "    for (size_t __i2 = 0; __i2 < __other.cap; __i2++) {{").unwrap();
-                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
-            }
-            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
-            writeln!(out, "        gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "intersection" => {
-            // intersection: elements in both self and other
-            writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "difference" => {
-            // difference: elements in self but not in other
-            writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "symmetric_difference" => {
-            // symmetric_difference: elements in self xor other
-            writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            if is_ordered {
-                writeln!(out, "    for (size_t __j2 = 0; __j2 < __other.order_len; __j2++) {{").unwrap();
-                writeln!(out, "        size_t __i2 = __other.order[__j2];").unwrap();
-                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
-            } else {
-                writeln!(out, "    for (size_t __i2 = 0; __i2 < __other.cap; __i2++) {{").unwrap();
-                writeln!(out, "        if (__other.states[__i2] != 1) continue;").unwrap();
-            }
-            writeln!(out, "        {elem_c} __elem2 = *({elem_c}*)((char*)__other.keys + __i2 * __other.key_size);").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
             writeln!(out, "}}").unwrap();
@@ -2849,6 +2781,148 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             }} \
         }}").unwrap();
     }
+
+    // Type-independent set-op stubs (union / intersection / difference /
+    // symmetric_difference). All walk `src->order[]` for ordered sets
+    // (preserving insertion order) and `src->cap/states` for unordered;
+    // the result inherits hash/eq/drop/clone/materialize from `__self`
+    // via `gorget_set_new_like`. One stub covers every element type
+    // since the iteration is driven by runtime `key_size`.
+    let has_set_op = has_extern("gorget_set_union")
+        || has_extern("gorget_set_intersection")
+        || has_extern("gorget_set_difference")
+        || has_extern("gorget_set_symmetric_difference");
+    if has_set_op {
+        // Fresh GorgetSet that mirrors `src`'s config fields.
+        writeln!(out, "static inline GorgetSet gorget_set_new_like(const GorgetSet* __src) {{ \
+            GorgetSet __dst = __src->order \
+                ? gorget_dict_new(__src->key_size, 0) \
+                : gorget_map_new(__src->key_size, 0); \
+            __dst.hash_fn = __src->hash_fn; \
+            __dst.eq_fn = __src->eq_fn; \
+            __dst.key_drop = __src->key_drop; \
+            __dst.key_clone = __src->key_clone; \
+            __dst.key_materialize = __src->key_materialize; \
+            return __dst; \
+        }}").unwrap();
+    }
+    if has_extern("gorget_set_union") {
+        writeln!(out, "static inline GorgetSet gorget_set_union(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet* __self = (GorgetSet*)__self_ptr; \
+            GorgetSet __result = gorget_set_new_like(__self); \
+            if (__self->order) {{ \
+                for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
+                    size_t __i = __self->order[__j]; \
+                    if (__self->states[__i] != 1) continue; \
+                    gorget_map_put_cloned(&__result, (char*)__self->keys + __i * __self->key_size, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self->cap; __i++) {{ \
+                    if (__self->states[__i] != 1) continue; \
+                    gorget_map_put_cloned(&__result, (char*)__self->keys + __i * __self->key_size, NULL); \
+                }} \
+            }} \
+            if (__other.order) {{ \
+                for (size_t __j = 0; __j < __other.order_len; __j++) {{ \
+                    size_t __i = __other.order[__j]; \
+                    if (__other.states[__i] != 1) continue; \
+                    gorget_map_put_cloned(&__result, (char*)__other.keys + __i * __other.key_size, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                    if (__other.states[__i] != 1) continue; \
+                    gorget_map_put_cloned(&__result, (char*)__other.keys + __i * __other.key_size, NULL); \
+                }} \
+            }} \
+            return __result; \
+        }}").unwrap();
+    }
+    if has_extern("gorget_set_intersection") {
+        writeln!(out, "static inline GorgetSet gorget_set_intersection(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet* __self = (GorgetSet*)__self_ptr; \
+            GorgetSet __result = gorget_set_new_like(__self); \
+            if (__self->order) {{ \
+                for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
+                    size_t __i = __self->order[__j]; \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self->cap; __i++) {{ \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} \
+            return __result; \
+        }}").unwrap();
+    }
+    if has_extern("gorget_set_difference") {
+        writeln!(out, "static inline GorgetSet gorget_set_difference(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet* __self = (GorgetSet*)__self_ptr; \
+            GorgetSet __result = gorget_set_new_like(__self); \
+            if (__self->order) {{ \
+                for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
+                    size_t __i = __self->order[__j]; \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self->cap; __i++) {{ \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} \
+            return __result; \
+        }}").unwrap();
+    }
+    if has_extern("gorget_set_symmetric_difference") {
+        writeln!(out, "static inline GorgetSet gorget_set_symmetric_difference(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet* __self = (GorgetSet*)__self_ptr; \
+            GorgetSet __result = gorget_set_new_like(__self); \
+            if (__self->order) {{ \
+                for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
+                    size_t __i = __self->order[__j]; \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self->cap; __i++) {{ \
+                    if (__self->states[__i] != 1) continue; \
+                    void* __k = (char*)__self->keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} \
+            if (__other.order) {{ \
+                for (size_t __j = 0; __j < __other.order_len; __j++) {{ \
+                    size_t __i = __other.order[__j]; \
+                    if (__other.states[__i] != 1) continue; \
+                    void* __k = (char*)__other.keys + __i * __other.key_size; \
+                    if (!gorget_set_contains(__self, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                    if (__other.states[__i] != 1) continue; \
+                    void* __k = (char*)__other.keys + __i * __other.key_size; \
+                    if (!gorget_set_contains(__self, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} \
+            return __result; \
+        }}").unwrap();
+    }
+
     // gorget_array_windows(arr, n): Vector[Vector[T]] of sliding N-sized
     // slices. Elements are bit-copied (no clone); correct for POD types.
     // Uses src->elem_size so one stub covers every T.

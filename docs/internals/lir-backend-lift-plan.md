@@ -611,12 +611,15 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      cap/states walk); `is_ordered` is encoded via `value_ty`.
    - Set routed to runtime stubs: `is_subset`, `is_superset`,
      `is_disjoint` → `gorget_set_is_{subset,superset,disjoint}`
-     (type-independent read-only predicates).
-   - Set still in backends: `filter`, `map`, `union`,
-     `intersection`, `difference`, `symmetric_difference` — all
-     need result-set construction with `gorget_ordered_set_new`
-     vs `gorget_set_new` ctor dispatch and `_str` variants for
-     String keys.
+     (type-independent read-only predicates); `union`,
+     `intersection`, `difference`, `symmetric_difference` →
+     `gorget_set_{union,intersection,difference,symmetric_difference}`
+     with `gorget_set_new_like(src)` mirroring the source's
+     hash/eq/drop/clone/materialize config so one stub per op
+     covers every element type.
+   - Set still in backends: `filter`, `map` — need result-set
+     construction (will also use `gorget_set_new_like` once
+     migrated via HofExpand).
 
    After this round of cleanup, backend helper generators
    (`emit_vector_helper` / `emit_dict_helper` / `emit_set_helper`
