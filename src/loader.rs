@@ -89,6 +89,29 @@ pub fn extract_imports(module: &Module) -> Vec<(Vec<String>, Span)> {
     imports
 }
 
+/// Check whether the module uses `@derive(Hashable)` on any struct or enum —
+/// the derived `equip T with Hashable: void hash(self, FxHasher &h)` needs
+/// std.hash's FxHasher struct and its methods at link time.
+fn module_uses_hashable_derive(module: &Module) -> bool {
+    use crate::parser::ast::{AttributeArg};
+    for item in &module.items {
+        let attrs = match &item.node {
+            Item::Struct(s) => &s.attributes,
+            Item::Enum(e) => &e.attributes,
+            _ => continue,
+        };
+        for attr in attrs {
+            if attr.node.name.node != "derive" { continue; }
+            for arg in &attr.node.args {
+                if let AttributeArg::Identifier(name) = arg {
+                    if name == "Hashable" { return true; }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Recursively extract imports from items, including inside `meta if` blocks.
 /// For `meta if platform()` conditions, we evaluate at load time to only load
 /// modules for the current platform. For other meta if conditions, we conservatively
@@ -262,8 +285,31 @@ impl ModuleLoader {
         // Store entry base dir for cross-directory fallback resolution
         self.entry_base_dir = Some(base_dir.clone());
 
+        // Auto-load std.hash when the module uses @derive(Hashable) —
+        // the derived `equip T with Hashable: void hash(self, FxHasher &h)`
+        // references FxHasher and its write_int / write_string / finish
+        // methods from std.hash. Without the auto-load users would hit
+        // link-time errors for those symbols after the derive.
+        //
+        // Skipped for hot-reload modules: the host binary emits a
+        // Hasher vtable global even when the code doesn't use it, and
+        // the host's function-set is pruned tighter than the guest's —
+        // the vtable would dangle against undefined Hasher_for_FxHasher
+        // symbols. Hot-reload programs that need @derive(Hashable) can
+        // still import std.hash explicitly.
+        let uses_hashable_derive = module_uses_hashable_derive(&entry_module);
+        let is_hot_reload = entry_module.items.iter().any(|i| matches!(
+            &i.node,
+            crate::parser::ast::Item::Directive(d) if d.name == "hot-reload"
+        ));
+
         // Entry module has an empty logical path.
         results.push((canonical.clone(), Vec::new(), entry_source, entry_module));
+
+        if uses_hashable_derive && !is_hot_reload {
+            let hash_segments = vec!["std".to_string(), "hash".to_string()];
+            self.load_recursive(&base_dir, &hash_segments, &mut results)?;
+        }
 
         // Recursively load each import
         for (segments, _span) in imports {

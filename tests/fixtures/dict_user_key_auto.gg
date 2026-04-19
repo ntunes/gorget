@@ -1,0 +1,39 @@
+# Dict keyed by a user struct with a String field — auto-lowered derives.
+#
+# This is the "no explicit hash_of call" variant of
+# `dict_user_key_hashable.gg`. When `@derive(Equatable, Hashable)` is
+# applied and the type is used as a Dict / Set key, the runtime wiring
+# calls the user's `T__hash` / `T__eq` methods from inside the
+# `GorgetMap.hash_fn` / `eq_fn` slots — a call that's invisible to the
+# LIR reachability graph.
+#
+# The LIR DCE now scans Dict / Set / HashMap / HashSet constructor calls
+# and marks every referenced user-key type's Hashable / Equatable impls
+# as reachability roots. CallExtern targets (e.g. `FxHasher__write_int`)
+# are likewise roots when the name resolves to a module function.
+# Together with auto-loading `std.hash`, the derived impls and their
+# dependencies survive DCE with no explicit user call.
+
+@derive(Equatable, Hashable)
+struct Named:
+    int id
+    String name
+
+int main():
+    Dict[Named, int] d = Dict[Named, int]()
+    d.put(Named(1, "alice"), 100)
+    d.put(Named(2, "bob"), 200)
+
+    # Fresh String allocation with matching content — byte-FNV/memcmp
+    # without wiring would miss this.
+    String alice2 = "alice"
+    if d.contains(Named(1, alice2)):
+        print("finds alice")
+    else:
+        print("MISSED alice")
+
+    if not d.contains(Named(99, "nobody")):
+        print("missing ok")
+
+    print(d.len())
+    return 0

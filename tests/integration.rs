@@ -1977,6 +1977,17 @@ missing ok
 }
 
 #[test]
+fn dict_user_key_auto() {
+    run_gg(
+        "dict_user_key_auto.gg",
+        "\
+finds alice
+missing ok
+2",
+    );
+}
+
+#[test]
 fn set_user_key_hashable() {
     run_gg(
         "set_user_key_hashable.gg",

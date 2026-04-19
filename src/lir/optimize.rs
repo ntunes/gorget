@@ -173,6 +173,31 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
         }
     }
 
+    // Hashable / Equatable impls for user types used as Dict / Set keys.
+    // The `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` bridges
+    // emitted in the C backend (see c_lir/mod.rs::emit_hashable_key_bridges)
+    // call `T__hash` / `T__eq` directly from the runtime GorgetMap at
+    // lookup time — that call isn't visible in the LIR call graph, so
+    // regular DCE prunes the methods and the bridges link-fail. Treat
+    // them as roots.
+    let hashable_key_types = find_hashable_key_types(module);
+    for key_type in &hashable_key_types {
+        let candidates = [
+            format!("{key_type}__hash"),
+            format!("{key_type}__eq"),
+            format!("Hashable_for_{key_type}__hash"),
+            format!("Equatable_for_{key_type}__eq"),
+        ];
+        for (i, func) in module.functions.iter().enumerate() {
+            if candidates.iter().any(|c| c == &func.name) {
+                let fid = FuncId(i as u32);
+                if live.insert(fid) {
+                    worklist.push(fid);
+                }
+            }
+        }
+    }
+
     // Functions referenced by global initializers.
     for global in &module.globals {
         collect_global_func_refs(&global.init, &mut |fid| {
@@ -181,6 +206,13 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
             }
         });
     }
+
+    // Build a name→FuncId lookup for resolving CallExtern call targets
+    // (CallExtern stores a name string, not a FuncId).
+    let name_to_fid: rustc_hash::FxHashMap<&str, FuncId> = module.functions.iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.as_str(), FuncId(i as u32)))
+        .collect();
 
     // Transitive closure: walk called/referenced functions.
     while let Some(fid) = worklist.pop() {
@@ -192,11 +224,108 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
                         worklist.push(ref_fid);
                     }
                 });
+                // CallExtern targets are resolved by name at emit time —
+                // if a matching function exists in the module, treat it
+                // as a live reference. Without this, functions like
+                // `FxHasher__write_int` (called by user `__hash` impls
+                // via the mangled name, not via LIR FuncId) get DCE'd
+                // and the bridges link-fail.
+                if let Inst::CallExtern { name, .. } = inst {
+                    if let Some(&ref_fid) = name_to_fid.get(name.as_str()) {
+                        if live.insert(ref_fid) {
+                            worklist.push(ref_fid);
+                        }
+                    }
+                }
             }
         }
     }
 
     live
+}
+
+/// Scan the LIR for Dict / Set / HashMap / HashSet constructor calls and
+/// return the set of user-struct key types referenced. The Hashable /
+/// Equatable impls on these types are reachability roots even when the
+/// Gorget program never calls them directly — the runtime map looks them
+/// up by function-pointer from within the hash-bucket machinery. Runtime
+/// primitives (int64_t, GorgetString, etc.) are excluded because their
+/// hash paths are handled by dedicated runtime helpers.
+fn find_hashable_key_types(module: &LirModule) -> HashSet<String> {
+    let mut types: HashSet<String> = HashSet::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::CallExtern { name, original_name, .. } = inst {
+                    let (is_mapped, lookup) = match (name.as_str(), original_name) {
+                        ("gorget_dict_new", Some(o))
+                        | ("gorget_map_new", Some(o))
+                        | ("gorget_dict_new_str", Some(o))
+                        | ("gorget_map_new_str", Some(o))
+                        | ("gorget_set_new", Some(o))
+                        | ("gorget_set_with_capacity", Some(o))
+                        | ("gorget_ordered_set_new", Some(o))
+                        | ("gorget_ordered_set_new_str", Some(o)) => (true, o.as_str()),
+                        _ => (false, name.as_str()),
+                    };
+                    let (prefix, is_set) = if lookup.starts_with("Dict__") {
+                        ("Dict__", false)
+                    } else if lookup.starts_with("HashMap__") {
+                        ("HashMap__", false)
+                    } else if lookup.starts_with("Set__") {
+                        ("Set__", true)
+                    } else if lookup.starts_with("HashSet__") {
+                        ("HashSet__", true)
+                    } else {
+                        continue;
+                    };
+                    let rest = match lookup.strip_prefix(prefix) {
+                        Some(r) => r,
+                        None => continue,
+                    };
+                    let rest = if is_mapped {
+                        rest.strip_suffix("__new_str")
+                            .or_else(|| rest.strip_suffix("__new"))
+                            .or_else(|| rest.strip_suffix("__with_capacity"))
+                            .unwrap_or(rest)
+                    } else {
+                        // Pre-map constructor names end in a primitive type
+                        // segment; method calls (`Dict__K__V__put`) don't.
+                        let last = rest.rsplit("__").next().unwrap_or("");
+                        if !matches!(last,
+                            "int64_t" | "int32_t" | "int16_t" | "int8_t"
+                            | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
+                            | "double" | "float" | "bool" | "GorgetString"
+                            | "GorgetArray" | "GorgetMap" | "GorgetSet" | "void"
+                            | "T" | "U" | "V")
+                        {
+                            continue;
+                        }
+                        rest
+                    };
+                    let key = if is_set {
+                        rest.to_string()
+                    } else {
+                        rest.splitn(2, "__").next().unwrap_or("").to_string()
+                    };
+                    if key.is_empty() { continue; }
+                    // Skip primitives / runtime types — their hashing is handled
+                    // by runtime helpers, not by user `__hash` methods.
+                    if matches!(key.as_str(),
+                        "int64_t" | "int32_t" | "int16_t" | "int8_t"
+                        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
+                        | "double" | "float" | "bool" | "_Bool"
+                        | "Str" | "GorgetString")
+                    {
+                        continue;
+                    }
+                    if key.contains("__") { continue; }
+                    types.insert(key);
+                }
+            }
+        }
+    }
+    types
 }
 
 fn collect_inst_func_refs(inst: &Inst, cb: &mut dyn FnMut(FuncId)) {

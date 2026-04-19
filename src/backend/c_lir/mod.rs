@@ -228,11 +228,15 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
             Some(pair) => pair,
             None => continue,
         };
+        // FxHasher from std.hash is a single-field struct `{ int state }`.
+        // We allocate an `int64_t` and pass its address — ABI-compatible
+        // with `FxHasher*`, avoiding a dependency on the FxHasher typedef
+        // (which might get DCE'd from modules that don't touch it directly).
         writeln!(out,
             "static uint64_t __gorget_ktable_hash__{ty}(const void* __kp) {{ \
-               __gg_FxHasher __h; __h.state = 0; \
-               {hash_name}(__kp, &__h); \
-               return (uint64_t)__h.state; }}").unwrap();
+               int64_t __h_state = 0; \
+               {hash_name}(__kp, &__h_state); \
+               return (uint64_t)__h_state; }}").unwrap();
         // The Equatable impl's bool eq(self, Self other) takes self by value
         // through an inout pointer — deref the raw bytes on both sides.
         writeln!(out,
