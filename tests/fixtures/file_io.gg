@@ -1,4 +1,4 @@
-from std.io import File
+from std.io import File, write_str
 from std.fs import read_file, write_file, append_file, file_exists, delete_file
 
 void main():
@@ -20,7 +20,7 @@ void main():
 
     # File struct usage
     File f = File.create("_test_output2.txt")
-    f.write("from File struct")
+    write_str[File](&f, "from File struct")
     f.close()
 
     String data = read_file("_test_output2.txt")

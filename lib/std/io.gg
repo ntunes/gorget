@@ -30,7 +30,6 @@ struct File:
 
 equip File:
     extern Result[String, String] read_all() = "gorget_file_read_all"
-    extern "C" void write(String content) = "gorget_file_write"
     extern void close() = "gorget_file_close"
     # Byte-oriented primitives. These return the raw bytes-written /
     # bytes-read count (non-negative) or a negative errno that the

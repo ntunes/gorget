@@ -996,11 +996,16 @@ demand, not shipped speculatively.
 
 **Phase 3 follow-ups (post-initial-ship):**
 
-- **Rename `write_bytes` / `read_bytes` → `write` / `read`** once the
-  legacy `File.write(String)` extern is retired and callers move to
-  `write_str` / `write_all`. The `_bytes` suffix was only a
-  name-collision shim during migration; the final narrow-waist names
-  on `Writer` / `Reader` are `write` and `read`.
+- **Rename `write_bytes` / `read_bytes` → `write` / `read`** — partially
+  unblocked. `File.write(String)` extern retired 2026-04-19 (the one
+  caller, `tests/fixtures/file_io.gg`, moved to `write_str[File](&f, …)`).
+  The remaining blockers are legacy `Socket.write(Vector[uint8])` /
+  `Socket.read(int n)` + `TlsSocket.write(Vector[uint8])` /
+  `TlsSocket.read(int n)` externs — four call sites in `xtd` (ssh.gg,
+  http.gg) need migration to the Writer/Reader trait methods before the
+  externs can be dropped. The `_bytes` suffix was only a name-collision
+  shim during migration; the final narrow-waist names on `Writer` /
+  `Reader` are `write` and `read`.
 - ✅ **Retired `println` / `writeln` / `println_str`** (2026-04-19).
   `print` stays as the infallible compiler builtin with `terminator=` /
   `file=` kwargs (script ergonomics). Typed-error callers use
