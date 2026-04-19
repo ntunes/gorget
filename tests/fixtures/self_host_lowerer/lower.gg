@@ -494,6 +494,55 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
             # Named type (user struct, collection, etc.)
             return lookup_or_register_named(&gmod, type_name)
 
+# Constant-fold a top-level `const int` initializer. Supports int
+# literals, references to other const_decls, and the binary/unary ops
+# the self-host's parser.gg actually uses in KW_* / PREC_* decls.
+# Returns None for unsupported shapes — the const is dropped silently
+# and the identifier reference later falls back to OpConstI64(0).
+Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
+    match spe.expr:
+        case EIntLiteral(v):
+            return Some(v)
+        case EIdentifier(name):
+            if gmod.const_decls.contains(name):
+                return Some(gmod.const_decls.get(name).unwrap())
+            return None
+        case EBinaryOp(lhs_box, op, rhs_box):
+            Option[int] lv = eval_const_int_expr(*lhs_box, &gmod)
+            Option[int] rv = eval_const_int_expr(*rhs_box, &gmod)
+            match lv:
+                case Some(la):
+                    match rv:
+                        case Some(ra):
+                            if op == "+":
+                                return Some(la + ra)
+                            if op == "-":
+                                return Some(la - ra)
+                            if op == "*":
+                                return Some(la * ra)
+                            if op == "/" and ra != 0:
+                                return Some(la / ra)
+                            if op == "%" and ra != 0:
+                                return Some(la - (la / ra) * ra)
+                            return None
+                        case None:
+                            return None
+                case None:
+                    return None
+        case EUnaryOp(op, inner_box):
+            Option[int] iv = eval_const_int_expr(*inner_box, &gmod)
+            match iv:
+                case Some(ia):
+                    if op == "-":
+                        return Some(0 - ia)
+                    if op == "+":
+                        return Some(ia)
+                    return None
+                case None:
+                    return None
+        else:
+            return None
+
 # Get and increment the module-level closure ID counter.
 # Uses named_types["__closure_counter"] as storage.
 int gmod_next_closure_id(GirModule &gmod):
@@ -791,6 +840,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EIdentifier(name):
             if ctx.named_locals.contains(name):
                 return ctx.named_locals.get(name).unwrap()
+            # Module-level `const int` — inline the evaluated value.
+            # Without this, the self-compiled parser's KW_* / PREC_*
+            # constants all become 0 and check_kw(0, 0) hangs.
+            if gmod.const_decls.contains(name):
+                int cv = gmod.const_decls.get(name).unwrap()
+                int cdst = add_local(&ctx, I64_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
+                return cdst
             # Unknown identifier (imported constant, unresolved) — placeholder
             int unk = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(unk, OpConstI64(0)))
@@ -3599,7 +3656,28 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tfi += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params)
+    Dict[String, int] const_decls = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls)
+
+    # Pre-scan: evaluate IConstDecl init exprs and register values in
+    # gmod.const_decls. Without this, references to module-level consts
+    # (e.g. `const int KW_IF = 5` in parser.gg) default to 0 at EIdentifier
+    # lowering, which confuses the self-compiled parser's keyword dispatch
+    # and deadlocks in check_kw(kw=0, pos=0).
+    int cdi = 0
+    while cdi < m.items.len():
+        Item cd_item = m.items.get(cdi).unwrap()
+        match cd_item:
+            case IConstDecl(_, cd_name, cd_val):
+                Option[int] cd_eval = eval_const_int_expr(cd_val, &gmod)
+                match cd_eval:
+                    case Some(cv):
+                        gmod.const_decls.put(cd_name, cv)
+                    case None:
+                        pass
+            else:
+                pass
+        cdi += 1
 
     # Collect generic templates and discover instances
     Dict[String, FunctionDef] fn_templates = {}

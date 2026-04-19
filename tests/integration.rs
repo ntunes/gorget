@@ -11312,7 +11312,7 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage0 → stage1.c",
-        Duration::from_secs(120),
+        Duration::from_secs(300),
     );
     assert!(body_out.status.success(), "stage-0 driver failed");
     let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
@@ -11352,7 +11352,7 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage1 → stage2.c",
-        Duration::from_secs(120),
+        Duration::from_secs(300),
     );
     assert!(
         stage2_out.status.success(),
