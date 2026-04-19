@@ -1001,21 +1001,29 @@ demand, not shipped speculatively.
   `write_str` / `write_all`. The `_bytes` suffix was only a
   name-collision shim during migration; the final narrow-waist names
   on `Writer` / `Reader` are `write` and `read`.
-- **Re-examine the `print()` vs `println()` split.** Currently `print`
-  is an infallible compiler builtin (panics on stdout failure) and
-  `println` is the typed-error stdlib wrapper. Two traits in one
-  surface (builtin vs stdlib, infallible vs Result). Options:
-  (a) Keep `print` as sugar that drops the Result — one name, two
-      error postures depending on whether callers bind the return.
-  (b) Make `print` return `Result` unconditionally; scripts write
-      `_ = print("hi")` and services use `?`. Removes the builtin-vs-
-      stdlib axis, at the cost of script ergonomics.
-  (c) Retire `println` entirely; `print(x)` takes an optional
-      `file=stderr` / bindable return, and the Result posture is
-      decided by what the caller does with it.
-  Open question — pick one before Phase 3 closes. Current preference
-  is to NOT keep both `print` AND `println`; which one stays is the
-  discussion.
+- **Retire `println` / `writeln`; keep `print` infallible.** Resolution
+  of the earlier open question (2026-04-19): `print` stays as the
+  infallible compiler builtin with `newline=` / `file=` kwargs —
+  script ergonomics matter more than a uniform Result return, and
+  the typed-error path is already available via `stdout.write_display(v)`
+  / `write_all` on the Writer trait. `println` and `writeln` add a
+  parallel surface for no new semantics and are retired; callers
+  wanting a typed-error printf use the Writer primitives directly.
+- **Upgrade `print`'s `newline=bool` to `terminator=String`.** Python's
+  `end=` / Swift's `terminator:` — with the bool form, callers who
+  want e.g. TSV-style output (`print("col1", terminator="\t")`) must
+  pre-embed the tab in the string. A `terminator: String = "\n"` kwarg
+  subsumes the bool (`newline=false` ≡ `terminator=""`) and covers
+  the tab / custom-separator case cleanly. Minor change to `print`'s
+  signature; keep `newline=bool` as sugar if we want backward compat.
+- **Add `Writer.flush(&self) -> Result[void, IoError]`.** Today
+  there's no way to force a buffered writer (stdout when piped,
+  BufWriter, etc.) to commit bytes before the buffer fills. Progress
+  bars, REPLs, competitive programming output all hit this. Default
+  impl on the trait is a no-op; File / BufWriter override. Rust has
+  `io::Write::flush`; Python has `file.flush()`; Gorget doesn't yet.
+  Not blocking Phase 3 close but a genuine gap in the Writer
+  surface.
 
 ### Phase 4: Concurrency-model enforcement
 
