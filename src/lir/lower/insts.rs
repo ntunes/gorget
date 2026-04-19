@@ -2023,6 +2023,156 @@ impl<'a> FuncLowering<'a> {
         Some(bb)
     }
 
+    /// If `original_name` is a `Set__<T>__<method>` or
+    /// `HashSet__<T>__<method>` HOF we've migrated (`each`, `fold`,
+    /// `any`, `all`), emit `Inst::HofExpand`. `value_ty` encodes
+    /// `is_ordered` for the BIR expansion: `Some(Void)` = ordered
+    /// (Set__, walks order[]), `Some(Ptr)` = unordered (HashSet__,
+    /// walks states).
+    fn try_emit_set_hof(
+        &mut self,
+        original_name: &str,
+        dst: &Option<ir::types::LocalId>,
+        args: &[Operand],
+        lir_args: &[ValueId],
+        bb: BlockId,
+    ) -> Option<BlockId> {
+        let (rest, is_ordered) = if let Some(r) = original_name.strip_prefix("Set__") {
+            (r, true)
+        } else if let Some(r) = original_name.strip_prefix("HashSet__") {
+            (r, false)
+        } else {
+            return None;
+        };
+        let sep_pos = rest.rfind("__")?;
+        let method = &rest[sep_pos + 2..];
+        let (hof_op, produces_result, is_fold) = match method {
+            "each" => (HofOp::SetEach, false, false),
+            "fold" => (HofOp::SetFold, true, true),
+            "any" => (HofOp::SetAny, true, false),
+            "all" => (HofOp::SetAll, true, false),
+            _ => return None,
+        };
+        if lir_args.len() < 2 {
+            return None;
+        }
+        if is_fold && lir_args.len() < 3 {
+            return None;
+        }
+        if produces_result && dst.is_none() {
+            return None;
+        }
+        let elem_c = &rest[..sep_pos];
+        let elem_ty = super::component_to_lir_type(elem_c, self.struct_reg);
+
+        let closure_idx = lir_args.len() - 1;
+        let closure_call_sig = args.get(closure_idx).and_then(|op| {
+            let key = match op {
+                Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                Operand::Copy(_) | Operand::Move(_) => {
+                    let ty_name = self.operand_gir_type_name(op)?;
+                    format!("{ty_name}__call")
+                }
+                _ => return None,
+            };
+            self.closure_call_sigs.get(&key).cloned()
+        });
+        if closure_call_sig.is_none() {
+            return None;
+        }
+        let param_tys: Vec<LirType> = closure_call_sig
+            .as_ref()
+            .map(|sig| sig.param_tys.clone())
+            .unwrap_or_default();
+        let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
+            use crate::ir::abi::AbiKind;
+            match ty {
+                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Struct(_) => AbiKind::ByValue,
+                _ => AbiKind::Scalar,
+            }
+        };
+        let (acc_abi, elem_abi) = if is_fold {
+            let acc = param_tys
+                .first()
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or(crate::ir::abi::AbiKind::Scalar);
+            let e = param_tys
+                .get(1)
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if elem_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            (Some(acc), e)
+        } else {
+            let e = param_tys
+                .first()
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if elem_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            (None, e)
+        };
+
+        let mut lir_args_wrapped = lir_args.to_vec();
+        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+
+        let closure_ret_ty = if is_fold {
+            let d = dst.as_ref().expect("fold requires dst");
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            self.map_type(&gir_ty)
+        } else if produces_result {
+            LirType::Bool
+        } else {
+            LirType::Void
+        };
+
+        let closure_arg_abis = match acc_abi {
+            Some(a) => vec![a, elem_abi],
+            None => vec![elem_abi],
+        };
+
+        let result_id = if produces_result {
+            Some(self.lir_func.next_value())
+        } else {
+            None
+        };
+        let init_id = if is_fold { Some(lir_args_wrapped[1]) } else { None };
+
+        // Encode is_ordered via value_ty: Void → ordered, Ptr → unordered.
+        let value_ty = if is_ordered {
+            Some(LirType::Void)
+        } else {
+            Some(LirType::Ptr)
+        };
+
+        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+            coll: lir_args_wrapped[0],
+            hof_op,
+            element_ty: elem_ty,
+            value_ty,
+            closure: lir_args_wrapped[closure_idx],
+            closure_kind: ClosureDispatchKind::EscapedClosure,
+            closure_ret_ty,
+            closure_arg_abis,
+            dst: result_id,
+            init: init_id,
+        });
+
+        if let (Some(d), Some(r)) = (*dst, result_id) {
+            self.store_to_local(d, r, bb);
+        }
+        Some(bb)
+    }
+
     /// The closure argument is packed into a `GorgetClosure` pointer via
     /// `wrap_closure_call_args` so the BIR expansion can dispatch it through
     /// `Inst::CallClosure { kind: EscapedClosure }`. Closure arg ABI is set
@@ -2285,6 +2435,10 @@ impl<'a> FuncLowering<'a> {
         // lowering generate the loop skeleton. Other HOF variants still flow
         // through the per-backend inline expanders until they are migrated.
         if let Some(bb2) = self.try_emit_dict_hof(original_name, dst, args, &lir_args, bb) {
+            self.emit_post_call_zeros(args, bb2);
+            return bb2;
+        }
+        if let Some(bb2) = self.try_emit_set_hof(original_name, dst, args, &lir_args, bb) {
             self.emit_post_call_zeros(args, bb2);
             return bb2;
         }

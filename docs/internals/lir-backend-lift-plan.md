@@ -579,22 +579,34 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      `any`, `all`, `fold`, `reduce`, `count`, `find`, `find_index`,
      `filter`, `map`, `flat_map`. The closure signature snapshot
      (`ClosureCallSig`, built once per module in `LoweringContext`)
-     powers per-arg ABI selection for both `__Closure_N` closures
-     and bare `FuncRef` closures — aggregate accumulators/elements
-     now go through the same BIR expansion path as scalars. The
-     corresponding inline handlers in both backends are gone.
-   - Vector still in backends (not loop-shaped HOFs): `sorted`,
-     `sort`, `unique` (qsort with per-type comparator), `sort_by` /
-     `sorted_by` / `sort_by_key` / `sorted_by_key` (qsort trampoline
-     via `emit_vector_helper`), `windows` / `chunks` (delegated
-     non-closure helpers).
-   - Dict: all variants still inline in backends (`emit_dict_helper`
-     generates static inline C functions; callers delegate via one
-     line each). Migration requires a new BIR scaffold for the
-     `for i in 0..cap { if states[i] != 1 continue; … }` iteration
-     shape.
-   - Set: same as Dict — a separate scaffold for the
-     `gorget_set_next_idx`-style iteration.
+     powers per-arg ABI selection for both `__Closure_N` and
+     `FuncRef` closures. Backend inline handlers are gone.
+   - Vector routed to runtime stubs (no backend inliner needed):
+     `sort`, `sorted`, `unique` → typed
+     `gorget_array_<method>_{int,float,str,generic}` stubs
+     dispatched by element type in `map_monomorphized_to_runtime`;
+     `windows` / `chunks` → generic `gorget_array_<method>` stubs
+     that use the source array's `elem_size` field (one stub covers
+     every T).
+   - Vector still in backends (qsort TLS trampoline): `sort_by`,
+     `sorted_by`, `sort_by_key`, `sorted_by_key` — closure-based
+     qsort with thread-local closure storage.
+   - Dict migrated: `each`, `fold`, `any`, `all`. A new BIR
+     scaffold `emit_dict_hof_loop_scaffold` walks the hash table
+     (`for i in 0..cap { if states[i] != 1 continue; … }`) and
+     threads extras through both the state-skip and body paths via
+     a parameterised `advance_bb`. Accumulators on Dict.fold work
+     via check_bb block params, same pattern as Vector.fold.
+   - Dict still in backends: `filter`, `map`, `update`, `get_or`,
+     `get_or_put`. Filter/map need result-dict construction
+     (ctor dispatch by key type — `gorget_dict_new_str` vs
+     `gorget_dict_new`, plus val-drop wiring for resource vals).
+     update/get_or/get_or_put are non-closure ops that could route
+     to runtime stubs similarly to `windows`/`chunks`.
+   - Set: not yet migrated. Set iteration shape mirrors Dict
+     (cap/states walk for `HashSet__`, insertion-order via
+     `order[]` for `Set__`). A separate scaffold (or a
+     parameterised one handling both shapes) is required.
 
 10. **Step 9** — Add `AddressOf { value, ty }` + BIR expansion. GIR→LIR
     emits this whenever an `AbiKind::Ptr` extern param is fed an SSA-value

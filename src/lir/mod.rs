@@ -271,6 +271,21 @@ pub enum HofOp {
     DictAll,
     /// `d.map(|k, v| …)` — returns a fresh `Dict<K, V2>`.
     DictMap,
+
+    // ── Set variants ──────────────────────────────────────────────
+    // Iteration shape differs from Dict:
+    //   `Set__` walks the `order[]` array (insertion order), using
+    //   `order[j] → i → keys[i]` indirection, to match the existing
+    //   ordered-set semantics.
+    //   `HashSet__` walks `cap/states` like Dict does.
+    /// `s.each(|x| …)` — for side-effects. No dst.
+    SetEach,
+    /// `s.fold(init, |acc, x| …)` — returns `R`.
+    SetFold,
+    /// `s.any(|x| pred(x))` — returns `bool`.
+    SetAny,
+    /// `s.all(|x| pred(x))` — returns `bool`.
+    SetAll,
 }
 
 // ── Closure dispatch kind ──────────────────────────────────────────────────

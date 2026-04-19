@@ -245,7 +245,11 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::DictEach
                         | HofOp::DictFold
                         | HofOp::DictAny
-                        | HofOp::DictAll => {
+                        | HofOp::DictAll
+                        | HofOp::SetEach
+                        | HofOp::SetFold
+                        | HofOp::SetAny
+                        | HofOp::SetAll => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -414,6 +418,71 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                         closure_ret_ty,
                                         init.expect("DictFold must carry init"),
                                         dst.expect("DictFold must carry dst"),
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::SetEach => {
+                                    // `value_ty` encodes is_ordered:
+                                    // Some(Void) → ordered (Set__),
+                                    // Some(Ptr)  → unordered (HashSet__).
+                                    let is_ordered = !matches!(
+                                        value_ty_inner,
+                                        Some(LirType::Ptr)
+                                    );
+                                    expand_set_each(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        is_ordered,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::SetFold => {
+                                    let is_ordered = !matches!(
+                                        value_ty_inner,
+                                        Some(LirType::Ptr)
+                                    );
+                                    expand_set_fold(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        closure_ret_ty,
+                                        init.expect("SetFold must carry init"),
+                                        dst.expect("SetFold must carry dst"),
+                                        is_ordered,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::SetAny | HofOp::SetAll => {
+                                    let is_ordered = !matches!(
+                                        value_ty_inner,
+                                        Some(LirType::Ptr)
+                                    );
+                                    expand_set_any_all(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        hof_op,
+                                        coll,
+                                        element_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        dst.expect("SetAny/All must carry dst"),
+                                        is_ordered,
                                         remaining,
                                         orig_term,
                                     );
@@ -2480,6 +2549,508 @@ fn expand_dict_any_all(
     // body_bb terminator:
     //   any: pred ? done_bb(early) : advance_bb
     //   all: pred ? advance_bb    : done_bb(early)
+    let (then_block, then_args, else_block, else_args) = if is_any {
+        (ctx.done_bb, vec![early], ctx.advance_bb, vec![])
+    } else {
+        (ctx.advance_bb, vec![], ctx.done_bb, vec![early])
+    };
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block,
+        then_args,
+        else_block,
+        else_args,
+    };
+}
+
+/// Scaffold for Set (`GorgetSet` — a GorgetMap with no val array)
+/// HOF loops. Two iteration shapes:
+///   * ordered (`Set__T`): walk `order[j]` for `j in 0..order_len`,
+///     resolve `i = order[j]`, check `states[i]`, read `keys[i]`.
+///     Matches the insertion-order semantics of the existing
+///     `emit_set_helper` ordered case.
+///   * unordered (`HashSet__T`): walk `i in 0..cap`, check
+///     `states[i]`, read `keys[i]`. Same shape as Dict but with no
+///     value array.
+///
+/// The scaffold exposes `elem_arg` (loaded or pointer, per closure
+/// ABI hint) and the same block-param threading pattern as the Dict
+/// scaffold (advance_bb carries extras forward on both skip and
+/// body paths).
+#[allow(dead_code)]
+struct SetHofLoopCtx {
+    check_bb: BlockId,
+    state_bb: BlockId,
+    body_bb: BlockId,
+    advance_bb: BlockId,
+    done_bb: BlockId,
+    counter_val: ValueId,
+    next_counter: ValueId,
+    cap_cond: ValueId,
+    elem_ptr: ValueId,
+    elem_arg: ValueId,
+    elem_abi: crate::ir::abi::AbiKind,
+    extra_check_params: Vec<ValueId>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_set_hof_loop_scaffold(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    elem_ty: &LirType,
+    elem_abi_hint: Option<crate::ir::abi::AbiKind>,
+    extra_check_inits: Vec<(LirType, ValueId)>,
+    is_ordered: bool,
+) -> SetHofLoopCtx {
+    // GorgetSet aliases GorgetMap — reuse its struct id / field layout.
+    let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
+
+    let check_bb = func.add_block();
+    let state_bb = func.add_block();
+    let body_bb = func.add_block();
+    let advance_bb = func.add_block();
+    let done_bb = func.add_block();
+
+    // check_bb params: counter + extras.
+    let counter_val = alloc_value(next);
+    func.block_mut(check_bb).params.push((counter_val, LirType::I64));
+    let mut extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(check_bb).params.push((p, ty.clone()));
+        extra_check_params.push(p);
+    }
+
+    // advance_bb mirrors the extras (same forwarding pattern as Dict).
+    let mut advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(advance_bb).params.push((p, ty.clone()));
+        advance_extra_params.push(p);
+    }
+
+    // Entry: jmp check_bb(0, init0, init1, ...)
+    let zero = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::IConst {
+            dst: zero,
+            ty: LirType::I64,
+            value: 0,
+        });
+    let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
+    entry_args.push(zero);
+    for (_, init) in &extra_check_inits {
+        entry_args.push(*init);
+    }
+    func.block_mut(BlockId(current_bb as u32)).terminator =
+        Term::Jump(check_bb, entry_args);
+
+    // check_bb: load bound (order_len for ordered, cap for unordered).
+    let bound_field_idx: u32 = if is_ordered { 9 } else { 1 }; // order_len | cap
+    let bound_ptr = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+        dst: bound_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: bound_field_idx,
+    });
+    let bound = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Load {
+        dst: bound,
+        ptr: bound_ptr,
+        ty: LirType::I64,
+    });
+    let cap_cond = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Cmp {
+        dst: cap_cond,
+        op: CmpOp::Lt,
+        lhs: counter_val,
+        rhs: bound,
+    });
+
+    // state_bb: resolve `i` (either `order[j]` or `counter` directly)
+    // and check `states[i] == 1`.
+    let i_val = if is_ordered {
+        // i = load(order + j * 8)
+        let order_field = alloc_value(next);
+        func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+            dst: order_field,
+            base: coll,
+            struct_id: gmap_sid,
+            field: 8, // order
+        });
+        let order_ptr = alloc_value(next);
+        func.block_mut(state_bb).insts.push(Inst::Load {
+            dst: order_ptr,
+            ptr: order_field,
+            ty: LirType::Ptr,
+        });
+        let order_j_ptr = alloc_value(next);
+        func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+            dst: order_j_ptr,
+            base: order_ptr,
+            index: counter_val,
+            elem_size: 8, // size_t
+        });
+        let i = alloc_value(next);
+        func.block_mut(state_bb).insts.push(Inst::Load {
+            dst: i,
+            ptr: order_j_ptr,
+            ty: LirType::I64,
+        });
+        i
+    } else {
+        counter_val
+    };
+
+    let states_field = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+        dst: states_field,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 3,
+    });
+    let states_ptr = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Load {
+        dst: states_ptr,
+        ptr: states_field,
+        ty: LirType::Ptr,
+    });
+    let state_i_ptr = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+        dst: state_i_ptr,
+        base: states_ptr,
+        index: i_val,
+        elem_size: 1,
+    });
+    let state_val = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Load {
+        dst: state_val,
+        ptr: state_i_ptr,
+        ty: LirType::U8,
+    });
+    let one_u8 = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::IConst {
+        dst: one_u8,
+        ty: LirType::U8,
+        value: 1,
+    });
+    let occupied = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Cmp {
+        dst: occupied,
+        op: CmpOp::Eq,
+        lhs: state_val,
+        rhs: one_u8,
+    });
+    let skip_args: Vec<ValueId> = extra_check_params.iter().copied().collect();
+    func.block_mut(state_bb).terminator = Term::Branch {
+        cond: occupied,
+        then_block: body_bb,
+        then_args: vec![],
+        else_block: advance_bb,
+        else_args: skip_args,
+    };
+
+    // body_bb: keys[i] load.
+    let keys_field = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+        dst: keys_field,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 0,
+    });
+    let keys_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Load {
+        dst: keys_ptr,
+        ptr: keys_field,
+        ty: LirType::Ptr,
+    });
+    let key_size = c_sizeof_lir_type(elem_ty, structs) as u32;
+    let elem_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: elem_ptr,
+        base: keys_ptr,
+        index: i_val,
+        elem_size: key_size,
+    });
+
+    let pass_by_ptr = match elem_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => elem_ty.is_aggregate(),
+    };
+    let elem_arg = if pass_by_ptr {
+        elem_ptr
+    } else {
+        let e = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Load {
+            dst: e,
+            ptr: elem_ptr,
+            ty: elem_ty.clone(),
+        });
+        e
+    };
+    let elem_abi = if pass_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    // advance_bb: next_counter = counter + 1, Jump back to check_bb.
+    let next_counter = alloc_value(next);
+    let one_i64 = alloc_value(next);
+    func.block_mut(advance_bb).insts.push(Inst::IConst {
+        dst: one_i64,
+        ty: LirType::I64,
+        value: 1,
+    });
+    func.block_mut(advance_bb).insts.push(Inst::Add {
+        dst: next_counter,
+        ty: LirType::I64,
+        lhs: counter_val,
+        rhs: one_i64,
+        overflow: Overflow::Wrap,
+    });
+    let mut back_args = Vec::with_capacity(1 + advance_extra_params.len());
+    back_args.push(next_counter);
+    back_args.extend(advance_extra_params.iter().copied());
+    func.block_mut(advance_bb).terminator = Term::Jump(check_bb, back_args);
+
+    SetHofLoopCtx {
+        check_bb,
+        state_bb,
+        body_bb,
+        advance_bb,
+        done_bb,
+        counter_val,
+        next_counter,
+        cap_cond,
+        elem_ptr,
+        elem_arg,
+        elem_abi,
+        extra_check_params,
+    }
+}
+
+/// Expand `HofExpand { hof_op: SetEach }` — call closure `(elem)` for
+/// every occupied slot.
+#[allow(clippy::too_many_arguments)]
+fn expand_set_each(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    elem_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    is_ordered: bool,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_set_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &elem_ty,
+        elem_abi_hint,
+        vec![],
+        is_ordered,
+    );
+
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Void,
+    });
+    func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: SetFold, init, dst }` — thread a
+/// scalar accumulator through the set walk. Closure signature:
+/// `(acc, elem) -> acc`.
+#[allow(clippy::too_many_arguments)]
+fn expand_set_fold(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    elem_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    init: ValueId,
+    dst: ValueId,
+    is_ordered: bool,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    // closure signature: (acc, elem). arg_abis = [acc_abi, elem_abi].
+    let acc_abi_hint = closure_arg_abis.first().copied();
+    let elem_abi_hint = closure_arg_abis.get(1).copied();
+    let ctx = emit_set_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &elem_ty,
+        elem_abi_hint,
+        vec![(closure_ret_ty.clone(), init)],
+        is_ordered,
+    );
+    let acc_val = ctx.extra_check_params[0];
+
+    let acc_by_ptr = match acc_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => closure_ret_ty.is_aggregate(),
+    };
+    let acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+            dst: p,
+            value: acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        acc_val
+    };
+    let acc_abi = if acc_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![acc_val],
+    };
+    let new_acc = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![acc_arg, ctx.elem_arg],
+        arg_abis: vec![acc_abi, ctx.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.advance_bb, vec![new_acc]);
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: SetAny | SetAll, dst }` — early-exit
+/// predicate over a Set.
+#[allow(clippy::too_many_arguments)]
+fn expand_set_any_all(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    op: HofOp,
+    coll: ValueId,
+    elem_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    is_ordered: bool,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let is_any = matches!(op, HofOp::SetAny);
+    let dst_ty = func
+        .value_types
+        .get(dst.0 as usize)
+        .and_then(|t| t.as_ref())
+        .cloned()
+        .unwrap_or(LirType::I64);
+
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_set_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &elem_ty,
+        elem_abi_hint,
+        vec![],
+        is_ordered,
+    );
+
+    let early = alloc_value(next);
+    let fall = alloc_value(next);
+    let (early_value, fall_value) = if is_any { (1, 0) } else { (0, 1) };
+    let const_inst = |d, v| match &dst_ty {
+        LirType::Bool => Inst::BoolConst {
+            dst: d,
+            value: v != 0,
+        },
+        _ => Inst::IConst {
+            dst: d,
+            ty: dst_ty.clone(),
+            value: v,
+        },
+    };
+    func.block_mut(ctx.body_bb)
+        .insts
+        .push(const_inst(early, early_value));
+    func.block_mut(ctx.check_bb)
+        .insts
+        .push(const_inst(fall, fall_value));
+
+    func.block_mut(ctx.done_bb)
+        .params
+        .push((dst, dst_ty.clone()));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![fall],
+    };
+
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
     let (then_block, then_args, else_block, else_args) = if is_any {
         (ctx.done_bb, vec![early], ctx.advance_bb, vec![])
     } else {
