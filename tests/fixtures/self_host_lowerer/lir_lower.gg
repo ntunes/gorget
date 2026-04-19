@@ -969,7 +969,65 @@ bool is_collection_constructor(String name):
             return true
     return false
 
-# Get the element size for a type name.
+# Byte size of an LIR scalar / pointer type. Struct-typed fields fall
+# back to pointer size since recursion risks infinite loops on recursive
+# types and callers can't meaningfully use a nested struct size anyway.
+int lir_type_byte_size(int ty):
+    if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
+        return 1
+    if ty == LT_I16 or ty == LT_U16:
+        return 2
+    if ty == LT_I32 or ty == LT_U32 or ty == LT_F32:
+        return 4
+    if ty == LT_I64 or ty == LT_U64 or ty == LT_F64:
+        return 8
+    if ty == LT_PTR:
+        return 8
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return 8
+    return 8
+
+# Get the element size for a type name. Uses m.structs when available to
+# sum actual field sizes for user structs; falls back to pointer size when
+# the struct can't be resolved.
+int type_elem_size_in_mod(String elem, StructRegistry &sr, LirModule &m):
+    if elem == "int64_t" or elem == "double":
+        return 8
+    elif elem == "int32_t" or elem == "float":
+        return 4
+    elif elem == "int16_t" or elem == "uint16_t":
+        return 2
+    elif elem == "int8_t" or elem == "uint8_t" or elem == "bool" or elem == "byte":
+        return 1
+    elif elem == "GorgetString" or elem == "Str":
+        return 32
+    int sid = sr_lookup(&sr, elem)
+    if sid >= 0 and sid < m.structs.len():
+        LirStructDef sdef = m.structs.get(sid).unwrap()
+        # Pre-computed size (set during type lowering for known runtime
+        # structs like GorgetString/GorgetArray) takes precedence.
+        if sdef.computed_c_size > 0:
+            return sdef.computed_c_size
+        # Sum scalar/ptr field sizes. Enum union layouts already have a
+        # correct pre-computed size from type lowering, so this path only
+        # fires for plain flat structs where simple summation matches.
+        int total = 0
+        int fi = 0
+        while fi < sdef.fields.len():
+            int fty = sdef.fields.get(fi).unwrap().ty
+            total = total + lir_type_byte_size(fty)
+            fi += 1
+        if total == 0:
+            return 8
+        # Round up to 8-byte boundary for C struct alignment.
+        int rem = total % 8
+        if rem != 0:
+            total = total + (8 - rem)
+        return total
+    return 8
+
+# Backwards-compatible wrapper — kept because some sites lack LirModule
+# access; prefer `type_elem_size_in_mod` wherever `m` is in scope.
 int type_elem_size(String elem, StructRegistry &sr):
     if elem == "int64_t" or elem == "double":
         return 8
@@ -981,10 +1039,9 @@ int type_elem_size(String elem, StructRegistry &sr):
         return 1
     elif elem == "GorgetString" or elem == "Str":
         return 32
-    # Named struct — look up in registry and use pointer size as fallback
     int sid = sr_lookup(&sr, elem)
     if sid >= 0:
-        return 8  # TODO: compute actual struct size
+        return 8
     return 8
 
 # Get the element size for a collection constructor.
@@ -1005,6 +1062,25 @@ int collection_elem_size(String name, StructRegistry &sr):
     elif name.starts_with("Channel__") or name.starts_with("Shared__"):
         return 8
     return type_elem_size(elem, &sr)
+
+# Size-aware variant that uses LirModule to sum actual struct field
+# sizes. Mirrors collection_elem_size; prefer this at call sites where
+# Vector[MyStruct] / Set[MyStruct] element size matters.
+int collection_elem_size_in_mod(String name, StructRegistry &sr, LirModule &m):
+    String elem = ""
+    if name.starts_with("Vector__"):
+        elem = name.slice(8, name.len())
+    elif name.starts_with("Deque__"):
+        elem = name.slice(7, name.len())
+    elif name.starts_with("Set__"):
+        elem = name.slice(5, name.len())
+    elif name.starts_with("HashSet__"):
+        elem = name.slice(9, name.len())
+    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+        return 8
+    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
+        return 8
+    return type_elem_size_in_mod(elem, &sr, &m)
 
 # Extract key type name from Dict__K__V or HashMap__K__V.
 String dict_key_type(String name):
@@ -1241,6 +1317,38 @@ int extract_elem_size_from_name(String name, StructRegistry &sr):
         return type_elem_size(elem, &sr)
     return 8
 
+# Size-aware variant used at lower_instruction's `gorget_array_contains`
+# site where the element may be a user struct requiring real size lookup.
+int extract_elem_size_from_name_in_mod(String name, StructRegistry &sr, LirModule &m):
+    String elem = ""
+    if name.starts_with("Vector__"):
+        String rest = name.slice(8, name.len())
+        int i = 0
+        while i < rest.len() - 1:
+            String c1 = rest.slice(i, i + 1)
+            String c2 = rest.slice(i + 1, i + 2)
+            if c1 == "_" and c2 == "_":
+                elem = rest.slice(0, i)
+                break
+            i += 1
+        if elem == "":
+            elem = rest
+    elif name.starts_with("Set__"):
+        String rest = name.slice(5, name.len())
+        int i = 0
+        while i < rest.len() - 1:
+            String c1 = rest.slice(i, i + 1)
+            String c2 = rest.slice(i + 1, i + 2)
+            if c1 == "_" and c2 == "_":
+                elem = rest.slice(0, i)
+                break
+            i += 1
+        if elem == "":
+            elem = rest
+    if elem != "":
+        return type_elem_size_in_mod(elem, &sr, &m)
+    return 8
+
 String extract_method_name(String name):
     # Find the last "__" and return everything after it
     int last_pos = -1
@@ -1419,7 +1527,7 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
 
 # ── Instruction lowering ────────────────────────────────────
 
-void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, StructRegistry &sr):
+void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, StructRegistry &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
@@ -1581,15 +1689,15 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                         String val_ty = dict_val_type(func_name)
                         if is_string_keyed(func_name):
                             # _str variant: only val_size
-                            int val_size = type_elem_size(val_ty, &sr)
+                            int val_size = type_elem_size_in_mod(val_ty, &sr, &m)
                             int vs = lir_fn_next_value(&f)
                             LirBlock sblk = f.blocks.get(bb).unwrap()
                             sblk.insts.push(IIConst(vs, LT_I64, val_size))
                             f.blocks.set(bb, sblk)
                             lir_args.push(vs)
                         else:
-                            int key_size = type_elem_size(key_ty, &sr)
-                            int val_size = type_elem_size(val_ty, &sr)
+                            int key_size = type_elem_size_in_mod(key_ty, &sr, &m)
+                            int val_size = type_elem_size_in_mod(val_ty, &sr, &m)
                             int ks = lir_fn_next_value(&f)
                             LirBlock sblk = f.blocks.get(bb).unwrap()
                             sblk.insts.push(IIConst(ks, LT_I64, key_size))
@@ -1603,7 +1711,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     elif func_name.starts_with("Set__") or func_name.starts_with("HashSet__"):
                         # Set: _str variant takes 0 args, non-str takes 1 (elem_size)
                         if not is_string_keyed(func_name):
-                            int elem_size = collection_elem_size(func_name, &sr)
+                            int elem_size = collection_elem_size_in_mod(func_name, &sr, &m)
                             int size_val = lir_fn_next_value(&f)
                             LirBlock sblk = f.blocks.get(bb).unwrap()
                             sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
@@ -1614,7 +1722,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                         # Vector, Deque, Channel, Shared: 1 arg (elem_size).
                         # Shared is special: size comes FIRST and init_data is
                         # a pointer; handled below via arg reordering.
-                        int elem_size = collection_elem_size(func_name, &sr)
+                        int elem_size = collection_elem_size_in_mod(func_name, &sr, &m)
                         int size_val = lir_fn_next_value(&f)
                         LirBlock sblk = f.blocks.get(bb).unwrap()
                         sblk.insts.push(IIConst(size_val, LT_I64, elem_size))
@@ -1720,7 +1828,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 call_name = mapped
             # Post-mapping fixups: append extra args for functions that need them.
             if call_name == "gorget_array_contains":
-                int es = extract_elem_size_from_name(func_name, &sr)
+                int es = extract_elem_size_from_name_in_mod(func_name, &sr, &m)
                 int esv = lir_fn_next_value(&f)
                 LirBlock esblk = f.blocks.get(bb).unwrap()
                 esblk.insts.push(IIConst(esv, LT_I64, es))
@@ -1829,7 +1937,7 @@ LirTerm lower_terminator(Terminator term, LirFunction &f, int bb, Vector[int] &l
 
 # ── Function lowering ───────────────────────────────────────
 
-LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry &sr, Dict[String, int] &func_index):
+LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry &sr, Dict[String, int] &func_index, LirModule &m):
     # Map parameter types
     Vector[int] param_types = []
     int pi = 0
@@ -1897,7 +2005,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry 
         int ii = 0
         while ii < gir_blk.insts.len():
             Instruction gir_inst = gir_blk.insts.get(ii).unwrap()
-            lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr)
+            lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
             ii += 1
 
         # Lower terminator
@@ -2087,7 +2195,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     int fli = 0
     while fli < gmod.functions.len():
         GirFunction gfn = gmod.functions.get(fli).unwrap()
-        LirFunction lf = lir_lower_function(gfn, &gmod, &sr, &func_index)
+        LirFunction lf = lir_lower_function(gfn, &gmod, &sr, &func_index, &m)
         lir_mod_add_function(&m, lf)
         fli += 1
 
