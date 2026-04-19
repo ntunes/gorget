@@ -1066,15 +1066,10 @@ pub(super) fn is_std_header_fn(name: &str) -> bool {
             | "usleep"
     )
 }
-/// Choose the right qsort comparator based on element C type.
-pub(super) fn compare_fn_for_elem(elem_c: &str) -> &'static str {
-    match elem_c {
-        "double" | "float" => "gorget_float_compare",
-        "Str" => "gorget_str_compare",
-        "int64_t" => "gorget_int_compare",
-        _ => "gorget_generic_compare",
-    }
-}
+// `compare_fn_for_elem` was removed — element-type qsort dispatch now
+// happens at LIR emission time via `map_monomorphized_to_runtime`,
+// which routes `Vector__T__sort` to typed stubs like
+// `gorget_array_sort_int` / `_float` / `_str` / `_generic`.
 /// Map a `__gorget_box_alloc_<suffix>` suffix to the correct C type.
 /// Some types (like GorgetString) are represented as LirType::Ptr in LIR
 /// but need their real C struct type for proper sizeof/copy semantics.

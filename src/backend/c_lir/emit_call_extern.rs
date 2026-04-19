@@ -695,43 +695,26 @@ pub(super) fn emit_call_extern(
                 }).unwrap_or_else(|| find_closure_call_fn(module, "void*", sn))
             };
 
-            if let Some((elem_ty, method)) = parse_vector_higher_order(emit_name) {
+            if let Some((_elem_ty, method)) = parse_vector_higher_order(emit_name) {
                 // All closure-taking Vector HOFs (each/any/all/map/filter/fold/
                 // reduce/count/flat_map/find/find_index) are lowered upstream
-                // via `Inst::HofExpand`. Only closure-free or qsort-trampoline
-                // methods remain: sort/sort_by/windows/chunks/unique/sorted(_by)?
-                // and the `*_by_key` variants.
-                if (dst.is_some() || method == "sort" || method == "sort_by" || method == "sort_by_key")
-                    && !matches!(method, "each" | "any" | "all" | "map" | "filter" | "fold" | "reduce" | "count" | "flat_map" | "find" | "find_index")
+                // via `Inst::HofExpand`. Plain `sort`/`sorted`/`unique` route
+                // to typed runtime stubs via `map_monomorphized_to_runtime`.
+                // Only qsort-trampoline closures (`sort_by*`, `sorted_by*`)
+                // and delegated helpers (`windows`, `chunks`) remain inline.
+                if (dst.is_some() || method == "sort_by" || method == "sort_by_key")
+                    && matches!(method,
+                        "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"
+                        | "windows" | "chunks"
+                    )
                 {
                     let d_opt = dst;
-                    let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
-                        .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
-                        .collect();
-                    let elem_c = elem_type_to_c_with_sn(elem_ty, &orig_to_c2);
-                    let closure_arg = if method == "sorted" || method == "sort" || method == "unique" { None } else { emit_args.last().copied() };
-                    let call_fn = resolve_call_fn(closure_arg);
                     let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
                     let arr_arg = v(emit_args[0]);
+                    let closure_arg = emit_args.last().copied();
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
-                    // If closure arg is already a pointer (Ptr type), don't add extra &
                     let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    let _fn_ref = if closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
-                    // Determine which closure params need & prefix (Ptr ABI for resource types)
-                    let needs_ref = closure_params_need_ref(module, &call_fn);
-                    let _er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     match method {
-                        "sorted" => {
-                            let cmp = compare_fn_for_elem(&elem_c);
-                            write!(out, "{dv} = ({{ GorgetArray __result = gorget_array_clone((GorgetArray*){arr_arg}); \
-                                qsort(__result.data, __result.len, __result.elem_size, {cmp}); \
-                                __result; }});").unwrap();
-                        }
-                        "sort" => {
-                            let cmp = compare_fn_for_elem(&elem_c);
-                            write!(out, "{{ GorgetArray* __a = (GorgetArray*){arr_arg}; \
-                                qsort(__a->data, __a->len, __a->elem_size, {cmp}); }}").unwrap();
-                        }
                         "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key" => {
                             // Delegate to the helper emitted by emit_vector_helper.
                             // The helper takes the closure as const void* and stores a
@@ -754,18 +737,7 @@ pub(super) fn emit_call_extern(
                             // fn_arg is the int `n` value already. Delegate to helper.
                             write!(out, "{dv} = {emit_name}({arr_arg}, {fn_arg});").unwrap();
                         }
-                        "unique" => {
-                            let cmp = compare_fn_for_elem(&elem_c);
-                            write!(out, "{dv} = ({{ GorgetArray __result = gorget_array_clone((GorgetArray*){arr_arg}); \
-                                qsort(__result.data, __result.len, __result.elem_size, {cmp}); \
-                                gorget_array_dedup(&__result); \
-                                __result; }});").unwrap();
-                        }
-                        _ => {
-                            // Fall through to existing helper call
-                            write!(out, "{}({arr_arg}, {fn_arg})", emit_name).unwrap();
-                            write!(out, ");").unwrap();
-                        }
+                        _ => unreachable!(),
                     }
                     return;
                 }

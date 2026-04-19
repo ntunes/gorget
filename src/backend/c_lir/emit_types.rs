@@ -6,10 +6,13 @@ use super::*;
 /// Higher-order collection methods that the old C backend generates inline.
 pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
     "filter", "map", "flat_map", "fold", "reduce", "any", "all",
-    "each", "find", "find_index", "sorted", "sort", "sorted_by", "sort_by",
+    "each", "find", "find_index", "sorted_by", "sort_by",
     "sorted_by_key", "sort_by_key",
     "windows", "chunks",
-    "unique", "count",
+    "count",
+    // `sort` / `sorted` / `unique` go through typed runtime stubs
+    // (`gorget_array_sort_{int,float,str,generic}` etc.) dispatched
+    // in `map_monomorphized_to_runtime` — no inline helper needed.
 ];
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
@@ -242,23 +245,6 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
             writeln!(out, "    return __acc;").unwrap();
             writeln!(out, "}}").unwrap();
         }
-        "sorted" => {
-            // sorted() → clone + qsort with type-specific compare
-            let cmp = compare_fn_for_elem(elem_c);
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr) {{").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
-            writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp});").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "sort" => {
-            // sort() → in-place qsort with type-specific compare
-            let cmp = compare_fn_for_elem(elem_c);
-            writeln!(out, "static inline void {full_name}(void* __arr_ptr) {{").unwrap();
-            writeln!(out, "    GorgetArray* __a = (GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    qsort(__a->data, __a->len, __a->elem_size, {cmp});").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
         "sort_by" | "sorted_by" => {
             // Closure-based sort: use thread-local closure pointer + static comparator.
             // The TLS is saved/restored to support nested sort_by calls.
@@ -339,16 +325,6 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
                 writeln!(out, "    return __result;").unwrap();
                 writeln!(out, "}}").unwrap();
             }
-        }
-        "unique" => {
-            // unique() → clone + sort + dedup with type-specific compare
-            let cmp = compare_fn_for_elem(elem_c);
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr) {{").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
-            writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp});").unwrap();
-            writeln!(out, "    gorget_array_dedup(&__result);").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
         }
         "windows" => {
             // windows(n) → Vector[Vector[T]] of sliding slices of size n.
