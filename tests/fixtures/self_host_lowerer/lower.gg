@@ -1461,8 +1461,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # Previously silently dropped — `self.lex_pos += 1` didn't
                     # increment, leaving the lexer loop spinning.
                     lower_field_write(&ctx, *base_box, field_name, value_expr, &gmod)
+                case EIndex(base_box, idx_box):
+                    # v[i] = x — Vector/Dict/Set index assignment. Dispatch
+                    # to the collection's runtime setter based on the base
+                    # type name. The self-host uses this for Dict[K,V] put
+                    # (int_consts[name] = val) and Vector[T] set patterns.
+                    lower_index_assign(&ctx, *base_box, *idx_box, value_expr, &gmod)
                 else:
-                    lower_fail("SAssign target is neither EIdentifier nor EFieldAccess")
+                    lower_fail("SAssign target is neither EIdentifier, EFieldAccess, nor EIndex")
         case SBreak(_):
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
@@ -1654,6 +1660,30 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
             pass
     switch_to(&ctx, merge_bb)
 
+
+# Lower `base[idx] = value` as a collection-typed setter call. Vector
+# routes to gorget_array_set; Dict / HashMap route to gorget_map_put;
+# Set has no meaningful index-assign so falls through to lower_fail.
+void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_expr, SpannedExpr value_expr, GirModule &gmod):
+    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base_tid = ctx.locals.get(base).unwrap().type_id
+    String base_tname = type_id_to_name(base_tid, &gmod)
+    int idx = lower_expr(&ctx, idx_expr, &gmod)
+    int val = lower_expr(&ctx, value_expr, &gmod)
+    String setter = ""
+    if base_tname.starts_with("Vector__") or base_tname.starts_with("Deque__"):
+        setter = "gorget_array_set"
+    elif base_tname.starts_with("Dict__") or base_tname.starts_with("HashMap__"):
+        setter = "gorget_map_put"
+    else:
+        lower_fail("lower_index_assign: unsupported base type " + base_tname)
+        return
+    # gorget_array_set / gorget_map_put take self by pointer (&base),
+    # key/index by value, and value by pointer-or-value depending on
+    # element type. Use OpMove so needs_ptr_arg emits SlotAddr for the
+    # collection pointer.
+    Vector[Operand] set_args = [OpMove(base), OpCopy(idx), OpCopy(val)]
+    emit(&ctx, GICallExtern(-1, setter, set_args))
 
 # Local copy of `is_ptr_type` from lir_lower.gg — needed for the
 # match/field-write paths that determine argument-passing ABI.
