@@ -974,16 +974,24 @@ This phase has **real type-system prerequisites** — see §4.2, §4.3, and §3.
    Drop `to_set()` / `to_dict()` from the surface; they all go through `collect()`.
 
 **Interim — eager terminals shipped as free functions (2026-04-19):**
-`find_iter`, `for_each_iter`, `product_iter`, `min_iter`, `max_iter`
-join the existing `collect_vec`, `count_iter`, `sum_iter`, `fold_iter`,
-`any_iter`, `all_iter` in `std.iter`. These are called as
-`find_iter[T, Iter, F](iter, pred)` — ergonomically equivalent to
-`iter.find(pred)` once per-call-site method mono lands on method
-calls (TODO item under Medium). Terminals have no new state-machine
-structs, so they compose with any `Iterator[T]` without the Phase 2b
-adapter generalization. Lazy transformation adapters
-(`filter_map`, `enumerate`, `zip`, `take_while`, `drop_while`,
-`windows`, `chunks`, `inspect`) still wait on Phase 2b.
+Full set now in `std.iter`:
+
+- Aggregation: `sum_iter`, `product_iter`, `count_iter`, `fold_iter`,
+  `min_iter`, `max_iter` (int), `any_iter`, `all_iter`.
+- Search: `find_iter`, `find_index_iter`.
+- Positional: `last_iter`, `nth_iter`.
+- Side-effect: `for_each_iter`.
+- Collection: `collect_vec`, `join_iter` (Displayable-based).
+
+Called as `find_iter[T, Iter, F](iter, pred)` — ergonomically
+equivalent to `iter.find(pred)` once per-call-site method mono lands
+on method calls (TODO item under Medium). Terminals have no new
+state-machine structs, so they compose with any `Iterator[T]`
+without the Phase 2b adapter generalization. Lazy transformation
+adapters (`filter_map`, `enumerate`, `zip`, `take_while`,
+`drop_while`, `windows`, `chunks`, `inspect`) still wait on Phase
+2b. Comparable-bounded `min`/`max`/`sort_by_key` generalizations
+wait on method-level generic dispatch (Phase 4 remainder).
 
 #### Phase 2d: Advanced adapters
 
