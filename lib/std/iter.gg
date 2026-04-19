@@ -6,7 +6,8 @@
 # `FilterIter[T, F]` — each is a state-machine struct, no trait-object
 # dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
 # `product_iter`, `any_iter`, `all_iter`, `fold_iter`, `find_iter`,
-# `for_each_iter`, `min_iter`, `max_iter`.
+# `find_index_iter`, `for_each_iter`, `min_iter`, `max_iter`,
+# `last_iter`, `nth_iter`, `join_iter`.
 #
 # Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` and
 # `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` construct the
@@ -198,6 +199,38 @@ Option[T] find_iter[T, Iter, F](Iter iter, F pred):
     for x in iter:
         if pred(x):
             return Some(x)
+    return None
+
+# Index of the first element matching `pred`. Returns None if no match.
+# Short-circuiting. Mirror of `find_iter` for the case where you want
+# positional info instead of the value.
+Option[int] find_index_iter[T, Iter, F](Iter iter, F pred):
+    int i = 0
+    for x in iter:
+        if pred(x):
+            return Some(i)
+        i = i + 1
+    return None
+
+# Last element of the iterator. Walks to exhaustion — O(n). For
+# bounded iterators only; infinite iterators never terminate.
+Option[T] last_iter[T, Iter](Iter iter):
+    Option[T] out = None
+    for x in iter:
+        out = Some(x)
+    return !out
+
+# Element at position `n` (0-indexed). Consumes up to n+1 elements.
+# Returns None if the iterator ends before reaching `n`. Negative `n`
+# always returns None.
+Option[T] nth_iter[T, Iter](Iter iter, int n):
+    if n < 0:
+        return None
+    int i = 0
+    for x in iter:
+        if i == n:
+            return Some(x)
+        i = i + 1
     return None
 
 # Run `f` on every element for side effects; no return value. Sibling of

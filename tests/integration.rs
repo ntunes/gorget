@@ -2080,6 +2080,14 @@ fn stdlib_iter_join() {
 }
 
 #[test]
+fn stdlib_iter_more_terminals() {
+    run_gg(
+        "stdlib_iter_more_terminals.gg",
+        "idx_even=0\nidx_big=none\nlast=14\nempty_last=none\nnth2=12\nnth0=10\nnth99=none\nnth_neg=none",
+    );
+}
+
+#[test]
 fn vector_swap_fill() {
     run_gg(
         "vector_swap_fill.gg",

@@ -1,0 +1,83 @@
+# Exercise the second wave of iterator terminals:
+# `find_index_iter`, `last_iter`, `nth_iter`.
+
+from std.iter import find_index_iter, last_iter, nth_iter
+from std.collections import Vector
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool gt_hundred(int x):
+    return x > 100
+
+int main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(11)
+    v.push(12)
+    v.push(13)
+    v.push(14)
+
+    # find_index_iter — first even is at index 0 (10 is even).
+    Option[int] idx0 = find_index_iter[int, VectorIter[int], bool(int)](v.iter(), is_even)
+    match idx0:
+        case Some(i):
+            print(f"idx_even={i}")
+        case None:
+            print("idx_even=none")
+
+    # find_index_iter — no match.
+    Option[int] idx_none = find_index_iter[int, VectorIter[int], bool(int)](v.iter(), gt_hundred)
+    match idx_none:
+        case Some(i):
+            print(f"idx_big={i}")
+        case None:
+            print("idx_big=none")
+
+    # last_iter — tail of the vector.
+    Option[int] tail = last_iter[int, VectorIter[int]](v.iter())
+    match tail:
+        case Some(x):
+            print(f"last={x}")
+        case None:
+            print("last=none")
+
+    # last_iter on empty — None.
+    Vector[int] empty = Vector[int]()
+    Option[int] empty_last = last_iter[int, VectorIter[int]](empty.iter())
+    match empty_last:
+        case Some(x):
+            print(f"empty_last={x}")
+        case None:
+            print("empty_last=none")
+
+    # nth_iter — middle, first, last, out-of-range, negative.
+    Option[int] n2 = nth_iter[int, VectorIter[int]](v.iter(), 2)
+    match n2:
+        case Some(x):
+            print(f"nth2={x}")
+        case None:
+            print("nth2=none")
+
+    Option[int] n0 = nth_iter[int, VectorIter[int]](v.iter(), 0)
+    match n0:
+        case Some(x):
+            print(f"nth0={x}")
+        case None:
+            print("nth0=none")
+
+    Option[int] n_past = nth_iter[int, VectorIter[int]](v.iter(), 99)
+    match n_past:
+        case Some(x):
+            print(f"nth99={x}")
+        case None:
+            print("nth99=none")
+
+    Option[int] n_neg = nth_iter[int, VectorIter[int]](v.iter(), -1)
+    match n_neg:
+        case Some(x):
+            print(f"nth_neg={x}")
+        case None:
+            print("nth_neg=none")
+
+    return 0
