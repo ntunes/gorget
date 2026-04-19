@@ -32,23 +32,29 @@ adding new backends (WASM, LLVM-JIT, freestanding) a fraction of today's effort.
 Measuring "how dumb the backend is" by counting name-based dispatch sites
 (`name == "X"`, `name.starts_with("Y")`, `name.contains("Z")`):
 
-| Backend file | Lines | Name checks |
-|---|---:|---:|
-| `src/backend/llvm/mod.rs` | 6,451 | **228** |
-| `src/backend/c_lir/emit_call_extern.rs` | 1,726 | **84** |
-| `src/backend/c_lir/mod.rs` | 2,545 | **62** |
+| Backend file | Lines (orig) | Lines (now) | Name checks (orig) | Name checks (now) |
+|---|---:|---:|---:|---:|
+| `src/backend/llvm/mod.rs` | 6,451 | 5,606 | 228 | 209 |
+| `src/backend/c_lir/emit_call_extern.rs` | 1,726 | 1,600 | 84 | 84 |
+| `src/backend/c_lir/mod.rs` | 2,545 | 2,703 | 62 | 68 |
+| `src/backend/c_lir/emit_types.rs` | — | 2,958 | — | 46 |
 
 A truly dumb backend has **zero** name-based dispatch — it only looks at
 instruction opcodes and declared LIR types.
 
-The single largest chunk of smart-backend code is **HOF inlining** —
-per-backend generation of filter/map/fold/reduce/each loops:
+The single largest chunk of smart-backend code *was* **HOF inlining** —
+per-backend generation of filter/map/fold/reduce/each loops. After Step 8
+migration, what's left:
 
 | Backend | Vector HOFs | Dict/Set HOFs | Total |
 |---|---:|---:|---:|
-| LLVM | 860 | 563 | 1,423 |
-| C    | ~450 | ~240 | ~690 |
-| **Duplicated logic** | | | **~2,100 lines** |
+| LLVM | ~60 (sort_by family) | ~80 (filter/map) | ~140 |
+| C    | ~40 (sort_by family) | ~120 (filter/map + Set ops) | ~160 |
+| **Remaining duplicated logic** | | | **~300 lines** |
+
+Originally ~2,100 LOC of HOF inliner duplication; now ~300 LOC. The
+rest migrated to `HofExpand` + BIR expansion, or to runtime stubs
+(sort, unique, windows, chunks, set predicates, update).
 
 ## Research Base — How Mature IRs Handle This
 
@@ -580,33 +586,43 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      `filter`, `map`, `flat_map`. The closure signature snapshot
      (`ClosureCallSig`, built once per module in `LoweringContext`)
      powers per-arg ABI selection for both `__Closure_N` and
-     `FuncRef` closures. Backend inline handlers are gone.
+     `FuncRef` closures.
    - Vector routed to runtime stubs (no backend inliner needed):
      `sort`, `sorted`, `unique` → typed
      `gorget_array_<method>_{int,float,str,generic}` stubs
-     dispatched by element type in `map_monomorphized_to_runtime`;
-     `windows` / `chunks` → generic `gorget_array_<method>` stubs
-     that use the source array's `elem_size` field (one stub covers
-     every T).
+     dispatched by element type; `windows` / `chunks` → generic
+     `gorget_array_<method>` stubs using the source array's
+     `elem_size` (one stub covers every T).
    - Vector still in backends (qsort TLS trampoline): `sort_by`,
-     `sorted_by`, `sort_by_key`, `sorted_by_key` — closure-based
-     qsort with thread-local closure storage.
-   - Dict migrated: `each`, `fold`, `any`, `all`. A new BIR
-     scaffold `emit_dict_hof_loop_scaffold` walks the hash table
-     (`for i in 0..cap { if states[i] != 1 continue; … }`) and
-     threads extras through both the state-skip and body paths via
-     a parameterised `advance_bb`. Accumulators on Dict.fold work
-     via check_bb block params, same pattern as Vector.fold.
-   - Dict still in backends: `filter`, `map`, `update`, `get_or`,
-     `get_or_put`. Filter/map need result-dict construction
-     (ctor dispatch by key type — `gorget_dict_new_str` vs
-     `gorget_dict_new`, plus val-drop wiring for resource vals).
-     update/get_or/get_or_put are non-closure ops that could route
-     to runtime stubs similarly to `windows`/`chunks`.
-   - Set: not yet migrated. Set iteration shape mirrors Dict
-     (cap/states walk for `HashSet__`, insertion-order via
-     `order[]` for `Set__`). A separate scaffold (or a
-     parameterised one handling both shapes) is required.
+     `sorted_by`, `sort_by_key`, `sorted_by_key`.
+   - Dict migrated via HofExpand: `each`, `fold`, `any`, `all`.
+     The BIR scaffold `emit_dict_hof_loop_scaffold` walks the hash
+     table and threads extras through both the state-skip and body
+     paths via a parameterised `advance_bb`.
+   - Dict routed to runtime stubs: `update` → `gorget_map_update`
+     (type-independent).
+   - Dict still in backends: `filter`, `map` (result-dict
+     construction — ctor dispatch by key type, val-drop wiring for
+     resource vals), `get_or`, `get_or_put` (per-type clone on
+     String vals).
+   - Set migrated via HofExpand: `each`, `fold`, `any`, `all`.
+     New BIR scaffold `emit_set_hof_loop_scaffold` handles both
+     `Set__` (ordered, `order[]` walk) and `HashSet__` (unordered,
+     cap/states walk); `is_ordered` is encoded via `value_ty`.
+   - Set routed to runtime stubs: `is_subset`, `is_superset`,
+     `is_disjoint` → `gorget_set_is_{subset,superset,disjoint}`
+     (type-independent read-only predicates).
+   - Set still in backends: `filter`, `map`, `union`,
+     `intersection`, `difference`, `symmetric_difference` — all
+     need result-set construction with `gorget_ordered_set_new`
+     vs `gorget_set_new` ctor dispatch and `_str` variants for
+     String keys.
+
+   After this round of cleanup, backend helper generators
+   (`emit_vector_helper` / `emit_dict_helper` / `emit_set_helper`
+   in `src/backend/c_lir/emit_types.rs`) and LLVM HOF inline
+   dispatchers only emit code for the unmigrated variants listed
+   above. The rest is gone.
 
 10. **Step 9** — Add `AddressOf { value, ty }` + BIR expansion. GIR→LIR
     emits this whenever an `AbiKind::Ptr` extern param is fed an SSA-value
