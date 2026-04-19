@@ -2008,19 +2008,26 @@ fn emit_function(
                         let is_str_push_line_direct = name == "gorget_string_push_line";
 
                         // Detect Vector HOF calls that create inline loops (labels).
-                        // `each` / `any` / `all` / `fold` / `reduce` / `count`
-                        // / `find` / `find_index` are (partially) lowered
-                        // upstream via `Inst::HofExpand`. For fold/reduce/
-                        // count/find/find_index the intercept gates on
-                        // scalar-only, so the backend still inlines the
-                        // aggregate cases — this detection keeps reserving a
-                        // `pfx` slot for those uncertain cases by triggering
-                        // the counter for every method name, not just the
-                        // ones that always inline.
+                        // All core HOFs (each/any/all/map/filter/fold/reduce/
+                        // count/flat_map/find/find_index) are lowered upstream
+                        // via `Inst::HofExpand`. The backend only inlines the
+                        // generic opaque-callable fallback (Ptr-typed closure
+                        // args the intercept can't resolve). Mirror the
+                        // emission gate exactly: counter bumps iff the closure
+                        // arg is Ptr-typed.
                         let is_vector_hof = parse_vector_hof(name).is_some();
                         let vector_hof_needs_inline = if is_vector_hof {
                             let (_, method) = parse_vector_hof(name).unwrap();
-                            !matches!(method, "each" | "any" | "all") && dst.is_some()
+                            let closure_arg_peek = if method == "fold" && args.len() >= 3 {
+                                Some(args[2])
+                            } else if args.len() >= 2 {
+                                Some(*args.last().unwrap())
+                            } else {
+                                None
+                            };
+                            closure_arg_peek.is_some_and(|ca| {
+                                matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr))
+                            })
                         } else { false };
 
                         // Detect Dict/Set HOF calls that create inline loops
@@ -3015,15 +3022,23 @@ fn emit_inst(
             // hardcode a single closure — calling with a different closure at a
             // different site would invoke the wrong function.
             if let Some((elem_c, method)) = parse_vector_hof(name) {
-                let has_dst = dst.is_some();
-                // Most Vector HOFs (each/any/all/map/filter/fold/reduce/count/flat_map)
-                // are lowered upstream via `Inst::HofExpand`. Only `find` / `find_index`
-                // still inline here — the HofExpand intercept is scalar-only and
-                // aggregate-element finds still need this path.
-                let needs_inline = match method {
-                    "find" | "find_index" => has_dst,
-                    _ => false,
+                // All Vector HOFs (each/any/all/map/filter/fold/reduce/count/
+                // flat_map/find/find_index) are lowered upstream via
+                // `Inst::HofExpand` (scalar + aggregate via closure_call_sigs).
+                // The generic callable dispatch fallback below handles opaque
+                // callable parameters (Ptr-typed `[fn_ptr, env_ptr]` pairs)
+                // where the HofExpand intercept couldn't resolve the sig.
+                let closure_arg_peek = if method == "fold" && args.len() >= 3 {
+                    Some(args[2])
+                } else if args.len() >= 2 {
+                    Some(*args.last().unwrap())
+                } else {
+                    None
                 };
+                let opaque_callable = closure_arg_peek.is_some_and(|ca| {
+                    matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr))
+                });
+                let needs_inline = opaque_callable;
                 if needs_inline && !args.is_empty() {
                     let uid = *trap_counter;
                     *trap_counter += 1;
@@ -3042,101 +3057,12 @@ fn emit_inst(
                     };
                     let closure_info = closure_arg.and_then(|ca| resolve_closure_call_fn(ca, val_types, module));
 
-                    // Determine the closure call function name and return type
-                    let (call_fn, _ret_ty, params_are_ptr) = match &closure_info {
-                        Some((name, rty, pap)) => (name.clone(), rty.clone(), pap.clone()),
-                        None => {
-                            // Can't resolve closure — fall through to generic handler
-                            // (This shouldn't happen for well-formed HOF calls)
-                            writeln!(out, "  ; WARNING: could not resolve closure for {name}").unwrap();
-                            // Fall through below will handle it
-                            ("".to_string(), LirType::Void, vec![])
-                        }
-                    };
-
-                    if closure_info.is_some() {
-                        let closure_val = closure_arg.unwrap();
-                        // Check if the closure param takes the element by pointer
-                        let elem_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
-                        // aarch64 ABI: aggregates ≤16 bytes pass in registers (by value);
-                        // larger ones pass by pointer. When elem_is_aggregate, only pass ptr
-                        // for large structs — small structs must be loaded and passed by value.
-                        let _elem_pass_by_ptr = elem_by_ptr || (elem_is_aggregate && elem_size > 16);
-
-                        match method {
-                            "find" => {
-                                let d = dst.unwrap();
-                                // find: return Option — alloca, set tag=1 (None), loop and set tag=0+payload on match
-                                let find_pay_off = option_payload_offset(&elem_llvm_ty) as usize;
-                                writeln!(out, "  %v{} = alloca i8, i64 {}", d.0, find_pay_off + elem_size.max(1)).unwrap();
-                                // Init to None (tag=1)
-                                writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", d.0).unwrap();
-                                writeln!(out, "  store i32 1, ptr %{pfx}.tagp").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
-                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
-                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr {
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
-                                } else {
-                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
-                                }
-                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
-                                writeln!(out, "{pfx}.found:").unwrap();
-                                // Set tag=0 (Some) and copy element to payload at the correct offset
-                                writeln!(out, "  store i32 0, ptr %{pfx}.tagp").unwrap();
-                                writeln!(out, "  %{pfx}.payp = getelementptr i8, ptr %v{}, i64 {find_pay_off}", d.0).unwrap();
-                                writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payp, ptr %{pfx}.ep, i64 {elem_size})").unwrap();
-                                writeln!(out, "  br label %{pfx}.done").unwrap();
-                                writeln!(out, "{pfx}.cont:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            "find_index" => {
-                                let d = dst.unwrap();
-                                // find_index: return i64 (-1 if not found)
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.cont]").unwrap();
-                                writeln!(out, "  %{pfx}.lenp = getelementptr %GorgetArray, ptr %v{}, i32 0, i32 2", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.len = load i64, ptr %{pfx}.lenp").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.len").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.datap = load ptr, ptr %v{}", arr_arg.0).unwrap();
-                                writeln!(out, "  %{pfx}.offset = mul i64 %{pfx}.i, {elem_size}").unwrap();
-                                writeln!(out, "  %{pfx}.ep = getelementptr i8, ptr %{pfx}.datap, i64 %{pfx}.offset").unwrap();
-                                if elem_by_ptr {
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, ptr %{pfx}.ep)", closure_val.0).unwrap();
-                                } else {
-                                    writeln!(out, "  %{pfx}.elem = load {elem_llvm_ty}, ptr %{pfx}.ep").unwrap();
-                                    writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {elem_llvm_ty} %{pfx}.elem)", closure_val.0).unwrap();
-                                }
-                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.found, label %{pfx}.cont").unwrap();
-                                writeln!(out, "{pfx}.found:").unwrap();
-                                writeln!(out, "  br label %{pfx}.done").unwrap();
-                                writeln!(out, "{pfx}.cont:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                writeln!(out, "  %v{} = phi i64 [%{pfx}.i, %{pfx}.found], [-1, %{pfx}.check]", d.0).unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            _ => {} // Fall through for unsupported methods
-                        }
-                    }
+                    // With find/find_index migrated to HofExpand, the
+                    // concrete-closure branch is empty — the block is only
+                    // entered for opaque Ptr-typed callables, which take
+                    // the generic fallback below. Keep `closure_info` in
+                    // scope for the fallback's `is_none()` check.
+                    let _ = &closure_info;
 
                     // ── Generic callable dispatch for named-function callables ──
                     // When resolve_closure_call_fn returns None but the closure arg is Ptr,

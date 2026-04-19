@@ -696,12 +696,13 @@ pub(super) fn emit_call_extern(
             };
 
             if let Some((elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                // Most Vector HOFs (each/any/all/map/filter/fold/reduce/count/flat_map)
-                // are lowered upstream via `Inst::HofExpand`. Only find/find_index (for
-                // aggregate elements), sort/sort_by/windows/chunks/unique/sorted still
-                // inline here.
-                if (dst.is_some() || method == "find" || method == "sort" || method == "sort_by" || method == "sort_by_key")
-                    && !matches!(method, "each" | "any" | "all" | "map" | "filter" | "fold" | "reduce" | "count" | "flat_map")
+                // All closure-taking Vector HOFs (each/any/all/map/filter/fold/
+                // reduce/count/flat_map/find/find_index) are lowered upstream
+                // via `Inst::HofExpand`. Only closure-free or qsort-trampoline
+                // methods remain: sort/sort_by/windows/chunks/unique/sorted(_by)?
+                // and the `*_by_key` variants.
+                if (dst.is_some() || method == "sort" || method == "sort_by" || method == "sort_by_key")
+                    && !matches!(method, "each" | "any" | "all" | "map" | "filter" | "fold" | "reduce" | "count" | "flat_map" | "find" | "find_index")
                 {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
@@ -715,10 +716,10 @@ pub(super) fn emit_call_extern(
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
                     // If closure arg is already a pointer (Ptr type), don't add extra &
                     let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    let fn_ref = if closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
+                    let _fn_ref = if closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
                     // Determine which closure params need & prefix (Ptr ABI for resource types)
                     let needs_ref = closure_params_need_ref(module, &call_fn);
-                    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                    let _er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     match method {
                         "sorted" => {
                             let cmp = compare_fn_for_elem(&elem_c);
@@ -759,24 +760,6 @@ pub(super) fn emit_call_extern(
                                 qsort(__result.data, __result.len, __result.elem_size, {cmp}); \
                                 gorget_array_dedup(&__result); \
                                 __result; }});").unwrap();
-                        }
-                        "find" => {
-                            let opt_ty = d_opt.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
-                                .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                {opt_ty} __opt; memset(&__opt, 0, sizeof(__opt)); __opt.tag = 1; \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, {er}__elem)) {{ __opt.tag = 0; __opt.Some_0 = __elem; break; }} \
-                                }} __opt; }});").unwrap();
-                        }
-                        "find_index" => {
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                int64_t __idx = -1; \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, {er}__elem)) {{ __idx = (int64_t)__i; break; }} \
-                                }} __idx; }});").unwrap();
                         }
                         _ => {
                             // Fall through to existing helper call
