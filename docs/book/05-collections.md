@@ -193,6 +193,65 @@ auto b = [4, 5]
 auto c = a + b        # [1, 2, 3, 4, 5]
 ```
 
+### Iteration with Adapters
+
+`for x in v` is the everyday form, but the `std.iter` module provides
+concrete iterator state-machines (`VectorIter[T]`, `TakeIter[T]`,
+`SkipIter[T]`, `ChainIter[T]`) that compose through method chains. Each
+adapter is a struct stored by value — no boxing, no trait-object
+dispatch, and the chain fuses at monomorphization.
+
+```gorget
+from std.iter import VectorIter, TakeIter, SkipIter
+
+auto v = [10, 20, 30, 40, 50]
+
+# `.iter()` yields a VectorIter[T]. `.take(n)` / `.skip(n)` /
+# `.chain(other)` return the corresponding concrete adapter.
+for x in v.iter().take(3):
+    print(x)                # 10 20 30
+
+for x in v.iter().skip(2):
+    print(x)                # 30 40 50
+
+auto w = [100, 200]
+for x in v.iter().chain(w.iter()):
+    print(x)                # 10 20 30 40 50 100 200
+```
+
+Bind the chain to a local when you need to reuse the intermediate or
+name the type explicitly:
+
+```gorget
+TakeIter[int] prefix = v.iter().take(3)
+for x in prefix:
+    print(x)
+```
+
+For one-shot materialization / counting / aggregation there are
+terminals in `std.iter`:
+
+```gorget
+from std.iter import collect_vec, count_iter, sum_iter, fold_iter
+
+Vector[int] first3 = collect_vec[int, TakeIter[int]](v.iter().take(3))
+int total = sum_iter[VectorIter[int]](v.iter())       # 150
+int prod = fold_iter[int, int, VectorIter[int], int(int, int)](
+    v.iter(), 1, (acc, x): acc * x)                   # 120000000
+```
+
+Sets iterate through the same machinery via a `SetIter[T]` wrapper
+constructed by the `set_iter` free function:
+
+```gorget
+from std.iter import set_iter
+
+Set[int] s = Set[int]()
+s.add(1); s.add(2); s.add(3)
+for x in set_iter[int](s).take(2):
+    print(x)
+```
+
 ---
 
 ## Dicts
