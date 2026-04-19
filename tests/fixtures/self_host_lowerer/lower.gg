@@ -24,6 +24,12 @@ struct LowerCtx:
     int current_block
     Dict[String, int] named_locals
     int next_closure_id
+    # Stack of (continue_target, break_target) bb ids for the enclosing
+    # loops. break / continue inside a loop body jump to the innermost
+    # pair. Pushed at loop entry, popped at exit. Parallel Vectors because
+    # Gorget doesn't have easy tuple storage in fields.
+    Vector[int] loop_continue_stack
+    Vector[int] loop_break_stack
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -1379,6 +1385,17 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     lower_field_write(&ctx, *base_box, field_name, value_expr, &gmod)
                 else:
                     pass
+        case SBreak(_):
+            # Jump to the innermost loop's break target. Silently dropped
+            # before, which caused while-loops in the self-host lexer to
+            # never exit on their closing-quote checks.
+            if ctx.loop_break_stack.len() > 0:
+                int tgt = ctx.loop_break_stack.get(ctx.loop_break_stack.len() - 1).unwrap()
+                set_terminator(&ctx, GTJump(tgt))
+        case SContinue:
+            if ctx.loop_continue_stack.len() > 0:
+                int tgt = ctx.loop_continue_stack.get(ctx.loop_continue_stack.len() - 1).unwrap()
+                set_terminator(&ctx, GTJump(tgt))
         case SCompoundAssign(target_expr, op, value_expr):
             # x <op>= y  →  x = x <op> y. Lower per target shape: local
             # identifier goes through GIAssign, field access goes through
@@ -1522,7 +1539,9 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
     switch_to(&ctx, header_bb)
     int cond = lower_expr(&ctx, cond_expr, &gmod)
     set_terminator(&ctx, GTBranch(OpCopy(cond), body_bb, exit_bb))
-    # Body
+    # Body. Push loop targets so SBreak/SContinue know where to jump.
+    ctx.loop_continue_stack.push(header_bb)
+    ctx.loop_break_stack.push(exit_bb)
     switch_to(&ctx, body_bb)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
@@ -1531,6 +1550,9 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirMod
             set_terminator(&ctx, GTJump(header_bb))
         else:
             pass
+    # Pop — targets only apply to this loop's direct body.
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
     switch_to(&ctx, exit_bb)
 
 # ── Function lowering ────────────────────────────────────
@@ -1564,7 +1586,9 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Instruction] init_insts = []
     Vector[Vector[Instruction]] block_insts = [!init_insts]
     Vector[Terminator] block_terms = [GTNone()]
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0)
+    Vector[int] _lc_stk = []
+    Vector[int] _lb_stk = []
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk)
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -1687,7 +1711,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         bool is_main = false
         int ret_type = map_fn_return_type(mdef.return_type, &gmod)
 
-        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0)
+        Vector[int] _lc_stk2 = []
+        Vector[int] _lb_stk2 = []
+        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -3429,7 +3455,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         dci += 1
                     if not is_skipped:
                         String test_fn_name = "__test_" + int_to_str(test_idx)
-                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0)
+                        Vector[int] _lc_stk3 = []
+                        Vector[int] _lb_stk3 = []
+                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
