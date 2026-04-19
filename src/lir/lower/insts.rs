@@ -1863,17 +1863,18 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter) =
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map) =
             match method {
-                "each" => (HofOp::Each, false, false, false, false, false, false, false),
-                "any" => (HofOp::Any, true, false, false, false, false, false, false),
-                "all" => (HofOp::All, true, false, false, false, false, false, false),
-                "fold" => (HofOp::Fold, true, true, false, false, false, false, false),
-                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false),
-                "count" => (HofOp::Count, true, false, false, true, false, false, false),
-                "find" => (HofOp::Find, true, false, false, false, true, false, false),
-                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false),
-                "filter" => (HofOp::Filter, true, false, false, false, false, false, true),
+                "each" => (HofOp::Each, false, false, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false, false, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false),
+                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false),
+                "map" => (HofOp::Map, true, false, false, false, false, false, false, true),
                 _ => return None,
             };
         if lir_args.len() < 2 {
@@ -1907,15 +1908,33 @@ impl<'a> FuncLowering<'a> {
         let elem_c_name = &rest[..sep];
         let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
 
-        // For fold/reduce, the closure return type = dst's declared
-        // type (the accumulator type). Derive it from the destination
-        // local's GIR type to match what the caller expects. For
-        // `any`/`all`/`count`/`find`/`find_index` the closure returns
-        // Bool (predicate). `each` closure returns Void.
+        // For fold/reduce the closure return type = the accumulator
+        // type = dst's declared type. For `map` we look up the
+        // closure's `__Closure_N__call` return type via the
+        // precomputed `closure_call_returns` table — the dst's
+        // declared element type can diverge (cross-typed maps). For
+        // predicate-style HOFs (any/all/count/find/find_index) it's
+        // `Bool`; for `each` it's `Void`.
         let closure_ret_ty = if is_fold || is_reduce {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
+        } else if is_map {
+            // Resolve the closure's `__Closure_N` GIR type, then look
+            // up `__Closure_N__call` in the pre-computed table.
+            let closure_gir_arg = args.get(closure_idx)?;
+            let closure_name = match closure_gir_arg {
+                Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                Operand::Copy(_) | Operand::Move(_) => {
+                    self.operand_gir_type_name(closure_gir_arg)?
+                }
+                _ => return None,
+            };
+            let call_fn_name = format!("{closure_name}__call");
+            match self.closure_call_returns.get(&call_fn_name).cloned() {
+                Some(ty) => ty,
+                None => return None,
+            }
         } else if produces_result {
             LirType::Bool
         } else {
@@ -1952,6 +1971,13 @@ impl<'a> FuncLowering<'a> {
         // aggregate elements the closure's `__call` signature isn't
         // reachable from here — fall through to the backend inliner.
         if is_filter && element_ty.is_aggregate() {
+            return None;
+        }
+        // `map`: gate on scalar element for now (same rationale as
+        // filter). `closure_ret_ty` can still be aggregate — the
+        // `AddressOf(new_elem)` expansion handles struct spilling
+        // via backend `val_types` dispatch.
+        if is_map && element_ty.is_aggregate() {
             return None;
         }
 

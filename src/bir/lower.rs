@@ -239,7 +239,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::Count
                         | HofOp::Find
                         | HofOp::FindIndex
-                        | HofOp::Filter => {
+                        | HofOp::Filter
+                        | HofOp::Map => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -339,6 +340,20 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     closure,
                                     closure_arg_abis,
                                     dst.expect("filter must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::Map => expand_map(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    closure_ret_ty,
+                                    dst.expect("map must carry a dst ValueId"),
                                     remaining,
                                     orig_term,
                                 ),
@@ -1507,6 +1522,132 @@ fn expand_filter(
     func.block_mut(cont_bb).terminator = Term::Jump(ctx.check_bb, vec![ctx.next_i]);
 
     // done_bb: SlotLoad the result array into dst + remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+        dst,
+        slot: result_slot,
+        ty: garray_ty,
+    });
+    func.block_mut(ctx.done_bb).insts.extend(remaining);
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: Map, dst, … }` — build a fresh
+/// `GorgetArray` of the closure's return values.
+///
+/// Like `filter`, the result slot is allocated at the function level
+/// and loaded into `dst` at `done_bb`. Unlike `filter`, every iteration
+/// produces a value (`new_elem`) that must be pushed — the SSA result
+/// is spilled to a fresh slot via `Inst::AddressOf` so
+/// `gorget_array_push` can take its address. AddressOf expansion
+/// is idempotent across loop iterations: it allocates one slot at
+/// BIR-lowering time and the slot is reused on every push.
+///
+/// For this pathfinder the closure return is gated to scalar types in
+/// the LIR emitter; the BIR expansion itself works for any type as
+/// long as the generated `Store` in AddressOf's expansion does the
+/// right thing (aggregates require memcpy, which the backend Store
+/// dispatch handles via `val_types`).
+#[allow(clippy::too_many_arguments)]
+fn expand_map(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let garray_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
+    let garray_ty = LirType::Struct(garray_sid);
+    let cur = BlockId(current_bb as u32);
+
+    // current_bb: allocate result slot + init via gorget_array_new,
+    // sized by the closure's return type (not the source element type).
+    let result_slot = func.add_slot(garray_ty.clone(), None);
+    let ret_sz = c_sizeof_lir_type(&closure_ret_ty, structs) as i64;
+    let ret_sz_val = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::IConst {
+        dst: ret_sz_val,
+        ty: LirType::I64,
+        value: ret_sz,
+    });
+    let arr_val = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::CallExtern {
+        dst: Some(arr_val),
+        name: "gorget_array_new".to_string(),
+        args: vec![ret_sz_val],
+        original_name: None,
+        arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
+    });
+    func.block_mut(cur).insts.push(Inst::SlotStore {
+        slot: result_slot,
+        value: arr_val,
+        is_move: true,
+    });
+
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![],
+        None,
+    );
+
+    // body_bb: call closure → new_elem; AddressOf new_elem; push.
+    let new_elem = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(new_elem),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    let new_elem_ptr = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        dst: new_elem_ptr,
+        value: new_elem,
+        ty: closure_ret_ty,
+    });
+    let result_addr = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::SlotAddr {
+        dst: result_addr,
+        slot: result_slot,
+    });
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallExtern {
+        dst: None,
+        name: "gorget_array_push".to_string(),
+        args: vec![result_addr, new_elem_ptr],
+        original_name: None,
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+
+    // check_bb: cond ? body_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    // body_bb: jump back to check with next_i.
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+
+    // done_bb: SlotLoad result into dst + remaining + orig_term.
     func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
         dst,
         slot: result_slot,
