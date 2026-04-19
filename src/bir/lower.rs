@@ -240,7 +240,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::Find
                         | HofOp::FindIndex
                         | HofOp::Filter
-                        | HofOp::Map => {
+                        | HofOp::Map
+                        | HofOp::FlatMap => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -354,6 +355,20 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     closure_arg_abis,
                                     closure_ret_ty,
                                     dst.expect("map must carry a dst ValueId"),
+                                    remaining,
+                                    orig_term,
+                                ),
+                                HofOp::FlatMap => expand_flat_map(
+                                    func,
+                                    bb_idx,
+                                    &mut next,
+                                    structs,
+                                    coll,
+                                    element_ty,
+                                    closure,
+                                    closure_arg_abis,
+                                    closure_ret_ty,
+                                    dst.expect("flat_map must carry a dst ValueId"),
                                     remaining,
                                     orig_term,
                                 ),
@@ -1628,6 +1643,129 @@ fn expand_map(
         dst: None,
         name: "gorget_array_push".to_string(),
         args: vec![result_addr, new_elem_ptr],
+        original_name: None,
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+
+    // check_bb: cond ? body_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cond,
+        then_block: ctx.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    // body_bb: jump back to check with next_i.
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+
+    // done_bb: SlotLoad result into dst + remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+        dst,
+        slot: result_slot,
+        ty: garray_ty,
+    });
+    func.block_mut(ctx.done_bb).insts.extend(remaining);
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: FlatMap, dst, … }` — build a
+/// `GorgetArray` by concatenating the Vector returned by the closure
+/// for each source element.
+///
+/// Per iteration:
+///     sub = closure(elem)               // Vector<T> (GorgetArray)
+///     gorget_array_extend(result, &sub)
+///
+/// `gorget_array_extend(dst, src)` appends all elements of `src` into
+/// `dst` (memcpy + len bump) and leaves `src` logically consumed —
+/// matching what the backend inliners do today.
+#[allow(clippy::too_many_arguments)]
+fn expand_flat_map(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    element_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let garray_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
+    let garray_ty = LirType::Struct(garray_sid);
+    let cur = BlockId(current_bb as u32);
+
+    // current_bb: allocate result slot + init via gorget_array_new.
+    // Result elem_size = source elem_size (flat_map preserves element
+    // type; the closure returns a Vector of the SAME element type).
+    let result_slot = func.add_slot(garray_ty.clone(), None);
+    let elem_size_val = alloc_value(next);
+    let elem_size = c_sizeof_lir_type(&element_ty, structs) as i64;
+    func.block_mut(cur).insts.push(Inst::IConst {
+        dst: elem_size_val,
+        ty: LirType::I64,
+        value: elem_size,
+    });
+    let arr_val = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::CallExtern {
+        dst: Some(arr_val),
+        name: "gorget_array_new".to_string(),
+        args: vec![elem_size_val],
+        original_name: None,
+        arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
+    });
+    func.block_mut(cur).insts.push(Inst::SlotStore {
+        slot: result_slot,
+        value: arr_val,
+        is_move: true,
+    });
+
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &element_ty,
+        elem_abi_hint,
+        vec![],
+        None,
+    );
+
+    // body_bb: sub = closure(elem); AddressOf(sub) → sub_ptr;
+    //          gorget_array_extend(result_addr, sub_ptr).
+    let sub_vec = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(sub_vec),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    let sub_ptr = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+        dst: sub_ptr,
+        value: sub_vec,
+        ty: closure_ret_ty,
+    });
+    let result_addr = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::SlotAddr {
+        dst: result_addr,
+        slot: result_slot,
+    });
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallExtern {
+        dst: None,
+        name: "gorget_array_extend".to_string(),
+        args: vec![result_addr, sub_ptr],
         original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,

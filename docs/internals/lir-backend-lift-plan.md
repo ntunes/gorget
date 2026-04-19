@@ -577,13 +577,13 @@ Each step is a single commit, each removes code, each demonstrates payoff:
    **Migration status:**
    - Vector: `each` ✓ (pathfinder), `any` ✓, `all` ✓, `fold` ✓,
      `reduce` ✓, `count` ✓, `find` ✓, `find_index` ✓, `filter` ✓,
-     `map` ✓ (fold, reduce, count, find, find_index, filter, map
-     are scalar-element only; aggregate forms still fall through
-     to backend handlers pending a fuller closure-signature lookup
-     at emit time — return type is already wired, parameter ABI is
-     not). `flat_map`, `sorted`, `sort_by`, `sorted_by`,
-     `sort_by_key`, `sorted_by_key`, `windows`, `chunks`, `unique`
-     — still inline in backends.
+     `map` ✓, `flat_map` ✓ (fold, reduce, count, find, find_index,
+     filter, map, flat_map are scalar-element only; aggregate forms
+     still fall through to backend handlers pending a fuller
+     closure-signature lookup at emit time — return type is
+     already wired, parameter ABI is not). `sorted`, `sort_by`,
+     `sorted_by`, `sort_by_key`, `sorted_by_key`, `windows`,
+     `chunks`, `unique` — still inline in backends.
    - Dict: all variants still inline in backends.
    - Set: all variants still inline in backends.
 

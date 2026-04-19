@@ -1863,18 +1863,19 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map) =
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map, is_flat_map) =
             match method {
-                "each" => (HofOp::Each, false, false, false, false, false, false, false, false),
-                "any" => (HofOp::Any, true, false, false, false, false, false, false, false),
-                "all" => (HofOp::All, true, false, false, false, false, false, false, false),
-                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false),
-                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false),
-                "count" => (HofOp::Count, true, false, false, true, false, false, false, false),
-                "find" => (HofOp::Find, true, false, false, false, true, false, false, false),
-                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false),
-                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false),
-                "map" => (HofOp::Map, true, false, false, false, false, false, false, true),
+                "each" => (HofOp::Each, false, false, false, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false, false, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false, false, false, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false, false),
+                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false, false),
+                "map" => (HofOp::Map, true, false, false, false, false, false, false, true, false),
+                "flat_map" => (HofOp::FlatMap, true, false, false, false, false, false, false, false, true),
                 _ => return None,
             };
         if lir_args.len() < 2 {
@@ -1919,9 +1920,11 @@ impl<'a> FuncLowering<'a> {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
-        } else if is_map {
+        } else if is_map || is_flat_map {
             // Resolve the closure's `__Closure_N` GIR type, then look
-            // up `__Closure_N__call` in the pre-computed table.
+            // up `__Closure_N__call` in the pre-computed table. `map`
+            // uses it for the result elem size; `flat_map` uses it for
+            // the AddressOf ty on the sub-vector.
             let closure_gir_arg = args.get(closure_idx)?;
             let closure_name = match closure_gir_arg {
                 Operand::Constant(Constant::FuncRef(n)) => n.clone(),
@@ -1940,7 +1943,7 @@ impl<'a> FuncLowering<'a> {
         } else {
             LirType::Void
         };
-        let _ = (is_count, is_find_index, is_filter);
+        let _ = (is_count, is_find_index, is_filter, is_flat_map);
 
         // Gate out aggregate accumulators AND aggregate elements for
         // fold/reduce/count. The closure's `__call` signature decides
@@ -1978,6 +1981,12 @@ impl<'a> FuncLowering<'a> {
         // `AddressOf(new_elem)` expansion handles struct spilling
         // via backend `val_types` dispatch.
         if is_map && element_ty.is_aggregate() {
+            return None;
+        }
+        // `flat_map`: same aggregate-element gate as filter/map. The
+        // sub-vector returned by the closure is always a GorgetArray
+        // (aggregate), which `AddressOf` handles correctly.
+        if is_flat_map && element_ty.is_aggregate() {
             return None;
         }
 
