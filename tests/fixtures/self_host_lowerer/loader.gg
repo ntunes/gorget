@@ -238,6 +238,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         if real_methods.len() > 0:
                             EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field)
                             m.items.push(IEquip(filtered))
+                    case IConstDecl(_, _, _):
+                        # Merge module-level `const int X = 5` so the main
+                        # lowerer's pre-scan sees them and EIdentifier(X)
+                        # in callers resolves to the folded value instead
+                        # of OpConstI64(0). Without this, parser.gg's
+                        # TOK_* / KW_* constants stay invisible and the
+                        # compiled parser deadlocks in skip_trivia.
+                        m.items.push(imp_item)
                     case IExternBlock(ext_fns):
                         # Extract aliases from extern stubs: body is one of
                         # SExpr(EStringLiteral) or SReturn(Some(EStringLiteral))
