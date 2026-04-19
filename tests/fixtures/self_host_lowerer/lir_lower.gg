@@ -15,6 +15,7 @@ from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop,
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
+from lir import EK_NOT_ENUM
 from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
@@ -1451,6 +1452,75 @@ bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] 
     f.blocks.set(bb, blk)
     return true
 
+# Runtime-provided struct names whose layout the compiler treats as
+# opaque. User struct construction for these goes through the runtime
+# (`gorget_string_new`, `gorget_array_new`, etc.) — they are NOT lowered
+# via IStructInit and must not match the user-struct-ctor intercept.
+bool is_runtime_struct_name(String name):
+    if name == "GorgetString" or name == "Str" or name == "String":
+        return true
+    if name == "GorgetArray" or name == "GorgetMap" or name == "GorgetSet":
+        return true
+    if name == "GorgetClosure" or name == "TraitObj":
+        return true
+    return false
+
+# Attempt to lower a user struct constructor (e.g. `SpannedToken(tok, s, e)`)
+# as a canonical IStructInit filling the dst slot in place. Returns true on
+# success; false means the caller should fall through to the old emission
+# path (inline `(T){...}` struct literal) which miscompiles by-pointer
+# struct-typed args as pointer-to-struct assignments.
+bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand] args, LirFunction &f, int bb, Vector[int] &local_to_slot, StructRegistry &sr, LirModule &m):
+    if dst_local < 0:
+        return false
+    # Skip names that other intercepts already own.
+    if func_name == "Box" or func_name == "Some" or func_name == "None":
+        return false
+    if func_name == "Ok" or func_name == "Error":
+        return false
+    # Runtime-provided opaque types construct via the runtime, not IStructInit.
+    if is_runtime_struct_name(func_name):
+        return false
+    # Look up the struct in the registry. Absent → not a struct ctor.
+    int sid = sr_lookup(&sr, func_name)
+    if sid < 0 or sid >= m.structs.len():
+        return false
+    LirStructDef sdef = m.structs.get(sid).unwrap()
+    # Enums + enum variants have different init semantics; skip them.
+    if sdef.enum_kind != EK_NOT_ENUM:
+        return false
+    if m.enum_variant_parent.contains(func_name):
+        return false
+    # Require positional ctor — arg count must match field count exactly.
+    # A mismatch usually means this is a method call that happens to share
+    # a name with a struct, or a coercion like `String(x)`.
+    if args.len() != sdef.fields.len():
+        return false
+    # The dst slot must be typed as the target struct. If the self-host
+    # lost the type along the way, the old path handles placeholder cases
+    # more forgivingly — defer to it.
+    int dst_slot = local_to_slot.get(dst_local).unwrap()
+    int slot_ty = f.slots.get(dst_slot).unwrap().ty
+    if slot_ty != LT_STRUCT_BASE + sid:
+        return false
+    # Lower each arg into a FieldInit entry keyed on the field index.
+    Vector[FieldInit] fields = []
+    int ai = 0
+    while ai < args.len():
+        Operand a = args.get(ai).unwrap()
+        int aval = lower_operand(a, &f, bb, &local_to_slot)
+        fields.push(FieldInit(ai, aval))
+        ai += 1
+    # Emit SlotAddr + IStructInit. emit_field_store (invoked by the codegen
+    # expansion) does per-field memcpy for struct-typed fields — the
+    # specific fix for the stage-1 SpannedToken(!tok, …) miscast.
+    int target = lir_fn_next_value(&f)
+    LirBlock blk = f.blocks.get(bb).unwrap()
+    blk.insts.push(ISlotAddr(target, dst_slot))
+    blk.insts.push(IStructInit(target, sid, fields))
+    f.blocks.set(bb, blk)
+    return true
+
 # ── Operand lowering ────────────────────────────────────────
 
 # Returns the LIR type an operand would produce when lowered. Used by
@@ -1633,6 +1703,12 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             # the dst slot in place via IEnumInit. Struct id comes from the
             # slot's type — no codegen-side name inference needed.
             if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
+                return
+            # Canonical user struct constructors — emits IStructInit with
+            # per-field memcpy for struct-typed fields, fixing the stage-1
+            # SEGV where inline struct literals cast a by-pointer arg into
+            # a struct-typed field.
+            if try_lower_user_struct_ctor(func_name, dst_local, args, &f, bb, &local_to_slot, &sr, &m):
                 return
             # Canonical Box(x): emit IBoxAlloc with explicit inner_ty (unwrapped
             # from the operand's pointer-to-struct type if needed) so downstream

@@ -1815,13 +1815,31 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
     int vty = LT_VOID
     if val_types.contains(value):
         vty = val_types.get(value).unwrap()
-    if lir_is_aggregate(vty):
-        return "memcpy(&" + lval + ", &" + v(value) + ", sizeof(" + v(value) + "));"
     int field_ty = LT_I64
     if struct_id >= 0 and struct_id < m.structs.len():
         LirStructDef sdef = m.structs.get(struct_id).unwrap()
         if field < sdef.fields.len():
             field_ty = sdef.fields.get(field).unwrap().ty
+    # Struct-typed field with an aggregate value → memcpy from &__vN.
+    if lir_is_aggregate(field_ty) and lir_is_aggregate(vty):
+        String ft_name = c_type_name(field_ty, &sn)
+        return "memcpy(&" + lval + ", &" + v(value) + ", sizeof(" + ft_name + "));"
+    # Struct-typed field with a pointer value → memcpy from the pointee.
+    # This is the `SpannedToken(!tok, …)` case: tok is passed by pointer
+    # at the C ABI but the struct's .lex_token field IS the Token struct.
+    if lir_is_aggregate(field_ty) and (vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE)):
+        String ft_name = c_type_name(field_ty, &sn)
+        return "memcpy(&" + lval + ", " + v(value) + ", sizeof(" + ft_name + "));"
+    # Struct-typed field with unknown value type — treat value as pointer
+    # since by-pointer is the ABI convention for aggregate args; falls
+    # back to memcpy-from-pointee. Matches rust's output.
+    if lir_is_aggregate(field_ty):
+        String ft_name = c_type_name(field_ty, &sn)
+        return "memcpy(&" + lval + ", " + v(value) + ", sizeof(" + ft_name + "));"
+    # Aggregate value but scalar/ptr field (rare — usually means the
+    # self-host lost type info). Write zeros to keep cc happy.
+    if lir_is_aggregate(vty):
+        return "memcpy(&" + lval + ", &" + v(value) + ", sizeof(" + v(value) + "));"
     if lir_is_scalar(field_ty):
         String ft_name = c_type_name(field_ty, &sn)
         return lval + " = (" + ft_name + ")" + v(value) + ";"
