@@ -98,12 +98,24 @@ pub(super) struct FuncLowering<'a> {
     pub(super) extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Extern return ABI kinds (fn_name → AbiKind).
     pub(super) return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-    /// Pre-computed `__Closure_N__call` return types (LirType), indexed
-    /// by the full call-function name (e.g. "__Closure_2__call"). Used
-    /// by the HOF map intercept to resolve the closure's true return
-    /// type since the dst's declared element type can diverge.
-    pub(super) closure_call_returns:
-        &'a std::collections::HashMap<String, LirType>,
+    /// Pre-computed `__Closure_N__call` signatures, indexed by the
+    /// full call-function name (e.g. "__Closure_2__call"). The HOF
+    /// intercept uses `ret_ty` to resolve the closure's real return
+    /// type (which can diverge from the dst's declared element type
+    /// for cross-typed maps) and `param_tys` to pick per-arg ABI
+    /// tags that match the closure's actual signature.
+    pub(super) closure_call_sigs:
+        &'a std::collections::HashMap<String, ClosureCallSig>,
+}
+
+/// Signature snapshot for a closure's `__call` function, used to
+/// resolve the closure's return type and per-arg ABI at HOF
+/// emission time.
+#[derive(Debug, Clone)]
+pub(super) struct ClosureCallSig {
+    pub(super) ret_ty: LirType,
+    /// User params only (the `env` parameter at index 0 is skipped).
+    pub(super) param_tys: Vec<LirType>,
 }
 
 impl<'a> LoweringContext<'a> {
@@ -188,12 +200,16 @@ impl<'a> LoweringContext<'a> {
         // so FuncLowering can access drop_collision_types for inline drops.
         self.populate_recursive_drop_structs();
 
-        // Pre-compute `__Closure_N__call` return types from GIR for the
-        // HOF-map intercept — it needs the closure's real return type
-        // (not the dst's declared element type, which can diverge for
-        // cross-typed maps like `nums.map(int → String)`). One-pass
-        // scan; the map is passed by reference to every FuncLowering.
-        let closure_call_returns: std::collections::HashMap<String, LirType> = self
+        // Pre-compute `__Closure_N__call` signatures from GIR so the
+        // HOF intercept in FuncLowering can resolve each closure's
+        // actual return type and parameter layout. The return type
+        // matters for cross-typed maps (`nums.map(int → String)`)
+        // since the dst's declared element type can diverge. The
+        // parameter layout matters for aggregate-element HOFs
+        // (fold/filter/map/…) — the closure's `__call` signature
+        // decides per-arg whether it wants the struct by value or by
+        // pointer, and BIR's per-arg Load/pointer choice must match.
+        let closure_call_sigs: std::collections::HashMap<String, ClosureCallSig> = self
             .gir
             .functions
             .iter()
@@ -204,7 +220,20 @@ impl<'a> LoweringContext<'a> {
                     &self.gir.type_registry,
                     Some(&self.struct_reg),
                 );
-                (f.name.clone(), ret_ty)
+                // Skip the env param (index 0); keep only user params.
+                let param_tys: Vec<LirType> = f
+                    .params
+                    .iter()
+                    .skip(1)
+                    .map(|t| {
+                        map_gir_type_with_structs(
+                            t,
+                            &self.gir.type_registry,
+                            Some(&self.struct_reg),
+                        )
+                    })
+                    .collect();
+                (f.name.clone(), ClosureCallSig { ret_ty, param_tys })
             })
             .collect();
 
@@ -231,7 +260,7 @@ impl<'a> LoweringContext<'a> {
                     &self.module.type_drop_fns,
                     &self.gir.fn_extern_abi_kinds,
                     &self.gir.fn_return_abis,
-                    &closure_call_returns,
+                    &closure_call_sigs,
                 );
                 fl.lower();
                 all_pending_externs.extend(fl.pending_externs.drain(..));
@@ -1032,7 +1061,7 @@ impl<'a> FuncLowering<'a> {
         type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,
         extern_abi_kinds: &'a rustc_hash::FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
         return_abi_kinds: &'a rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
-        closure_call_returns: &'a std::collections::HashMap<String, LirType>,
+        closure_call_sigs: &'a std::collections::HashMap<String, ClosureCallSig>,
     ) -> Self {
         let params: Vec<LirType> = gir_func
             .params
@@ -1089,7 +1118,7 @@ impl<'a> FuncLowering<'a> {
             type_drop_fns,
             extern_abi_kinds,
             return_abi_kinds,
-            closure_call_returns,
+            closure_call_sigs,
         }
     }
 

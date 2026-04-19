@@ -1909,33 +1909,39 @@ impl<'a> FuncLowering<'a> {
         let elem_c_name = &rest[..sep];
         let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
 
+        // Resolve the closure's `__Closure_N` GIR type name (or
+        // FuncRef target) so we can look up the `__Closure_N__call`
+        // signature in the pre-computed table. The snapshot gives us
+        // both the return type (needed for cross-typed map/flat_map)
+        // and the parameter LIR types (needed to pick per-arg ABI
+        // tags that match the closure's signature — pass-by-value
+        // vs. pass-by-pointer for aggregates).
+        let closure_call_sig = args.get(closure_idx).and_then(|op| {
+            let name = match op {
+                Operand::Constant(Constant::FuncRef(n)) => Some(n.clone()),
+                Operand::Copy(_) | Operand::Move(_) => {
+                    self.operand_gir_type_name(op)
+                }
+                _ => None,
+            }?;
+            let call_fn = format!("{name}__call");
+            self.closure_call_sigs.get(&call_fn).cloned()
+        });
+
         // For fold/reduce the closure return type = the accumulator
-        // type = dst's declared type. For `map` we look up the
-        // closure's `__Closure_N__call` return type via the
-        // precomputed `closure_call_returns` table — the dst's
-        // declared element type can diverge (cross-typed maps). For
-        // predicate-style HOFs (any/all/count/find/find_index) it's
-        // `Bool`; for `each` it's `Void`.
+        // type = dst's declared type. For `map` / `flat_map` use the
+        // closure's actual return type (from the signature snapshot)
+        // — the dst's declared element type can diverge for
+        // cross-typed maps. For predicate-style HOFs
+        // (any/all/count/find/find_index) it's `Bool`; for `each`
+        // it's `Void`.
         let closure_ret_ty = if is_fold || is_reduce {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
         } else if is_map || is_flat_map {
-            // Resolve the closure's `__Closure_N` GIR type, then look
-            // up `__Closure_N__call` in the pre-computed table. `map`
-            // uses it for the result elem size; `flat_map` uses it for
-            // the AddressOf ty on the sub-vector.
-            let closure_gir_arg = args.get(closure_idx)?;
-            let closure_name = match closure_gir_arg {
-                Operand::Constant(Constant::FuncRef(n)) => n.clone(),
-                Operand::Copy(_) | Operand::Move(_) => {
-                    self.operand_gir_type_name(closure_gir_arg)?
-                }
-                _ => return None,
-            };
-            let call_fn_name = format!("{closure_name}__call");
-            match self.closure_call_returns.get(&call_fn_name).cloned() {
-                Some(ty) => ty,
+            match &closure_call_sig {
+                Some(sig) => sig.ret_ty.clone(),
                 None => return None,
             }
         } else if produces_result {
@@ -1943,50 +1949,42 @@ impl<'a> FuncLowering<'a> {
         } else {
             LirType::Void
         };
+        let param_tys: Vec<LirType> = closure_call_sig
+            .as_ref()
+            .map(|sig| sig.param_tys.clone())
+            .unwrap_or_default();
+        let sig_known = closure_call_sig.is_some();
         let _ = (is_count, is_find_index, is_filter, is_flat_map);
 
-        // Gate out aggregate accumulators AND aggregate elements for
-        // fold/reduce/count. The closure's `__call` signature decides
-        // per-arg whether it wants the struct by value or by pointer,
-        // and mirroring that choice faithfully requires looking up the
-        // closure's function signature at emit time (not yet wired
-        // through `FuncLowering`). Scalar-only covers the overwhelming
-        // majority of these call sites; the rest still inline in the
-        // backend handlers.
+        // Aggregate-element HOFs require knowing the closure's
+        // parameter ABI (pass-by-value vs pass-by-pointer), which we
+        // now have via `closure_call_sigs`. If the closure signature
+        // isn't in the table (e.g. FuncRef constants to a function
+        // whose signature we haven't snapshotted), fall through to
+        // the backend inliner so the heuristic ABI doesn't guess
+        // wrong on aggregates.
+        //
+        // `find` / `find_index` also need EnumInit-style scalar
+        // `Store` for the payload path (scalar element only).
         if (is_fold || is_reduce)
             && (closure_ret_ty.is_aggregate() || element_ty.is_aggregate())
+            && !sig_known
         {
             return None;
         }
-        if is_count && element_ty.is_aggregate() {
+        if is_count && element_ty.is_aggregate() && !sig_known {
             return None;
         }
-        // `find` / `find_index` use EnumInit-style scalar `Store` for
-        // the payload path; aggregate elements still go through the
-        // backend inliner until AddressOf + Memcpy for the payload is
-        // added here.
         if (is_find || is_find_index) && element_ty.is_aggregate() {
             return None;
         }
-        // `filter` passes `elem_ptr` to `gorget_array_push` directly
-        // (works for both scalar and aggregate elements), but the
-        // per-element closure call still needs a faithful ABI. For
-        // aggregate elements the closure's `__call` signature isn't
-        // reachable from here — fall through to the backend inliner.
-        if is_filter && element_ty.is_aggregate() {
+        if is_filter && element_ty.is_aggregate() && !sig_known {
             return None;
         }
-        // `map`: gate on scalar element for now (same rationale as
-        // filter). `closure_ret_ty` can still be aggregate — the
-        // `AddressOf(new_elem)` expansion handles struct spilling
-        // via backend `val_types` dispatch.
-        if is_map && element_ty.is_aggregate() {
+        if is_map && element_ty.is_aggregate() && !sig_known {
             return None;
         }
-        // `flat_map`: same aggregate-element gate as filter/map. The
-        // sub-vector returned by the closure is always a GorgetArray
-        // (aggregate), which `AddressOf` handles correctly.
-        if is_flat_map && element_ty.is_aggregate() {
+        if is_flat_map && element_ty.is_aggregate() && !sig_known {
             return None;
         }
 
@@ -1995,21 +1993,42 @@ impl<'a> FuncLowering<'a> {
         let mut lir_args_wrapped = lir_args.to_vec();
         self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
-        let elem_abi = if element_ty.is_aggregate() {
+        // Derive per-arg ABI from the closure's `__call` parameter
+        // types when available (from `closure_call_sig` above).
+        // Falls back to a type-shape heuristic (aggregate → Ptr,
+        // scalar → Scalar) when the closure signature isn't in the
+        // table.
+        let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
+            use crate::ir::abi::AbiKind;
+            match ty {
+                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Struct(_) => AbiKind::ByValue,
+                _ => AbiKind::Scalar,
+            }
+        };
+        let fallback_elem_abi = if element_ty.is_aggregate() {
             crate::ir::abi::AbiKind::Ptr
         } else {
             crate::ir::abi::AbiKind::Scalar
         };
+        let elem_abi = param_tys
+            .last()
+            .map(|ty| abi_from_param_ty(ty))
+            .unwrap_or(fallback_elem_abi);
 
         // closure_arg_abis layout depends on the HOF:
         //   each/any/all:  [elem_abi]
         //   fold / reduce: [acc_abi, elem_abi]
         let closure_arg_abis = if is_fold || is_reduce {
-            let acc_abi = if closure_ret_ty.is_aggregate() {
+            let fallback_acc_abi = if closure_ret_ty.is_aggregate() {
                 crate::ir::abi::AbiKind::Ptr
             } else {
                 crate::ir::abi::AbiKind::Scalar
             };
+            let acc_abi = param_tys
+                .first()
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or(fallback_acc_abi);
             vec![acc_abi, elem_abi]
         } else {
             vec![elem_abi]
