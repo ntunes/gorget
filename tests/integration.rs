@@ -11217,6 +11217,113 @@ fn self_host_bootstrap() {
     let _ = std::fs::remove_file(&stage1_bin);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Self-host Bootstrap — Fixed Point
+// ═══════════════════════════════════════════════════════════════
+//
+// The real "bootstrap is usable" proof: stage-1 (compiled from the
+// self-host output of stage-0) re-compiles the same driver.gg and
+// produces byte-identical C. If stage2 == stage1, every phase of
+// the self-host pipeline (parser → resolver → typechecker → GIR
+// lower → LIR lower → SSA → codegen) is a fixed point: whatever
+// the self-host understands about Gorget matches what it emits.
+//
+// Currently ignored because stage-1 hangs silently at runtime when
+// invoked with `--lir-c` — reproducible with `hello.gg`, so the bug
+// is in the prelude, not a fixture-specific issue. Separate task
+// from Phase 1-4 which only guarantee "stage-1 links." Tracked in
+// TODO.md. Unignore once stage-1 runs on hello.gg end to end.
+#[test]
+#[ignore]
+#[serial(self_host_lowerer_driver)]
+fn self_host_bootstrap_fixed_point() {
+    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let driver_gg = manifest_dir
+        .join("tests/fixtures/self_host_lowerer/driver.gg");
+
+    // Stage 0 → stage 1 body C.
+    let body_out = run_with_deadline(
+        Command::new(&driver_exe)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_bootstrap_fixed_point stage0 → stage1.c",
+        Duration::from_secs(120),
+    );
+    assert!(body_out.status.success(), "stage-0 driver failed");
+    let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
+
+    // Extract Rust preamble + concatenate → stage1.c.
+    let rust_c = std::fs::read_to_string(&driver_c)
+        .expect("failed to read driver.c");
+    let preamble_end = rust_c
+        .find("\ntypedef struct __gg_")
+        .expect("driver.c has no user-type typedef boundary");
+    let runtime_preamble = &rust_c[..preamble_end];
+
+    let tmp_dir = std::env::temp_dir();
+    let stage1_c = tmp_dir.join("self_host_stage1.c");
+    let stage1_bin = tmp_dir.join("self_host_stage1");
+    let stage2_c = tmp_dir.join("self_host_stage2.c");
+    std::fs::write(&stage1_c, format!("{runtime_preamble}\n{stage1_body}"))
+        .expect("failed to write stage1.c");
+
+    // Compile stage-1 binary.
+    let cc_out = Command::new("cc")
+        .arg("-O0")
+        .arg("-w")
+        .arg("-o")
+        .arg(&stage1_bin)
+        .arg(&stage1_c)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("failed to spawn cc");
+    assert!(cc_out.status.success(), "stage-1 cc failed");
+
+    // Stage 1 → stage 2 body C. Same arguments as stage-0.
+    let stage2_out = run_with_deadline(
+        Command::new(&stage1_bin)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_bootstrap_fixed_point stage1 → stage2.c",
+        Duration::from_secs(120),
+    );
+    assert!(
+        stage2_out.status.success(),
+        "stage-1 binary failed: stderr={}",
+        String::from_utf8_lossy(&stage2_out.stderr),
+    );
+    let stage2_body = String::from_utf8_lossy(&stage2_out.stdout).to_string();
+    std::fs::write(&stage2_c, &stage2_body).expect("failed to write stage2.c");
+
+    // Cleanup stage-0 artifacts regardless of the comparison outcome.
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    // Byte-for-byte fixed-point assertion.
+    if stage1_body != stage2_body {
+        panic!(
+            "self-host is not a fixed point.\n\
+             stage1.c preserved at {}\n\
+             stage2.c preserved at {}\n\
+             (use `diff {} {}` to inspect)",
+            stage1_c.display(),
+            stage2_c.display(),
+            stage1_c.display(),
+            stage2_c.display(),
+        );
+    }
+
+    // Cleanup on success.
+    let _ = std::fs::remove_file(&stage1_c);
+    let _ = std::fs::remove_file(&stage1_bin);
+    let _ = std::fs::remove_file(&stage2_c);
+}
+
 // Numeric trait integration tests
 
 #[test]
