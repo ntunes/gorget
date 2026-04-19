@@ -968,8 +968,9 @@ mod tests {
                         let names: Vec<&str> =
                             eq.items.iter().map(|m| m.node.name.node.as_str()).collect();
                         assert!(names.contains(&"read_all"));
-                        assert!(names.contains(&"write"));
                         assert!(names.contains(&"close"));
+                        assert!(names.contains(&"_write_bytes_buf"));
+                        assert!(names.contains(&"_read_bytes_buf"));
                         return;
                     }
                 }
