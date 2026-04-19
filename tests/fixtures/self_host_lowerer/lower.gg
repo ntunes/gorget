@@ -747,6 +747,35 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(unk, OpConstI64(0)))
             return unk
         case EBinaryOp(lhs_box, op, rhs_box):
+            # Short-circuit `and` / `or` — `a and b` is NOT `a + b`. Lower
+            # to a branch-and-merge so the rhs isn't evaluated when the
+            # lhs already determines the result. Previously fell through
+            # to map_binop("and") = OP_ADD, and both sides always ran —
+            # crashed in the self-host lexer on guards like
+            # `self.lex_pos < byte_len and self.lex_peek() == b'\n'`
+            # when lex_pos was at/past end.
+            if op == "and" or op == "or":
+                int lhs_sc = lower_expr(&ctx, *lhs_box, &gmod)
+                int result_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                # Initialize result to short-circuit constant so the
+                # early-exit path lands on the right value.
+                if op == "and":
+                    emit(&ctx, GIAssign(result_local, OpConstBool(false)))
+                else:
+                    emit(&ctx, GIAssign(result_local, OpConstBool(true)))
+                int rhs_bb = new_block(&ctx)
+                int merge_bb = new_block(&ctx)
+                # `and`: if lhs: jump to rhs else merge. `or`: opposite.
+                if op == "and":
+                    set_terminator(&ctx, GTBranch(OpCopy(lhs_sc), rhs_bb, merge_bb))
+                else:
+                    set_terminator(&ctx, GTBranch(OpCopy(lhs_sc), merge_bb, rhs_bb))
+                switch_to(&ctx, rhs_bb)
+                int rhs_sc = lower_expr(&ctx, *rhs_box, &gmod)
+                emit(&ctx, GIAssign(result_local, OpCopy(rhs_sc)))
+                set_terminator(&ctx, GTJump(merge_bb))
+                switch_to(&ctx, merge_bb)
+                return result_local
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
             if is_comparison(op):
