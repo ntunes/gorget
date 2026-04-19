@@ -35,6 +35,55 @@ struct LowerCtx:
 
 Option[String] NO_NAME = None
 
+# Diagnostic helper for unhandled AST variants. Called from the
+# `else: ...` fall-through arms in lower_stmt / lower_expr. The message
+# is wrapped in a /* ... */ C comment so it embeds harmlessly in the
+# stage-0 stdout → stage-1 C channel. After a stage-0 run,
+# `grep '\[lower_fail\]' stage1.c` surfaces every silently-dropped
+# variant encountered during compilation.
+void lower_fail(String msg):
+    print("/* [lower_fail] " + msg + " */")
+
+# Return the variant name of a Stmt. Used by lower_fail diagnostics to
+# pinpoint which AST variant the self-host isn't handling.
+String stmt_kind(Stmt s):
+    match s:
+        case SVarDecl(_, _, _, _, _, _):
+            return "SVarDecl"
+        case SAssign(_, _):
+            return "SAssign"
+        case SCompoundAssign(_, _, _):
+            return "SCompoundAssign"
+        case SExpr(_):
+            return "SExpr"
+        case SReturn(_):
+            return "SReturn"
+        case SThrow(_):
+            return "SThrow"
+        case SBreak(_):
+            return "SBreak"
+        case SContinue:
+            return "SContinue"
+        case SPass:
+            return "SPass"
+        case SMeta:
+            return "SMeta"
+        case SMetaFor(_):
+            return "SMetaFor"
+        case SMetaIf(_, _):
+            return "SMetaIf"
+        case SFor(_, _, _, _, _):
+            return "SFor"
+        case SWhile(_, _):
+            return "SWhile"
+        case SLoop(_):
+            return "SLoop"
+        case SIf(_, _, _):
+            return "SIf"
+        case SMatch(_, _):
+            return "SMatch"
+    return "?unknown_stmt?"
+
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name))
@@ -1413,7 +1462,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # increment, leaving the lexer loop spinning.
                     lower_field_write(&ctx, *base_box, field_name, value_expr, &gmod)
                 else:
-                    pass
+                    lower_fail("SAssign target is neither EIdentifier nor EFieldAccess")
         case SBreak(_):
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
@@ -1425,6 +1474,40 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             if ctx.loop_continue_stack.len() > 0:
                 int tgt = ctx.loop_continue_stack.get(ctx.loop_continue_stack.len() - 1).unwrap()
                 set_terminator(&ctx, GTJump(tgt))
+        case SPass:
+            # `pass` is a literal no-op statement. Explicit case silences
+            # the lower_fail diagnostic; behaviour is unchanged.
+            pass
+        case SMeta:
+            # Standalone `meta` marker — compile-time sentinel, no runtime.
+            pass
+        case SMetaFor(_):
+            # `meta for` — compile-time loop already expanded earlier in
+            # the pipeline; any remaining SMetaFor is a residual marker.
+            pass
+        case SMetaIf(_, _):
+            # `meta if` — compile-time conditional, already resolved.
+            pass
+        case SLoop(body):
+            # Unconditional loop — `loop: body`, exit via break. Same
+            # shape as `while true:`, but the body's default back-edge
+            # jumps to the body itself rather than a condition header.
+            int loop_bb = new_block(&ctx)
+            int loop_exit_bb = new_block(&ctx)
+            set_terminator(&ctx, GTJump(loop_bb))
+            ctx.loop_continue_stack.push(loop_bb)
+            ctx.loop_break_stack.push(loop_exit_bb)
+            switch_to(&ctx, loop_bb)
+            lower_stmts(&ctx, body, &gmod, is_main)
+            Terminator loop_body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+            match loop_body_term:
+                case GTNone():
+                    set_terminator(&ctx, GTJump(loop_bb))
+                else:
+                    pass
+            ctx.loop_continue_stack.pop()
+            ctx.loop_break_stack.pop()
+            switch_to(&ctx, loop_exit_bb)
         case SCompoundAssign(target_expr, op, value_expr):
             # x <op>= y  →  x = x <op> y. Lower per target shape: local
             # identifier goes through GIAssign, field access goes through
@@ -1454,9 +1537,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
                 else:
-                    pass
+                    lower_fail("SCompoundAssign target is neither EIdentifier nor EFieldAccess")
         else:
-            pass
+            lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
 # Lower `base.field = value_expr`. Emits GICallExtern for the codegen-side
 # __field_write_TYPE_FIELD helper which expands to `((T*)base)->field = value`.
