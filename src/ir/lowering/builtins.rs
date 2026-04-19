@@ -362,7 +362,8 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_set_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_set_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         // items() → Vector[T] — materializes the set into an ordered array.
-        // Used by SetIter to iterate lazily via the Vector adapter chain.
+        // Used by `set_iter` (std.iter) to hand callers a VectorIter[T]
+        // over the materialized elements.
         BuiltinMethodDecl { name: "items", runtime_callee: Some("gorget_set_to_array"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: |_a, ctx| {
             let vec_name = format!("Vector__{}", ctx.elem_name);
             (ctx.lookup_type_by_name)(&vec_name)

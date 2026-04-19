@@ -240,8 +240,9 @@ int prod = fold_iter[int, int, VectorIter[int], int(int, int)](
     v.iter(), 1, (acc, x): acc * x)                   # 120000000
 ```
 
-Sets iterate through the same machinery via a `SetIter[T]` wrapper
-constructed by the `set_iter` free function:
+Sets iterate through the same machinery — `set_iter[T](s)` returns a
+plain `VectorIter[T]` over the materialized elements so every adapter
+on Vector works identically:
 
 ```gorget
 from std.iter import set_iter

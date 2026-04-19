@@ -316,7 +316,7 @@ Min-heap by default. Elements must implement `Comparable`.
 Concrete state-machine iterators composable over `Vector[T]` and `Set[T]`:
 
 ```gorget
-from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, SetIter, set_iter, collect_vec
+from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, set_iter, collect_vec
 
 Vector[int] v = [10, 20, 30, 40, 50]
 VectorIter[int] vit = v.iter()

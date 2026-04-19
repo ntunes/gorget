@@ -193,52 +193,32 @@ bool all_iter[T, Iter, F](Iter iter, F pred):
 
 # ── Set / Dict iteration ─────────────────────────────────────
 #
-# `SetIter[T]` and `DictKeyIter[K]` / `DictValueIter[V]` wrap a
-# pre-materialized `Vector[T]` / `Vector[K]` / `Vector[V]` so the
-# for-loop protocol and adapter chain reuse the `VectorIter` machinery.
-# That's eager up-front but keeps the state machine trivial — the only
-# runtime cost is the materialization call (`s.items()` / `d.keys()` /
-# `d.values()`) at iterator-construction time.
+# `set_iter` returns a plain `VectorIter[T]` wrapping the materialized
+# elements — Set callers get the full VectorIter adapter chain
+# (`take` / `skip` / `chain` + anything we add later) for free.
 #
-# A fully lazy implementation (walking the underlying GorgetMap bucket
-# array) is the proper Phase 2c goal; this shipping sugar covers the
-# 90% case where users want to pipe a set/dict through `take` / `skip` /
-# `chain` adapters or iterate by name.
+# Eager up-front but keeps the state machine trivial — the only runtime
+# cost is the materialization call (`s.items()`) at
+# iterator-construction time. A fully lazy implementation (walking the
+# underlying GorgetMap bucket array) remains the Phase 2c goal.
 #
-# Constructors are free functions (`set_iter` / `dict_iter_keys` /
-# `dict_iter_values`) rather than equip methods because Gorget's
-# method-resolution picks up user equip blocks over the builtin
-# collection protocol, and adding an `.iter()` method on `Set[T]`
-# shadows the builtin `.items()` / `.map()` / `.filter()` surface.
-# Free functions sidestep the shadowing. Once method-protocol merging
-# lands, these convert to `s.iter()` / `d.iter_keys()` trivially.
+# Free function rather than an equip method because adding an `.iter()`
+# method on `Set[T]` shadows the builtin collection protocol's
+# `items()` / `map()` / `filter()` surface at method resolution. Once
+# method-protocol merging lands this converts to `s.iter()` trivially.
+#
+# Dict key / value iteration is deferred — a naive
+# `VectorIter[K](d.keys(), 0)` via a generic `dict_iter_keys[K, V]`
+# wrapper trips the "Ptr ABI received scalar value" codegen panic in
+# `c_lir/emit_types.rs` when K is a resource type (e.g. String). The
+# issue is specific to how `d.keys()`'s return flows through the
+# monomorphized `VectorIter[String]` constructor; `Dict[int, int]`
+# works fine with the same shape. Tracked in TODO.md ("User DictIter").
+# Callers iterate `d.keys()` / `d.values()` / `d.items()` directly for
+# now — those return Vectors that accept all the usual adapters.
 
-struct SetIter[T]:
-    VectorIter[T] inner
-
-equip [T] SetIter[T] with Iterator[T]:
-    Option[T] next(&self):
-        return self.inner.next()
-
-SetIter[T] set_iter[T](Set[T] s):
-    return SetIter[T](VectorIter[T](s.items(), 0))
-
-equip [T] SetIter[T]:
-    TakeIter[T] take(self, int n):
-        return TakeIter[T](self.inner, n)
-
-    SkipIter[T] skip(self, int n):
-        return SkipIter[T](self.inner, n)
-
-    ChainIter[T] chain(self, SetIter[T] other):
-        return ChainIter[T](self.inner, other.inner, true)
-
-# Dict key/value iteration is deferred — a `DictKeyIter[K]` / `DictValueIter[V]`
-# wrapping `VectorIter[K]` / `VectorIter[V]` trips the "Ptr ABI received
-# scalar value" panic in `c_lir/emit_types.rs` when the user struct is
-# constructed with a Vector field via a self-pointer access. Tracked in
-# TODO.md (see "User DictIter[K, V] / DictKeyIter[K]"). Callers iterate
-# through `d.keys()` / `d.values()` / `d.items()` until that's fixed.
+VectorIter[T] set_iter[T](Set[T] s):
+    return VectorIter[T](s.items(), 0)
 
 # Textual join is deferred — the naive `int_to_str`-based version
 # tripped a cross-crate import that force-monomorphized

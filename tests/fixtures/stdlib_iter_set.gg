@@ -1,16 +1,15 @@
-# Iterator sugar over Set — free-function constructor `set_iter[T](s)`
-# plus the full adapter chain (`take`, `skip`, `chain`) on the
-# concrete `SetIter[T]` wrapper.
+# Iterator sugar over Set — `set_iter[T](s)` returns a `VectorIter[T]`
+# wrapping the materialized elements. Callers get the full VectorIter
+# adapter chain (`take` / `skip` / `chain`) for free.
 #
-# `set_iter` materializes the set through its builtin `items()` call,
-# then hands the resulting Vector to the reusable VectorIter state
-# machine. Eager up-front; a bucket-walk lazy variant waits on Phase 2c.
+# Eager up-front; a lazy bucket-walk variant waits on Phase 2c.
 #
-# Dict iteration is deferred — a DictKeyIter wrapping VectorIter[K]
-# tripped a pre-existing Ptr-ABI codegen panic (see TODO.md). Users
-# iterate through `d.keys()` / `d.values()` / `d.items()` for now.
+# Dict key/value iteration via `VectorIter[K](d.keys(), 0)` is the same
+# shape, but currently trips a codegen panic for resource-type keys
+# (String). Use `d.keys()` / `d.values()` / `d.items()` + Vector
+# iteration directly until that lands.
 
-from std.iter import set_iter, TakeIter, SkipIter, ChainIter, SetIter
+from std.iter import set_iter, TakeIter, SkipIter, ChainIter, VectorIter
 
 int main():
     Set[int] s = Set[int]()
@@ -25,21 +24,21 @@ int main():
 
     print("--")
 
-    # take on SetIter yields TakeIter[T] — same adapter chain as VectorIter.
+    # take on VectorIter (returned by set_iter) yields TakeIter[T].
     TakeIter[int] t = set_iter[int](s).take(2)
     for x in t:
         print(x)
 
     print("--")
 
-    # skip on SetIter yields SkipIter[T].
+    # skip on VectorIter yields SkipIter[T].
     SkipIter[int] k = set_iter[int](s).skip(2)
     for x in k:
         print(x)
 
     print("--")
 
-    # chain concatenates two SetIters through their VectorIter inner.
+    # chain concatenates two VectorIters.
     Set[int] s2 = Set[int]()
     s2.add(100)
     s2.add(200)
