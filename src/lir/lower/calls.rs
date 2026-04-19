@@ -517,6 +517,20 @@ pub(super) fn clone_fn_for_collection_element(elem_type_name: &str) -> Option<&'
 ///       `GorgetString__to_upper` → `gorget_str_to_upper`.
 /// Returns true if `s` is a known C type name (indicating the "method" part of a
 /// monomorphized name is actually a type parameter, not a method name).
+/// Map a monomorphized element-type name to a qsort comparator suffix.
+/// Matches the typed stub families emitted by `emit_types.rs` — int
+/// uses a value-wise i64 compare, float uses value-wise double,
+/// Str uses lexical, anything else falls back to memcmp on `elem_size`.
+pub(super) fn cmp_suffix_for_elem(elem: &str) -> &'static str {
+    match elem {
+        "int64_t" | "int32_t" | "int16_t" | "int8_t"
+        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" => "int",
+        "double" | "float" => "float",
+        "Str" | "GorgetString" => "str",
+        _ => "generic",
+    }
+}
+
 pub(super) fn is_type_name(s: &str) -> bool {
     matches!(s, "int64_t" | "int32_t" | "int16_t" | "int8_t"
         | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
@@ -585,10 +599,28 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         }
         match method {
             "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
-            | "each" | "find" | "find_index" | "sorted" | "sort" | "sorted_by" | "sort_by"
+            | "each" | "find" | "find_index" | "sorted_by" | "sort_by"
             | "sorted_by_key" | "sort_by_key"
             | "windows" | "chunks"
-            | "unique" | "count" => return None,
+            | "count" => return None,
+            // sort/sorted/unique dispatch to typed stubs emitted by
+            // emit_types.rs, keyed by element type so qsort uses the
+            // right comparator:
+            //   Vector__int64_t__sort → gorget_array_sort_int
+            //   Vector__double__sort  → gorget_array_sort_float
+            //   Vector__Str__sort     → gorget_array_sort_str
+            //   Vector__Foo__sort     → gorget_array_sort_generic
+            "sort" | "sorted" | "unique" => {
+                let elem = name
+                    .strip_prefix("Vector__")
+                    .and_then(|rest| {
+                        rest.strip_suffix(&format!("__{method}"))
+                    });
+                let suffix = elem
+                    .map(cmp_suffix_for_elem)
+                    .unwrap_or("generic");
+                return Some(format!("gorget_array_{method}_{suffix}"));
+            }
             // Vector.get() returns Option[T] — use safe (non-panicking) get.
             "get" => return Some("gorget_array_safe_get".into()),
             // Vector.pop() returns Option[T] — use safe (non-panicking) pop.

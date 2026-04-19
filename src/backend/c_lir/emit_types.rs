@@ -3074,8 +3074,38 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
         writeln!(out, "static int __gorget_sort_cmp(const void* a, const void* b) {{ return memcmp(a, b, __gorget_sort_elem_size); }}").unwrap();
         writeln!(out, "static inline void gorget_array_sort(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; __gorget_sort_elem_size = a->elem_size; qsort(a->data, a->len, a->elem_size, __gorget_sort_cmp); }}").unwrap();
     }
+    // Typed sort/unique variants — chosen by element type at LIR
+    // emission time so qsort uses the right comparator:
+    //   _int    → gorget_int_compare     (value-wise i64)
+    //   _float  → gorget_float_compare   (value-wise double)
+    //   _str    → gorget_str_compare     (lexical on Str struct)
+    //   _generic → gorget_generic_compare (memcmp, for user structs)
+    if has_extern("gorget_array_sort_int") {
+        writeln!(out, "static inline void gorget_array_sort_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_int_compare); }}").unwrap();
+    }
+    if has_extern("gorget_array_sort_float") {
+        writeln!(out, "static inline void gorget_array_sort_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_float_compare); }}").unwrap();
+    }
+    if has_extern("gorget_array_sort_str") {
+        writeln!(out, "static inline void gorget_array_sort_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_str_compare); }}").unwrap();
+    }
+    if has_extern("gorget_array_sort_generic") {
+        writeln!(out, "static inline void gorget_array_sort_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_generic_compare); }}").unwrap();
+    }
     if has_extern("gorget_array_sorted") {
         writeln!(out, "static inline GorgetArray gorget_array_sorted(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_sorted_int") {
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_sorted_float") {
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_sorted_str") {
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_sorted_generic") {
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }}").unwrap();
     }
     // gorget_array_reversed: clone + reverse (not in runtime, inlined by old backend)
     if has_extern("gorget_array_reversed") {
@@ -3084,6 +3114,18 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // gorget_array_unique: clone + sort + dedup (matches GIR backend semantics)
     if has_extern("gorget_array_unique") {
         writeln!(out, "static inline GorgetArray gorget_array_unique(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_unique_int") {
+        writeln!(out, "static inline GorgetArray gorget_array_unique_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_unique_float") {
+        writeln!(out, "static inline GorgetArray gorget_array_unique_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_unique_str") {
+        writeln!(out, "static inline GorgetArray gorget_array_unique_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    if has_extern("gorget_array_unique_generic") {
+        writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
     }
     // gorget_array_zip: pair elements from two arrays into an array of tuples
     if has_extern("gorget_array_zip") {
