@@ -11,7 +11,7 @@ struct Cursor:
 equip Cursor with Reader:
     # Each call yields at most 8 bytes — simulates a short-read source
     # so the drain/exact loops are exercised across multiple iterations.
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+    Result[int, IoError] read(&self, Vector[byte] &buf):
         int n = 0
         while self.pos < self.src.len() and n < 8:
             buf.push(self.src.get(self.pos).unwrap())

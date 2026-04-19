@@ -815,7 +815,7 @@ Gorget doesn't enforce trait naming rules, but following consistent conventions 
 **The I/O pair — byte-shaped roles.** `Writer` and `Reader` are canonical
 `-er` role traits: a type *is a* Writer / Reader — it's not an incidental
 capability, it's the type's job. The method set is minimal (one
-`write_bytes` / `read_bytes` + derived helpers) so any byte-producing
+`write` / `read` + derived helpers) so any byte-producing
 source (File, String builder, Socket, TlsSocket) plugs in with one
 equip block.
 

@@ -12,6 +12,7 @@
 
 from std.collections import Vector
 from std.net.socket import Socket, socket_connect
+from std.io import write_all
 from std.bytes import bytes_from_str, bytes_to_str, bytes_from_hex
 from std.bytes import bytes_write_u32_be, bytes_read_u32_be
 from std.bytes import bytes_concat, bytes_slice, random_bytes
@@ -240,9 +241,9 @@ void send_packet(Session &session, Vector[uint8] payload):
         # Encrypt the packet (not the MAC)
         Vector[uint8] enc_data = session.enc_cipher.encrypt(packet)
         Vector[uint8] wire = bytes_concat(enc_data, mac)
-        session.sock.write(wire)
+        write_all[Socket](&session.sock, wire)
     else:
-        session.sock.write(packet)
+        write_all[Socket](&session.sock, packet)
     session.send_seq = session.send_seq + 1
 
 # Read a packet (handles decryption + MAC verification)

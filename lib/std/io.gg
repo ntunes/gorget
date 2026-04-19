@@ -3,10 +3,10 @@
 # Phase 3 of the stdlib narrow-waist redesign (docs/internals/stdlib-design.md §6).
 #
 # Conventions:
-# - Writer.write_bytes returns `Result[int, IoError]` — the byte count actually
+# - Writer.write returns `Result[int, IoError]` — the byte count actually
 #   written may be less than the input for short-write destinations
 #   (sockets, pipes). `write_all` is derived to guarantee full write.
-# - Reader.read_bytes fills the caller's buffer through a mutable borrow.
+# - Reader.read fills the caller's buffer through a mutable borrow.
 #   Returning Ok(0) means EOF. `reader_drain` / `read_exact` derive on top.
 # - Errors are typed via `IoError`; no stringly-typed `Result[T, String]`
 #   at the I/O boundary.
@@ -69,7 +69,7 @@ extern "C":
 #
 # The codegen also recognises the identifiers `stdout`/`stderr` as
 # a keyword routing hint for `print(x, file=stderr)`. That path is
-# orthogonal to the Writer impl — `stderr.write_bytes(...)` goes
+# orthogonal to the Writer impl — `stderr.write(...)` goes
 # through the runtime call below; `print(..., file=stderr)` stays
 # on the fprintf fast path for now.
 
@@ -230,23 +230,19 @@ equip IoError with Error:
 
 # ── Writer ────────────────────────────────────────────────────
 #
-# `write_bytes` is the single required method — all higher-level output
+# `write` is the single required method — all higher-level output
 # convenience is derived on top.
 #
 # Input is `Vector[byte]` — a raw byte buffer — **not** `String`/`Str`.
 # Writer is byte-shaped: binary files, TLS, compressed streams all push
 # arbitrary bytes that are not UTF-8. Callers with a `String` source go
 # through `.bytes()` at the boundary.
-#
-# Naming note: the trait method is `write_bytes` (not `write`) to avoid
-# colliding with the legacy `File.write` extern during the migration.
-# Once the extern is retired, the trait method renames to `write`.
 
 trait Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf)
+    Result[int, IoError] write(&self, Vector[byte] buf)
     # Force buffered output to commit. Default is no-op — for
     # in-memory writers (String) the bytes are already "committed"
-    # the moment `write_bytes` returns. File / Socket / TlsSocket
+    # the moment `write` returns. File / Socket / TlsSocket
     # override to push through stdio / TCP / SSL buffers. Callers:
     # progress bars, REPLs, interactive CLI prompts.
     Result[int, IoError] flush(&self):
@@ -254,11 +250,11 @@ trait Writer:
 
 # ── Reader ────────────────────────────────────────────────────
 #
-# `read_bytes` fills `buf` through a mutable borrow and returns the byte
+# `read` fills `buf` through a mutable borrow and returns the byte
 # count actually read. `Ok(0)` means EOF.
 
 trait Reader:
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf)
+    Result[int, IoError] read(&self, Vector[byte] &buf)
 
 # String implements Writer: the input buffer is appended to the
 # String's builder. The String doesn't enforce UTF-8 at the byte level,
@@ -268,7 +264,7 @@ trait Reader:
 extern "C" String __bytes_to_str_raw(Vector[uint8] data) = "gorget_bytes_to_str"
 
 equip String with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         int n = buf.len()
         String chunk = __bytes_to_str_raw(buf.clone())
         self.push(chunk)
@@ -320,7 +316,7 @@ IoError _errno_to_io_error(int code):
 # negative → IoError variant, non-negative → Ok(n).
 
 equip File with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         # `_write_bytes_buf` is a File-method extern — the compiler
         # threads `&self` into the C `GorgetFile*` param automatically.
         int n = self._write_bytes_buf(buf)
@@ -335,7 +331,7 @@ equip File with Writer:
         return Ok(0)
 
 equip File with Reader:
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+    Result[int, IoError] read(&self, Vector[byte] &buf):
         # Read up to 4KB per call — callers typically loop via
         # `reader_drain` / `read_exact` so this chunk size just keeps
         # any individual call bounded.
@@ -434,7 +430,7 @@ Result[int, IoError] write_all[W](W &w, Vector[byte] buf):
     int len = buf.len()
     while total < len:
         Vector[byte] remaining = buf.slice(total, len)
-        Result[int, IoError] r = w.write_bytes(remaining)
+        Result[int, IoError] r = w.write(remaining)
         match r:
             case Ok(0):
                 return Error(IoError.BrokenPipe())
@@ -463,14 +459,14 @@ Result[int, IoError] write_display[W, Displayable D](W &w, D v):
 # follow-ups for the resolution.
 
 # Read all available bytes from `r` into a fresh buffer. Loops calling
-# `read_bytes` until Ok(0) (EOF) or an error. Returns the final buffer
+# `read` until Ok(0) (EOF) or an error. Returns the final buffer
 # on success; `buf` accumulates across reads.
 Result[Vector[byte], IoError] reader_drain[R](R &reader):
     Vector[byte] buf = Vector[byte]()
     bool done = false
     while not done:
         int before = buf.len()
-        Result[int, IoError] step = reader.read_bytes(&buf)
+        Result[int, IoError] step = reader.read(&buf)
         match step:
             case Ok(0):
                 done = true
@@ -502,7 +498,7 @@ Result[Vector[byte], IoError] read_exact[R](R &reader, int n):
     IoError err_kind = IoError.UnexpectedEof()
     while buf.len() < n and not failed:
         int before = buf.len()
-        Result[int, IoError] step = reader.read_bytes(&buf)
+        Result[int, IoError] step = reader.read(&buf)
         match step:
             case Ok(0):
                 failed = true

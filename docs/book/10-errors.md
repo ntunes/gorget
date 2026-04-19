@@ -375,7 +375,7 @@ instead of parsing message strings:
 ```gorget
 from std.io import IoError
 
-match socket.write_bytes(request.bytes()):
+match socket.write(request.bytes()):
     case Ok(n):
         print(f"wrote {n} bytes")
     case Error(IoError.BrokenPipe()):

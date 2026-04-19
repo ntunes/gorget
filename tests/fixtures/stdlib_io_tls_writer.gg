@@ -22,12 +22,12 @@ int main():
     match cr:
         case Ok(conn):
             TlsSocket c = !conn
-            # Writer.write_bytes on a TlsSocket — not reached here, but
+            # Writer.write on a TlsSocket — not reached here, but
             # the monomorphization must succeed for this branch to compile.
-            Result[int, IoError] wr = c.write_bytes("ping".bytes())
+            Result[int, IoError] wr = c.write("ping".bytes())
             Result[int, IoError] wa = write_all[TlsSocket](&c, "pong".bytes())
             Vector[byte] rbuf = Vector[byte]()
-            Result[int, IoError] rr = c.read_bytes(&rbuf)
+            Result[int, IoError] rr = c.read(&rbuf)
             Result[Vector[byte], IoError] dr = reader_drain[TlsSocket](&c)
             c.close()
         case Error(e):

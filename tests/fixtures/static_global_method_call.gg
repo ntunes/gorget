@@ -11,7 +11,7 @@
 # Exercises two paths:
 #   1. User struct — `Counter.inc(&self)` called on a static Counter
 #      mutates the global; second call sees the updated state.
-#   2. Stdlib File — `stdout.write_bytes(...)` works directly, no
+#   2. Stdlib File — `stdout.write(...)` works directly, no
 #      `File f = stdout` alias required.
 
 from std.io import stdout
@@ -34,7 +34,7 @@ int main():
 
     # Direct method call on a stdlib static global — previously
     # broken, now produces the expected output.
-    Result[int, IoError] r = stdout.write_bytes("direct\n".bytes())
+    Result[int, IoError] r = stdout.write("direct\n".bytes())
     match r:
         case Ok(n):
             print(f"wrote {n}")

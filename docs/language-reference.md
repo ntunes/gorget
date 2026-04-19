@@ -2551,8 +2551,8 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Parseable` | `Option[Self] parse(String s)` (static) | `Option[Self]` | Fallible string parsing via `Type.parse(s)` |
 | `Measurable` | `int len(self)` | `int` | Types with a length; enables `len(x)` free function |
 | `Debuggable` | `String debug(self)` | `String` | `@derive(Debuggable)` + developer-facing debug representation |
-| `Writer` | `Result[int, IoError] write_bytes(&self, Vector[byte] buf)` + default `flush(&self)` | `Result[int, IoError]` | Byte sinks — std.io `write_all`, `write_display`, `write_str`. Default `flush` is a no-op; `File` overrides to push the stdio buffer. |
-| `Reader` | `Result[int, IoError] read_bytes(&self, Vector[byte] &buf)` | `Result[int, IoError]` | Byte sources — std.io `reader_drain`, `read_exact` |
+| `Writer` | `Result[int, IoError] write(&self, Vector[byte] buf)` + default `flush(&self)` | `Result[int, IoError]` | Byte sinks — std.io `write_all`, `write_display`, `write_str`. Default `flush` is a no-op; `File` overrides to push the stdio buffer. |
+| `Reader` | `Result[int, IoError] read(&self, Vector[byte] &buf)` | `Result[int, IoError]` | Byte sources — std.io `reader_drain`, `read_exact` |
 | `Error` | `Option[String] source(&self)` (extends `Displayable & Debuggable`) | `Option[String]` | Narrow error trait; every stdlib error type (`IoError`, `ParseError`, …) implements it |
 
 #### Displayable
@@ -3280,7 +3280,7 @@ The following functions are available via `import`:
 | `read_exact[R]` | `Result[Vector[byte], IoError](R &reader, int n)` | Read exactly `n` bytes |
 | `from_string_error[T]` | `Result[T, IoError](Result[T, String])` | Adapt legacy stringly-typed errors |
 
-**Traits:** `Writer` — `Result[int, IoError] write_bytes(&self, Vector[byte] buf)`. `Reader` — `Result[int, IoError] read_bytes(&self, Vector[byte] &buf)`. `Error` — `extends Displayable & Debuggable` + `Option[String] source(&self)`.
+**Traits:** `Writer` — `Result[int, IoError] write(&self, Vector[byte] buf)`. `Reader` — `Result[int, IoError] read(&self, Vector[byte] &buf)`. `Error` — `extends Displayable & Debuggable` + `Option[String] source(&self)`.
 
 **Writer/Reader implementors:** `String`, `File` (includes `stdout`/`stderr`/`stdin`), `Socket`, `TlsSocket`.
 

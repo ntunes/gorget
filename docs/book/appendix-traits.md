@@ -215,7 +215,7 @@ an `Iterator`, then calls `next()` repeatedly.
 
 ```gorget
 trait Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf)
+    Result[int, IoError] write(&self, Vector[byte] buf)
     Result[int, IoError] flush(&self):   # default: no-op
         return Ok(0)
 ```
@@ -237,7 +237,7 @@ output before the buffer fills.
 
 ```gorget
 trait Reader:
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf)
+    Result[int, IoError] read(&self, Vector[byte] &buf)
 ```
 
 Narrow input interface. Reader fills the caller's buffer through a
@@ -456,8 +456,8 @@ for tuple variants.
 | IndexMut[K,V] | `set` | `val[key] = x` | No |
 | Iterator[T] | `next` | Manual iteration, `for x in val` | No |
 | Iterable[T] | `iter` | `for x in val` (with iter struct) | No |
-| Writer | `write_bytes` | Byte-shaped output | No |
-| Reader | `read_bytes` | Byte-shaped input | No |
+| Writer | `write` | Byte-shaped output | No |
+| Reader | `read` | Byte-shaped input | No |
 | From[T] | `from` | Type conversion | No |
 | TryFrom[T] | `try_from` | Fallible conversion | No |
 | Measurable | `len` | `.len()` | No |

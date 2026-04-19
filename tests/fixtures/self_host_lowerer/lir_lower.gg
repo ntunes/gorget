@@ -509,12 +509,13 @@ String map_runtime_name(String name):
         return "gorget_file_flush"
     if name == "_file_open_try":
         return "gorget_file_open_try"
-    # Trait-method dispatch: File_write_bytes resolves to the equip-block
-    # specialization emitted with a `Writer_for_` prefix.
-    if name == "File__write_bytes":
-        return "Writer_for_File__write_bytes"
-    if name == "File__read_bytes":
-        return "Reader_for_File__read_bytes"
+    # Trait-method dispatch: File__write / File__read resolves to the
+    # equip-block specialization emitted with a `Writer_for_` / `Reader_for_`
+    # prefix.
+    if name == "File__write":
+        return "Writer_for_File__write"
+    if name == "File__read":
+        return "Reader_for_File__read"
     if name == "_parse_int_raw":
         return "gorget_parse_int"
     if name == "_parse_float_raw":

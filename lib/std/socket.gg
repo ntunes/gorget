@@ -20,9 +20,7 @@ extern "C":
 # ── Socket methods ───────────────────────────────────────────
 
 equip Socket:
-    extern blocking Vector[uint8] read(int n) = "gorget_socket_read"
     extern blocking Vector[uint8] read_exact(int n) = "gorget_socket_read_exact"
-    extern blocking int write(Vector[uint8] data) = "gorget_socket_write"
     extern "C" blocking int write_str(String s) = "gorget_socket_write_str"
     extern blocking Result[String, String] read_line() = "gorget_socket_read_line"
     extern void set_timeout(int ms) = "gorget_socket_set_timeout"
@@ -43,14 +41,14 @@ equip Socket:
 # loop on top of these.
 
 equip Socket with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         int n = self._write_bytes_buf(buf)
         if n < 0:
             return Error(_errno_to_io_error(-n))
         return Ok(n)
 
 equip Socket with Reader:
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+    Result[int, IoError] read(&self, Vector[byte] &buf):
         int n = self._read_bytes_buf(&buf, 4096)
         if n < 0:
             return Error(_errno_to_io_error(-n))

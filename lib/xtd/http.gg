@@ -9,6 +9,7 @@
 
 from std.net.tls import TlsSocket, tls_connect
 from std.net.socket import Socket, socket_connect
+from std.io import IoError
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.bytes import bytes_to_str, bytes_concat
@@ -114,8 +115,10 @@ private String read_body_close(TlsSocket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
-        Vector[uint8] http_chunk = http_conn.read(4096)
-        if http_chunk.len() == 0:
+        Vector[uint8] http_chunk = Vector[uint8]()
+        Result[int, IoError] http_rr = http_conn.read(&http_chunk)
+        int http_n = http_rr.unwrap_or(0)
+        if http_n == 0:
             http_reading = false
         else:
             http_buf = bytes_concat(http_buf, http_chunk)
@@ -155,8 +158,10 @@ private String read_body_close_plain(Socket &http_conn):
     Vector[uint8] http_buf = Vector[uint8]()
     bool http_reading = true
     while http_reading:
-        Vector[uint8] http_chunk = http_conn.read(4096)
-        if http_chunk.len() == 0:
+        Vector[uint8] http_chunk = Vector[uint8]()
+        Result[int, IoError] http_rr = http_conn.read(&http_chunk)
+        int http_n = http_rr.unwrap_or(0)
+        if http_n == 0:
             http_reading = false
         else:
             http_buf = bytes_concat(http_buf, http_chunk)

@@ -996,16 +996,14 @@ demand, not shipped speculatively.
 
 **Phase 3 follow-ups (post-initial-ship):**
 
-- **Rename `write_bytes` / `read_bytes` → `write` / `read`** — partially
-  unblocked. `File.write(String)` extern retired 2026-04-19 (the one
-  caller, `tests/fixtures/file_io.gg`, moved to `write_str[File](&f, …)`).
-  The remaining blockers are legacy `Socket.write(Vector[uint8])` /
-  `Socket.read(int n)` + `TlsSocket.write(Vector[uint8])` /
-  `TlsSocket.read(int n)` externs — four call sites in `xtd` (ssh.gg,
-  http.gg) need migration to the Writer/Reader trait methods before the
-  externs can be dropped. The `_bytes` suffix was only a name-collision
-  shim during migration; the final narrow-waist names on `Writer` /
-  `Reader` are `write` and `read`.
+- ✅ **Rename `write_bytes` / `read_bytes` → `write` / `read`**
+  (2026-04-19). All legacy name-collision shims retired: `File.write
+  (String)` + `Socket.write(Vector)` / `Socket.read(int)` +
+  `TlsSocket.write(Vector)` / `TlsSocket.read(int)` all removed. The
+  four `xtd` callers (ssh.gg:243/245, http.gg:117/158) migrated to
+  Writer/Reader trait methods. `Writer.write(&self, Vector[byte] buf)`
+  and `Reader.read(&self, Vector[byte] &buf)` are now the final
+  narrow-waist names.
 - ✅ **Retired `println` / `writeln` / `println_str`** (2026-04-19).
   `print` stays as the infallible compiler builtin with `terminator=` /
   `file=` kwargs (script ergonomics). Typed-error callers use
@@ -1025,7 +1023,7 @@ demand, not shipped speculatively.
   default no-op body** (2026-04-19). In-memory writers (`String`,
   `Vector[byte]`) inherit the default; `File` overrides via
   `gorget_file_flush` to push the stdio buffer. Return type is
-  `Result[int, IoError]` matching `write_bytes`'s shape; the int is
+  `Result[int, IoError]` matching `write`'s shape; the int is
   unused on success (always `0`). Socket / TlsSocket could add an
   SSL-flush override later but TCP writes go straight to the kernel
   send buffer so the default is correct today.

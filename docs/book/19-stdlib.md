@@ -360,7 +360,7 @@ struct ByteSink:
     Vector[byte] buf
 
 equip ByteSink with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         self.buf.extend(buf.clone())
         return Ok(buf.len())
 
@@ -374,7 +374,7 @@ Every Writer returns `Result[int, IoError]` — pattern-match on
 instead of parsing strings. Short-writes are allowed; `write_all` wraps
 the short-write loop.
 
-`write_bytes` takes raw bytes (`Vector[byte]`, not `String`) because
+`write` takes raw bytes (`Vector[byte]`, not `String`) because
 Writer is byte-shaped — binary protocols, TLS, compression all push
 arbitrary bytes, not UTF-8. Callers with a `String` source convert via
 `.bytes()` at the boundary. (`byte` is a lexer-level alias for `uint8`

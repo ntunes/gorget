@@ -20,9 +20,7 @@ extern "C":
 # ── TlsSocket methods ───────────────────────────────────────
 
 equip TlsSocket:
-    extern blocking Vector[uint8] read(int n) = "gorget_tls_read"
     extern blocking Vector[uint8] read_exact(int n) = "gorget_tls_read_exact"
-    extern blocking int write(Vector[uint8] data) = "gorget_tls_write"
     extern "C" blocking int write_str(String s) = "gorget_tls_write_str"
     extern blocking Result[String, String] read_line() = "gorget_tls_read_line"
     extern void close() = "gorget_tls_close"
@@ -41,14 +39,14 @@ equip TlsSocket:
 # on top of these.
 
 equip TlsSocket with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         int n = self._write_bytes_buf(buf)
         if n < 0:
             return Error(_errno_to_io_error(-n))
         return Ok(n)
 
 equip TlsSocket with Reader:
-    Result[int, IoError] read_bytes(&self, Vector[byte] &buf):
+    Result[int, IoError] read(&self, Vector[byte] &buf):
         int n = self._read_bytes_buf(&buf, 4096)
         if n < 0:
             return Error(_errno_to_io_error(-n))

@@ -12,7 +12,7 @@ struct ByteSink:
     Vector[byte] buf
 
 equip ByteSink with Writer:
-    Result[int, IoError] write_bytes(&self, Vector[byte] buf):
+    Result[int, IoError] write(&self, Vector[byte] buf):
         self.buf.extend(buf.clone())
         return Ok(buf.len())
 
@@ -20,7 +20,7 @@ int main():
     # ── ByteSink path ────────────────────────────────────────────
     ByteSink s = ByteSink(Vector[byte]())
     Vector[byte] hi = "hello ".bytes()
-    Result[int, IoError] r = s.write_bytes(hi)
+    Result[int, IoError] r = s.write(hi)
     match r:
         case Ok(n):
             print(n)
@@ -52,7 +52,7 @@ int main():
 
     # ── String-as-Writer path ───────────────────────────────────
     String buf = ""
-    Result[int, IoError] rs = buf.write_bytes("hi ".bytes())
+    Result[int, IoError] rs = buf.write("hi ".bytes())
     match rs:
         case Ok(n):
             print(n)
