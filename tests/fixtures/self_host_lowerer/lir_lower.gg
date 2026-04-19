@@ -969,9 +969,46 @@ bool is_collection_constructor(String name):
             return true
     return false
 
-# Byte size of an LIR scalar / pointer type. Struct-typed fields fall
-# back to pointer size since recursion risks infinite loops on recursive
-# types and callers can't meaningfully use a nested struct size anyway.
+# Byte size of an LIR scalar / pointer type. For scalar/pointer types
+# the answer is fixed; for inline struct fields we consult m.structs and
+# recurse — otherwise a Vector[SpannedToken] whose element contains a
+# union-layout Token enum gets allocated at 24 bytes instead of 60+
+# and pushes stomp adjacent memory. A small depth cap guards against
+# accidental self-reference in recursive types.
+int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
+    if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
+        return 1
+    if ty == LT_I16 or ty == LT_U16:
+        return 2
+    if ty == LT_I32 or ty == LT_U32 or ty == LT_F32:
+        return 4
+    if ty == LT_I64 or ty == LT_U64 or ty == LT_F64:
+        return 8
+    if ty == LT_PTR:
+        return 8
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return 8
+    if ty >= LT_STRUCT_BASE:
+        int sid = ty - LT_STRUCT_BASE
+        if sid < m.structs.len() and depth < 4:
+            LirStructDef sdef = m.structs.get(sid).unwrap()
+            if sdef.computed_c_size > 0:
+                return sdef.computed_c_size
+            int total = 0
+            int fi = 0
+            while fi < sdef.fields.len():
+                int fty = sdef.fields.get(fi).unwrap().ty
+                total = total + lir_type_byte_size_in_mod(fty, &m, depth + 1)
+                fi += 1
+            if total == 0:
+                return 8
+            int rem = total % 8
+            if rem != 0:
+                total = total + (8 - rem)
+            return total
+    return 8
+
+# Back-compat wrapper kept for any call site that lacks module access.
 int lir_type_byte_size(int ty):
     if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
         return 1
@@ -1008,14 +1045,15 @@ int type_elem_size_in_mod(String elem, StructRegistry &sr, LirModule &m):
         # structs like GorgetString/GorgetArray) takes precedence.
         if sdef.computed_c_size > 0:
             return sdef.computed_c_size
-        # Sum scalar/ptr field sizes. Enum union layouts already have a
-        # correct pre-computed size from type lowering, so this path only
-        # fires for plain flat structs where simple summation matches.
+        # Sum field sizes, recursing into struct-typed fields via the
+        # module-aware byte-size helper so SpannedToken et al. with
+        # nested union-layout Token payloads get the real size rather
+        # than the 8-byte pointer-size fallback.
         int total = 0
         int fi = 0
         while fi < sdef.fields.len():
             int fty = sdef.fields.get(fi).unwrap().ty
-            total = total + lir_type_byte_size(fty)
+            total = total + lir_type_byte_size_in_mod(fty, &m, 0)
             fi += 1
         if total == 0:
             return 8
