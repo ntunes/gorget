@@ -2614,6 +2614,53 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             return v(dst) + " = (GorgetClosure){.fn_ptr = (void*)" + call_fn + ", .env = NULL};"
         return ";"
 
+    # ── Field write: __field_write_TYPE_FIELD(base, value) ──
+    # Paired with __field_read_. Expands to `((T*)base)->field = value;`
+    # with scalar/aggregate/pointer dispatch matching emit_field_store.
+    if name.starts_with("__field_write_"):
+        if args.len() >= 2:
+            int base_val = args.get(0).unwrap()
+            int val_arg = args.get(1).unwrap()
+            String rest_w = name.slice(14, name.len())
+            int sep_w = find_substr(rest_w, "_")
+            if sep_w > 0:
+                String struct_name_w = rest_w.slice(0, sep_w)
+                String field_w = rest_w.slice(sep_w + 1, rest_w.len())
+                String c_struct_w = find_c_struct_name(struct_name_w, &m, &sn)
+                String c_field_w = c_field_name(field_w)
+                String lval_w = "((" + c_struct_w + "*)" + v(base_val) + ")->" + c_field_w
+                int val_ty_w = LT_VOID
+                if val_types.contains(val_arg):
+                    val_ty_w = val_types.get(val_arg).unwrap()
+                # Look up field type to pick the right store shape.
+                int sid_w = find_struct_type(struct_name_w, &m) - LT_STRUCT_BASE
+                int field_ty_w = LT_I64
+                if sid_w >= 0 and sid_w < m.structs.len():
+                    LirStructDef sdef_w = m.structs.get(sid_w).unwrap()
+                    int fi_w = 0
+                    while fi_w < sdef_w.fields.len():
+                        StructField sf_w = sdef_w.fields.get(fi_w).unwrap()
+                        if c_field_name(sf_w.name) == c_field_w:
+                            field_ty_w = sf_w.ty
+                        fi_w += 1
+                # Aggregate field + aggregate value → memcpy from &value.
+                if lir_is_aggregate(field_ty_w) and lir_is_aggregate(val_ty_w):
+                    return "memcpy(&" + lval_w + ", &" + v(val_arg) + ", sizeof(" + v(val_arg) + "));"
+                # Aggregate field + pointer value → memcpy from *value.
+                if lir_is_aggregate(field_ty_w) and (val_ty_w == LT_PTR or (val_ty_w >= LT_PTR_TO_BASE and val_ty_w < LT_STRUCT_BASE)):
+                    String ft_name_w = c_type_name(field_ty_w, &sn)
+                    return "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
+                # Aggregate field + unknown value → assume pointer (ABI
+                # convention for aggregate args) and memcpy from pointee.
+                if lir_is_aggregate(field_ty_w):
+                    String ft_name_w = c_type_name(field_ty_w, &sn)
+                    return "memcpy(&" + lval_w + ", " + v(val_arg) + ", sizeof(" + ft_name_w + "));"
+                # Scalar/ptr field: direct assignment with cast.
+                if val_ty_w == LT_PTR or (val_ty_w >= LT_PTR_TO_BASE and val_ty_w < LT_STRUCT_BASE):
+                    return lval_w + " = (void*)" + v(val_arg) + ";"
+                return lval_w + " = " + v(val_arg) + ";"
+        return "/* bad field write */;"
+
     # ── Field read: __field_read_TYPE_FIELD(base, field_index) ──
     if name.starts_with("__field_read_"):
         if dst >= 0 and args.len() >= 2:

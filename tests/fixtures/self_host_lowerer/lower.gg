@@ -1364,24 +1364,25 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SWhile(cond_expr, body):
             lower_while(&ctx, cond_expr, body, &gmod, is_main)
         case SAssign(target_expr, value_expr):
-            # Simple identifier assignment
             match target_expr.expr:
                 case EIdentifier(name):
                     if ctx.named_locals.contains(name):
                         int lid = ctx.named_locals.get(name).unwrap()
                         int val = lower_expr(&ctx, value_expr, &gmod)
                         emit(&ctx, GIAssign(lid, OpCopy(val)))
+                case EFieldAccess(base_box, field_name):
+                    # self.field = value
+                    # Lower as: __field_write_TYPE_FIELD(&base, value).
+                    # The codegen expands this to `((T*)base)->field = value;`.
+                    # Previously silently dropped — `self.lex_pos += 1` didn't
+                    # increment, leaving the lexer loop spinning.
+                    lower_field_write(&ctx, *base_box, field_name, value_expr, &gmod)
                 else:
                     pass
         case SCompoundAssign(target_expr, op, value_expr):
-            # x += y  →  x = x + y (and similar for -=, *=, /=, %=).
-            # Lower as:
-            #   lhs_val = load(target_local)
-            #   rhs_val = lower(value_expr)
-            #   result  = lhs_val <op> rhs_val
-            #   target_local = result
-            # Silently dropped before, leading to stuck loops with
-            # `ai += 1` etc. in the self-host driver.
+            # x <op>= y  →  x = x <op> y. Lower per target shape: local
+            # identifier goes through GIAssign, field access goes through
+            # __field_read + binop + __field_write.
             match target_expr.expr:
                 case EIdentifier(name):
                     if ctx.named_locals.contains(name):
@@ -1393,10 +1394,75 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int op_dst = add_local(&ctx, lhs_type, NO_NAME)
                         emit(&ctx, GIBinOp(op_dst, map_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
                         emit(&ctx, GIAssign(lid, OpCopy(op_dst)))
+                case EFieldAccess(base_box, field_name):
+                    # self.field <op>= value
+                    # Lower as: self.field = self.field <op> value.
+                    # Read via lower_expr on the original field-access
+                    # expression (reuses __field_read), binop, field write.
+                    int lhs_val = lower_expr(&ctx, target_expr, &gmod)
+                    int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
+                    int rhs_val = lower_expr(&ctx, value_expr, &gmod)
+                    int op_dst = add_local(&ctx, lhs_type, NO_NAME)
+                    emit(&ctx, GIBinOp(op_dst, map_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
+                    # Wrap op_dst in a synthetic SpannedExpr to feed the
+                    # same field-write path used above.
+                    emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
                 else:
                     pass
         else:
             pass
+
+# Lower `base.field = value_expr`. Emits GICallExtern for the codegen-side
+# __field_write_TYPE_FIELD helper which expands to `((T*)base)->field = value`.
+void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, SpannedExpr value_expr, GirModule &gmod):
+    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base_tid = ctx.locals.get(base).unwrap().type_id
+    String base_type_name = type_id_to_name(base_tid, &gmod)
+    # Unwrap Ptr/MutPtr to get the inner type name.
+    if base_tid >= 0 and base_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(base_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                base_type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                base_type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    int val = lower_expr(&ctx, value_expr, &gmod)
+    String write_fn = "__field_write_" + base_type_name + "_" + field_name
+    Vector[Operand] write_args = []
+    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    if base_is_ptr:
+        write_args.push(OpCopy(base))
+    else:
+        write_args.push(OpMove(base))
+    write_args.push(OpCopy(val))
+    emit(&ctx, GICallExtern(-1, write_fn, write_args))
+
+# Variant of lower_field_write that takes a pre-lowered local id for the
+# value rather than re-lowering an expression.
+void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String field_name, int value_local, GirModule &gmod):
+    int base = lower_expr(&ctx, base_expr, &gmod)
+    int base_tid = ctx.locals.get(base).unwrap().type_id
+    String base_type_name = type_id_to_name(base_tid, &gmod)
+    if base_tid >= 0 and base_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(base_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                base_type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                base_type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    String write_fn = "__field_write_" + base_type_name + "_" + field_name
+    Vector[Operand] write_args = []
+    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    if base_is_ptr:
+        write_args.push(OpCopy(base))
+    else:
+        write_args.push(OpMove(base))
+    write_args.push(OpCopy(value_local))
+    emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
 # ── Control flow lowering ────────────────────────────────
 
