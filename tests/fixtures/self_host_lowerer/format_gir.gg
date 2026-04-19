@@ -168,6 +168,8 @@ String format_instruction(Instruction inst, GirModule &gmod):
             return "        drop_if_alive _" + int_to_str(lid)
         case GIMoveZero(lid):
             return "        move_zero _" + int_to_str(lid)
+        case GIDeref(dst, src, _):
+            return "        _" + int_to_str(dst) + " = deref _" + int_to_str(src)
         case GINop():
             return "        nop"
 

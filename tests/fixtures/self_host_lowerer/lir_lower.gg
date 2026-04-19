@@ -642,6 +642,8 @@ String map_runtime_name(String name):
                 return "gorget_string_clone_to_owned"
             case "free":
                 return "gorget_string_free"
+            case "substring":
+                return "gorget_str_slice"
             else:
                 return "gorget_str_" + method
 
@@ -2044,6 +2046,25 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             LirBlock blk = f.blocks.get(bb).unwrap()
             blk.insts.push(IMoveSlot(slot))
             f.blocks.set(bb, blk)
+
+        case GIDeref(dst_local, src_local, inner_ty):
+            # *box — load *src pointer value, memcpy sizeof(inner) into
+            # dst slot. Works uniformly for scalar and aggregate inner
+            # types because the dst slot address is a byte-addressable
+            # destination. Matches IBoxAlloc's heap-store shape.
+            int inner_lir_ty = map_gir_type(inner_ty, &gmod, &sr)
+            int size_bytes = lir_type_byte_size_in_mod(inner_lir_ty, &m, 0)
+            int src_slot_d = local_to_slot.get(src_local).unwrap()
+            int dst_slot_d = local_to_slot.get(dst_local).unwrap()
+            int src_ptr_val = lir_fn_next_value(&f)
+            int dst_addr_val = lir_fn_next_value(&f)
+            int size_val = lir_fn_next_value(&f)
+            LirBlock dblk = f.blocks.get(bb).unwrap()
+            dblk.insts.push(ISlotLoad(src_ptr_val, src_slot_d, LT_PTR))
+            dblk.insts.push(ISlotAddr(dst_addr_val, dst_slot_d))
+            dblk.insts.push(IIConst(size_val, LT_I64, size_bytes))
+            dblk.insts.push(IMemcpy(dst_addr_val, src_ptr_val, size_val))
+            f.blocks.set(bb, dblk)
 
         case GINop():
             pass

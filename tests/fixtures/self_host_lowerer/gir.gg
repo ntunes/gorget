@@ -86,6 +86,7 @@ enum Instruction:
     GIDrop(int)
     GIDropIfAlive(int)
     GIMoveZero(int)
+    GIDeref(int, int, int)    # dst_local, src_local (ptr/Box), inner_ty_id
     GINop()
 
 # ── Terminators ───────────────────────────────────────────

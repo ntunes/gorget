@@ -1256,7 +1256,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EMutableBorrow(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDeref(inner_box):
-            return lower_expr(&ctx, *inner_box, &gmod)
+            # `*box` — actually load the inner value. The inner AST is
+            # lowered to a local of type `Box[T]` (void* at C level). We
+            # need to emit a load so downstream code that passes the
+            # result to a function expecting `T` works.
+            int dsrc = lower_expr(&ctx, *inner_box, &gmod)
+            int dsrc_tid = ctx.locals.get(dsrc).unwrap().type_id
+            String dsrc_tname = type_id_to_name(dsrc_tid, &gmod)
+            if dsrc_tname.starts_with("Box__"):
+                String d_inner_name = dsrc_tname.substring(5, dsrc_tname.len())
+                int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
+                int ddst = add_local(&ctx, d_inner_tid, NO_NAME)
+                emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
+                return ddst
+            return dsrc
         case ETry(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDotShorthand(variant, sargs):
@@ -1494,18 +1507,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SMetaIf(_, _):
             # `meta if` — compile-time conditional, already resolved.
             pass
-        case SMatch(_, _):
-            # SMatch is still the dominant remaining lower_fail site (204
-            # drops per self-host compilation). A partial implementation
-            # (lower_match_stmt + lower_ctor_pattern below) exists but
-            # regresses self_host_bootstrap — the generated stage-1 C
-            # doesn't typecheck because `__field_read_Expr_EBinaryOp_0`
-            # returns Box[SpannedExpr] but resolve_expr() expects a
-            # SpannedExpr value. Needs type-coercion via __field_read_
-            # or a different lowering that deref's the Box. Left wired
-            # behind lower_fail + the helpers preserved below for the
-            # next iteration.
-            lower_fail("unhandled in lower_stmt: SMatch")
+        case SMatch(scrutinee, arms):
+            # Real SMatch lowering — delegates to lower_match_stmt for
+            # the per-arm ctor / binding / guard scaffolding. Payload
+            # binds of type Box[T] are consumed via EDeref → GIDeref
+            # which emits a proper load.
+            lower_match_stmt(&ctx, scrutinee, arms, &gmod, is_main)
         case SLoop(body):
             # Unconditional loop — `loop: body`, exit via break. Same
             # shape as `while true:`, but the body's default back-edge
@@ -1765,7 +1772,8 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
         case PBinding(name):
             # Always match; bind scrutinee into a fresh local under `name`.
             int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
-            int bound = add_local(&ctx, scr_tid, Some(name))
+            Option[String] name_opt = Some(name.clone())
+            int bound = add_local(&ctx, scr_tid, name_opt)
             emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
             ctx.named_locals.put(name, bound)
             set_terminator(&ctx, GTJump(match_bb))
@@ -1819,7 +1827,8 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # Look up field type from the enum's variant's field info.
                 int fty = lookup_ctor_field_type(enum_name, variant_name, fi, &gmod)
                 int field_val = emit_payload_read(&ctx, scrutinee_ptr, enum_name, variant_name, fi, fty, &gmod)
-                int bound = add_local(&ctx, fty, Some(bname))
+                Option[String] bname_opt = Some(bname.clone())
+                int bound = add_local(&ctx, fty, bname_opt)
                 emit(&ctx, GIAssign(bound, OpCopy(field_val)))
                 ctx.named_locals.put(bname, bound)
             else:
