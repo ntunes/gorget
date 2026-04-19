@@ -664,8 +664,13 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         let method = name.rsplit("__").next()?;
         match method {
             "filter" | "fold" | "each" | "any" | "all" | "map"
-            | "is_subset" | "is_superset" | "is_disjoint"
             | "union" | "intersection" | "difference" | "symmetric_difference" => return None,
+            // Read-only set predicates route to generic runtime stubs
+            // that walk the sets' own cap/states/key_size fields —
+            // type-independent, one stub per op covers every T.
+            "is_subset" | "is_superset" | "is_disjoint" => {
+                return Some(format!("gorget_set_{method}"));
+            }
             "insert" => return Some("gorget_set_add".into()),
             "has" => return Some("gorget_set_contains".into()),
             // Set.new() needs gorget_ordered_set_new (ordered); HashSet uses unordered.

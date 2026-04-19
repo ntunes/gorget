@@ -23,8 +23,12 @@ pub(super) const DICT_INLINE_METHODS: &[&str] = &[
     // dispatched via `map_monomorphized_to_runtime`.
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
-    "filter", "fold", "each", "any", "all", "map", "is_subset", "is_superset",
-    "union", "intersection", "difference", "symmetric_difference", "is_disjoint",
+    "filter", "fold", "each", "any", "all", "map",
+    "union", "intersection", "difference", "symmetric_difference",
+    // `is_subset` / `is_superset` / `is_disjoint` route to generic
+    // runtime stubs (`gorget_set_is_{subset,superset,disjoint}`)
+    // dispatched via `map_monomorphized_to_runtime` — no per-type
+    // inline helper needed.
 ];
 
 /// Parse a monomorphized name like `Dict__Str__int64_t__filter` into
@@ -583,35 +587,6 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
         }
-        "is_subset" => {
-            // is_subset(other): check every element in self is in other
-            writeln!(out, "static inline bool {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__other, &__elem)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "is_superset" => {
-            // is_superset(other) = other.is_subset(self)
-            writeln!(out, "static inline bool {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __self = *(GorgetSet*)__set_ptr;").unwrap();
-            if is_ordered {
-                writeln!(out, "    for (size_t __j = 0; __j < __other.order_len; __j++) {{").unwrap();
-                writeln!(out, "        size_t __i = __other.order[__j];").unwrap();
-                writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
-            } else {
-                writeln!(out, "    for (size_t __i = 0; __i < __other.cap; __i++) {{").unwrap();
-                writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
-            }
-            writeln!(out, "        {elem_c} __elem = *({elem_c}*)((char*)__other.keys + __i * __other.key_size);").unwrap();
-            writeln!(out, "        if (!gorget_set_contains(&__self, &__elem)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
         "union" => {
             // union: combine all elements from self and other
             writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
@@ -680,17 +655,6 @@ pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, m
             writeln!(out, "        if (!gorget_set_contains(&__src, &__elem2)) gorget_map_put_cloned(&__result, &__elem2, NULL);").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "is_disjoint" => {
-            // is_disjoint(other): true if no element in self is in other
-            writeln!(out, "static inline bool {full_name}(void* __set_ptr, GorgetSet __other) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if (gorget_set_contains(&__other, &__elem)) return false;").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return true;").unwrap();
             writeln!(out, "}}").unwrap();
         }
         _ => {
@@ -3050,6 +3014,47 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     if has_extern("gorget_array_unique_generic") {
         writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
     }
+    // Type-independent set predicates — each walks the argument
+    // sets using their own `cap`/`states`/`key_size` fields, so a
+    // single stub covers every element type.
+    //
+    // is_subset: every element of self is in other.
+    if has_extern("gorget_set_is_subset") {
+        writeln!(out, "static inline bool gorget_set_is_subset(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet __self = *(GorgetSet*)__self_ptr; \
+            for (size_t __i = 0; __i < __self.cap; __i++) {{ \
+                if (__self.states[__i] != 1) continue; \
+                void* __k = (char*)__self.keys + __i * __self.key_size; \
+                if (!gorget_set_contains(&__other, __k)) return false; \
+            }} \
+            return true; \
+        }}").unwrap();
+    }
+    // is_superset(self, other) ≡ is_subset(other, self).
+    if has_extern("gorget_set_is_superset") {
+        writeln!(out, "static inline bool gorget_set_is_superset(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet* __self = (GorgetSet*)__self_ptr; \
+            for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                if (__other.states[__i] != 1) continue; \
+                void* __k = (char*)__other.keys + __i * __other.key_size; \
+                if (!gorget_set_contains(__self, __k)) return false; \
+            }} \
+            return true; \
+        }}").unwrap();
+    }
+    // is_disjoint: no element appears in both.
+    if has_extern("gorget_set_is_disjoint") {
+        writeln!(out, "static inline bool gorget_set_is_disjoint(void* __self_ptr, GorgetSet __other) {{ \
+            GorgetSet __self = *(GorgetSet*)__self_ptr; \
+            for (size_t __i = 0; __i < __self.cap; __i++) {{ \
+                if (__self.states[__i] != 1) continue; \
+                void* __k = (char*)__self.keys + __i * __self.key_size; \
+                if (gorget_set_contains(&__other, __k)) return false; \
+            }} \
+            return true; \
+        }}").unwrap();
+    }
+
     // gorget_map_update(dst, src): merge src's entries into dst via
     // put_cloned. Type-independent: walks src by `cap`/`states` using
     // its `key_size` / `val_size` fields. Used by `Dict.update(other)`
