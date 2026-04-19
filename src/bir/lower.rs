@@ -242,7 +242,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::Filter
                         | HofOp::Map
                         | HofOp::FlatMap
-                        | HofOp::DictEach => {
+                        | HofOp::DictEach
+                        | HofOp::DictFold => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -390,6 +391,27 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                         val_ty,
                                         closure,
                                         closure_arg_abis,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::DictFold => {
+                                    let val_ty = value_ty_inner
+                                        .clone()
+                                        .unwrap_or(LirType::I64);
+                                    expand_dict_fold(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        val_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        closure_ret_ty,
+                                        init.expect("DictFold must carry init"),
+                                        dst.expect("DictFold must carry dst"),
                                         remaining,
                                         orig_term,
                                     );
@@ -1910,6 +1932,9 @@ struct DictHofLoopCtx {
     val_arg: ValueId,
     key_abi: crate::ir::abi::AbiKind,
     val_abi: crate::ir::abi::AbiKind,
+    /// Block-param ValueIds on `check_bb` (for each entry in
+    /// `extra_check_inits`). Read from body_bb / state_bb to access
+    /// the current iteration's accumulator.
     extra_check_params: Vec<ValueId>,
 }
 
@@ -1942,6 +1967,17 @@ fn emit_dict_hof_loop_scaffold(
         let p = alloc_value(next);
         func.block_mut(check_bb).params.push((p, ty.clone()));
         extra_check_params.push(p);
+    }
+
+    // advance_bb mirrors the extras — variants pass "the value to
+    // carry into the next iteration" when they jump in. On the state-
+    // skip path the scaffold carries the check_bb block-param values
+    // unchanged; on the body path the variant decides.
+    let mut advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(advance_bb).params.push((p, ty.clone()));
+        advance_extra_params.push(p);
     }
 
     // Entry: jmp check_bb(0, init0, init1, ...)
@@ -2025,12 +2061,16 @@ fn emit_dict_hof_loop_scaffold(
         lhs: state_val,
         rhs: one_u8,
     });
+    // State-skip path: carry check_bb's block-param extras through
+    // advance_bb unchanged — the accumulator (or any carried state)
+    // passes through since the element was skipped.
+    let skip_args: Vec<ValueId> = extra_check_params.iter().copied().collect();
     func.block_mut(state_bb).terminator = Term::Branch {
         cond: occupied,
         then_block: body_bb,
         then_args: vec![],
         else_block: advance_bb,
-        else_args: vec![],
+        else_args: skip_args,
     };
 
     // body_bb: key + val load/pointer.
@@ -2122,8 +2162,16 @@ fn emit_dict_hof_loop_scaffold(
         crate::ir::abi::AbiKind::Scalar
     };
 
-    // advance_bb: next_i = i + 1 (variants set the back-edge Jump
-    // themselves — they may need to pass accumulator extras).
+    // advance_bb: next_i = i + 1, then Jump back to check_bb with
+    // (next_i + carried-extras). The extras are advance_bb's block
+    // params — they flow from whichever predecessor (state-skip or
+    // body) jumped in with its "value to carry forward."
+    //
+    // Note: `next_i` is computed in advance_bb for a subtle reason —
+    // `i_val` is check_bb's block param and is dominated by check_bb,
+    // and advance_bb is reachable from check_bb (via state_bb and
+    // body_bb, both dominated by check_bb). So advance_bb can
+    // reference `i_val` directly.
     let next_i = alloc_value(next);
     let one_i64 = alloc_value(next);
     func.block_mut(advance_bb).insts.push(Inst::IConst {
@@ -2138,6 +2186,10 @@ fn emit_dict_hof_loop_scaffold(
         rhs: one_i64,
         overflow: Overflow::Wrap,
     });
+    let mut back_args = Vec::with_capacity(1 + advance_extra_params.len());
+    back_args.push(next_i);
+    back_args.extend(advance_extra_params.iter().copied());
+    func.block_mut(advance_bb).terminator = Term::Jump(check_bb, back_args);
 
     DictHofLoopCtx {
         check_bb,
@@ -2206,11 +2258,103 @@ fn expand_dict_each(
         arg_abis: vec![ctx.key_abi, ctx.val_abi],
         ret_ty: LirType::Void,
     });
+    // each has no carried extras — empty list for advance_bb's block args.
     func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
-    // advance_bb: back-edge to check_bb.
-    func.block_mut(ctx.advance_bb).terminator =
-        Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+    // advance_bb terminator is set by the scaffold (Jump(check_bb, [next_i]));
+    // no extras to forward for `each`.
     // done_bb: remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: DictFold, init, dst }` — thread a
+/// scalar accumulator through the hash-table walk. Closure signature:
+/// `(acc, K, V) -> acc`.
+#[allow(clippy::too_many_arguments)]
+fn expand_dict_fold(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    key_ty: LirType,
+    val_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    closure_ret_ty: LirType,
+    init: ValueId,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    // closure signature: (acc, K, V). closure_arg_abis = [acc_abi, key_abi, val_abi].
+    let acc_abi_hint = closure_arg_abis.first().copied();
+    let key_abi_hint = closure_arg_abis.get(1).copied();
+    let val_abi_hint = closure_arg_abis.get(2).copied();
+    let ctx = emit_dict_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &key_ty,
+        &val_ty,
+        key_abi_hint,
+        val_abi_hint,
+        vec![(closure_ret_ty.clone(), init)],
+    );
+    let acc_val = ctx.extra_check_params[0];
+
+    // Acc passing: closure expects either by-ptr or by-value.
+    let acc_by_ptr = match acc_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => closure_ret_ty.is_aggregate(),
+    };
+    let acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.body_bb).insts.push(Inst::AddressOf {
+            dst: p,
+            value: acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        acc_val
+    };
+    let acc_abi = if acc_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    // check_bb: cond ? state_bb : done_bb(acc).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![acc_val],
+    };
+    // body_bb: call closure(acc, key, val) → new_acc, then jump to
+    // advance_bb(new_acc) — advance_bb's block param receives the
+    // updated accumulator and forwards it to check_bb.
+    let new_acc = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![acc_arg, ctx.key_arg, ctx.val_arg],
+        arg_abis: vec![acc_abi, ctx.key_abi, ctx.val_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    func.block_mut(ctx.body_bb).terminator =
+        Term::Jump(ctx.advance_bb, vec![new_acc]);
+    // advance_bb terminator is already set by scaffold (forwards the
+    // block-param extras back to check_bb).
+    // done_bb: dst param = acc carried out.
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
     func.block_mut(ctx.done_bb).insts = remaining;
     func.block_mut(ctx.done_bb).terminator = orig_term;
 }

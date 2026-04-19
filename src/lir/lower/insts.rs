@@ -1865,11 +1865,16 @@ impl<'a> FuncLowering<'a> {
             .or_else(|| original_name.strip_prefix("HashMap__"))?;
         let sep_pos = rest.rfind("__")?;
         let method = &rest[sep_pos + 2..];
-        let (hof_op, produces_result) = match method {
-            "each" => (HofOp::DictEach, false),
+        let (hof_op, produces_result, is_fold) = match method {
+            "each" => (HofOp::DictEach, false, false),
+            "fold" => (HofOp::DictFold, true, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
+            return None;
+        }
+        // Fold: (dict, init, closure) — three args.
+        if is_fold && lir_args.len() < 3 {
             return None;
         }
         if produces_result && dst.is_none() {
@@ -1908,27 +1913,6 @@ impl<'a> FuncLowering<'a> {
                 _ => AbiKind::Scalar,
             }
         };
-        let key_abi = param_tys
-            .first()
-            .map(|ty| abi_from_param_ty(ty))
-            .unwrap_or_else(|| {
-                if key_ty.is_aggregate() {
-                    crate::ir::abi::AbiKind::Ptr
-                } else {
-                    crate::ir::abi::AbiKind::Scalar
-                }
-            });
-        let val_abi = param_tys
-            .get(1)
-            .map(|ty| abi_from_param_ty(ty))
-            .unwrap_or_else(|| {
-                if val_ty.is_aggregate() {
-                    crate::ir::abi::AbiKind::Ptr
-                } else {
-                    crate::ir::abi::AbiKind::Scalar
-                }
-            });
-
         // Only handle the case where the closure signature is known.
         // Without a signature we'd guess the per-arg ABI, which is
         // risky for aggregate types.
@@ -1936,11 +1920,87 @@ impl<'a> FuncLowering<'a> {
             return None;
         }
 
+        // For fold the closure signature is (acc, K, V); for each it's
+        // (K, V). Peel the accumulator from the ABI list when present.
+        let (acc_abi, key_abi, val_abi) = if is_fold {
+            let acc = param_tys
+                .first()
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or(crate::ir::abi::AbiKind::Scalar);
+            let k = param_tys
+                .get(1)
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if key_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            let v = param_tys
+                .get(2)
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if val_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            (Some(acc), k, v)
+        } else {
+            let k = param_tys
+                .first()
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if key_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            let v = param_tys
+                .get(1)
+                .map(|ty| abi_from_param_ty(ty))
+                .unwrap_or_else(|| {
+                    if val_ty.is_aggregate() {
+                        crate::ir::abi::AbiKind::Ptr
+                    } else {
+                        crate::ir::abi::AbiKind::Scalar
+                    }
+                });
+            (None, k, v)
+        };
+
         // Wrap the closure arg into a GorgetClosure pointer.
         let mut lir_args_wrapped = lir_args.to_vec();
         self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
-        let closure_ret_ty = LirType::Void; // each returns void
+        // closure_ret_ty: for fold, the accumulator type (= dst's
+        // declared type); for each, void. Aggregate accumulators go
+        // through AddressOf on the loop back-edge so they work here
+        // the same way as the Vector fold path.
+        let closure_ret_ty = if is_fold {
+            let d = dst.as_ref().expect("fold requires dst");
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            self.map_type(&gir_ty)
+        } else {
+            LirType::Void
+        };
+
+        let closure_arg_abis = match acc_abi {
+            Some(a) => vec![a, key_abi, val_abi],
+            None => vec![key_abi, val_abi],
+        };
+
+        // When a result is produced, allocate a fresh ValueId and
+        // plumb it to the caller's local slot.
+        let result_id = if produces_result {
+            Some(self.lir_func.next_value())
+        } else {
+            None
+        };
+        let init_id = if is_fold { Some(lir_args_wrapped[1]) } else { None };
 
         self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
             coll: lir_args_wrapped[0],
@@ -1950,10 +2010,14 @@ impl<'a> FuncLowering<'a> {
             closure: lir_args_wrapped[closure_idx],
             closure_kind: ClosureDispatchKind::EscapedClosure,
             closure_ret_ty,
-            closure_arg_abis: vec![key_abi, val_abi],
-            dst: None,
-            init: None,
+            closure_arg_abis,
+            dst: result_id,
+            init: init_id,
         });
+
+        if let (Some(d), Some(r)) = (*dst, result_id) {
+            self.store_to_local(d, r, bb);
+        }
         Some(bb)
     }
 
