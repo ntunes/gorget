@@ -643,7 +643,11 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
         let method = name.rsplit("__").next()?;
         match method {
             "filter" | "fold" | "each" | "any" | "all" | "map"
-            | "update" | "get_or" | "get_or_put" => return None,
+            | "get_or" | "get_or_put" => return None,
+            // `update(other)` routes to a single generic runtime stub
+            // (`gorget_map_update`) — the iteration is type-independent
+            // since src's struct carries key_size/val_size at runtime.
+            "update" => return Some("gorget_map_update".into()),
             // Dict.new() needs gorget_dict_new (ordered); all other methods use gorget_map_*
             "new" if name.starts_with("Dict__") => return Some("gorget_dict_new".into()),
             "set" => return Some("gorget_map_put".into()),

@@ -18,7 +18,9 @@ pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
 pub(super) const DICT_INLINE_METHODS: &[&str] = &[
-    "filter", "fold", "each", "any", "all", "map", "update", "get_or", "get_or_put",
+    "filter", "fold", "each", "any", "all", "map", "get_or", "get_or_put",
+    // `update` routes to generic runtime stub `gorget_map_update`
+    // dispatched via `map_monomorphized_to_runtime`.
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
     "filter", "fold", "each", "any", "all", "map", "is_subset", "is_superset",
@@ -466,20 +468,6 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
             writeln!(out, "        if (!{call_fn}(&__fn, {kr}__key, {vr}__val)) return false;").unwrap();
             writeln!(out, "    }}").unwrap();
             writeln!(out, "    return true;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "update" => {
-            // update(other_map): merge other dict entries into self.
-            // __k/__v point into __other's storage — use put_cloned so the new slot
-            // gets independent key/value copies via key_clone / val_clone.
-            writeln!(out, "static inline void {full_name}(void* __map_ptr, GorgetMap __other) {{").unwrap();
-            writeln!(out, "    GorgetMap* __dst = (GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __other.cap; __i++) {{").unwrap();
-            writeln!(out, "        if (__other.states[__i] != 1) continue;").unwrap();
-            writeln!(out, "        void* __k = (char*)__other.keys + __i * __other.key_size;").unwrap();
-            writeln!(out, "        void* __v = (char*)__other.values + __i * __other.val_size;").unwrap();
-            writeln!(out, "        gorget_map_put_cloned(__dst, __k, __v);").unwrap();
-            writeln!(out, "    }}").unwrap();
             writeln!(out, "}}").unwrap();
         }
         "get_or" => {
@@ -3061,6 +3049,21 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     }
     if has_extern("gorget_array_unique_generic") {
         writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    // gorget_map_update(dst, src): merge src's entries into dst via
+    // put_cloned. Type-independent: walks src by `cap`/`states` using
+    // its `key_size` / `val_size` fields. Used by `Dict.update(other)`
+    // / `HashMap.update(other)`.
+    if has_extern("gorget_map_update") {
+        writeln!(out, "static inline void gorget_map_update(void* __dst_ptr, GorgetMap __other) {{ \
+            GorgetMap* __dst = (GorgetMap*)__dst_ptr; \
+            for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                if (__other.states[__i] != 1) continue; \
+                void* __k = (char*)__other.keys + __i * __other.key_size; \
+                void* __v = (char*)__other.values + __i * __other.val_size; \
+                gorget_map_put_cloned(__dst, __k, __v); \
+            }} \
+        }}").unwrap();
     }
     // gorget_array_windows(arr, n): Vector[Vector[T]] of sliding N-sized
     // slices. Elements are bit-copied (no clone); correct for POD types.
