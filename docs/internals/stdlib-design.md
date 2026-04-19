@@ -994,6 +994,29 @@ demand, not shipped speculatively.
    `Result[T, IoError]` where they cross the I/O boundary — breaking,
    but contained to the I/O surface.
 
+**Phase 3 follow-ups (post-initial-ship):**
+
+- **Rename `write_bytes` / `read_bytes` → `write` / `read`** once the
+  legacy `File.write(String)` extern is retired and callers move to
+  `write_str` / `write_all`. The `_bytes` suffix was only a
+  name-collision shim during migration; the final narrow-waist names
+  on `Writer` / `Reader` are `write` and `read`.
+- **Re-examine the `print()` vs `println()` split.** Currently `print`
+  is an infallible compiler builtin (panics on stdout failure) and
+  `println` is the typed-error stdlib wrapper. Two traits in one
+  surface (builtin vs stdlib, infallible vs Result). Options:
+  (a) Keep `print` as sugar that drops the Result — one name, two
+      error postures depending on whether callers bind the return.
+  (b) Make `print` return `Result` unconditionally; scripts write
+      `_ = print("hi")` and services use `?`. Removes the builtin-vs-
+      stdlib axis, at the cost of script ergonomics.
+  (c) Retire `println` entirely; `print(x)` takes an optional
+      `file=stderr` / bindable return, and the Result posture is
+      decided by what the caller does with it.
+  Open question — pick one before Phase 3 closes. Current preference
+  is to NOT keep both `print` AND `println`; which one stays is the
+  discussion.
+
 ### Phase 4: Concurrency-model enforcement
 
 1. Type-checker pass: reject `&` captures crossing `spawn` boundaries;
