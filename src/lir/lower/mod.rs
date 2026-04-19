@@ -200,31 +200,43 @@ impl<'a> LoweringContext<'a> {
         // so FuncLowering can access drop_collision_types for inline drops.
         self.populate_recursive_drop_structs();
 
-        // Pre-compute `__Closure_N__call` signatures from GIR so the
-        // HOF intercept in FuncLowering can resolve each closure's
-        // actual return type and parameter layout. The return type
-        // matters for cross-typed maps (`nums.map(int → String)`)
-        // since the dst's declared element type can diverge. The
-        // parameter layout matters for aggregate-element HOFs
-        // (fold/filter/map/…) — the closure's `__call` signature
-        // decides per-arg whether it wants the struct by value or by
-        // pointer, and BIR's per-arg Load/pointer choice must match.
+        // Pre-compute function signatures the HOF intercept needs:
+        //   - `__Closure_N__call`  (closure literal): key is the
+        //     `__call` function name, `param_tys` excludes the env
+        //     parameter at index 0.
+        //   - user function `F`   (bare FuncRef closure): key is
+        //     the function's own name, `param_tys` includes every
+        //     declared param.
+        //
+        // The intercept ABI logic treats `sig.param_tys` as the user
+        // arg list — both shapes satisfy this contract.
+        //
+        // We walk every GIR function once. The return type matters
+        // for cross-typed maps (`nums.map(int → String)` where the
+        // dst's declared element type diverges from the closure's
+        // return). The parameter layout matters for aggregate-element
+        // HOFs (fold/filter/map/…) — the closure decides per-arg
+        // whether to take the struct by value or by pointer, and
+        // BIR's per-arg Load/pointer choice must match.
         let closure_call_sigs: std::collections::HashMap<String, ClosureCallSig> = self
             .gir
             .functions
             .iter()
-            .filter(|f| f.name.starts_with("__Closure_") && f.name.ends_with("__call"))
             .map(|f| {
                 let ret_ty = map_gir_type_with_structs(
                     &f.return_type,
                     &self.gir.type_registry,
                     Some(&self.struct_reg),
                 );
-                // Skip the env param (index 0); keep only user params.
+                let skip = if f.name.starts_with("__Closure_") && f.name.ends_with("__call") {
+                    1
+                } else {
+                    0
+                };
                 let param_tys: Vec<LirType> = f
                     .params
                     .iter()
-                    .skip(1)
+                    .skip(skip)
                     .map(|t| {
                         map_gir_type_with_structs(
                             t,

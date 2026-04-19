@@ -1909,23 +1909,26 @@ impl<'a> FuncLowering<'a> {
         let elem_c_name = &rest[..sep];
         let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
 
-        // Resolve the closure's `__Closure_N` GIR type name (or
-        // FuncRef target) so we can look up the `__Closure_N__call`
-        // signature in the pre-computed table. The snapshot gives us
-        // both the return type (needed for cross-typed map/flat_map)
-        // and the parameter LIR types (needed to pick per-arg ABI
-        // tags that match the closure's signature — pass-by-value
-        // vs. pass-by-pointer for aggregates).
+        // Resolve the closure's signature from the pre-computed
+        // table. The snapshot gives us both the return type (needed
+        // for cross-typed map/flat_map) and the parameter LIR types
+        // (needed to pick per-arg ABI tags that match the closure's
+        // signature — pass-by-value vs. pass-by-pointer for
+        // aggregates). Keys:
+        //   - `__Closure_N` arg → `__Closure_N__call` (stored with
+        //     `env` param already stripped from param_tys).
+        //   - FuncRef constant  → the target function's own name
+        //     (stored with all params intact).
         let closure_call_sig = args.get(closure_idx).and_then(|op| {
-            let name = match op {
-                Operand::Constant(Constant::FuncRef(n)) => Some(n.clone()),
+            let key = match op {
+                Operand::Constant(Constant::FuncRef(n)) => n.clone(),
                 Operand::Copy(_) | Operand::Move(_) => {
-                    self.operand_gir_type_name(op)
+                    let ty_name = self.operand_gir_type_name(op)?;
+                    format!("{ty_name}__call")
                 }
-                _ => None,
-            }?;
-            let call_fn = format!("{name}__call");
-            self.closure_call_sigs.get(&call_fn).cloned()
+                _ => return None,
+            };
+            self.closure_call_sigs.get(&key).cloned()
         });
 
         // For fold/reduce the closure return type = the accumulator

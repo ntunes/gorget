@@ -696,10 +696,12 @@ pub(super) fn emit_call_extern(
             };
 
             if let Some((elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                // `each` / `any` / `all` are lowered upstream via
-                // `Inst::HofExpand`; other HOFs still inline here.
+                // Most Vector HOFs (each/any/all/map/filter/fold/reduce/count/flat_map)
+                // are lowered upstream via `Inst::HofExpand`. Only find/find_index (for
+                // aggregate elements), sort/sort_by/windows/chunks/unique/sorted still
+                // inline here.
                 if (dst.is_some() || method == "find" || method == "sort" || method == "sort_by" || method == "sort_by_key")
-                    && !matches!(method, "each" | "any" | "all")
+                    && !matches!(method, "each" | "any" | "all" | "map" | "filter" | "fold" | "reduce" | "count" | "flat_map")
                 {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
@@ -718,95 +720,6 @@ pub(super) fn emit_call_extern(
                     let needs_ref = closure_params_need_ref(module, &call_fn);
                     let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     match method {
-                        "filter" => {
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, {er}__elem)) gorget_array_push(&__result, &__elem); \
-                                }} __result; }});").unwrap();
-                        }
-                        "map" => {
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                __typeof__({call_fn}({fn_ref}, {er}({elem_c}){{0}})) __map_out; \
-                                GorgetArray __result = gorget_array_new(sizeof(__map_out)); \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __map_out = {call_fn}({fn_ref}, {er}__elem); \
-                                gorget_array_push(&__result, &__map_out); \
-                                }} __result; }});").unwrap();
-                        }
-                        "fold" if emit_args.len() >= 3 => {
-                            let acc_arg = v(emit_args[1]);
-                            let fn_a = v(emit_args[2]);
-                            let fold_closure_is_ptr = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
-                            let fn_a_ref = if fold_closure_is_ptr { fn_a.clone() } else { format!("&{fn_a}") };
-                            let call_fn2 = val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()).and_then(|ty| {
-                                if let LirType::Struct(sid) = ty {
-                                    let sdef = &module.structs[sid.0 as usize];
-                                    let cn = format!("{}__call", sdef.name);
-                                    if module.functions.iter().any(|f| f.name == cn) { Some(cn) } else { None }
-                                } else { None }
-                            }).unwrap_or_else(|| call_fn.clone());
-                            let fold_needs_ref = closure_params_need_ref(module, &call_fn2);
-                            let far = if fold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                            let fer = if fold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                            // Accumulator type: use destination type (fold returns accumulator, not element).
-                            let acc_c = d_opt.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
-                                .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "int64_t".to_string());
-                            // Detect Str/GorgetString mismatch: if the closure returns GorgetString
-                            // but the fold destination is Str, use GorgetString internally and convert at the end.
-                            let closure_returns_gorget_string = {
-                                // Look up the __call function and check its return type
-                                module.functions.iter().find(|f| f.name == call_fn2).map_or(false, |f| {
-                                    matches!(&f.return_type, LirType::Struct(sid) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"))
-                                })
-                            };
-                            let dst_is_str = acc_c == "Str";
-                            let acc_is_str_lit = str_lit_vals.get(emit_args[1].0 as usize).copied().unwrap_or(false);
-                            let acc_is_gs = acc_c == "GorgetString";
-                            if closure_returns_gorget_string && dst_is_str {
-                                // Str and GorgetString are the same 32-byte struct — no coercion needed.
-                                let acc_init = if acc_is_str_lit {
-                                    format!("{acc_arg}")
-                                } else {
-                                    format!("{acc_arg}")
-                                };
-                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                    Str __acc = {acc_init}; \
-                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, {far}__acc, {fer}__elem); \
-                                    }} __acc; }});").unwrap();
-                            } else if acc_is_str_lit && (acc_is_gs || dst_is_str) {
-                                // String literal init for string fold
-                                let acc_init = format!("{acc_arg}");
-                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                    {acc_c} __acc = {acc_init}; \
-                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, {far}__acc, {fer}__elem); \
-                                    }} __acc; }});").unwrap();
-                            } else {
-                                write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                    {acc_c} __acc = {acc_arg}; \
-                                    for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                    {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                    __acc = {call_fn2}({fn_a_ref}, {far}__acc, {fer}__elem); \
-                                    }} __acc; }});").unwrap();
-                            }
-                        }
-                        "reduce" => {
-                            let reduce_needs_ref = closure_params_need_ref(module, &call_fn);
-                            let rar = if reduce_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                            let rer = if reduce_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                {elem_c} __acc = GORGET_ARRAY_AT({elem_c}, __src, 0); \
-                                for (size_t __i = 1; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                __acc = {call_fn}({fn_ref}, {rar}__acc, {rer}__elem); \
-                                }} __acc; }});").unwrap();
-                        }
                         "sorted" => {
                             let cmp = compare_fn_for_elem(&elem_c);
                             write!(out, "{dv} = ({{ GorgetArray __result = gorget_array_clone((GorgetArray*){arr_arg}); \
@@ -864,23 +777,6 @@ pub(super) fn emit_call_extern(
                                 {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
                                 if ({call_fn}({fn_ref}, {er}__elem)) {{ __idx = (int64_t)__i; break; }} \
                                 }} __idx; }});").unwrap();
-                        }
-                        "flat_map" => {
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                GorgetArray __result = gorget_array_new(sizeof({elem_c})); \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                GorgetArray __sub = {call_fn}({fn_ref}, {er}__elem); \
-                                gorget_array_extend(&__result, &__sub); \
-                                }} __result; }});").unwrap();
-                        }
-                        "count" => {
-                            write!(out, "{dv} = ({{ GorgetArray __src = *(GorgetArray*){arr_arg}; \
-                                int64_t __cnt = 0; \
-                                for (size_t __i = 0; __i < __src.len; __i++) {{ \
-                                {elem_c} __elem = GORGET_ARRAY_AT({elem_c}, __src, __i); \
-                                if ({call_fn}({fn_ref}, {er}__elem)) __cnt++; \
-                                }} __cnt; }});").unwrap();
                         }
                         _ => {
                             // Fall through to existing helper call
