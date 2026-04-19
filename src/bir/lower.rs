@@ -243,7 +243,9 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::Map
                         | HofOp::FlatMap
                         | HofOp::DictEach
-                        | HofOp::DictFold => {
+                        | HofOp::DictFold
+                        | HofOp::DictAny
+                        | HofOp::DictAll => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -412,6 +414,26 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                         closure_ret_ty,
                                         init.expect("DictFold must carry init"),
                                         dst.expect("DictFold must carry dst"),
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::DictAny | HofOp::DictAll => {
+                                    let val_ty = value_ty_inner
+                                        .clone()
+                                        .unwrap_or(LirType::I64);
+                                    expand_dict_any_all(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        hof_op,
+                                        coll,
+                                        element_ty,
+                                        val_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        dst.expect("DictAny/All must carry dst"),
                                         remaining,
                                         orig_term,
                                     );
@@ -2357,6 +2379,119 @@ fn expand_dict_fold(
     func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
     func.block_mut(ctx.done_bb).insts = remaining;
     func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Expand `HofExpand { hof_op: DictAny | DictAll, dst }` — early-exit
+/// predicate over a Dict. Matches the shape of `expand_any_all` for
+/// Vector but iterates via the Dict scaffold (which skips
+/// non-occupied slots).
+#[allow(clippy::too_many_arguments)]
+fn expand_dict_any_all(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    op: HofOp,
+    coll: ValueId,
+    key_ty: LirType,
+    val_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let is_any = matches!(op, HofOp::DictAny);
+    let dst_ty = func
+        .value_types
+        .get(dst.0 as usize)
+        .and_then(|t| t.as_ref())
+        .cloned()
+        .unwrap_or(LirType::I64);
+
+    let key_abi_hint = closure_arg_abis.first().copied();
+    let val_abi_hint = closure_arg_abis.get(1).copied();
+    let ctx = emit_dict_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &key_ty,
+        &val_ty,
+        key_abi_hint,
+        val_abi_hint,
+        vec![],
+    );
+
+    // Constants for true/false in the dst's declared type. For Bool
+    // dst we emit BoolConst; otherwise IConst (matches the Vector
+    // any/all convention where Bool can be lifted into i64 slots at
+    // some call sites).
+    let early = alloc_value(next);
+    let fall = alloc_value(next);
+    let (early_value, fall_value) = if is_any { (1, 0) } else { (0, 1) };
+    let const_inst = |d, v| match &dst_ty {
+        LirType::Bool => Inst::BoolConst {
+            dst: d,
+            value: v != 0,
+        },
+        _ => Inst::IConst {
+            dst: d,
+            ty: dst_ty.clone(),
+            value: v,
+        },
+    };
+    // `early` parks in body_bb (after the CallClosure, its only user);
+    // `fall` parks in check_bb (the exhaustion branch reads it).
+    func.block_mut(ctx.body_bb)
+        .insts
+        .push(const_inst(early, early_value));
+    func.block_mut(ctx.check_bb)
+        .insts
+        .push(const_inst(fall, fall_value));
+
+    // done_bb(result: dst_ty)
+    func.block_mut(ctx.done_bb)
+        .params
+        .push((dst, dst_ty.clone()));
+    func.block_mut(ctx.done_bb).insts = remaining;
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+
+    // check_bb: cond ? state_bb : done_bb(fall).
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![fall],
+    };
+
+    // body_bb: CallClosure(closure, [key, val]) → pred.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.key_arg, ctx.val_arg],
+        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        ret_ty: LirType::Bool,
+    });
+    // body_bb terminator:
+    //   any: pred ? done_bb(early) : advance_bb
+    //   all: pred ? advance_bb    : done_bb(early)
+    let (then_block, then_args, else_block, else_args) = if is_any {
+        (ctx.done_bb, vec![early], ctx.advance_bb, vec![])
+    } else {
+        (ctx.advance_bb, vec![], ctx.done_bb, vec![early])
+    };
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block,
+        then_args,
+        else_block,
+        else_args,
+    };
 }
 
 fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {

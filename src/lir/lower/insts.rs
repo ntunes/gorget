@@ -1868,6 +1868,8 @@ impl<'a> FuncLowering<'a> {
         let (hof_op, produces_result, is_fold) = match method {
             "each" => (HofOp::DictEach, false, false),
             "fold" => (HofOp::DictFold, true, true),
+            "any" => (HofOp::DictAny, true, false),
+            "all" => (HofOp::DictAll, true, false),
             _ => return None,
         };
         if lir_args.len() < 2 {
