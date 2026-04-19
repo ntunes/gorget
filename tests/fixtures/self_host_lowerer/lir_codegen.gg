@@ -2662,28 +2662,35 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         return "/* bad field write */;"
 
     # ── Field read: __field_read_TYPE_FIELD(base, field_index) ──
+    # Route through field_access_lvalue so union-layout enum payloads
+    # get the `.data.<vprefix>.<fname>` dereference rather than a raw
+    # `->Field` that misses the union. Find the struct's field index
+    # by name so the helper can pick the right access shape.
     if name.starts_with("__field_read_"):
         if dst >= 0 and args.len() >= 2:
             int base_val = args.get(0).unwrap()
-            # Extract struct type name and field name from the function name
-            # __field_read_Holder_name → struct="Holder", field="name"
             String rest = name.slice(13, name.len())
             int sep = find_substr(rest, "_")
             if sep > 0:
                 String struct_name = rest.slice(0, sep)
                 String field = rest.slice(sep + 1, rest.len())
+                int sid = find_struct_type(struct_name, &m) - LT_STRUCT_BASE
+                if sid >= 0 and sid < m.structs.len():
+                    LirStructDef sdef = m.structs.get(sid).unwrap()
+                    int fi = 0
+                    int found = -1
+                    while fi < sdef.fields.len():
+                        StructField sf = sdef.fields.get(fi).unwrap()
+                        if c_field_name(sf.name) == c_field_name(field):
+                            found = fi
+                        fi += 1
+                    if found >= 0:
+                        String lval = field_access_lvalue(v(base_val), sid, found, &m, &sn)
+                        return v(dst) + " = " + lval + ";"
+                # Fallback if the struct isn't registered — use raw arrow.
                 String c_struct = find_c_struct_name(struct_name, &m, &sn)
                 String c_field = c_field_name(field)
-                # Check if base is a pointer (Ptr type) or value type
-                int base_ty = -1
-                if val_types.contains(base_val):
-                    base_ty = val_types.get(base_val).unwrap()
-                if base_ty == LT_PTR or base_ty >= LT_PTR_TO_BASE:
-                    # Pointer to struct → arrow access
-                    return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
-                else:
-                    # Value → dot access (shouldn't happen often)
-                    return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
+                return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
         return "/* bad field read */;"
 
     # DropIfAlive guard.

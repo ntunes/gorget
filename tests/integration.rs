@@ -11192,7 +11192,13 @@ fn self_host_bootstrap() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap driver.gg",
-        Duration::from_secs(120),
+        // Bumped from 120s — SMatch lowering emits many BBs per arm
+        // (one per pattern constructor, two per arm merge), roughly
+        // doubling the stage-1 C size (~170k → ~345k lines). Future
+        // optimisation: collapse sequential ctor tests on the same
+        // scrutinee into a single switch-on-tag rather than a chain
+        // of branches, like rustc's decision-tree match compiler.
+        Duration::from_secs(300),
     );
     assert!(
         body_out.status.success(),

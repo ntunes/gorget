@@ -1488,6 +1488,18 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SMetaIf(_, _):
             # `meta if` — compile-time conditional, already resolved.
             pass
+        case SMatch(_, _):
+            # SMatch is still the dominant remaining lower_fail site (204
+            # drops per self-host compilation). A partial implementation
+            # (lower_match_stmt + lower_ctor_pattern below) exists but
+            # regresses self_host_bootstrap — the generated stage-1 C
+            # doesn't typecheck because `__field_read_Expr_EBinaryOp_0`
+            # returns Box[SpannedExpr] but resolve_expr() expects a
+            # SpannedExpr value. Needs type-coercion via __field_read_
+            # or a different lowering that deref's the Box. Left wired
+            # behind lower_fail + the helpers preserved below for the
+            # next iteration.
+            lower_fail("unhandled in lower_stmt: SMatch")
         case SLoop(body):
             # Unconditional loop — `loop: body`, exit via break. Same
             # shape as `while true:`, but the body's default back-edge
@@ -1640,6 +1652,203 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
             set_terminator(&ctx, GTJump(merge_bb))
         else:
             pass
+    switch_to(&ctx, merge_bb)
+
+
+# Local copy of `is_ptr_type` from lir_lower.gg — needed for the
+# match/field-write paths that determine argument-passing ABI.
+bool lower_is_ptr_type(int tid, GirModule &gmod):
+    if tid < 0 or tid >= gmod.type_table.len():
+        return false
+    GirType ty = gmod.type_table.get(tid).unwrap()
+    match ty:
+        case GtPtr(_):
+            return true
+        case GtMutPtr(_):
+            return true
+        else:
+            return false
+
+# Look up the parent enum name for a type. If `type_name` itself is an
+# enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".
+String match_enum_type(String type_name, GirModule &gmod):
+    if gmod.type_infos.contains(type_name):
+        GirTypeInfo ti = gmod.type_infos.get(type_name).unwrap()
+        if ti.is_enum:
+            return type_name
+    return ""
+
+# Find the variant's index in its enum's variant list. Returns -1 if
+# the enum or variant isn't registered.
+int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
+    if not gmod.type_infos.contains(enum_name):
+        return -1
+    GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
+    int i = 0
+    while i < ti.variants.len():
+        GirEnumVariantInfo v = ti.variants.get(i).unwrap()
+        if v.name == variant_name:
+            return i
+        i += 1
+    return -1
+
+# Emit a tag-read against the scrutinee. Returns the local id holding
+# the int32 tag value. The enum_name must be a plain identifier (no
+# `__` separator); Option/Result variants aren't yet supported by this
+# routing because the name-based __field_read_ parser splits on the
+# first `_` and confuses `Option__int64_t` with the `Option` type.
+int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule &gmod):
+    String read_fn = "__field_read_" + enum_name + "_tag"
+    Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(0)]
+    int tag = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GICallExtern(tag, read_fn, args))
+    return tag
+
+# Emit a variant-payload read. `variant_name` + `field_idx` determines
+# which struct field to read; result binds into `dst_type`.
+int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
+    String field = variant_name + "_" + int_to_str(field_idx)
+    String read_fn = "__field_read_" + enum_name + "_" + field
+    Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(field_idx)]
+    int dst = add_local(&ctx, dst_type, NO_NAME)
+    emit(&ctx, GICallExtern(dst, read_fn, args))
+    return dst
+
+# Take the address of scrutinee's local so we can pass a pointer to the
+# field_read helpers (arg 0 is Ptr-typed by needs_ptr_arg convention).
+int match_scrutinee_ptr(LowerCtx &ctx, int scrutinee):
+    # Move the value into a temp local so we can take its address —
+    # scrutinee may already be an identifier with a stable slot, but
+    # this extra copy keeps the address path uniform.
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    int tmp = add_local(&ctx, scr_tid, NO_NAME)
+    emit(&ctx, GIAssign(tmp, OpCopy(scrutinee)))
+    return tmp
+
+# Lower a single match arm's pattern-match test. Emits branches to
+# either `match_bb` (pattern matched, possibly with bindings) or
+# `no_match_bb` (pattern didn't match, try next arm).
+void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, String enum_name, int match_bb, int no_match_bb, GirModule &gmod):
+    match spat.pat:
+        case PWildcard:
+            set_terminator(&ctx, GTJump(match_bb))
+        case PBinding(name):
+            # Always match; bind scrutinee into a fresh local under `name`.
+            int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+            int bound = add_local(&ctx, scr_tid, Some(name))
+            emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
+            ctx.named_locals.put(name, bound)
+            set_terminator(&ctx, GTJump(match_bb))
+        case PConstructor(variant_name, sub_pats):
+            lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+        case PDotShorthand(variant_name, sub_pats):
+            # `.VariantName(pats)` — same semantics as PConstructor with
+            # enum name inferred from the scrutinee's type.
+            lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+        else:
+            # Unsupported pattern shape (PLiteral, PTuple, POr, PRest) —
+            # fall through with a permissive match rather than silently
+            # dropping the arm body. Future fixes: add proper patterns.
+            lower_fail("unsupported pattern variant in match arm")
+            set_terminator(&ctx, GTJump(match_bb))
+
+void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vector[SpannedPattern] sub_pats, String enum_name, int match_bb, int no_match_bb, GirModule &gmod):
+    if enum_name == "":
+        # Scrutinee isn't a known enum — fall through to match. This hits
+        # on monomorphized Option / Result which use `__` separators the
+        # __field_read_ parser can't split cleanly. Handling them needs
+        # numeric-id routing (TODO).
+        lower_fail("PConstructor on non-enum scrutinee — enum_name empty")
+        set_terminator(&ctx, GTJump(match_bb))
+        return
+    int expected_tag = match_variant_index(enum_name, variant_name, &gmod)
+    if expected_tag < 0:
+        lower_fail("PConstructor variant not in enum: " + variant_name)
+        set_terminator(&ctx, GTJump(match_bb))
+        return
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, scrutinee)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, enum_name, &gmod)
+    int expected = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
+    int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(is_match, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(expected)))
+    int bind_bb = new_block(&ctx)
+    set_terminator(&ctx, GTBranch(OpCopy(is_match), bind_bb, no_match_bb))
+    switch_to(&ctx, bind_bb)
+    # Bind payload sub-patterns. For each sub_pat, emit a payload read
+    # then match that sub-pattern. If a sub-pat doesn't match the whole
+    # arm fails — but we simplify: PBinding/PWildcard sub-pats always
+    # match, so just bind linearly here.
+    int fi = 0
+    while fi < sub_pats.len():
+        SpannedPattern sp = sub_pats.get(fi).unwrap()
+        match sp.pat:
+            case PWildcard:
+                pass
+            case PBinding(bname):
+                # Look up field type from the enum's variant's field info.
+                int fty = lookup_ctor_field_type(enum_name, variant_name, fi, &gmod)
+                int field_val = emit_payload_read(&ctx, scrutinee_ptr, enum_name, variant_name, fi, fty, &gmod)
+                int bound = add_local(&ctx, fty, Some(bname))
+                emit(&ctx, GIAssign(bound, OpCopy(field_val)))
+                ctx.named_locals.put(bname, bound)
+            else:
+                lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback")
+        fi += 1
+    set_terminator(&ctx, GTJump(match_bb))
+
+int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx, GirModule &gmod):
+    if not gmod.type_infos.contains(enum_name):
+        return I64_TYPE
+    GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
+    int vi = 0
+    while vi < ti.variants.len():
+        GirEnumVariantInfo v = ti.variants.get(vi).unwrap()
+        if v.name == variant_name:
+            if field_idx < v.fields.len():
+                GirFieldInfo f = v.fields.get(field_idx).unwrap()
+                return resolve_field_gir_type(f.type_name, &gmod)
+            return I64_TYPE
+        vi += 1
+    return I64_TYPE
+
+void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod, bool is_main):
+    int scrutinee = lower_expr(&ctx, scrutinee_expr, &gmod)
+    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+    String type_name = type_id_to_name(scr_tid, &gmod)
+    # Unwrap Ptr if the scrutinee came through a borrow.
+    if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+        GirType bt = gmod.type_table.get(scr_tid).unwrap()
+        match bt:
+            case GtPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                type_name = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    String enum_name = match_enum_type(type_name, &gmod)
+    int merge_bb = new_block(&ctx)
+    int ai = 0
+    while ai < arms.len():
+        MatchArm arm = arms.get(ai).unwrap()
+        int arm_body_bb = new_block(&ctx)
+        int next_arm_bb = new_block(&ctx)
+        lower_pattern_match(&ctx, scrutinee, arm.pattern, enum_name, arm_body_bb, next_arm_bb, &gmod)
+        # Arm body lowering in the match-bound block.
+        switch_to(&ctx, arm_body_bb)
+        lower_stmts(&ctx, arm.body, &gmod, is_main)
+        Terminator arm_term = ctx.block_terms.get(ctx.current_block).unwrap()
+        match arm_term:
+            case GTNone():
+                set_terminator(&ctx, GTJump(merge_bb))
+            else:
+                pass
+        switch_to(&ctx, next_arm_bb)
+        ai += 1
+    # No arm matched — jump to merge (unreachable in practice when the
+    # match is exhaustive; the self-host's typechecker doesn't enforce
+    # exhaustiveness yet so we keep a safe fall-through).
+    set_terminator(&ctx, GTJump(merge_bb))
     switch_to(&ctx, merge_bb)
 
 void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirModule &gmod, bool is_main):
