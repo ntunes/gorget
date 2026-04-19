@@ -1,0 +1,98 @@
+# Iterator terminal method sugar on VectorIter — validates that the
+# per-call-site method-mono pipeline handles both no-generic and
+# method-level-generic terminals end to end.
+#
+# `.count()` / `.last()` / `.nth(n)` / `.collect()` — no method-level
+# generics; exercise the single equip-level T substitution.
+# `.any[F](p)` / `.all[F](p)` / `.find[F](p)` / `.find_index[F](p)`
+# / `.for_each[F](f)` / `.fold[A, F](init, f)` — method-level
+# generics; exercise the merged equip + method substitution.
+
+from std.collections import Vector
+from std.iter import VectorIter
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool is_big(int x):
+    return x > 100
+
+int sum_both(int acc, int x):
+    return acc + x
+
+int main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+
+    # .count()
+    int n = v.iter().count()
+    print(n)
+
+    # .any[F](pred)
+    bool has_even = v.iter().any[bool(int)](is_even)
+    print(has_even)
+
+    # .all[F](pred) — true case
+    bool all_even = v.iter().all[bool(int)](is_even)
+    print(all_even)
+
+    # .all[F](pred) — false case
+    bool all_big = v.iter().all[bool(int)](is_big)
+    print(all_big)
+
+    # .find[F](pred) — matches
+    Option[int] first_big = v.iter().find[bool(int)](is_even)
+    match first_big:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .find[F](pred) — no match
+    Option[int] none_match = v.iter().find[bool(int)](is_big)
+    match none_match:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .find_index[F](pred)
+    Option[int] idx = v.iter().find_index[bool(int)](is_even)
+    match idx:
+        case Some(i):
+            print(i)
+        case None:
+            print(-1)
+
+    # .fold[A, F](init, f)
+    int total = v.iter().fold[int, int(int, int)](0, sum_both)
+    print(total)
+
+    # .last()
+    Option[int] tail = v.iter().last()
+    match tail:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .nth(n) — valid
+    Option[int] third = v.iter().nth(2)
+    match third:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .nth(n) — out of range
+    Option[int] past = v.iter().nth(99)
+    match past:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .collect()
+    Vector[int] collected = v.iter().collect()
+    print(collected.len())
+
+    return 0

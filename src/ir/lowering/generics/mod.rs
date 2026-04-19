@@ -1039,6 +1039,38 @@ impl GenericCollector {
         if self.method_instances_registered.contains_key(&mangled_symbol) {
             return;
         }
+        let method_def_for_scan = matched.clone().unwrap();
+        // Rescan the method body with the merged substitution applied so any
+        // nested generic calls (e.g. `find_iter[T, VectorIter[T], F](self, pred)`
+        // inside `.find`) get registered as concrete instances. Without this,
+        // `find_iter__int64_t__VectorIter__int64_t__GorgetClosure` is missing
+        // from fn_sigs when the call site lowers, and the ret-type lookup
+        // falls back to I64 instead of Option[int].
+        let equip_blocks = self.equip_templates.get(&equip_base).cloned().unwrap_or_default();
+        let mut merged_subs: Vec<(String, Type)> = Vec::new();
+        for equip in &equip_blocks {
+            let eq_subs = build_equip_type_substitutions(equip, &equip_type_args);
+            if !eq_subs.is_empty() {
+                merged_subs = eq_subs;
+                break;
+            }
+        }
+        if let Some(ref gp) = method_def_for_scan.generic_params {
+            for (param, arg) in gp.node.params.iter().zip(method_targs.iter()) {
+                let name = match &param.node {
+                    GenericParam::Type { name: s, .. } => s.node.clone(),
+                    GenericParam::Const { name, .. } => name.node.clone(),
+                };
+                merged_subs.push((name, arg.node.clone()));
+            }
+        }
+        if !merged_subs.is_empty() {
+            let prev = self.current_generic_params.take();
+            let substituted = substitute_function_body(&method_def_for_scan, &merged_subs);
+            self.scan_function(&substituted);
+            self.current_generic_params = prev;
+        }
+
         self.method_instances_registered.insert(mangled_symbol.clone(), ());
         self.method_instances.push(MethodInstance {
             equip_base,

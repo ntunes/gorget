@@ -766,14 +766,18 @@ impl<'a> LoweringContext<'a> {
             let mut result = name.to_string();
             let mut changed = false;
             for (param, concrete) in &self.generics.generic_fragment_subs {
-                let pattern_end = format!("__{param}");
+                // Apply BOTH internal and trailing occurrences in the same pass —
+                // a name like `last_iter__T__VectorIter__T` has T in both positions
+                // and an if/else between them leaves one behind.
                 let pattern_mid = format!("__{param}__");
+                if result.contains(&pattern_mid) {
+                    result = result.replace(&pattern_mid, &format!("__{concrete}__"));
+                    changed = true;
+                }
+                let pattern_end = format!("__{param}");
                 if result.ends_with(&pattern_end) {
                     let prefix = &result[..result.len() - pattern_end.len()];
                     result = format!("{prefix}__{concrete}");
-                    changed = true;
-                } else if result.contains(&pattern_mid) {
-                    result = result.replace(&pattern_mid, &format!("__{concrete}__"));
                     changed = true;
                 }
             }

@@ -1589,15 +1589,18 @@ fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
         let mut substituted = name.clone();
         let mut changed = false;
         for (param, concrete) in &fragment_subs {
-            // Match `__T` at end of name or `__T__` in middle
-            let pattern_end = format!("__{param}");
+            // Match `__T` at end of name AND `__T__` anywhere in the middle —
+            // both can fire on the same name (e.g. `A__T__B__T`), so we don't
+            // short-circuit between them.
             let pattern_mid = format!("__{param}__");
+            if substituted.contains(&pattern_mid) {
+                substituted = substituted.replace(&pattern_mid, &format!("__{concrete}__"));
+                changed = true;
+            }
+            let pattern_end = format!("__{param}");
             if substituted.ends_with(&pattern_end) {
                 let prefix = &substituted[..substituted.len() - pattern_end.len()];
                 substituted = format!("{prefix}__{concrete}");
-                changed = true;
-            } else if substituted.contains(&pattern_mid) {
-                substituted = substituted.replace(&pattern_mid, &format!("__{concrete}__"));
                 changed = true;
             }
         }

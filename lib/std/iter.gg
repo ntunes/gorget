@@ -60,6 +60,43 @@ equip [T] VectorIter[T]:
     FilterIter[T, F] filter[F](self, F p):
         return FilterIter[T, F](self, p)
 
+    # ── Terminal methods ───────────────────────────────────
+    #
+    # Bodies delegate to the free-function terminals defined below so
+    # there's a single source of truth for loop semantics. Each method
+    # has the concrete iterator type (VectorIter[T]) baked in, so the
+    # per-call-site method-mono pipeline specialises these per call.
+
+    int count(self):
+        return count_iter[VectorIter[T]](self)
+
+    Vector[T] collect(self):
+        return collect_vec[T, VectorIter[T]](self)
+
+    bool any[F](self, F pred):
+        return any_iter[T, VectorIter[T], F](self, pred)
+
+    bool all[F](self, F pred):
+        return all_iter[T, VectorIter[T], F](self, pred)
+
+    Option[T] find[F](self, F pred):
+        return find_iter[T, VectorIter[T], F](self, pred)
+
+    Option[int] find_index[F](self, F pred):
+        return find_index_iter[T, VectorIter[T], F](self, pred)
+
+    void for_each[F](self, F f):
+        for_each_iter[T, VectorIter[T], F](self, f)
+
+    A fold[A, F](self, A init, F f):
+        return fold_iter[A, T, VectorIter[T], F](self, init, f)
+
+    Option[T] last(self):
+        return last_iter[T, VectorIter[T]](self)
+
+    Option[T] nth(self, int n):
+        return nth_iter[T, VectorIter[T]](self, n)
+
 struct TakeIter[T]:
     VectorIter[T] inner
     int remaining

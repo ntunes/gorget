@@ -2064,6 +2064,14 @@ fn iter_map_filter_method_sugar() {
 }
 
 #[test]
+fn iter_terminal_method_sugar() {
+    run_gg(
+        "iter_terminal_method_sugar.gg",
+        "5\ntrue\ntrue\nfalse\n10\n-1\n0\n150\n50\n30\n-1\n5",
+    );
+}
+
+#[test]
 fn stdlib_iter_set() {
     run_gg(
         "stdlib_iter_set.gg",
