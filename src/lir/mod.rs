@@ -254,6 +254,23 @@ pub enum HofOp {
     Windows,
     /// `v.chunks(n)` — iterator of N-sized chunks; closure consumes each.
     Chunks,
+
+    // ── Dict variants ─────────────────────────────────────────────
+    // Same semantics as the matching Vector op, but the iteration
+    // walks a `GorgetMap` (hash-table cap/states array) and the
+    // closure takes `(K, V)` instead of a single element.
+    /// `d.each(|k, v| …)` — for side-effects. No dst.
+    DictEach,
+    /// `d.fold(init, |acc, k, v| …)` — returns `R`.
+    DictFold,
+    /// `d.filter(|k, v| pred(k, v))` — returns a fresh `Dict<K, V>`.
+    DictFilter,
+    /// `d.any(|k, v| pred(k, v))` — returns `bool`.
+    DictAny,
+    /// `d.all(|k, v| pred(k, v))` — returns `bool`.
+    DictAll,
+    /// `d.map(|k, v| …)` — returns a fresh `Dict<K, V2>`.
+    DictMap,
 }
 
 // ── Closure dispatch kind ──────────────────────────────────────────────────

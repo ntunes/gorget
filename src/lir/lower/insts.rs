@@ -1844,6 +1844,119 @@ impl<'a> FuncLowering<'a> {
     /// Returns `None` when the call doesn't match, leaving the caller to
     /// dispatch normally.
     ///
+    /// If `original_name` is a `Dict__<K>__<V>__<method>` HOF we've
+    /// migrated, emit `Inst::HofExpand` with the `DictEach` / … tag.
+    /// Otherwise returns `None`. For Dict HOFs:
+    ///   * `element_ty` on `HofExpand` carries the KEY type (K).
+    ///   * `value_ty` carries the VALUE type (V).
+    ///
+    /// Supported variants (pathfinder): `each`.
+    fn try_emit_dict_hof(
+        &mut self,
+        original_name: &str,
+        dst: &Option<ir::types::LocalId>,
+        args: &[Operand],
+        lir_args: &[ValueId],
+        bb: BlockId,
+    ) -> Option<BlockId> {
+        // Dict__K__V__method or HashMap__K__V__method
+        let rest = original_name
+            .strip_prefix("Dict__")
+            .or_else(|| original_name.strip_prefix("HashMap__"))?;
+        let sep_pos = rest.rfind("__")?;
+        let method = &rest[sep_pos + 2..];
+        let (hof_op, produces_result) = match method {
+            "each" => (HofOp::DictEach, false),
+            _ => return None,
+        };
+        if lir_args.len() < 2 {
+            return None;
+        }
+        if produces_result && dst.is_none() {
+            return None;
+        }
+        // Key/value type: split the `<K>__<V>` prefix.
+        let type_part = &rest[..sep_pos];
+        let key_sep = type_part.find("__")?;
+        let key_c = &type_part[..key_sep];
+        let val_c = &type_part[key_sep + 2..];
+        let key_ty = super::component_to_lir_type(key_c, self.struct_reg);
+        let val_ty = super::component_to_lir_type(val_c, self.struct_reg);
+
+        // Closure signature lookup (same shape as Vector HOFs).
+        let closure_idx = lir_args.len() - 1;
+        let closure_call_sig = args.get(closure_idx).and_then(|op| {
+            let key = match op {
+                Operand::Constant(Constant::FuncRef(n)) => n.clone(),
+                Operand::Copy(_) | Operand::Move(_) => {
+                    let ty_name = self.operand_gir_type_name(op)?;
+                    format!("{ty_name}__call")
+                }
+                _ => return None,
+            };
+            self.closure_call_sigs.get(&key).cloned()
+        });
+        let param_tys: Vec<LirType> = closure_call_sig
+            .as_ref()
+            .map(|sig| sig.param_tys.clone())
+            .unwrap_or_default();
+        let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
+            use crate::ir::abi::AbiKind;
+            match ty {
+                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Struct(_) => AbiKind::ByValue,
+                _ => AbiKind::Scalar,
+            }
+        };
+        let key_abi = param_tys
+            .first()
+            .map(|ty| abi_from_param_ty(ty))
+            .unwrap_or_else(|| {
+                if key_ty.is_aggregate() {
+                    crate::ir::abi::AbiKind::Ptr
+                } else {
+                    crate::ir::abi::AbiKind::Scalar
+                }
+            });
+        let val_abi = param_tys
+            .get(1)
+            .map(|ty| abi_from_param_ty(ty))
+            .unwrap_or_else(|| {
+                if val_ty.is_aggregate() {
+                    crate::ir::abi::AbiKind::Ptr
+                } else {
+                    crate::ir::abi::AbiKind::Scalar
+                }
+            });
+
+        // Only handle the case where the closure signature is known.
+        // Without a signature we'd guess the per-arg ABI, which is
+        // risky for aggregate types.
+        if closure_call_sig.is_none() {
+            return None;
+        }
+
+        // Wrap the closure arg into a GorgetClosure pointer.
+        let mut lir_args_wrapped = lir_args.to_vec();
+        self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
+
+        let closure_ret_ty = LirType::Void; // each returns void
+
+        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+            coll: lir_args_wrapped[0],
+            hof_op,
+            element_ty: key_ty,
+            value_ty: Some(val_ty),
+            closure: lir_args_wrapped[closure_idx],
+            closure_kind: ClosureDispatchKind::EscapedClosure,
+            closure_ret_ty,
+            closure_arg_abis: vec![key_abi, val_abi],
+            dst: None,
+            init: None,
+        });
+        Some(bb)
+    }
+
     /// The closure argument is packed into a `GorgetClosure` pointer via
     /// `wrap_closure_call_args` so the BIR expansion can dispatch it through
     /// `Inst::CallClosure { kind: EscapedClosure }`. Closure arg ABI is set
@@ -2105,6 +2218,10 @@ impl<'a> FuncLowering<'a> {
         // Vector `each` / `any` / `all` — emit `Inst::HofExpand` and let BIR
         // lowering generate the loop skeleton. Other HOF variants still flow
         // through the per-backend inline expanders until they are migrated.
+        if let Some(bb2) = self.try_emit_dict_hof(original_name, dst, args, &lir_args, bb) {
+            self.emit_post_call_zeros(args, bb2);
+            return bb2;
+        }
         if let Some(bb2) = self.try_emit_vector_each_hof(original_name, dst, args, &lir_args, bb) {
             self.emit_post_call_zeros(args, bb2);
             return bb2;

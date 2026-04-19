@@ -241,7 +241,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::FindIndex
                         | HofOp::Filter
                         | HofOp::Map
-                        | HofOp::FlatMap => {
+                        | HofOp::FlatMap
+                        | HofOp::DictEach => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -372,6 +373,27 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                     remaining,
                                     orig_term,
                                 ),
+                                HofOp::DictEach => {
+                                    // For Dict, `element_ty` carries K and
+                                    // `value_ty_inner` carries V. Emitter
+                                    // fills both.
+                                    let val_ty = value_ty_inner
+                                        .clone()
+                                        .unwrap_or(LirType::I64);
+                                    expand_dict_each(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        val_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
                                 HofOp::Find => {
                                     // The dst's declared type (`Struct(Option__T)`)
                                     // is carried on HofExpand.value_ty by the emitter
@@ -1832,6 +1854,364 @@ fn expand_flat_map(
         ty: garray_ty,
     });
     func.block_mut(ctx.done_bb).insts.extend(remaining);
+    func.block_mut(ctx.done_bb).terminator = orig_term;
+}
+
+/// Scaffold for Dict (`GorgetMap`) HOF loops.
+///
+/// Dict iteration walks all `cap` slots of the hash table and skips
+/// non-occupied slots (`states[i] != 1`). Per-iteration blocks:
+///
+/// ```text
+///   current_bb:
+///     <pre-HofExpand insts>
+///     jmp check_bb(0_i64, extras...)
+///   check_bb(i: i64, extras...):
+///     cap = Load(FieldPtr(coll, 1))
+///     cond = Cmp(Lt, i, cap)
+///     branch cond, state_bb, done_bb
+///   state_bb:
+///     states = Load(FieldPtr(coll, 3))
+///     state_i = Load(ElemPtr(states, i, 1), U8)
+///     occupied = Cmp(Eq, state_i, 1_u8)
+///     branch occupied, body_bb, advance_bb
+///   body_bb:
+///     keys = Load(FieldPtr(coll, 0))
+///     key_ptr = ElemPtr(keys, i, key_size)
+///     values = Load(FieldPtr(coll, 2))
+///     val_ptr = ElemPtr(values, i, val_size)
+///     (optional Load for scalar key/val → key_arg, val_arg)
+///     <variant appends CallClosure + terminator>
+///   advance_bb:
+///     next_i = Add(i, 1)
+///     jmp check_bb(next_i, carried-extras...)
+///   done_bb:
+///     (variant fills insts + terminator)
+/// ```
+///
+/// `body_bb` terminator is NOT set — the caller extends it (each's
+/// variant jumps to `advance_bb` after `CallClosure`; other variants
+/// may branch differently). `advance_bb`'s terminator IS set to the
+/// back-edge; the caller fills in carried-extras via
+/// `ctx.advance_jump_extras`.
+#[allow(dead_code)]
+struct DictHofLoopCtx {
+    check_bb: BlockId,
+    state_bb: BlockId,
+    body_bb: BlockId,
+    advance_bb: BlockId,
+    done_bb: BlockId,
+    i_val: ValueId,
+    next_i: ValueId,
+    cap_cond: ValueId,
+    key_ptr: ValueId,
+    val_ptr: ValueId,
+    key_arg: ValueId,
+    val_arg: ValueId,
+    key_abi: crate::ir::abi::AbiKind,
+    val_abi: crate::ir::abi::AbiKind,
+    extra_check_params: Vec<ValueId>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_dict_hof_loop_scaffold(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    key_ty: &LirType,
+    val_ty: &LirType,
+    key_abi_hint: Option<crate::ir::abi::AbiKind>,
+    val_abi_hint: Option<crate::ir::abi::AbiKind>,
+    extra_check_inits: Vec<(LirType, ValueId)>,
+) -> DictHofLoopCtx {
+    let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
+
+    let check_bb = func.add_block();
+    let state_bb = func.add_block();
+    let body_bb = func.add_block();
+    let advance_bb = func.add_block();
+    let done_bb = func.add_block();
+
+    // check_bb params: counter + extras.
+    let i_val = alloc_value(next);
+    func.block_mut(check_bb).params.push((i_val, LirType::I64));
+    let mut extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(check_bb).params.push((p, ty.clone()));
+        extra_check_params.push(p);
+    }
+
+    // Entry: jmp check_bb(0, init0, init1, ...)
+    let zero = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32))
+        .insts
+        .push(Inst::IConst {
+            dst: zero,
+            ty: LirType::I64,
+            value: 0,
+        });
+    let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
+    entry_args.push(zero);
+    for (_, init) in &extra_check_inits {
+        entry_args.push(*init);
+    }
+    func.block_mut(BlockId(current_bb as u32)).terminator =
+        Term::Jump(check_bb, entry_args);
+
+    // check_bb: cap load + bounds.
+    let cap_ptr = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::FieldPtr {
+        dst: cap_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 1, // GorgetMap.cap
+    });
+    let cap = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Load {
+        dst: cap,
+        ptr: cap_ptr,
+        ty: LirType::I64,
+    });
+    let cap_cond = alloc_value(next);
+    func.block_mut(check_bb).insts.push(Inst::Cmp {
+        dst: cap_cond,
+        op: CmpOp::Lt,
+        lhs: i_val,
+        rhs: cap,
+    });
+    // Caller sets `check_bb.terminator` — usually
+    // `Branch(cap_cond, state_bb, done_bb)`.
+
+    // state_bb: read states[i], check == 1.
+    let states_ptr_field = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::FieldPtr {
+        dst: states_ptr_field,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 3, // GorgetMap.states
+    });
+    let states_ptr = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Load {
+        dst: states_ptr,
+        ptr: states_ptr_field,
+        ty: LirType::Ptr,
+    });
+    let state_i_ptr = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::ElemPtr {
+        dst: state_i_ptr,
+        base: states_ptr,
+        index: i_val,
+        elem_size: 1, // U8 state byte
+    });
+    let state_val = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Load {
+        dst: state_val,
+        ptr: state_i_ptr,
+        ty: LirType::U8,
+    });
+    let one_u8 = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::IConst {
+        dst: one_u8,
+        ty: LirType::U8,
+        value: 1,
+    });
+    let occupied = alloc_value(next);
+    func.block_mut(state_bb).insts.push(Inst::Cmp {
+        dst: occupied,
+        op: CmpOp::Eq,
+        lhs: state_val,
+        rhs: one_u8,
+    });
+    func.block_mut(state_bb).terminator = Term::Branch {
+        cond: occupied,
+        then_block: body_bb,
+        then_args: vec![],
+        else_block: advance_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: key + val load/pointer.
+    let keys_field = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+        dst: keys_field,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 0,
+    });
+    let keys_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Load {
+        dst: keys_ptr,
+        ptr: keys_field,
+        ty: LirType::Ptr,
+    });
+    let key_size = c_sizeof_lir_type(key_ty, structs) as u32;
+    let key_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: key_ptr,
+        base: keys_ptr,
+        index: i_val,
+        elem_size: key_size,
+    });
+    let vals_field = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+        dst: vals_field,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 2,
+    });
+    let vals_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Load {
+        dst: vals_ptr,
+        ptr: vals_field,
+        ty: LirType::Ptr,
+    });
+    let val_size = c_sizeof_lir_type(val_ty, structs) as u32;
+    let val_ptr = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: val_ptr,
+        base: vals_ptr,
+        index: i_val,
+        elem_size: val_size,
+    });
+
+    let key_pass_by_ptr = match key_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => key_ty.is_aggregate(),
+    };
+    let key_arg = if key_pass_by_ptr {
+        key_ptr
+    } else {
+        let k = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Load {
+            dst: k,
+            ptr: key_ptr,
+            ty: key_ty.clone(),
+        });
+        k
+    };
+    let key_abi = if key_pass_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+    let val_pass_by_ptr = match val_abi_hint {
+        Some(crate::ir::abi::AbiKind::Ptr) => true,
+        Some(crate::ir::abi::AbiKind::ByValue) => false,
+        Some(crate::ir::abi::AbiKind::Scalar) => false,
+        _ => val_ty.is_aggregate(),
+    };
+    let val_arg = if val_pass_by_ptr {
+        val_ptr
+    } else {
+        let v = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Load {
+            dst: v,
+            ptr: val_ptr,
+            ty: val_ty.clone(),
+        });
+        v
+    };
+    let val_abi = if val_pass_by_ptr {
+        crate::ir::abi::AbiKind::Ptr
+    } else {
+        crate::ir::abi::AbiKind::Scalar
+    };
+
+    // advance_bb: next_i = i + 1 (variants set the back-edge Jump
+    // themselves — they may need to pass accumulator extras).
+    let next_i = alloc_value(next);
+    let one_i64 = alloc_value(next);
+    func.block_mut(advance_bb).insts.push(Inst::IConst {
+        dst: one_i64,
+        ty: LirType::I64,
+        value: 1,
+    });
+    func.block_mut(advance_bb).insts.push(Inst::Add {
+        dst: next_i,
+        ty: LirType::I64,
+        lhs: i_val,
+        rhs: one_i64,
+        overflow: Overflow::Wrap,
+    });
+
+    DictHofLoopCtx {
+        check_bb,
+        state_bb,
+        body_bb,
+        advance_bb,
+        done_bb,
+        i_val,
+        next_i,
+        cap_cond,
+        key_ptr,
+        val_ptr,
+        key_arg,
+        val_arg,
+        key_abi,
+        val_abi,
+        extra_check_params,
+    }
+}
+
+/// Expand `HofExpand { hof_op: Each }` for Dict — call closure
+/// `(key, val)` for every occupied slot.
+#[allow(clippy::too_many_arguments)]
+fn expand_dict_each(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    key_ty: LirType,
+    val_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let key_abi_hint = closure_arg_abis.first().copied();
+    let val_abi_hint = closure_arg_abis.get(1).copied();
+    let ctx = emit_dict_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &key_ty,
+        &val_ty,
+        key_abi_hint,
+        val_abi_hint,
+        vec![],
+    );
+
+    // check_bb: cap_cond ? state_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    // body_bb: CallClosure(closure, [key, val]) → void, then jump to advance.
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.key_arg, ctx.val_arg],
+        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        ret_ty: LirType::Void,
+    });
+    func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+    // advance_bb: back-edge to check_bb.
+    func.block_mut(ctx.advance_bb).terminator =
+        Term::Jump(ctx.check_bb, vec![ctx.next_i]);
+    // done_bb: remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts = remaining;
     func.block_mut(ctx.done_bb).terminator = orig_term;
 }
 
