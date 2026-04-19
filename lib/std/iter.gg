@@ -267,11 +267,20 @@ Option[int] max_iter[Iter](Iter iter):
 VectorIter[T] set_iter[T](Set[T] s):
     return VectorIter[T](s.items(), 0)
 
-# Textual join is deferred — the naive `int_to_str`-based version
-# tripped a cross-crate import that force-monomorphized
-# `VectorIter[uint8]` in modules that don't otherwise use it,
-# causing a forward-reference during validation. Callers materialize
-# to a Vector via `collect_vec` and join through `String.join` for
-# now; a Displayable-bound `join_iter` lands when the generic-HOF
-# closure propagation is sorted (tracked as Phase 2c follow-up).
+# Textual join — render each element through `Displayable.display()`
+# and concatenate with `sep` between. Routing through the trait
+# instead of `int_to_str` sidesteps the cross-crate monomorphization
+# that previously force-materialized `VectorIter[uint8]` everywhere.
+# Displacement of `String.join(vec)` — callers that currently
+# materialize a Vector just to join can now go straight from the
+# iterator: `join_iter[VectorIter[int], int](v.iter(), ", ")`.
+String join_iter[Iter, Displayable T](Iter iter, String sep):
+    String out = ""
+    bool first = true
+    for x in iter:
+        if not first:
+            out.push(sep.clone())
+        out.push(x.display())
+        first = false
+    return !out
 

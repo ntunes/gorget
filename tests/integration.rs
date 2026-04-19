@@ -2072,6 +2072,14 @@ fn stdlib_iter_terminals() {
 }
 
 #[test]
+fn stdlib_iter_join() {
+    run_gg(
+        "stdlib_iter_join.gg",
+        "1, 2, 3, 42\n7\n[]\n10+20+30",
+    );
+}
+
+#[test]
 fn vector_swap_fill() {
     run_gg(
         "vector_swap_fill.gg",

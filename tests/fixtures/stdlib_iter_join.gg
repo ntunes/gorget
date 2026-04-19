@@ -1,0 +1,42 @@
+# Exercise `join_iter` — the Displayable-based textual join terminal
+# in std.iter. Displaces the legacy `String.join(vec)` pattern.
+
+from std.iter import join_iter
+from std.collections import Vector
+
+int main():
+    # Int iterator — int is Displayable.
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    nums.push(42)
+    String a = join_iter[VectorIter[int], int](nums.iter(), ", ")
+    print(a)
+
+    # Single element — no separator emitted.
+    Vector[int] one = Vector[int]()
+    one.push(7)
+    String b = join_iter[VectorIter[int], int](one.iter(), "|")
+    print(b)
+
+    # Empty iterator — empty string.
+    Vector[int] empty = Vector[int]()
+    String c = join_iter[VectorIter[int], int](empty.iter(), "-")
+    print(f"[{c}]")
+
+    # String iterator is deferred — VectorIter[String] trips the Ptr-
+    # ABI codegen panic (tracked in TODO.md; `for x in v.iter():`
+    # hits the same path for any resource-type T). Int works below.
+
+    # Chained with an adapter (take) — exercise composition.
+    Vector[int] big = Vector[int]()
+    big.push(10)
+    big.push(20)
+    big.push(30)
+    big.push(40)
+    big.push(50)
+    String e = join_iter[TakeIter[int], int](big.iter().take(3), "+")
+    print(e)
+
+    return 0
