@@ -971,6 +971,7 @@ mod tests {
                         assert!(names.contains(&"close"));
                         assert!(names.contains(&"_write_bytes_buf"));
                         assert!(names.contains(&"_read_bytes_buf"));
+                        assert!(names.contains(&"_flush_buffer"));
                         return;
                     }
                 }
