@@ -2088,6 +2088,14 @@ fn stdlib_iter_more_terminals() {
 }
 
 #[test]
+fn stdlib_udp_typed() {
+    run_gg(
+        "stdlib_udp_typed.gg",
+        "sent=9\ntyped-udp\ntyped_error",
+    );
+}
+
+#[test]
 fn vector_swap_fill() {
     run_gg(
         "vector_swap_fill.gg",

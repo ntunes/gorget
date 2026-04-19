@@ -1,6 +1,7 @@
 # std.net.udp — UDP socket operations
 
 from std.collections import Vector
+from std.io import IoError, _errno_to_io_error
 
 struct UdpSocket:
     int _handle
@@ -17,6 +18,11 @@ struct UdpPacket:
 
 extern "C":
     extern Result[UdpSocket, String] udp_bind(cstr addr, int port) = "gorget_udp_bind"
+    # Typed-error errno accessor for the UDP runtime helpers.
+    # Returns the errno of the most-recent UDP operation that failed,
+    # or 0 if the last call succeeded. Used by `send_to` / `recv_from`
+    # to route raw errno through `_errno_to_io_error`.
+    extern int _udp_last_errno() = "gorget_udp_last_errno"
 
 # ── UdpSocket methods ────────────────────────────────────────
 
@@ -33,3 +39,30 @@ equip UdpSocket:
     extern void set_multicast_loopback(bool &enabled) = "gorget_udp_set_multicast_loopback"
     extern UdpAddr local_addr() = "gorget_udp_local_addr"
     extern void close() = "gorget_udp_close"
+
+# ── Typed-error convenience ─────────────────────────────────
+#
+# UDP is message-oriented, not stream-oriented, so the Writer/Reader
+# traits (byte-stream with short-write/short-read semantics) don't
+# quite fit. Instead these two methods mirror the typed-error
+# convention used by File/Socket/TlsSocket Writer/Reader impls —
+# `Result[_, IoError]` surfaces errno-categorized variants. The
+# legacy `sendto` / `recvfrom` (stringly-typed) stay for existing
+# callers; new code should prefer `send_to` / `recv_from`.
+
+equip UdpSocket:
+    Result[int, IoError] send_to(&self, Vector[uint8] &data, String host, int port):
+        Result[int, String] r = self.sendto(&data, host, port)
+        match r:
+            case Ok(n):
+                return Ok(n)
+            case Error(_):
+                return Error(_errno_to_io_error(_udp_last_errno()))
+
+    Result[UdpPacket, IoError] recv_from(&self, int max_bytes):
+        Result[UdpPacket, String] r = self.recvfrom(max_bytes)
+        match r:
+            case Ok(pkt):
+                return Ok(!pkt)
+            case Error(_):
+                return Error(_errno_to_io_error(_udp_last_errno()))

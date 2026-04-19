@@ -1,0 +1,58 @@
+# UDP typed-error API — `send_to` / `recv_from` route failure through
+# `IoError` instead of stringly-typed `Result[_, String]`.
+#
+# Spins up a send/receive pair on loopback + OS-assigned ports, sends
+# via the typed `send_to`, receives via the typed `recv_from`, and
+# also exercises the error path by sending to an invalid hostname —
+# errno routes to `IoError.Other(strerror(errno))` or a named variant.
+
+from std.net.udp import UdpSocket, UdpAddr, UdpPacket, udp_bind
+from std.io import IoError
+from std.bytes import bytes_from_str, bytes_to_str
+
+void main():
+    UdpSocket sender = udp_bind("127.0.0.1", 0).unwrap()
+    UdpSocket receiver = udp_bind("127.0.0.1", 0).unwrap()
+
+    UdpAddr recv_addr = receiver.local_addr()
+
+    Vector[uint8] msg = bytes_from_str("typed-udp")
+
+    # Typed-error send — expected Ok(n).
+    Result[int, IoError] sr = sender.send_to(msg, "127.0.0.1", recv_addr.port)
+    match sr:
+        case Ok(n):
+            print(f"sent={n}")
+        case Error(e):
+            print(f"send_err={e.display()}")
+
+    # Wait for data.
+    bool ready = receiver.poll(1000)
+    if ready:
+        Result[UdpPacket, IoError] rr = receiver.recv_from(1024)
+        match rr:
+            case Ok(pkt):
+                print(bytes_to_str(pkt.data).unwrap())
+            case Error(e):
+                print(f"recv_err={e.display()}")
+
+    sender.close()
+    receiver.close()
+
+    # Error-path coverage — a bad hostname should produce
+    # IoError.Other("no such host"-ish) via the hostname-resolution
+    # errno shim (EHOSTUNREACH / 113). The exact Displayable text
+    # depends on the errno-to-variant mapping: Linux errno 113 maps
+    # to "no route to host" in `_errno_to_io_error`, but we only
+    # care that it is an IoError (not string-flattened).
+    UdpSocket probe = udp_bind("127.0.0.1", 0).unwrap()
+    Vector[uint8] msg2 = bytes_from_str("nope")
+    Result[int, IoError] er = probe.send_to(msg2, "no-such-host.invalid.", 9999)
+    match er:
+        case Ok(_):
+            print("unexpected_ok")
+        case Error(e):
+            # Don't print the display text (varies by platform); just
+            # prove it is an IoError (not a String).
+            print("typed_error")
+    probe.close()

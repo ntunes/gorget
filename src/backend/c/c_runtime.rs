@@ -8583,15 +8583,22 @@ typedef struct {
 } GorgetUdpPacket;
 
 static const char* __gorget_udp_last_error = NULL;
+static int __gorget_udp_last_errno = 0;
 
 static const char* gorget_udp_last_error(void) {
     return __gorget_udp_last_error;
 }
 
+static int64_t gorget_udp_last_errno(void) {
+    return (int64_t)__gorget_udp_last_errno;
+}
+
 static GorgetUdpSocket gorget_udp_bind(const char* addr, int64_t port) {
     __gorget_udp_last_error = NULL;
+    __gorget_udp_last_errno = 0;
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
+        __gorget_udp_last_errno = errno;
         __gorget_udp_last_error = strerror(errno);
         return (GorgetUdpSocket){-1};
     }
@@ -8611,6 +8618,7 @@ static GorgetUdpSocket gorget_udp_bind(const char* addr, int64_t port) {
     }
 
     if (bind(fd, (struct sockaddr*)&sa, sizeof(sa)) < 0) {
+        __gorget_udp_last_errno = errno;
         __gorget_udp_last_error = strerror(errno);
         close(fd);
         return (GorgetUdpSocket){-1};
@@ -8620,6 +8628,7 @@ static GorgetUdpSocket gorget_udp_bind(const char* addr, int64_t port) {
 
 static int64_t gorget_udp_sendto(GorgetUdpSocket* sock, const GorgetArray* data, const char* host, int64_t port) {
     __gorget_udp_last_error = NULL;
+    __gorget_udp_last_errno = 0;
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
@@ -8628,6 +8637,7 @@ static int64_t gorget_udp_sendto(GorgetUdpSocket* sock, const GorgetArray* data,
         // Try hostname resolution
         struct hostent* he = gethostbyname(host);
         if (!he) {
+            __gorget_udp_last_errno = EHOSTUNREACH;
             __gorget_udp_last_error = "hostname resolution failed";
             return -1;
         }
@@ -8637,6 +8647,7 @@ static int64_t gorget_udp_sendto(GorgetUdpSocket* sock, const GorgetArray* data,
     ssize_t sent = sendto(sock->fd, data->data, (size_t)(data->len * data->elem_size),
                           0, (struct sockaddr*)&sa, sizeof(sa));
     if (sent < 0) {
+        __gorget_udp_last_errno = errno;
         __gorget_udp_last_error = strerror(errno);
         return -1;
     }
@@ -8645,11 +8656,13 @@ static int64_t gorget_udp_sendto(GorgetUdpSocket* sock, const GorgetArray* data,
 
 static GorgetUdpPacket gorget_udp_recvfrom(GorgetUdpSocket* sock, int64_t max_bytes) {
     __gorget_udp_last_error = NULL;
+    __gorget_udp_last_errno = 0;
     GorgetUdpPacket pkt;
     memset(&pkt, 0, sizeof(pkt));
 
     uint8_t* buf = (uint8_t*)GORGET_ALLOC((size_t)max_bytes);
     if (!buf) {
+        __gorget_udp_last_errno = ENOMEM;
         __gorget_udp_last_error = "out of memory";
         return pkt;
     }
@@ -8659,6 +8672,7 @@ static GorgetUdpPacket gorget_udp_recvfrom(GorgetUdpSocket* sock, int64_t max_by
     ssize_t n = recvfrom(sock->fd, buf, (size_t)max_bytes, 0,
                          (struct sockaddr*)&sender_addr, &addr_len);
     if (n < 0) {
+        __gorget_udp_last_errno = errno;
         __gorget_udp_last_error = strerror(errno);
         GORGET_FREE(buf, 0);
         return pkt;
@@ -8700,14 +8714,17 @@ static void gorget_udp_set_nonblocking(GorgetUdpSocket* sock, bool enabled) {
 
 static bool gorget_udp_join_multicast(GorgetUdpSocket* sock, const char* group_addr) {
     __gorget_udp_last_error = NULL;
+    __gorget_udp_last_errno = 0;
     struct ip_mreq mreq;
     memset(&mreq, 0, sizeof(mreq));
     if (inet_pton(AF_INET, group_addr, &mreq.imr_multiaddr) <= 0) {
+        __gorget_udp_last_errno = EINVAL;
         __gorget_udp_last_error = "invalid multicast address";
         return false;
     }
     mreq.imr_interface.s_addr = INADDR_ANY;
     if (setsockopt(sock->fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+        __gorget_udp_last_errno = errno;
         __gorget_udp_last_error = strerror(errno);
         return false;
     }
