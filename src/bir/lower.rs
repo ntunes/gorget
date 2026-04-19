@@ -1395,15 +1395,55 @@ fn expand_find(
         else_args: vec![],
     };
 
-    // found_bb: mutate the option slot via Inst::EnumInit (tag=0, payload=elem).
-    // EnumInit lives in a fresh block so the BIR outer loop revisits it
-    // and expands the canonical op.
-    func.block_mut(found_bb).insts.push(Inst::EnumInit {
-        target: out_addr,
+    // found_bb: set tag=0 (Some) and write the payload. For scalar
+    // elements a plain `Store` does the job; for aggregate elements
+    // (String, user struct) we `Memcpy` from the source pointer into
+    // the payload field because Store on a `Ptr` value wouldn't copy
+    // the struct bytes, only the pointer. This is why find was
+    // scalar-only before.
+    let tag_ptr1 = alloc_value(next);
+    func.block_mut(found_bb).insts.push(Inst::FieldPtr {
+        dst: tag_ptr1,
+        base: out_addr,
         struct_id: option_sid,
-        variant_tag: 0,
-        fields: vec![(1, ctx.elem_arg)],
+        field: 0,
     });
+    let some_tag = alloc_value(next);
+    func.block_mut(found_bb).insts.push(Inst::IConst {
+        dst: some_tag,
+        ty: LirType::I32,
+        value: 0, // Some
+    });
+    func.block_mut(found_bb).insts.push(Inst::Store {
+        ptr: tag_ptr1,
+        value: some_tag,
+    });
+    let pay_ptr = alloc_value(next);
+    func.block_mut(found_bb).insts.push(Inst::FieldPtr {
+        dst: pay_ptr,
+        base: out_addr,
+        struct_id: option_sid,
+        field: 1,
+    });
+    if element_ty.is_aggregate() {
+        let size = c_sizeof_lir_type(&element_ty, structs) as i64;
+        let size_val = alloc_value(next);
+        func.block_mut(found_bb).insts.push(Inst::IConst {
+            dst: size_val,
+            ty: LirType::I64,
+            value: size,
+        });
+        func.block_mut(found_bb).insts.push(Inst::Memcpy {
+            dst_ptr: pay_ptr,
+            src_ptr: ctx.elem_ptr,
+            size: size_val,
+        });
+    } else {
+        func.block_mut(found_bb).insts.push(Inst::Store {
+            ptr: pay_ptr,
+            value: ctx.elem_arg,
+        });
+    }
     func.block_mut(found_bb).terminator = Term::Jump(ctx.done_bb, vec![]);
 
     // cont_bb: jump back to check with next_i.

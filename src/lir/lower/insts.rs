@@ -1978,7 +1978,14 @@ impl<'a> FuncLowering<'a> {
         if is_count && element_ty.is_aggregate() && !sig_known {
             return None;
         }
-        if (is_find || is_find_index) && element_ty.is_aggregate() {
+        // `find_index` is still scalar-only; its expansion threads the
+        // i64 index through block args and doesn't touch the element
+        // payload. `find` now handles aggregate elements via Memcpy
+        // in its found_bb.
+        if is_find_index && element_ty.is_aggregate() {
+            return None;
+        }
+        if is_find && element_ty.is_aggregate() && !sig_known {
             return None;
         }
         if is_filter && element_ty.is_aggregate() && !sig_known {
