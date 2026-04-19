@@ -575,17 +575,26 @@ Each step is a single commit, each removes code, each demonstrates payoff:
    backends.
 
    **Migration status:**
-   - Vector: `each` ✓ (pathfinder), `any` ✓, `all` ✓, `fold` ✓,
-     `reduce` ✓, `count` ✓, `find` ✓, `find_index` ✓, `filter` ✓,
-     `map` ✓, `flat_map` ✓ (fold, reduce, count, find, find_index,
-     filter, map, flat_map are scalar-element only; aggregate forms
-     still fall through to backend handlers pending a fuller
-     closure-signature lookup at emit time — return type is
-     already wired, parameter ABI is not). `sorted`, `sort_by`,
-     `sorted_by`, `sort_by_key`, `sorted_by_key`, `windows`,
-     `chunks`, `unique` — still inline in backends.
-   - Dict: all variants still inline in backends.
-   - Set: all variants still inline in backends.
+   - Vector (fully migrated, scalar + aggregate elements): `each`,
+     `any`, `all`, `fold`, `reduce`, `count`, `find`, `find_index`,
+     `filter`, `map`, `flat_map`. The closure signature snapshot
+     (`ClosureCallSig`, built once per module in `LoweringContext`)
+     powers per-arg ABI selection for both `__Closure_N` closures
+     and bare `FuncRef` closures — aggregate accumulators/elements
+     now go through the same BIR expansion path as scalars. The
+     corresponding inline handlers in both backends are gone.
+   - Vector still in backends (not loop-shaped HOFs): `sorted`,
+     `sort`, `unique` (qsort with per-type comparator), `sort_by` /
+     `sorted_by` / `sort_by_key` / `sorted_by_key` (qsort trampoline
+     via `emit_vector_helper`), `windows` / `chunks` (delegated
+     non-closure helpers).
+   - Dict: all variants still inline in backends (`emit_dict_helper`
+     generates static inline C functions; callers delegate via one
+     line each). Migration requires a new BIR scaffold for the
+     `for i in 0..cap { if states[i] != 1 continue; … }` iteration
+     shape.
+   - Set: same as Dict — a separate scaffold for the
+     `gorget_set_next_idx`-style iteration.
 
 10. **Step 9** — Add `AddressOf { value, ty }` + BIR expansion. GIR→LIR
     emits this whenever an `AbiKind::Ptr` extern param is fed an SSA-value
