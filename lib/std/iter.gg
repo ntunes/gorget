@@ -9,14 +9,13 @@
 # `find_index_iter`, `for_each_iter`, `min_iter`, `max_iter`,
 # `last_iter`, `nth_iter`, `join_iter`.
 #
-# Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` and
-# `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` construct the
-# corresponding concrete adapter. Each returns a value — no boxing,
-# no trait-object dispatch. Chains like `v.iter().take(3)` or
-# `VectorIter[int] prefix = v.iter().take(3)` work end to end; the
-# generic-on-generic closure cases (`map` / `filter`) need explicit
-# type args at the call site until Gorget's inference propagates
-# closure return types into method generics.
+# Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` /
+# `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` each return the
+# corresponding concrete adapter by value. Chains like
+# `v.iter().take(3).map[int, int(int)](double).filter[bool(int)](is_even)`
+# compose end to end; method-level generics on `.map` / `.filter`
+# currently need explicit type args at the call site until Gorget's
+# inference propagates closure return types into method generics.
 
 from std.collections import Vector, Set
 
@@ -40,13 +39,11 @@ equip [T] Vector[T]:
 # corresponding concrete adapter struct and returns it by value.
 # Callers chain with `v.iter().take(n)` / `v.iter().skip(2).chain(w.iter())` etc.
 #
-# Note: `.map(f)` / `.filter(p)` — adapter methods with their own
-# method-level generic params (`map[U, F]` / `filter[F]`) — are not
-# wired here. They trip a monomorphization issue where the partially-
-# substituted return type (`MapIter[int, U, F]` with T→int done but
-# U / F still abstract) gets accidentally registered as a concrete
-# type. Users construct these via `MapIter[T, U, F](v.iter(), f)` /
-# `FilterIter[T, F](v.iter(), pred)` until that's resolved.
+# `.map[U, F]` / `.filter[F]` are method-level-generic — the compiler
+# specialises each call site via per-call-site monomorphisation, so
+# chains like `v.iter().map[int, int(int)](double)` fuse the adapter
+# into a concrete state machine without boxing or trait-object
+# dispatch.
 equip [T] VectorIter[T]:
     TakeIter[T] take(self, int n):
         return TakeIter[T](self, n)
@@ -56,6 +53,12 @@ equip [T] VectorIter[T]:
 
     ChainIter[T] chain(self, VectorIter[T] other):
         return ChainIter[T](self, other, true)
+
+    MapIter[T, U, F] map[U, F](self, F f):
+        return MapIter[T, U, F](self, f)
+
+    FilterIter[T, F] filter[F](self, F p):
+        return FilterIter[T, F](self, p)
 
 struct TakeIter[T]:
     VectorIter[T] inner

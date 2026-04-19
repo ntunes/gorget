@@ -41,6 +41,7 @@ pub(super) fn lower_method_call(
     builder: &mut FunctionBuilder,
     receiver: &Spanned<Expr>,
     method_name: &str,
+    method_generic_args: Option<&[Spanned<ast::Type>]>,
     args: &[Spanned<ast::CallArg>],
 ) -> Operand {
     // Static method call: Type.method(args) where receiver is a type name, not a value
@@ -1120,8 +1121,25 @@ pub(super) fn lower_method_call(
             }
         }
 
-        // Iterator adapter expansion: fold/map/filter/collect on Iterator types
-        if matches!(method_name, "fold" | "map" | "filter" | "collect") {
+        // Iterator adapter expansion: fold/map/filter/collect on Iterator types.
+        // Skip when the call has explicit method-level generic args and a per-
+        // call-site method instance exists — the user (or library author)
+        // asked for the concrete-state-machine adapter (`VectorIter.map[U, F]`
+        // returns `MapIter[T, U, F]`), not the eager inline-into-Vector
+        // expansion. Match the fn_sigs lookup pattern used by the main
+        // dispatch site below.
+        let has_method_instance = method_generic_args
+            .filter(|targs| !targs.is_empty())
+            .map(|targs| {
+                let mut sym = format!("{type_name}__{method_name}");
+                for t in targs {
+                    sym.push_str("__");
+                    sym.push_str(&crate::ir::lowering::types::mangle_type_for_name(&t.node));
+                }
+                ctx.fn_sigs.contains_key(&sym)
+            })
+            .unwrap_or(false);
+        if !has_method_instance && matches!(method_name, "fold" | "map" | "filter" | "collect") {
             if let Some(result) = try_lower_iterator_adapter(
                 ctx, builder, &type_name, method_name, recv.clone(), args,
             ) {
@@ -1209,7 +1227,28 @@ pub(super) fn lower_method_call(
             (tn, "sorted", 1) if tn.starts_with("Vector__") || tn.starts_with("Deque__") => "sorted_by",
             _ => method_name,
         };
-        let mangled = format!("{type_name}__{effective_method}");
+        // Per-call-site method instance for method-level-generic equip methods:
+        // `v.iter().map[int, int(int)](f)` targets a dedicated mangled symbol
+        // whose body was produced by `lower_method_instance`. The fully-qualified
+        // mangled symbol appends each method-level type arg's mangled form.
+        let mangled = if let Some(targs) = method_generic_args {
+            if !targs.is_empty() {
+                let mut sym = format!("{type_name}__{effective_method}");
+                for t in targs {
+                    sym.push_str("__");
+                    sym.push_str(&crate::ir::lowering::types::mangle_type_for_name(&t.node));
+                }
+                if ctx.fn_sigs.contains_key(&sym) {
+                    sym
+                } else {
+                    format!("{type_name}__{effective_method}")
+                }
+            } else {
+                format!("{type_name}__{effective_method}")
+            }
+        } else {
+            format!("{type_name}__{effective_method}")
+        };
 
         // Save receiver local for !self post-call MoveZero (before recv is consumed)
         let recv_local_for_move_zero = if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {

@@ -1,0 +1,34 @@
+# Iterator method sugar — `.map[U, F]` and `.filter[F]` as method-level-
+# generic equip methods on VectorIter.
+#
+# Each call site is specialised by the compiler into a dedicated symbol
+# whose body has T (from the receiver), U (from the call-site) and F
+# (from the call-site) substituted with concrete types. No trait-object
+# dispatch, no boxing — the adapter struct fuses with the consuming
+# for-loop at the monomorphised layer.
+
+from std.collections import Vector
+from std.iter import VectorIter, MapIter, FilterIter, TakeIter
+
+int double(int x):
+    return x * 2
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+
+    # .map[U, F] — each element doubled
+    MapIter[int, int, int(int)] doubled = v.iter().map[int, int(int)](double)
+    for x in doubled:
+        print(x)
+
+    print("--")
+
+    # .filter[F] — keep only evens
+    FilterIter[int, bool(int)] evens = v.iter().filter[bool(int)](is_even)
+    for x in evens:
+        print(x)
+
+    return 0

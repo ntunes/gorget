@@ -338,6 +338,10 @@ pub fn lower_module(
     generic_collector.collect_templates(ast_module);
     generic_collector.discover_usages(ast_module);
     generic_collector.discover_transitive();
+    // P2.3b: Per-call-site specialization for method-level-generic equip methods
+    // (e.g. `v.iter().map[U, F](f)`). Requires typecheck output (`expr_types`)
+    // to resolve the receiver's concrete type at each call site.
+    generic_collector.discover_method_instances(ast_module, analysis);
 
     // Pre-register collection type names BEFORE monomorphization so that
     // monomorphize_enum can resolve inner types like Vector[int] in Option[Vector[int]].
@@ -923,6 +927,13 @@ pub fn lower_module(
     generic_collector.register_equip_sigs_with_defaults(
         &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_abis, Some(ast_module));
 
+    // Register signatures for per-call-site method instances (method-level-generic
+    // equip methods). Each one becomes a free-function-shaped symbol in fn_sigs,
+    // with the self pointer as param 0 and merged equip+method substitutions.
+    generic_collector.register_method_instance_sigs(
+        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs,
+        &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
+
     // Register built-in method signatures for Option/Result instantiations.
     // These methods are inlined by the C backend (not real functions), but
     // fn_sigs must know about them so the lowering creates properly-typed locals.
@@ -1107,6 +1118,38 @@ pub fn lower_module(
                     mangled_type_name,
                     Some(ast_module),
                 );
+            }
+        }
+    }
+
+    // Lower per-call-site method instances (method-level-generic equip methods).
+    // Each MethodInstance captures the equip + method + concrete type args, and
+    // lowers to a free-function-shaped symbol that the MethodCall dispatch path
+    // targets directly (see src/ir/lowering/exprs/methods.rs).
+    for mi in generic_collector.method_instances().to_vec() {
+        if let Some(equip_blocks) = generic_collector.get_equip_templates(&mi.equip_base) {
+            let equip_blocks = equip_blocks.clone();
+            'method_search: for equip in &equip_blocks {
+                for method in &equip.items {
+                    if method.node.name.node == mi.method_name
+                        && method.node.generic_params.as_ref()
+                            .map(|gp| gp.node.params.len() == mi.method_type_args.len())
+                            .unwrap_or(false)
+                    {
+                        ctx.gir_equip_methods.insert(mi.mangled_symbol.clone());
+                        functions::lower_method_instance(
+                            &mut ctx,
+                            &mut module,
+                            equip,
+                            &method.node,
+                            &mi.equip_type_args,
+                            &mi.method_type_args,
+                            &mi.mangled_type,
+                            &mi.mangled_symbol,
+                        );
+                        break 'method_search;
+                    }
+                }
             }
         }
     }

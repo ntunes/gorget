@@ -1361,6 +1361,10 @@ impl<'a> TypeChecker<'a> {
                         let arg_type = self.infer_expr(&arg.node.value);
                         self.unify(param_type, arg_type, arg.span);
                     }
+                    // Record the method call's own type so downstream consumers
+                    // (generic method-instance discovery, borrow checker) can
+                    // resolve chained call receivers back to concrete types.
+                    self.expr_types.insert(expr.span, sig.return_type);
                     sig.return_type
                 } else {
                     // Check for closure-returning Option/Result methods (map, and_then, or_else)

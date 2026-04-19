@@ -1183,166 +1183,17 @@ pub fn lower_generic_equip_methods_with_defaults(
         // `equip [T] VectorIter[T]:`) can't be lowered here — the equip-level
         // subs only cover T, so the return type `MapIter[T, U, F]` would
         // substitute to `MapIter[int, U, F]` which map_ast_type_mut resolves
-        // to UNIT_TYPE (leaking an undefined-type reference through GIR
-        // validation). These methods are lowered per call-site by the
-        // generic-function specialization pipeline.
+        // to UNIT_TYPE. Per-call-site mono via `lower_method_instance`
+        // handles these with merged equip + method substitutions.
         if method_def.generic_params.is_some() {
             continue;
         }
         let method_mangled = format!("{mangled_type_name}__{}", method_def.name.node);
-
-        // Use map_ast_type_mut so that generic return types like Option[T] get
-        // registered (not silently resolved to UNIT_TYPE) after substitution.
-        let substituted_ret = generics::substitute_type_pub(&method_def.return_type.node, &subs);
-        let return_type = ctx.type_mapper.map_ast_type_mut(&substituted_ret, &mut ctx.type_registry);
-
-        // Self pointer type — only for methods with a self parameter
-        let has_self = method_def.params.first()
-            .map(|p| p.node.name.node == "self")
-            .unwrap_or(false);
-
-        let self_type_id = ctx.type_mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
-        let self_is_mutable = method_def.params.first()
-            .map(|p| {
-                p.node.name.node == "self" &&
-                matches!(p.node.ownership, Ownership::MutableBorrow)
-            })
-            .unwrap_or(false);
-
-        let self_ptr_type = if self_is_mutable {
-            ctx.register_mut_ptr_type(self_type_id)
-        } else {
-            ctx.register_ptr_type(self_type_id)
-        };
-
-        let mut params: Vec<(TypeId, Option<&str>)> = if has_self {
-            vec![(self_ptr_type, Some("self"))]
-        } else {
-            vec![]
-        };
-        for p in &method_def.params {
-            if p.node.name.node == "self" {
-                continue;
-            }
-            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-            params.push((gir_type, Some(p.node.name.node.as_str())));
-        }
-
-        let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
-
-        ctx.clear_locals();
-        ctx.func_state.callable_return_types.clear();
-        let mut param_idx = if has_self {
-            ctx.register_local("self", LocalId(1), self_ptr_type);
-            2u32
-        } else {
-            1u32
-        };
-        for p in &method_def.params {
-            if p.node.name.node == "self" {
-                continue;
-            }
-            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-            ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
-            if ctx.is_ref_param(base_type, p.node.ownership) {
-                ctx.set_bare_param(LocalId(param_idx));
-            } else if matches!(p.node.ownership, Ownership::MutableBorrow)
-                && ctx.type_registry.is_resource_type(base_type)
-            {
-                ctx.set_ref(LocalId(param_idx));
-            } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-                ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
-            }
-            // Track callable parameter return types for indirect call lowering
-            if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
-                ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
-            }
-            param_idx += 1;
-        }
-
-        // P2.6: Push Function drop scope
-        ctx.drops.push_scope(DropScopeKind::Function);
-
-        // Register function parameters with the drop elaborator
-        {
-            let mut pidx = if has_self { 2u32 } else { 1u32 };
-            for p in &method_def.params {
-                if p.node.name.node == "self" {
-                    continue;
-                }
-                let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-                let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
-                ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
-                pidx += 1;
-            }
-        }
-
-        match &method_def.body {
-            FunctionBody::Block(block) => {
-                // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
-                let mut block = block.clone();
-                let self_subs = vec![("Self".to_string(), substituted_equipped_type.clone())];
-                let empty_env = rustc_hash::FxHashMap::default();
-                let delayed_ctx = DelayedMetaContext {
-                    type_subs:      &self_subs,
-                    features:       &[],
-                    meta_env:       &empty_env,
-                    items:          &[],
-                    trait_registry: &ctx.analysis.traits,
-                    type_registry:  &ctx.type_registry,
-                };
-                let mut meta_errors = Vec::new();
-                meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
-                for e in &meta_errors {
-                    eprintln!("[delayed-meta generic-equip] {e:?}");
-                }
-                lower_block(ctx, &mut builder, &block);
-
-                let last_block_idx = builder.current_block.0 as usize;
-                if builder.blocks[last_block_idx].terminator.is_none() {
-                    ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
-                    if return_type == UNIT_TYPE {
-                        builder.ret(FunctionBuilder::const_unit());
-                    } else {
-                        builder.ret(FunctionBuilder::copy(LocalId(0)));
-                    }
-                } else {
-                    ctx.drops.pop_scope_no_emit();
-                }
-            }
-            FunctionBody::Expression(expr) => {
-                let expr_span = expr.span;
-                let mut operand = lower_expr(ctx, &mut builder, expr);
-                // Clone borrowed operands at the return boundary.
-                // Skip when return type is Ptr — the caller expects a borrow.
-                let ret_type = builder.locals[0].type_id;
-                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                    operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                }
-                let returned_local = match &operand {
-                    Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
-                        Some(place.local)
-                    }
-                    _ => None,
-                };
-                builder.assign(Place::local(LocalId(0)), operand);
-                ctx.drops.emit_early_exit_drops(
-                    &mut builder, &ctx.type_registry,
-                    DropScopeKind::Function, returned_local,
-                );
-                ctx.drops.pop_scope_no_emit();
-                builder.ret(FunctionBuilder::copy(LocalId(0)));
-            }
-            FunctionBody::Declaration | FunctionBody::Extern(_) => {
-                ctx.drops.pop_scope_no_emit();
-                continue;
-            }
-        }
-
-        ctx.flush_ownership_to_locals(&mut builder);
-        module.functions.push(builder.build());
+        lower_equip_method_with_subs(
+            ctx, module, method_def, &subs,
+            mangled_type_name, &method_mangled,
+            &substituted_equipped_type,
+        );
     }
 
     // Emit default trait methods that aren't overridden in the equip block
@@ -1381,6 +1232,233 @@ pub fn lower_generic_equip_methods_with_defaults(
             }
         }
     }
+
+    ctx.generics.type_name_subs.clear();
+    ctx.generics.generic_type_params.clear();
+}
+
+/// Lower a single equip method body with the given substitutions. Shared
+/// between the equip-block bulk path (`lower_generic_equip_methods_with_defaults`)
+/// and the per-call-site method-instance path (`lower_method_instance`). The
+/// two differ only in how they build `subs` and `method_mangled`.
+fn lower_equip_method_with_subs(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    method_def: &ast::FunctionDef,
+    subs: &[(String, Type)],
+    mangled_type_name: &str,
+    method_mangled: &str,
+    substituted_equipped_type: &Type,
+) {
+    // Use map_ast_type_mut so that generic return types like Option[T] get
+    // registered (not silently resolved to UNIT_TYPE) after substitution.
+    let substituted_ret = generics::substitute_type_pub(&method_def.return_type.node, subs);
+    let return_type = ctx.type_mapper.map_ast_type_mut(&substituted_ret, &mut ctx.type_registry);
+
+    // Self pointer type — only for methods with a self parameter
+    let has_self = method_def.params.first()
+        .map(|p| p.node.name.node == "self")
+        .unwrap_or(false);
+
+    let self_type_id = ctx.type_mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
+    let self_is_mutable = method_def.params.first()
+        .map(|p| {
+            p.node.name.node == "self" &&
+            matches!(p.node.ownership, Ownership::MutableBorrow)
+        })
+        .unwrap_or(false);
+
+    let self_ptr_type = if self_is_mutable {
+        ctx.register_mut_ptr_type(self_type_id)
+    } else {
+        ctx.register_ptr_type(self_type_id)
+    };
+
+    let mut params: Vec<(TypeId, Option<&str>)> = if has_self {
+        vec![(self_ptr_type, Some("self"))]
+    } else {
+        vec![]
+    };
+    for p in &method_def.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+        params.push((gir_type, Some(p.node.name.node.as_str())));
+    }
+
+    let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
+
+    ctx.clear_locals();
+    ctx.func_state.callable_return_types.clear();
+    let mut param_idx = if has_self {
+        ctx.register_local("self", LocalId(1), self_ptr_type);
+        2u32
+    } else {
+        1u32
+    };
+    for p in &method_def.params {
+        if p.node.name.node == "self" {
+            continue;
+        }
+        let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+        let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+        ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
+        if ctx.is_ref_param(base_type, p.node.ownership) {
+            ctx.set_bare_param(LocalId(param_idx));
+        } else if matches!(p.node.ownership, Ownership::MutableBorrow)
+            && ctx.type_registry.is_resource_type(base_type)
+        {
+            ctx.set_ref(LocalId(param_idx));
+        } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
+            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
+        }
+        // Track callable parameter return types for indirect call lowering
+        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {
+            ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
+        }
+        param_idx += 1;
+    }
+
+    // P2.6: Push Function drop scope
+    ctx.drops.push_scope(DropScopeKind::Function);
+
+    // Register function parameters with the drop elaborator
+    {
+        let mut pidx = if has_self { 2u32 } else { 1u32 };
+        for p in &method_def.params {
+            if p.node.name.node == "self" {
+                continue;
+            }
+            let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
+            let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
+            ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            pidx += 1;
+        }
+    }
+
+    match &method_def.body {
+        FunctionBody::Block(block) => {
+            // Evaluate delayed meta blocks (meta if/for) with Self bound to the equipped type.
+            let mut block = block.clone();
+            let self_subs = vec![("Self".to_string(), substituted_equipped_type.clone())];
+            let empty_env = rustc_hash::FxHashMap::default();
+            let delayed_ctx = DelayedMetaContext {
+                type_subs:      &self_subs,
+                features:       &[],
+                meta_env:       &empty_env,
+                items:          &[],
+                trait_registry: &ctx.analysis.traits,
+                type_registry:  &ctx.type_registry,
+            };
+            let mut meta_errors = Vec::new();
+            meta::evaluate_delayed_meta_block(&mut block, &delayed_ctx, &mut meta_errors);
+            for e in &meta_errors {
+                eprintln!("[delayed-meta generic-equip] {e:?}");
+            }
+            lower_block(ctx, &mut builder, &block);
+
+            let last_block_idx = builder.current_block.0 as usize;
+            if builder.blocks[last_block_idx].terminator.is_none() {
+                ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
+                if return_type == UNIT_TYPE {
+                    builder.ret(FunctionBuilder::const_unit());
+                } else {
+                    builder.ret(FunctionBuilder::copy(LocalId(0)));
+                }
+            } else {
+                ctx.drops.pop_scope_no_emit();
+            }
+        }
+        FunctionBody::Expression(expr) => {
+            let expr_span = expr.span;
+            let mut operand = lower_expr(ctx, &mut builder, expr);
+            // Clone borrowed operands at the return boundary.
+            // Skip when return type is Ptr — the caller expects a borrow.
+            let ret_type = builder.locals[0].type_id;
+            if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
+            }
+            let returned_local = match &operand {
+                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            };
+            builder.assign(Place::local(LocalId(0)), operand);
+            ctx.drops.emit_early_exit_drops(
+                &mut builder, &ctx.type_registry,
+                DropScopeKind::Function, returned_local,
+            );
+            ctx.drops.pop_scope_no_emit();
+            builder.ret(FunctionBuilder::copy(LocalId(0)));
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {
+            ctx.drops.pop_scope_no_emit();
+            return;
+        }
+    }
+
+    ctx.flush_ownership_to_locals(&mut builder);
+    module.functions.push(builder.build());
+}
+
+/// Lower a per-call-site monomorphisation of a method-level-generic equip
+/// method into a free-function-shaped symbol. Used for calls like
+/// `v.iter().map[int, int(int)](f)` that the bulk equip-lowering path skips
+/// because the equip-level subs don't cover the method-level generics.
+///
+/// Merges equip-level substitutions (e.g. `T→int` from `VectorIter[int]`)
+/// with method-level substitutions (e.g. `U→int`, `F→int(int)` from the
+/// call site's generic args). The resulting body has all type params
+/// substituted; the emitted function is named by `mangled_symbol` and is
+/// called directly by the MethodCall dispatch path (see
+/// `src/ir/lowering/exprs/methods.rs`).
+pub fn lower_method_instance(
+    ctx: &mut LoweringContext,
+    module: &mut crate::ir::Module,
+    equip: &ast::EquipBlock,
+    method: &ast::FunctionDef,
+    equip_type_args: &[Spanned<Type>],
+    method_type_args: &[Spanned<Type>],
+    mangled_type_name: &str,
+    mangled_symbol: &str,
+) {
+    // Equip-level subs (T → concrete from receiver).
+    let mut subs = build_equip_subs(equip, equip_type_args);
+    // Method-level subs (U, F → concrete from call-site targs).
+    if let Some(ref gp) = method.generic_params {
+        for (param, arg) in gp.node.params.iter().zip(method_type_args.iter()) {
+            let name = match &param.node {
+                GenericParam::Type { name: s, .. } => s.node.clone(),
+                GenericParam::Const { name, .. } => name.node.clone(),
+            };
+            subs.push((name, arg.node.clone()));
+        }
+    }
+
+    let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
+
+    // Shared context setup: type-name subs + generic type param TypeId map.
+    // Both drive method-body lowering decisions (struct init, method dispatch).
+    build_type_name_subs(ctx, &subs);
+    if let Type::Named { name, generic_args } = &equip.type_.node {
+        let base_name = &name.node;
+        if !generic_args.is_empty() {
+            let template_mangled = super::types::mangle_generic_name(base_name, generic_args);
+            if template_mangled != mangled_type_name {
+                ctx.generics.type_name_subs.insert(template_mangled, mangled_type_name.to_string());
+            }
+        }
+    }
+    build_generic_type_params(ctx, &subs);
+
+    lower_equip_method_with_subs(
+        ctx, module, method, &subs,
+        mangled_type_name, mangled_symbol,
+        &substituted_equipped_type,
+    );
 
     ctx.generics.type_name_subs.clear();
     ctx.generics.generic_type_params.clear();

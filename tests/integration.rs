@@ -2056,6 +2056,14 @@ fn iter_method_sugar() {
 }
 
 #[test]
+fn iter_map_filter_method_sugar() {
+    run_gg(
+        "iter_map_filter_method_sugar.gg",
+        "2\n4\n6\n8\n10\n--\n2\n4",
+    );
+}
+
+#[test]
 fn stdlib_iter_set() {
     run_gg(
         "stdlib_iter_set.gg",

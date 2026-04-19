@@ -2088,6 +2088,21 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // Scalar — simple dereference store.
                 let ty_name = c_type_named(val_ty.unwrap(), sn);
                 write!(out, "*({ty_name}*)({p}) = {val};", p = v(*ptr), val = v(*value)).unwrap();
+            } else if matches!(val_ty, Some(LirType::Void)) {
+                // Void val_ty happens for ByValue params whose source type was
+                // erased (closure params for instance: `F f` with F→int(int)
+                // resolves to UNIT_TYPE at the IR param layer, emitting as
+                // `void*` in C). The value is a raw pointer; if the
+                // destination has a known pointee type, copy that many bytes
+                // from the source pointer. Falls back to the conservative
+                // `&val, sizeof(val)` form when nothing is known.
+                let dst_pointee = ptr_pointee.get(ptr.0 as usize).and_then(|t| t.as_ref());
+                if let Some(ty) = dst_pointee {
+                    let ty_name = c_type_named(ty, sn);
+                    write!(out, "memcpy({p}, {val}, sizeof({ty_name}));", p = v(*ptr), val = v(*value)).unwrap();
+                } else {
+                    write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
+                }
             } else {
                 // Struct by value — take address for memcpy source.
                 write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
