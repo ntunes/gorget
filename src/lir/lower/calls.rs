@@ -601,8 +601,13 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
             | "each" | "find" | "find_index" | "sorted_by" | "sort_by"
             | "sorted_by_key" | "sort_by_key"
-            | "windows" | "chunks"
             | "count" => return None,
+            // `windows` / `chunks` route to generic runtime stubs that
+            // use the source array's `elem_size` field — one stub covers
+            // every element type, no per-type variants needed.
+            "windows" | "chunks" => {
+                return Some(format!("gorget_array_{method}"));
+            }
             // sort/sorted/unique dispatch to typed stubs emitted by
             // emit_types.rs, keyed by element type so qsort uses the
             // right comparator:

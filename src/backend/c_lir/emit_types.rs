@@ -8,11 +8,12 @@ pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
     "filter", "map", "flat_map", "fold", "reduce", "any", "all",
     "each", "find", "find_index", "sorted_by", "sort_by",
     "sorted_by_key", "sort_by_key",
-    "windows", "chunks",
     "count",
-    // `sort` / `sorted` / `unique` go through typed runtime stubs
-    // (`gorget_array_sort_{int,float,str,generic}` etc.) dispatched
-    // in `map_monomorphized_to_runtime` — no inline helper needed.
+    // `sort` / `sorted` / `unique` / `windows` / `chunks` all go through
+    // runtime stubs dispatched in `map_monomorphized_to_runtime` — no
+    // inline helper needed. Only the qsort TLS trampoline variants
+    // (sort_by*, sort_by_key*) still require per-call-site inline
+    // codegen.
 ];
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
@@ -325,48 +326,6 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
                 writeln!(out, "    return __result;").unwrap();
                 writeln!(out, "}}").unwrap();
             }
-        }
-        "windows" => {
-            // windows(n) → Vector[Vector[T]] of sliding slices of size n.
-            // Each window shares elements with neighbors — for resource T, elements
-            // are bit-copied (no clone); Phase 2 lazy iterators will handle resource
-            // types properly via borrowing. Phase 1.5 is correct for POD types.
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, int64_t __n) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free);").unwrap();
-            writeln!(out, "    if (__n <= 0 || (size_t)__n > __src.len) return __result;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i + (size_t)__n <= __src.len; __i++) {{").unwrap();
-            writeln!(out, "        GorgetArray __w = gorget_array_new(sizeof({elem_c}));").unwrap();
-            writeln!(out, "        for (size_t __j = __i; __j < __i + (size_t)__n; __j++) {{").unwrap();
-            writeln!(out, "            {elem_c} __e = GORGET_ARRAY_AT({elem_c}, __src, __j);").unwrap();
-            writeln!(out, "            gorget_array_push(&__w, &__e);").unwrap();
-            writeln!(out, "        }}").unwrap();
-            writeln!(out, "        gorget_array_push(&__result, &__w);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "chunks" => {
-            // chunks(n) → Vector[Vector[T]] of non-overlapping slices of size n.
-            // Last chunk may be shorter. For resource T, elements are bit-copied
-            // (transferred once since chunks are disjoint). Phase 2 lazy version
-            // will handle borrowing.
-            writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, int64_t __n) {{").unwrap();
-            writeln!(out, "    GorgetArray __src = *(GorgetArray*)__arr_ptr;").unwrap();
-            writeln!(out, "    GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free);").unwrap();
-            writeln!(out, "    if (__n <= 0) return __result;").unwrap();
-            writeln!(out, "    for (size_t __i = 0; __i < __src.len; __i += (size_t)__n) {{").unwrap();
-            writeln!(out, "        GorgetArray __c = gorget_array_new(sizeof({elem_c}));").unwrap();
-            writeln!(out, "        size_t __end = __i + (size_t)__n;").unwrap();
-            writeln!(out, "        if (__end > __src.len) __end = __src.len;").unwrap();
-            writeln!(out, "        for (size_t __j = __i; __j < __end; __j++) {{").unwrap();
-            writeln!(out, "            {elem_c} __e = GORGET_ARRAY_AT({elem_c}, __src, __j);").unwrap();
-            writeln!(out, "            gorget_array_push(&__c, &__e);").unwrap();
-            writeln!(out, "        }}").unwrap();
-            writeln!(out, "        gorget_array_push(&__result, &__c);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
         }
         "find" => {
             // find(pred) → Option[T]  (returns first matching element)
@@ -3102,6 +3061,47 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     }
     if has_extern("gorget_array_unique_generic") {
         writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+    }
+    // gorget_array_windows(arr, n): Vector[Vector[T]] of sliding N-sized
+    // slices. Elements are bit-copied (no clone); correct for POD types.
+    // Uses src->elem_size so one stub covers every T.
+    if has_extern("gorget_array_windows") {
+        writeln!(out, "static inline GorgetArray gorget_array_windows(void* __arr_ptr, int64_t __n) {{ \
+            GorgetArray* __src = (GorgetArray*)__arr_ptr; \
+            GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free); \
+            if (__n <= 0 || (size_t)__n > __src->len) return __result; \
+            size_t __es = __src->elem_size; \
+            for (size_t __i = 0; __i + (size_t)__n <= __src->len; __i++) {{ \
+                GorgetArray __w = gorget_array_new(__es); \
+                for (size_t __j = __i; __j < __i + (size_t)__n; __j++) {{ \
+                    void* __e = (char*)__src->data + __j * __es; \
+                    gorget_array_push(&__w, __e); \
+                }} \
+                gorget_array_push(&__result, &__w); \
+            }} \
+            return __result; \
+        }}").unwrap();
+    }
+    // gorget_array_chunks(arr, n): Vector[Vector[T]] of N-sized disjoint
+    // slices; last chunk may be shorter.
+    if has_extern("gorget_array_chunks") {
+        writeln!(out, "static inline GorgetArray gorget_array_chunks(void* __arr_ptr, int64_t __n) {{ \
+            GorgetArray* __src = (GorgetArray*)__arr_ptr; \
+            GorgetArray __result = gorget_array_new_drop(sizeof(GorgetArray), (__gorget_drop_fn)gorget_array_free); \
+            if (__n <= 0) return __result; \
+            size_t __es = __src->elem_size; \
+            for (size_t __i = 0; __i < __src->len; __i += (size_t)__n) {{ \
+                GorgetArray __c = gorget_array_new(__es); \
+                size_t __end = __i + (size_t)__n; \
+                if (__end > __src->len) __end = __src->len; \
+                for (size_t __j = __i; __j < __end; __j++) {{ \
+                    void* __e = (char*)__src->data + __j * __es; \
+                    gorget_array_push(&__c, __e); \
+                }} \
+                gorget_array_push(&__result, &__c); \
+            }} \
+            return __result; \
+        }}").unwrap();
     }
     // gorget_array_zip: pair elements from two arrays into an array of tuples
     if has_extern("gorget_array_zip") {

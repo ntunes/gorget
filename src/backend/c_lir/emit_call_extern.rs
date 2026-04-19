@@ -696,16 +696,15 @@ pub(super) fn emit_call_extern(
             };
 
             if let Some((_elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                // All closure-taking Vector HOFs (each/any/all/map/filter/fold/
-                // reduce/count/flat_map/find/find_index) are lowered upstream
-                // via `Inst::HofExpand`. Plain `sort`/`sorted`/`unique` route
-                // to typed runtime stubs via `map_monomorphized_to_runtime`.
-                // Only qsort-trampoline closures (`sort_by*`, `sorted_by*`)
-                // and delegated helpers (`windows`, `chunks`) remain inline.
+                // All closure-taking Vector HOFs plus sort/sorted/unique/
+                // windows/chunks are lowered upstream — via `Inst::HofExpand`
+                // or via `map_monomorphized_to_runtime` routing to typed /
+                // generic runtime stubs. Only the qsort TLS trampoline
+                // variants (`sort_by` / `sorted_by` / `sort_by_key` /
+                // `sorted_by_key`) remain inline.
                 if (dst.is_some() || method == "sort_by" || method == "sort_by_key")
                     && matches!(method,
                         "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"
-                        | "windows" | "chunks"
                     )
                 {
                     let d_opt = dst;
@@ -714,30 +713,20 @@ pub(super) fn emit_call_extern(
                     let closure_arg = emit_args.last().copied();
                     let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
                     let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    match method {
-                        "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key" => {
-                            // Delegate to the helper emitted by emit_vector_helper.
-                            // The helper takes the closure as const void* and stores a
-                            // pointer in TLS (save/restored across calls). Pass either
-                            // the closure pointer directly or the address of the struct.
-                            let closure_pass = if closure_is_ptr {
-                                fn_arg.clone()
-                            } else {
-                                format!("&{fn_arg}")
-                            };
-                            let is_mutating = method == "sort_by" || method == "sort_by_key";
-                            if is_mutating {
-                                write!(out, "{emit_name}({arr_arg}, {closure_pass});").unwrap();
-                            } else {
-                                write!(out, "{dv} = {emit_name}({arr_arg}, {closure_pass});").unwrap();
-                            }
-                        }
-                        "windows" | "chunks" => {
-                            // windows(n) / chunks(n) — non-closure arg (int n).
-                            // fn_arg is the int `n` value already. Delegate to helper.
-                            write!(out, "{dv} = {emit_name}({arr_arg}, {fn_arg});").unwrap();
-                        }
-                        _ => unreachable!(),
+                    // Delegate to the helper emitted by emit_vector_helper.
+                    // The helper takes the closure as const void* and stores a
+                    // pointer in TLS (save/restored across calls). Pass either
+                    // the closure pointer directly or the address of the struct.
+                    let closure_pass = if closure_is_ptr {
+                        fn_arg.clone()
+                    } else {
+                        format!("&{fn_arg}")
+                    };
+                    let is_mutating = method == "sort_by" || method == "sort_by_key";
+                    if is_mutating {
+                        write!(out, "{emit_name}({arr_arg}, {closure_pass});").unwrap();
+                    } else {
+                        write!(out, "{dv} = {emit_name}({arr_arg}, {closure_pass});").unwrap();
                     }
                     return;
                 }
