@@ -2095,6 +2095,20 @@ fn iter_fold_inference() {
 }
 
 #[test]
+fn iter_map_inference() {
+    // Method-level generic inference (Shape 2: map — structural).
+    // `Vector[U] map[U, F](self, F f)` — F binds via shape-1 from the
+    // closure arg; U appears only in the return type, so shape-2's
+    // structural rule binds U = F's resolved return type. Includes
+    // the cross-type case (U=String) and a same-shape filter for
+    // contrast (.filter has only F, no shape-2 needed).
+    run_gg(
+        "iter_map_inference.gg",
+        "2\n4\n6\n--\nitem1\nitem2\nitem3\n--\n2",
+    );
+}
+
+#[test]
 fn method_generic_trait_dispatch() {
     run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }

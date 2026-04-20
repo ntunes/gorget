@@ -1,0 +1,49 @@
+# Method-level generic inference — Shape 2 (map, structural).
+#
+# `Vector[U] map[U, F](self, F f)` on VectorIter has two method-level
+# generics: F appears as a direct sig-param slot (shape-1 binds it from
+# the closure arg), but U appears only in the return type. Shape-2
+# structural inference binds U = F.return_type by looking at the bound
+# callable's return type.
+#
+# The `iter_map_filter_method_sugar.gg` fixture covers the WITH-explicit-
+# args form (`v.iter().map[int, int(int)](double)`). This fixture is the
+# no-args counterpart.
+
+from std.collections import Vector
+from std.iter import VectorIter, MapIter, FilterIter
+from std.conv import int_to_str
+
+int double(int x):
+    return x * 2
+
+String int_to_label(int x):
+    return "item" + int_to_str(x)
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int main():
+    Vector[int] v = [1, 2, 3]
+
+    # .map(f) — F inferred via shape-1 (int(int)), U inferred via
+    # shape-2 (F's return type = int).
+    MapIter[VectorIter[int], int, int, int(int)] doubled = v.iter().map(double)
+    for x in doubled:
+        print(x)
+
+    print("--")
+
+    # .map(f) with cross-type closure — F = String(int), U = String.
+    MapIter[VectorIter[int], int, String, String(int)] labeled = v.iter().map(int_to_label)
+    for s in labeled:
+        print(s)
+
+    print("--")
+
+    # .filter(p) — single method-generic F (only shape-1 needed).
+    FilterIter[VectorIter[int], int, bool(int)] evens = v.iter().filter(is_even)
+    for x in evens:
+        print(x)
+
+    return 0

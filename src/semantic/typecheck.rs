@@ -11,6 +11,33 @@ use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
 
 /// Return the valid (min, max) range for an integer primitive type.
+/// Walk an AST `Type` and return true if any `Type::Named { name, [] }`
+/// nested anywhere inside has the given name. Used by shape-2 inference
+/// to detect when a method-level generic appears only in the return type
+/// (e.g. the `U` in `Vector[U] map[U, F](self, F f)`).
+fn type_mentions_name(ty: &Type, target: &str) -> bool {
+    match ty {
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() && name.node == target {
+                return true;
+            }
+            generic_args.iter().any(|a| type_mentions_name(&a.node, target))
+        }
+        Type::Tuple(elems) => elems.iter().any(|e| type_mentions_name(&e.node, target)),
+        Type::Array { element, .. } | Type::Slice { element } => {
+            type_mentions_name(&element.node, target)
+        }
+        Type::Function { return_type, params, .. } => {
+            type_mentions_name(&return_type.node, target)
+                || params.iter().any(|p| type_mentions_name(&p.node, target))
+        }
+        Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
+            type_mentions_name(&inner.node, target)
+        }
+        Type::Primitive(_) | Type::SelfType | Type::Inferred => false,
+    }
+}
+
 fn int_range(prim: &PrimitiveType) -> Option<(i128, i128)> {
     match prim {
         PrimitiveType::Int8 => Some((-128, 127)),
@@ -2982,13 +3009,16 @@ impl<'a> TypeChecker<'a> {
     /// binds `F = bool(int)`.
     ///
     /// Shape 3 (fold): `A fold[A, F](self, A init, F f)` is subsumed by
-    /// the shape-1 walk — both `A` (in `init`'s slot) and `F` (in `f`'s
-    /// slot) appear directly as named-slot params and bind in a single
-    /// pass. The design doc's "bind concrete args first" ordering only
-    /// matters once shape-2 (structural matching of generics inside a
-    /// callable's return-type position) lands.
+    /// shape-1 — both `A` (in `init`'s slot) and `F` (in `f`'s slot)
+    /// appear directly as named-slot params and bind in one pass.
     ///
-    /// Shape 2 (map — structural): added in a subsequent commit.
+    /// Shape 2 (map — structural): when a method-level generic `U`
+    /// appears only in the return type (not in any param slot) AND one
+    /// param is a callable `F` bound to a Function type, bind `U =
+    /// F.return_type`. e.g. `Vector[U] map[U, F](self, F f)` called
+    /// as `v.iter().map(double)` where `double: int(int)` binds
+    /// `F = int(int)` then `U = int`.
+    ///
     /// Returns `Some(Vec<Type>)` with one AST type per generic param if
     /// every generic resolves; `None` otherwise (caller falls back to
     /// existing dispatch).
@@ -3019,9 +3049,47 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        // Shape 2 (map — structural): for each unbound generic `G` that
+        // appears in the return type, if exactly one already-bound param
+        // resolves to a Function, bind `G = that function's return type`.
+        // Handles the `Vector[U] map[U, F](self, F f)` pattern where U
+        // is never a direct sig-param slot; the body constraint
+        // `U = F.return_type` is materialised here instead.
+        for g in &shape.generic_params {
+            if bindings.contains_key(g) {
+                continue;
+            }
+            if !type_mentions_name(&shape.return_type, g) {
+                continue;
+            }
+            let mut fn_ret_type: Option<TypeId> = None;
+            for &arg_ty in arg_types {
+                let resolved = self.resolve_type(arg_ty);
+                if let ResolvedType::Function { return_type, .. } = self.types.get(resolved) {
+                    let rt = *return_type;
+                    if rt == self.types.error_id {
+                        continue;
+                    }
+                    if let Some(prev) = fn_ret_type {
+                        if prev != rt {
+                            // Multiple Function args with different
+                            // return types — can't pick one
+                            // unambiguously. Let fallback handle it.
+                            fn_ret_type = None;
+                            break;
+                        }
+                    } else {
+                        fn_ret_type = Some(rt);
+                    }
+                }
+            }
+            if let Some(rt) = fn_ret_type {
+                bindings.insert(g.clone(), rt);
+            }
+        }
+
         // Materialise bindings in declaration order. If any param is
-        // unbound at this point, shape-1 alone can't resolve — bail and
-        // let later commits (shape-2 / shape-3) take over.
+        // unbound at this point, inference failed — caller falls back.
         let mut out = Vec::with_capacity(shape.generic_params.len());
         for name in &shape.generic_params {
             let tid = *bindings.get(name)?;
