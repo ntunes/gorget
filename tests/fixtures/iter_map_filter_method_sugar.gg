@@ -20,14 +20,14 @@ int main():
     Vector[int] v = [1, 2, 3, 4, 5]
 
     # .map[U, F] — each element doubled
-    MapIter[int, int, int(int)] doubled = v.iter().map[int, int(int)](double)
+    MapIter[VectorIter[int], int, int, int(int)] doubled = v.iter().map[int, int(int)](double)
     for x in doubled:
         print(x)
 
     print("--")
 
     # .filter[F] — keep only evens
-    FilterIter[int, bool(int)] evens = v.iter().filter[bool(int)](is_even)
+    FilterIter[VectorIter[int], int, bool(int)] evens = v.iter().filter[bool(int)](is_even)
     for x in evens:
         print(x)
 

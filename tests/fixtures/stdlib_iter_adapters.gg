@@ -27,7 +27,7 @@ int main():
     Vector[int] b = [100, 200]
     VectorIter[int] ia = a.iter()
     VectorIter[int] ib = b.iter()
-    ChainIter[int] c = ChainIter[int](ia, ib, true)
+    ChainIter[VectorIter[int], VectorIter[int], int] c = ChainIter[VectorIter[int], VectorIter[int], int](ia, ib, true)
     for x in c:
         print(x)
 

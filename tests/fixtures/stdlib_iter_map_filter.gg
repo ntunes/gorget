@@ -19,16 +19,16 @@ int main():
 
     # map → [2, 4, 6, 8, 10]
     VectorIter[int] it1 = v.iter()
-    MapIter[int, int, int(int)] mi = MapIter[int, int, int(int)](it1, doubled)
-    Vector[int] m = collect_vec[int, MapIter[int, int, int(int)]](mi)
+    MapIter[VectorIter[int], int, int, int(int)] mi = MapIter[VectorIter[int], int, int, int(int)](it1, doubled)
+    Vector[int] m = collect_vec[int, MapIter[VectorIter[int], int, int, int(int)]](mi)
     print(m.len())
     print(m.get(0).unwrap())
     print(m.get(4).unwrap())
 
     # filter → [3, 4, 5]
     VectorIter[int] it2 = v.iter()
-    FilterIter[int, bool(int)] fi = FilterIter[int, bool(int)](it2, is_big)
-    Vector[int] f = collect_vec[int, FilterIter[int, bool(int)]](fi)
+    FilterIter[VectorIter[int], int, bool(int)] fi = FilterIter[VectorIter[int], int, bool(int)](it2, is_big)
+    Vector[int] f = collect_vec[int, FilterIter[VectorIter[int], int, bool(int)]](fi)
     print(f.len())
 
     # sum (terminal)

@@ -42,7 +42,7 @@ int main():
     Set[int] s2 = Set[int]()
     s2.add(100)
     s2.add(200)
-    ChainIter[int] c = set_iter[int](s).chain(set_iter[int](s2))
+    ChainIter[VectorIter[int], VectorIter[int], int] c = set_iter[int](s).chain(set_iter[int](s2))
     for x in c:
         print(x)
 

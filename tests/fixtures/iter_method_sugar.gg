@@ -31,7 +31,7 @@ int main():
 
     # chain(other)
     Vector[int] w = [100, 200]
-    ChainIter[int] c = v.iter().chain(w.iter())
+    ChainIter[VectorIter[int], VectorIter[int], int] c = v.iter().chain(w.iter())
     for x in c:
         print(x)
 

@@ -1,10 +1,13 @@
 # std.iter — lazy iterator support.
 #
 # Provides `VectorIter[T]` and `Vector.iter()` so a Vector can be iterated
-# lazily through the `Iterator[T]` protocol. Concrete adapters:
-# `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
-# `FilterIter[T, F]` — each is a state-machine struct, no trait-object
-# dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
+# lazily through the `Iterator[T]` protocol. Concrete adapters generic
+# over the source iterator type so chains can compose:
+# `TakeIter[Iter, T]`, `SkipIter[Iter, T]`, `ChainIter[IterA, IterB, T]`,
+# `MapIter[Iter, T, U, F]`, `FilterIter[Iter, T, F]`,
+# `TakeWhileIter[Iter, T, F]`, `DropWhileIter[Iter, T, F]`,
+# `FilterMapIter[Iter, T, U, F]`, `InspectIter[Iter, T, F]` — each
+# is a state-machine struct, no trait-object dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
 # `product_iter`, `any_iter`, `all_iter`, `fold_iter`, `find_iter`,
 # `find_index_iter`, `for_each_iter`, `min_iter`, `max_iter`,
 # `last_iter`, `nth_iter`, `join_iter`.
@@ -148,26 +151,26 @@ equip [T] VectorIter[T]:
     SkipIter[VectorIter[T], T] skip(self, int n):
         return SkipIter[VectorIter[T], T](self, n)
 
-    ChainIter[T] chain(self, VectorIter[T] other):
-        return ChainIter[T](self, other, true)
+    ChainIter[VectorIter[T], VectorIter[T], T] chain(self, VectorIter[T] other):
+        return ChainIter[VectorIter[T], VectorIter[T], T](self, other, true)
 
-    MapIter[T, U, F] map[U, F](self, F f):
-        return MapIter[T, U, F](self, f)
+    MapIter[VectorIter[T], T, U, F] map[U, F](self, F f):
+        return MapIter[VectorIter[T], T, U, F](self, f)
 
-    FilterIter[T, F] filter[F](self, F p):
-        return FilterIter[T, F](self, p)
+    FilterIter[VectorIter[T], T, F] filter[F](self, F p):
+        return FilterIter[VectorIter[T], T, F](self, p)
 
-    TakeWhileIter[T, F] take_while[F](self, F p):
-        return TakeWhileIter[T, F](self, p, false)
+    TakeWhileIter[VectorIter[T], T, F] take_while[F](self, F p):
+        return TakeWhileIter[VectorIter[T], T, F](self, p, false)
 
-    DropWhileIter[T, F] drop_while[F](self, F p):
-        return DropWhileIter[T, F](self, p, true)
+    DropWhileIter[VectorIter[T], T, F] drop_while[F](self, F p):
+        return DropWhileIter[VectorIter[T], T, F](self, p, true)
 
-    FilterMapIter[T, U, F] filter_map[U, F](self, F f):
-        return FilterMapIter[T, U, F](self, f)
+    FilterMapIter[VectorIter[T], T, U, F] filter_map[U, F](self, F f):
+        return FilterMapIter[VectorIter[T], T, U, F](self, f)
 
-    InspectIter[T, F] inspect[F](self, F f):
-        return InspectIter[T, F](self, f)
+    InspectIter[VectorIter[T], T, F] inspect[F](self, F f):
+        return InspectIter[VectorIter[T], T, F](self, f)
 
     # ── Terminal methods ───────────────────────────────────
     #
@@ -203,14 +206,16 @@ equip [Iter, T] SkipIter[Iter, T] with Iterator[T]:
                     return None
         return self.inner.next()
 
-# ChainIter[T] — concatenates two VectorIter[T]. Yields from `a` until
-# exhausted, then from `b`.
-struct ChainIter[T]:
-    VectorIter[T] a
-    VectorIter[T] b
+# ChainIter[IterA, IterB, T] — concatenates two iterators of element T.
+# Yields from `a` until exhausted, then from `b`. Generic over both
+# source iterator types so chains like `v.iter().chain(w.iter()).chain(z.iter())`
+# can compose (each layer wraps the previous ChainIter).
+struct ChainIter[IterA, IterB, T]:
+    IterA a
+    IterB b
     bool on_first
 
-equip [T] ChainIter[T] with Iterator[T]:
+equip [IterA, IterB, T] ChainIter[IterA, IterB, T] with Iterator[T]:
     Option[T] next(&self):
         if self.on_first:
             Option[T] r = self.a.next()
@@ -228,11 +233,11 @@ equip [T] ChainIter[T] with Iterator[T]:
 # Monomorphization over the concrete source type + closure type
 # keeps the chain fused.
 
-struct MapIter[T, U, F]:
-    VectorIter[T] inner
+struct MapIter[Iter, T, U, F]:
+    Iter inner
     F f
 
-equip [T, U, F] MapIter[T, U, F] with Iterator[U]:
+equip [Iter, T, U, F] MapIter[Iter, T, U, F] with Iterator[U]:
     Option[U] next(&self):
         Option[T] v = self.inner.next()
         match v:
@@ -246,11 +251,11 @@ equip [T, U, F] MapIter[T, U, F] with Iterator[U]:
             case None:
                 return None
 
-struct FilterIter[T, F]:
-    VectorIter[T] inner
+struct FilterIter[Iter, T, F]:
+    Iter inner
     F pred
 
-equip [T, F] FilterIter[T, F] with Iterator[T]:
+equip [Iter, T, F] FilterIter[Iter, T, F] with Iterator[T]:
     Option[T] next(&self):
         while true:
             Option[T] v = self.inner.next()
@@ -272,12 +277,12 @@ equip [T, F] FilterIter[T, F] with Iterator[T]:
 # value passes through unchanged. Useful for debug-printing
 # elements at a specific pipeline stage without collecting.
 
-struct TakeWhileIter[T, F]:
-    VectorIter[T] inner
+struct TakeWhileIter[Iter, T, F]:
+    Iter inner
     F pred
     bool done
 
-equip [T, F] TakeWhileIter[T, F] with Iterator[T]:
+equip [Iter, T, F] TakeWhileIter[Iter, T, F] with Iterator[T]:
     Option[T] next(&self):
         if self.done:
             return None
@@ -293,12 +298,12 @@ equip [T, F] TakeWhileIter[T, F] with Iterator[T]:
                 self.done = true
                 return None
 
-struct DropWhileIter[T, F]:
-    VectorIter[T] inner
+struct DropWhileIter[Iter, T, F]:
+    Iter inner
     F pred
     bool dropping
 
-equip [T, F] DropWhileIter[T, F] with Iterator[T]:
+equip [Iter, T, F] DropWhileIter[Iter, T, F] with Iterator[T]:
     Option[T] next(&self):
         # Drain leading elements where pred(x) is true. Once we
         # produce the first surviving element, flip `dropping` so
@@ -316,11 +321,11 @@ equip [T, F] DropWhileIter[T, F] with Iterator[T]:
                     return None
         return self.inner.next()
 
-struct FilterMapIter[T, U, F]:
-    VectorIter[T] inner
+struct FilterMapIter[Iter, T, U, F]:
+    Iter inner
     F f
 
-equip [T, U, F] FilterMapIter[T, U, F] with Iterator[U]:
+equip [Iter, T, U, F] FilterMapIter[Iter, T, U, F] with Iterator[U]:
     Option[U] next(&self):
         while true:
             Option[T] v = self.inner.next()
@@ -337,11 +342,11 @@ equip [T, U, F] FilterMapIter[T, U, F] with Iterator[U]:
                     return None
         return None
 
-struct InspectIter[T, F]:
-    VectorIter[T] inner
+struct InspectIter[Iter, T, F]:
+    Iter inner
     F f
 
-equip [T, F] InspectIter[T, F] with Iterator[T]:
+equip [Iter, T, F] InspectIter[Iter, T, F] with Iterator[T]:
     Option[T] next(&self):
         Option[T] v = self.inner.next()
         match v:

@@ -1492,8 +1492,15 @@ pub fn lower_method_instance(
     }
     build_generic_type_params(ctx, &subs);
 
+    // Pre-substitute the body so nested generic type-arg lists like
+    // `MapIter[VectorIter[T], T, U, F](self, f)` mangle directly to
+    // `MapIter__VectorIter__int64_t__int64_t__int64_t__GorgetClosure`.
+    // The string-replacement substitution that fires later can't handle
+    // adjacent `__T__T__` patterns (Rust's `replace` consumes underscores
+    // non-overlappingly, leaving the trailing T orphaned).
+    let substituted_method = generics::substitute_function_body_pub(method, &subs);
     lower_equip_method_with_subs(
-        ctx, module, method, &subs,
+        ctx, module, &substituted_method, &subs,
         mangled_type_name, mangled_symbol,
         &substituted_equipped_type,
     );
