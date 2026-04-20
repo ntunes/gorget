@@ -1442,4 +1442,166 @@ mod tests {
             .push(LirFunction::new("__gg_synth_bogus".into(), vec![], LirType::Void));
         assert_no_synth_prefix(&module);
     }
+
+    /// End-to-end test of the sort-family synthesis pipeline:
+    ///
+    /// 1. Construct a module with one user function containing a single
+    ///    `HofExpand { SortBy, element_ty=I64 }` instruction.
+    /// 2. Run it through `BirModule::from_lir` (which runs synthesis then
+    ///    validates).
+    /// 3. Assert:
+    ///    - The caller's `HofExpand` was rewritten to a `Call` targeting a
+    ///      `__gg_synth_*` function.
+    ///    - No `HofExpand` remains anywhere in the module.
+    ///    - **Opaque-closure invariant**: in the synthesized body, the
+    ///      closure parameter is never the base of a `FieldPtr`. The body
+    ///      must only use the closure through `CallClosure`.
+    ///    - BirModule::from_lir returns Ok (validator passes).
+    #[test]
+    fn sort_by_synthesis_end_to_end_and_opaque_closure_invariant() {
+        use crate::bir::BirModule;
+        use crate::ir::abi::AbiKind;
+        use crate::lir::{
+            Block, BlockId, ClosureDispatchKind, HofOp, Inst, LirModule, StructDef, Term,
+            ValueId,
+        };
+
+        // Minimal module: GorgetArray struct (synth body FieldPtrs on it) +
+        // one user function `caller(arr: Ptr, cl: Ptr)` with a SortBy HofExpand.
+        let mut module = LirModule::new();
+        // Push the builtin GorgetArray shape so lookup_struct_id finds it.
+        let gorget_array_sid = module.add_struct(StructDef {
+            name: "GorgetArray".into(),
+            fields: vec![
+                ("data".into(), LirType::Ptr),
+                ("cap".into(), LirType::I64),
+                ("len".into(), LirType::I64),
+                ("elem_size".into(), LirType::I64),
+            ],
+            enum_kind: crate::lir::EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: Some(64),
+            computed_c_align: Some(8),
+        });
+        let _ = gorget_array_sid;
+
+        // Build caller function. Param layout: (arr: Ptr, cl: Ptr).
+        let mut caller =
+            LirFunction::new("caller".into(), vec![LirType::Ptr, LirType::Ptr], LirType::Void);
+        let arr = caller.next_value();
+        let cl = caller.next_value();
+        let bb0 = caller.add_block();
+        caller.block_mut(bb0).insts.push(Inst::ParamRef {
+            dst: arr,
+            index: 0,
+            ty: LirType::Ptr,
+        });
+        caller.block_mut(bb0).insts.push(Inst::ParamRef {
+            dst: cl,
+            index: 1,
+            ty: LirType::Ptr,
+        });
+        caller.block_mut(bb0).insts.push(Inst::HofExpand {
+            coll: arr,
+            hof_op: HofOp::SortBy,
+            element_ty: LirType::I64,
+            value_ty: None,
+            closure: cl,
+            closure_kind: ClosureDispatchKind::EscapedClosure,
+            closure_ret_ty: LirType::I64,
+            closure_arg_abis: vec![AbiKind::Scalar, AbiKind::Scalar],
+            dst: None,
+            init: None,
+        });
+        caller.block_mut(bb0).terminator = Term::RetVoid;
+        module.add_function(caller);
+
+        // compute_module_value_types before BIR (matches real pipeline).
+        crate::lir::types::compute_module_value_types(&mut module);
+
+        // Lower to BIR. This runs the synth pool and validates primitives-only.
+        let bir = BirModule::from_lir(module).expect("BIR lowering should succeed");
+        let module = bir.as_lir();
+
+        // (a) Caller has been rewritten: no HofExpand, one Call to __gg_synth_*.
+        let caller = module
+            .functions
+            .iter()
+            .find(|f| f.name == "caller")
+            .expect("caller function present");
+        let caller_has_hof = caller
+            .blocks
+            .iter()
+            .flat_map(|b: &Block| b.insts.iter())
+            .any(|i| matches!(i, Inst::HofExpand { .. }));
+        assert!(
+            !caller_has_hof,
+            "caller still contains HofExpand after synthesis",
+        );
+        let called_synth_fn: Option<&str> = caller
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find_map(|i| match i {
+                Inst::Call { func: fid, .. } => {
+                    let name = &module.functions[fid.0 as usize].name;
+                    name.starts_with(SYNTH_PREFIX).then(|| name.as_str())
+                }
+                _ => None,
+            });
+        assert!(
+            called_synth_fn.is_some(),
+            "caller must contain a Call to a __gg_synth_* function",
+        );
+
+        // (b) No HofExpand remains anywhere in the module (synth or user).
+        for f in &module.functions {
+            for b in &f.blocks {
+                for inst in &b.insts {
+                    assert!(
+                        !matches!(inst, Inst::HofExpand { .. }),
+                        "unlowered HofExpand in fn `{}` bb{}",
+                        f.name,
+                        b.id.0,
+                    );
+                }
+            }
+        }
+
+        // (c) Opaque-closure invariant: find the synthesized fn and walk its
+        // body. Locate the ValueId for the closure param (ParamRef index=1);
+        // assert no FieldPtr uses it as base.
+        let synth_fn_name = called_synth_fn.unwrap().to_string();
+        let synth = module
+            .functions
+            .iter()
+            .find(|f| f.name == synth_fn_name)
+            .expect("synth fn exists in module");
+        let closure_param_vid: Option<ValueId> = synth
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find_map(|i| match i {
+                Inst::ParamRef { dst, index: 1, .. } => Some(*dst),
+                _ => None,
+            });
+        let closure_vid =
+            closure_param_vid.expect("synth fn must materialize its closure param");
+        for b in &synth.blocks {
+            for inst in &b.insts {
+                if let Inst::FieldPtr { base, .. } = inst {
+                    assert_ne!(
+                        *base, closure_vid,
+                        "opaque-closure invariant violated: FieldPtr on closure \
+                         param in synth fn `{}`",
+                        synth.name,
+                    );
+                }
+            }
+        }
+
+        // Suppress unused warning on BlockId import when the BlockId type
+        // only shows up inside the flat_map closures.
+        let _ = std::marker::PhantomData::<BlockId>;
+    }
 }

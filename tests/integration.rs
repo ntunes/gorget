@@ -4866,6 +4866,37 @@ done",
     );
 }
 
+/// Regression: sort_by / sort_by_key / sorted_by must be stable.
+/// The BIR-synthesized mergesort preserves insertion order among ties;
+/// the previous qsort-based implementation did not.
+#[test]
+fn vector_sort_stable() {
+    run_gg(
+        "vector_sort_stable.gg",
+        "\
+Bob
+Carol
+Eve
+Alice
+Dave
+Frank
+---
+B
+D
+A
+C
+E
+---
+3
+1
+3
+2
+1
+3
+done",
+    );
+}
+
 #[test]
 fn vector_methods2() {
     run_gg(

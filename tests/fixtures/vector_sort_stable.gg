@@ -1,0 +1,66 @@
+# Regression test: sort_by and sort_by_key must be stable.
+#
+# A stable sort preserves the relative order of elements that compare
+# equal. The new BIR-synthesized mergesort is stable; the previous
+# qsort-based implementation was not.
+#
+# We detect stability by sorting a list where multiple elements share
+# a key and checking that the insertion order among ties is preserved.
+
+from std.conv import int_to_str
+from std.collections import Vector
+
+struct Person:
+    String name
+    int age
+
+void main():
+    # sort_by_key — tied ages should preserve insertion order.
+    Vector[Person] v1 = Vector[Person]()
+    v1.push(Person("Alice", 30))
+    v1.push(Person("Bob", 25))
+    v1.push(Person("Carol", 25))
+    v1.push(Person("Dave", 30))
+    v1.push(Person("Eve", 25))
+    v1.push(Person("Frank", 30))
+    v1.sort_by_key((Person p): p.age)
+    # Expected (stable):
+    #   25: Bob, Carol, Eve        (insertion order preserved)
+    #   30: Alice, Dave, Frank     (insertion order preserved)
+    for i in 0 .. v1.len():
+        auto p = v1.get(i).unwrap()
+        print(p.name)
+
+    print("---")
+
+    # sort_by — same shape with a closure instead of a key fn.
+    Vector[Person] v2 = Vector[Person]()
+    v2.push(Person("A", 2))
+    v2.push(Person("B", 1))
+    v2.push(Person("C", 2))
+    v2.push(Person("D", 1))
+    v2.push(Person("E", 2))
+    v2.sort_by((Person a, Person b): a.age - b.age)
+    # Expected (stable):
+    #   age=1: B, D
+    #   age=2: A, C, E
+    for i in 0 .. v2.len():
+        auto p = v2.get(i).unwrap()
+        print(p.name)
+
+    print("---")
+
+    # sorted_by — returns new vector, stability same as sort_by.
+    Vector[int] nums = Vector[int]()
+    nums.push(3)
+    nums.push(1)
+    nums.push(3)
+    nums.push(2)
+    nums.push(1)
+    nums.push(3)
+    # key=0 for all; stable sort preserves order.
+    Vector[int] same = nums.sorted_by((int a, int b): 0)
+    for i in 0 .. same.len():
+        print(int_to_str(same.get(i).unwrap()))
+
+    print("done")
