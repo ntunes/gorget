@@ -246,6 +246,7 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::DictFold
                         | HofOp::DictAny
                         | HofOp::DictAll
+                        | HofOp::DictFilter
                         | HofOp::SetEach
                         | HofOp::SetFold
                         | HofOp::SetAny
@@ -524,6 +525,25 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                         closure,
                                         closure_arg_abis,
                                         dst.expect("DictAny/All must carry dst"),
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::DictFilter => {
+                                    let val_ty = value_ty_inner
+                                        .clone()
+                                        .unwrap_or(LirType::I64);
+                                    expand_dict_filter(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        val_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        dst.expect("DictFilter must carry dst"),
                                         remaining,
                                         orig_term,
                                     );
@@ -2582,6 +2602,126 @@ fn expand_dict_any_all(
         else_block,
         else_args,
     };
+}
+
+/// Expand `HofExpand { hof_op: DictFilter, dst }` — build a fresh
+/// `GorgetMap` of the entries that satisfy the predicate.
+///
+/// current_bb: CallExtern `gorget_map_new_like(src)` → result; SlotStore
+/// into result_slot. The helper mirrors key_size/val_size/hash/eq and
+/// all drop/clone/materialize hooks from src so the result works for
+/// any K/V without per-type ctor dispatch.
+///
+/// body_bb: `pred = closure(key, val)`; Branch(pred, push_bb, advance_bb).
+/// push_bb: `gorget_map_put_cloned(result_addr, key_ptr, val_ptr)` then
+/// Jump(advance_bb). done_bb SlotLoads the result into dst.
+#[allow(clippy::too_many_arguments)]
+fn expand_dict_filter(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    key_ty: LirType,
+    val_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
+    let gmap_ty = LirType::Struct(gmap_sid);
+    let cur = BlockId(current_bb as u32);
+
+    // current_bb: allocate result slot + init via gorget_map_new_like(coll).
+    let result_slot = func.add_slot(gmap_ty.clone(), None);
+    let map_val = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::CallExtern {
+        dst: Some(map_val),
+        name: "gorget_map_new_like".to_string(),
+        args: vec![coll],
+        original_name: None,
+        arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
+    });
+    func.block_mut(cur).insts.push(Inst::SlotStore {
+        slot: result_slot,
+        value: map_val,
+        is_move: true,
+    });
+
+    let key_abi_hint = closure_arg_abis.first().copied();
+    let val_abi_hint = closure_arg_abis.get(1).copied();
+    let ctx = emit_dict_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &key_ty,
+        &val_ty,
+        key_abi_hint,
+        val_abi_hint,
+        vec![],
+    );
+
+    // body_bb: call closure(key, val) → pred.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.key_arg, ctx.val_arg],
+        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        ret_ty: LirType::Bool,
+    });
+
+    // check_bb: cond ? state_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: pred ? push_bb : advance_bb.
+    let push_bb = func.add_block();
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block: push_bb,
+        then_args: vec![],
+        else_block: ctx.advance_bb,
+        else_args: vec![],
+    };
+
+    // push_bb: gorget_map_put_cloned(&result, key_ptr, val_ptr).
+    let result_addr = alloc_value(next);
+    func.block_mut(push_bb).insts.push(Inst::SlotAddr {
+        dst: result_addr,
+        slot: result_slot,
+    });
+    func.block_mut(push_bb).insts.push(Inst::CallExtern {
+        dst: None,
+        name: "gorget_map_put_cloned".to_string(),
+        args: vec![result_addr, ctx.key_ptr, ctx.val_ptr],
+        original_name: None,
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+    func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+
+    // done_bb: SlotLoad the result map into dst + remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+        dst,
+        slot: result_slot,
+        ty: gmap_ty,
+    });
+    func.block_mut(ctx.done_bb).insts.extend(remaining);
+    func.block_mut(ctx.done_bb).terminator = orig_term;
 }
 
 /// Scaffold for Set (`GorgetSet` — a GorgetMap with no val array)

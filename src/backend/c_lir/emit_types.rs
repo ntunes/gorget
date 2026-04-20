@@ -18,8 +18,11 @@ pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
 pub(super) const DICT_INLINE_METHODS: &[&str] = &[
-    "filter", "map", "get_or", "get_or_put",
-    // `fold` / `each` / `any` / `all` are migrated to `Inst::HofExpand`.
+    "map", "get_or", "get_or_put",
+    // `fold` / `each` / `any` / `all` / `filter` are migrated to
+    // `Inst::HofExpand`. `filter` pre-constructs its result via the
+    // `gorget_map_new_like` runtime helper so one BIR expansion
+    // covers every K/V.
     // `update` routes to generic runtime stub `gorget_map_update`
     // dispatched via `map_monomorphized_to_runtime`.
 ];
@@ -259,46 +262,12 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
 }
 
 /// Emit inline C helpers for Dict higher-order and inline methods.
-pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule) {
-    let iter_loop = format!(
-        "for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-        if (__src.states[__i] != 1) continue;"
-    );
-    let key_read = format!("{key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size);");
-    let val_read = format!("{val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size);");
-    // Dict uses ordered gorget_dict_new; if full_name starts with Dict__ or HashMap__ determines prefix
-    let is_dict = full_name.starts_with("Dict__");
-    let ctor_fn = if key_c == "Str" {
-        if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" }
-    } else {
-        if is_dict { "gorget_dict_new" } else { "gorget_map_new" }
-    };
-    let ctor_args = if key_c == "Str" { format!("sizeof({val_c})") } else { format!("sizeof({key_c}), sizeof({val_c})") };
-
-    // Determine which closure params need & prefix (Ptr ABI for resource types)
-    let needs_ref = closure_params_need_ref(module, call_fn);
-    let kr = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-    let vr = if needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
+///
+/// Only `get_or` / `get_or_put` (and `map`, which is unimplemented) still
+/// need per-type inline helpers — `filter` / `fold` / `each` / `any` /
+/// `all` / `update` are all migrated to BIR expansions or runtime stubs.
+pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str, method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
     match method {
-        "filter" => {
-            // filter(closure(K, V) → bool) → GorgetMap.
-            // __key/__val shallow-copy slots of __src → use put_cloned to avoid aliasing.
-            writeln!(out, "static inline GorgetMap {full_name}(void* __map_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetMap __src = *(GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    GorgetMap __result = {ctor_fn}({ctor_args});").unwrap();
-            if val_c == "Str" || val_c == "GorgetString" {
-                writeln!(out, "    __result.val_drop = (__gorget_drop_fn)gorget_string_free;").unwrap();
-                writeln!(out, "    __result.val_clone = (__gorget_drop_fn)gorget_string_clone_inplace;").unwrap();
-                writeln!(out, "    __result.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
-            }
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {key_read}").unwrap();
-            writeln!(out, "        {val_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {kr}__key, {vr}__val)) gorget_map_put_cloned(&__result, &__key, &__val);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
         "get_or" => {
             // get_or(key, default) → val_type
             // For String values, clone to prevent aliasing the map's internal storage.
@@ -2728,6 +2697,29 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
                 if (gorget_set_contains(&__other, __k)) return false; \
             }} \
             return true; \
+        }}").unwrap();
+    }
+
+    // gorget_map_new_like(src): fresh empty GorgetMap that mirrors
+    // `src`'s config fields (key_size / val_size / hash / eq / all
+    // drop/clone/materialize hooks). Used by the BIR expansion of
+    // `Dict.filter` (see src/bir/lower.rs::expand_dict_filter) so the
+    // result's per-element-type wiring matches the source exactly.
+    // Discriminates ordered vs unordered via `src->order != NULL`.
+    if has_extern("gorget_map_new_like") {
+        writeln!(out, "static inline GorgetMap gorget_map_new_like(const GorgetMap* __src) {{ \
+            GorgetMap __dst = __src->order \
+                ? gorget_dict_new(__src->key_size, __src->val_size) \
+                : gorget_map_new(__src->key_size, __src->val_size); \
+            __dst.hash_fn = __src->hash_fn; \
+            __dst.eq_fn = __src->eq_fn; \
+            __dst.key_drop = __src->key_drop; \
+            __dst.key_clone = __src->key_clone; \
+            __dst.key_materialize = __src->key_materialize; \
+            __dst.val_drop = __src->val_drop; \
+            __dst.val_clone = __src->val_clone; \
+            __dst.val_materialize = __src->val_materialize; \
+            return __dst; \
         }}").unwrap();
     }
 

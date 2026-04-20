@@ -595,16 +595,19 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      `elem_size` (one stub covers every T).
    - Vector still in backends (qsort TLS trampoline): `sort_by`,
      `sorted_by`, `sort_by_key`, `sorted_by_key`.
-   - Dict migrated via HofExpand: `each`, `fold`, `any`, `all`.
-     The BIR scaffold `emit_dict_hof_loop_scaffold` walks the hash
-     table and threads extras through both the state-skip and body
-     paths via a parameterised `advance_bb`.
+   - Dict migrated via HofExpand: `each`, `fold`, `any`, `all`,
+     `filter`. The BIR scaffold `emit_dict_hof_loop_scaffold` walks
+     the hash table and threads extras through both the state-skip
+     and body paths via a parameterised `advance_bb`. `filter`
+     pre-constructs its result via the `gorget_map_new_like(src)`
+     runtime helper — the result inherits src's hash/eq/drop/clone/
+     materialize for both keys and values, so one BIR expansion
+     covers every K/V.
    - Dict routed to runtime stubs: `update` → `gorget_map_update`
      (type-independent).
-   - Dict still in backends: `filter`, `map` (result-dict
-     construction — ctor dispatch by key type, val-drop wiring for
-     resource vals), `get_or`, `get_or_put` (per-type clone on
-     String vals).
+   - Dict still in backends: `map` (result-dict with different V
+     type — no fixture exercises it), `get_or`, `get_or_put`
+     (per-type clone on String vals).
    - Set migrated via HofExpand: `each`, `fold`, `any`, `all`,
      `filter`. New BIR scaffold `emit_set_hof_loop_scaffold` handles
      both `Set__` (ordered, `order[]` walk) and `HashSet__`

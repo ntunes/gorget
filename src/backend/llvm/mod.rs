@@ -118,6 +118,10 @@ fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
 
 /// Parse a Dict/HashMap/Set HOF name like `Dict__int64_t__GorgetString__fold` → ("int64_t", "GorgetString", "fold").
 /// Returns (key_c, val_c, method) or None.
+/// Parse a Dict/HashMap HOF name like `Dict__int64_t__int64_t__fold` →
+/// ("int64_t", "int64_t", "fold"). `filter` is excluded — migrated to
+/// `Inst::HofExpand` and handled by the BIR expansion, not LLVM's
+/// inline dispatch.
 fn parse_dict_hof(name: &str) -> Option<(&str, &str, &str)> {
     let prefix = if name.starts_with("Dict__") { "Dict__" }
         else if name.starts_with("HashMap__") { "HashMap__" }
@@ -126,7 +130,7 @@ fn parse_dict_hof(name: &str) -> Option<(&str, &str, &str)> {
     let sep = rest.rfind("__")?;
     let method = &rest[sep + 2..];
     match method {
-        "fold" | "each" | "filter" | "any" | "all" => {}
+        "fold" | "each" | "any" | "all" => {}
         _ => return None,
     }
     let kv = &rest[..sep];
@@ -3719,116 +3723,11 @@ fn emit_inst(
                 }
             }
 
-            // ── Inline Dict/Set higher-order methods (fold/each/filter/any/all) ──
-            // Must be inlined at each call site because compiled helpers hardcode
-            // a single __Closure_N__call function, but different call sites use
-            // different closure types.
-            if let Some((key_c, val_c, method)) = parse_dict_hof(name) {
-                let has_dst = dst.is_some();
-                let needs_inline = match method {
-                    "each" => true,
-                    _ => has_dst,
-                };
-                if needs_inline && !args.is_empty() {
-                    let uid = *trap_counter;
-                    *trap_counter += 1;
-                    let pfx = format!("dhof.{block_id}.{uid}");
-                    let map_arg = args[0];
-                    let (key_llvm, key_size) = elem_c_to_llvm(key_c, module, snames);
-                    let (val_llvm, val_size) = elem_c_to_llvm(val_c, module, snames);
-
-                    // Resolve closure
-                    let closure_arg = if method == "fold" && args.len() >= 3 {
-                        Some(args[2])
-                    } else if args.len() >= 2 {
-                        Some(*args.last().unwrap())
-                    } else { None };
-                    let closure_info = closure_arg.and_then(|ca| resolve_closure_call_fn(ca, val_types, module));
-
-                    if let Some((call_fn, _ret_ty, params_are_ptr)) = closure_info {
-                        let closure_val = closure_arg.unwrap();
-
-                        // GorgetMap layout: keys=0, cap=8, values=16, states=24, key_size=40, val_size=48
-                        writeln!(out, "  %{pfx}.keys = load ptr, ptr %v{}", map_arg.0).unwrap();
-                        writeln!(out, "  %{pfx}.capp = getelementptr i8, ptr %v{}, i64 8", map_arg.0).unwrap();
-                        writeln!(out, "  %{pfx}.cap = load i64, ptr %{pfx}.capp").unwrap();
-                        writeln!(out, "  %{pfx}.vals = getelementptr i8, ptr %v{}, i64 16", map_arg.0).unwrap();
-                        writeln!(out, "  %{pfx}.valsp = load ptr, ptr %{pfx}.vals").unwrap();
-                        writeln!(out, "  %{pfx}.statesp = getelementptr i8, ptr %v{}, i64 24", map_arg.0).unwrap();
-                        writeln!(out, "  %{pfx}.states = load ptr, ptr %{pfx}.statesp").unwrap();
-
-                        match method {
-                            "filter" => {
-                                let d = dst.unwrap();
-                                // Create new Dict/Map — need to call the correct constructor
-                                let is_dict = name.starts_with("Dict__");
-                                let ctor = if is_dict { "gorget_dict_new" } else { "gorget_map_new" };
-                                // Check if keys are strings → use _str variant
-                                let ctor_fn = if key_c == "GorgetString" {
-                                    format!("{ctor}_str")
-                                } else { ctor.to_string() };
-                                let map_type = "%GorgetMap";
-
-                                writeln!(out, "  %v{} = alloca {map_type}", d.0).unwrap();
-                                if key_c == "GorgetString" {
-                                    writeln!(out, "  call void @{ctor_fn}(ptr sret({map_type}) %v{}, i64 {val_size})", d.0).unwrap();
-                                } else {
-                                    writeln!(out, "  call void @{ctor_fn}(ptr sret({map_type}) %v{}, i64 {key_size}, i64 {val_size})", d.0).unwrap();
-                                }
-
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-                                writeln!(out, "{pfx}.check:").unwrap();
-                                writeln!(out, "  %{pfx}.i = phi i64 [0, %{current_label}], [%{pfx}.next, %{pfx}.skip], [%{pfx}.next, %{pfx}.insert]").unwrap();
-                                writeln!(out, "  %{pfx}.cmp = icmp ult i64 %{pfx}.i, %{pfx}.cap").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.cmp, label %{pfx}.body, label %{pfx}.done").unwrap();
-
-                                writeln!(out, "{pfx}.body:").unwrap();
-                                writeln!(out, "  %{pfx}.next = add i64 %{pfx}.i, 1").unwrap();
-                                writeln!(out, "  %{pfx}.sp = getelementptr i8, ptr %{pfx}.states, i64 %{pfx}.i").unwrap();
-                                writeln!(out, "  %{pfx}.st = load i8, ptr %{pfx}.sp").unwrap();
-                                writeln!(out, "  %{pfx}.occ = icmp eq i8 %{pfx}.st, 1").unwrap();
-                                writeln!(out, "  %{pfx}.koff = mul i64 %{pfx}.i, {key_size}").unwrap();
-                                writeln!(out, "  %{pfx}.kp = getelementptr i8, ptr %{pfx}.keys, i64 %{pfx}.koff").unwrap();
-                                writeln!(out, "  %{pfx}.voff = mul i64 %{pfx}.i, {val_size}").unwrap();
-                                writeln!(out, "  %{pfx}.vp = getelementptr i8, ptr %{pfx}.valsp, i64 %{pfx}.voff").unwrap();
-                                writeln!(out, "  br i1 %{pfx}.occ, label %{pfx}.call, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.call:").unwrap();
-                                let key_ref = params_are_ptr.first().copied().unwrap_or(false);
-                                let val_ref = params_are_ptr.get(1).copied().unwrap_or(false);
-                                let key_param = if key_ref || (key_llvm.starts_with('%') && key_size > 16) {
-                                    format!("ptr %{pfx}.kp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.key = load {key_llvm}, ptr %{pfx}.kp").unwrap();
-                                    format!("{key_llvm} %{pfx}.key")
-                                };
-                                let val_param = if val_ref || (val_llvm.starts_with('%') && val_size > 16) {
-                                    format!("ptr %{pfx}.vp")
-                                } else {
-                                    writeln!(out, "  %{pfx}.val = load {val_llvm}, ptr %{pfx}.vp").unwrap();
-                                    format!("{val_llvm} %{pfx}.val")
-                                };
-                                writeln!(out, "  %{pfx}.pred = call i1 @{call_fn}(ptr %v{}, {key_param}, {val_param})", closure_val.0).unwrap();
-                                writeln!(out, "  br i1 %{pfx}.pred, label %{pfx}.insert, label %{pfx}.skip").unwrap();
-
-                                writeln!(out, "{pfx}.insert:").unwrap();
-                                writeln!(out, "  call void @gorget_map_put_cloned(ptr %v{}, ptr %{pfx}.kp, ptr %{pfx}.vp)", d.0).unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.skip:").unwrap();
-                                writeln!(out, "  br label %{pfx}.check").unwrap();
-
-                                writeln!(out, "{pfx}.done:").unwrap();
-                                *current_label = format!("{pfx}.done");
-                                return;
-                            }
-                            _ => {
-                                writeln!(out, "  ; TODO: dict hof {method}").unwrap();
-                            }
-                        }
-                    }
-                }
-            }
+            // Dict HOF variants (`filter`, `fold`, `each`, `any`, `all`)
+            // are migrated to `Inst::HofExpand` — the LIR intercept
+            // generates loop blocks + `CallClosure` upstream, so LLVM
+            // sees primitive IR, not the monomorphized `Dict__K__V__method`
+            // extern call. `map` is not implemented.
 
             // Set HOF variants (`filter`, `fold`, `each`, `any`, `all`)
             // are migrated to `Inst::HofExpand` — the LIR intercept

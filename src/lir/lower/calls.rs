@@ -282,6 +282,11 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_map_clear" | "gorget_map_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
         "gorget_map_reserve" | "gorget_set_reserve" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
         "gorget_map_clone" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Ptr]),
+        // gorget_map_new_like(const GorgetMap*) — fresh empty map that
+        // mirrors the source's hash/eq/drop/clone/materialize config.
+        // Used by the BIR expansion of `Dict.filter` (and, later,
+        // `Dict.map`) so the result inherits the right per-type wiring.
+        "gorget_map_new_like" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Ptr]),
         "gorget_map_keys" | "gorget_map_values" | "gorget_map_items" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
         // Set methods
         "gorget_set_new" | "gorget_ordered_set_new" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![Scalar]),

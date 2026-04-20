@@ -733,8 +733,16 @@ pub(super) fn emit_call_extern(
             }
 
             // ── Inline Dict higher-order methods ─────────────
+            // Note: `filter` / `fold` / `each` / `any` / `all` are all
+            // migrated to `Inst::HofExpand`; this block is the fallback
+            // dispatch for call sites where the LIR intercept bailed
+            // (e.g. unresolved closure signature). `filter` is
+            // deliberately excluded — its migration requires a fresh
+            // result map, and if the intercept bails we'd emit a
+            // broken call instead of a quiet error. The migrated
+            // paths handle it upstream.
             if let Some((key_ty, val_ty, method)) = parse_dict_higher_order(emit_name) {
-                let has_closure = matches!(method, "filter" | "fold" | "each" | "any" | "all");
+                let has_closure = matches!(method, "fold" | "each" | "any" | "all");
                 if has_closure && (dst.is_some() || method == "each") {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
@@ -752,32 +760,7 @@ pub(super) fn emit_call_extern(
                     let dict_needs_ref = closure_params_need_ref(module, &call_fn);
                     let dkr = if dict_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     let dvr = if dict_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                    let is_dict = emit_name.starts_with("Dict__");
-                    let ctor_fn = if key_c == "Str" {
-                        if is_dict { "gorget_dict_new_str" } else { "gorget_map_new_str" }
-                    } else {
-                        if is_dict { "gorget_dict_new" } else { "gorget_map_new" }
-                    };
-                    let ctor_args = if key_c == "Str" { format!("sizeof({val_c})") } else { format!("sizeof({key_c}), sizeof({val_c})") };
                     match method {
-                        "filter" => {
-                            // __key/__val are shallow copies of slots in __src — use
-                            // put_cloned so __result's inserted slot holds independent
-                            // key/value copies instead of aliasing __src's buffers.
-                            let val_setup = if val_c == "Str" || val_c == "GorgetString" {
-                                " __result.val_drop = (__gorget_drop_fn)gorget_string_free; \
-                                  __result.val_clone = (__gorget_drop_fn)gorget_string_clone_inplace; \
-                                  __result.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;"
-                            } else { "" };
-                            write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                GorgetMap __result = {ctor_fn}({ctor_args});{val_setup} \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
-                                {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) gorget_map_put_cloned(&__result, &__key, &__val); \
-                                }} __result; }});").unwrap();
-                        }
                         "fold" if emit_args.len() >= 3 => {
                             let acc_arg = v(emit_args[1]);
                             let fn_a = v(emit_args[2]);

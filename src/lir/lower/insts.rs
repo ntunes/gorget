@@ -1865,11 +1865,12 @@ impl<'a> FuncLowering<'a> {
             .or_else(|| original_name.strip_prefix("HashMap__"))?;
         let sep_pos = rest.rfind("__")?;
         let method = &rest[sep_pos + 2..];
-        let (hof_op, produces_result, is_fold) = match method {
-            "each" => (HofOp::DictEach, false, false),
-            "fold" => (HofOp::DictFold, true, true),
-            "any" => (HofOp::DictAny, true, false),
-            "all" => (HofOp::DictAll, true, false),
+        let (hof_op, produces_result, is_fold, is_filter) = match method {
+            "each" => (HofOp::DictEach, false, false, false),
+            "fold" => (HofOp::DictFold, true, true, false),
+            "any" => (HofOp::DictAny, true, false, false),
+            "all" => (HofOp::DictAll, true, false, false),
+            "filter" => (HofOp::DictFilter, true, false, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
@@ -1978,14 +1979,33 @@ impl<'a> FuncLowering<'a> {
         let mut lir_args_wrapped = lir_args.to_vec();
         self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
+        // filter produces a fresh GorgetMap — pre-register the runtime
+        // helpers the BIR expansion will call (mirror src's config
+        // via gorget_map_new_like, insert via gorget_map_put_cloned).
+        if is_filter {
+            let map_ty = self.struct_reg
+                .lookup("GorgetMap")
+                .map(LirType::Struct)
+                .unwrap_or(LirType::Ptr);
+            self.ensure_extern("gorget_map_new_like", &[LirType::Ptr], &map_ty);
+            self.ensure_extern("gorget_map_put_cloned",
+                &[LirType::Ptr, LirType::Ptr, LirType::Ptr], &LirType::Void);
+        }
+
         // closure_ret_ty: for fold, the accumulator type (= dst's
-        // declared type); for each, void. Aggregate accumulators go
-        // through AddressOf on the loop back-edge so they work here
-        // the same way as the Vector fold path.
+        // declared type); for each, void; for filter, Bool (predicate).
+        // Aggregate accumulators go through AddressOf on the loop
+        // back-edge so they work here the same way as the Vector fold
+        // path.
         let closure_ret_ty = if is_fold {
             let d = dst.as_ref().expect("fold requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
+        } else if is_filter {
+            LirType::Bool
+        } else if produces_result {
+            // DictAny / DictAll — predicate closures.
+            LirType::Bool
         } else {
             LirType::Void
         };
