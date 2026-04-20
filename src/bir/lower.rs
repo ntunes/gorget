@@ -3592,7 +3592,8 @@ mod tests {
             ty: LirType::I64,
         });
         let slots_before = func.slots.len();
-        expand_func(&mut func, &[]);
+        let mut pool = crate::bir::synth::SynthPool::new(0);
+        expand_func(&mut func, &[], &mut pool);
         // IConst unchanged, AddressOf → SlotStore + SlotAddr.
         let insts = &func.blocks[0].insts;
         assert!(matches!(insts[0], Inst::IConst { .. }));
@@ -3618,7 +3619,8 @@ mod tests {
             inner_ty: LirType::I64,
             value,
         });
-        expand_func(&mut func, &[]);
+        let mut pool = crate::bir::synth::SynthPool::new(0);
+        expand_func(&mut func, &[], &mut pool);
         let insts = &func.blocks[0].insts;
         assert!(matches!(insts[0], Inst::IConst { value: 42, .. }));
         assert!(matches!(insts[1], Inst::IConst { ty: LirType::I64, value: 8, .. }),
