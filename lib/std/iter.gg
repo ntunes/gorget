@@ -33,14 +33,80 @@ trait Iterator[T]:
     Option[T] next(&self)
 
     # ── Default terminal methods ─────────────────────────────
-    # Count the elements remaining in the iterator. Consumes the
-    # iterator. Default body delegates to the for-loop protocol —
-    # same loop shape as the standalone `count_iter` free function.
+    #
+    # All eager terminals delegate to the for-loop protocol on
+    # `self` — the loop dispatches `next(&self)` through normal
+    # name-based resolution, so each equipping type gets a
+    # specialised loop without any per-method per-type duplication.
+    #
+    # Method-level generics (any[F], all[F], find[F], …) ride on
+    # per-call-site monomorphization (Phase 4) — closures reach the
+    # default body through the same mechanism that powers
+    # `VectorIter.map[U, F]`.
+
     int count(&self):
         int n = 0
         for _ in self:
             n = n + 1
         return n
+
+    Vector[T] collect(&self):
+        Vector[T] out = Vector[T]()
+        for x in self:
+            out.push(x)
+        return !out
+
+    Option[T] last(&self):
+        Option[T] out = None
+        for x in self:
+            out = Some(x)
+        return !out
+
+    Option[T] nth(&self, int n):
+        if n < 0:
+            return None
+        int i = 0
+        for x in self:
+            if i == n:
+                return Some(x)
+            i = i + 1
+        return None
+
+    bool any[F](&self, F pred):
+        for x in self:
+            if pred(x):
+                return true
+        return false
+
+    bool all[F](&self, F pred):
+        for x in self:
+            if not pred(x):
+                return false
+        return true
+
+    Option[T] find[F](&self, F pred):
+        for x in self:
+            if pred(x):
+                return Some(x)
+        return None
+
+    Option[int] find_index[F](&self, F pred):
+        int i = 0
+        for x in self:
+            if pred(x):
+                return Some(i)
+            i = i + 1
+        return None
+
+    void for_each[F](&self, F f):
+        for x in self:
+            f(x)
+
+    A fold[A, F](&self, A init, F f):
+        A acc = init
+        for x in self:
+            acc = f(acc, x)
+        return acc
 
 struct VectorIter[T]:
     Vector[T] source
@@ -97,39 +163,10 @@ equip [T] VectorIter[T]:
 
     # ── Terminal methods ───────────────────────────────────
     #
-    # Bodies delegate to the free-function terminals defined below so
-    # there's a single source of truth for loop semantics. Each method
-    # has the concrete iterator type (VectorIter[T]) baked in, so the
-    # per-call-site method-mono pipeline specialises these per call.
-
-    # `count(self)` provided as a default method on Iterator[T].
-
-    Vector[T] collect(self):
-        return collect_vec[T, VectorIter[T]](self)
-
-    bool any[F](self, F pred):
-        return any_iter[T, VectorIter[T], F](self, pred)
-
-    bool all[F](self, F pred):
-        return all_iter[T, VectorIter[T], F](self, pred)
-
-    Option[T] find[F](self, F pred):
-        return find_iter[T, VectorIter[T], F](self, pred)
-
-    Option[int] find_index[F](self, F pred):
-        return find_index_iter[T, VectorIter[T], F](self, pred)
-
-    void for_each[F](self, F f):
-        for_each_iter[T, VectorIter[T], F](self, f)
-
-    A fold[A, F](self, A init, F f):
-        return fold_iter[A, T, VectorIter[T], F](self, init, f)
-
-    Option[T] last(self):
-        return last_iter[T, VectorIter[T]](self)
-
-    Option[T] nth(self, int n):
-        return nth_iter[T, VectorIter[T]](self, n)
+    # All eager terminals (count, collect, any, all, find,
+    # find_index, for_each, fold, last, nth) live as default
+    # bodies on `trait Iterator[T]:` — VectorIter inherits them
+    # without per-type duplication.
 
 struct TakeIter[T]:
     VectorIter[T] inner

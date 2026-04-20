@@ -78,6 +78,12 @@ pub struct GenericCollector {
     method_instances: Vec<MethodInstance>,
     /// Dedup set keyed by the fully mangled symbol.
     method_instances_registered: FxHashMap<String, ()>,
+    /// Trait definitions by name. Populated from `Item::Trait` during
+    /// `collect_templates`. Used to find default-method bodies when an
+    /// equip block doesn't explicitly override them — the per-call-site
+    /// mono path looks here for method-level-generic defaults like
+    /// `bool any[F](&self, F pred)` declared on `trait Iterator[T]:`.
+    trait_defs: FxHashMap<String, ast::TraitDef>,
 }
 
 impl GenericCollector {
@@ -94,6 +100,7 @@ impl GenericCollector {
             meta_op_bindings: FxHashMap::default(),
             method_instances: Vec::new(),
             method_instances_registered: FxHashMap::default(),
+            trait_defs: FxHashMap::default(),
         }
     }
 
@@ -134,6 +141,9 @@ impl GenericCollector {
                 }
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.fn_templates.insert(f.name.node.clone(), f.clone());
+                }
+                Item::Trait(trait_def) => {
+                    self.trait_defs.insert(trait_def.name.node.clone(), trait_def.clone());
                 }
                 Item::Equip(equip) => {
                     if let Type::Named { name, generic_args } = &equip.type_.node {
@@ -1023,6 +1033,11 @@ impl GenericCollector {
             None => return,
         };
         // Find the matching method with method-level generic params.
+        // First check the equip blocks (explicit overrides); if none match,
+        // fall through to default-method bodies on the trait the equip
+        // implements (e.g. `bool any[F](&self, F pred)` declared on
+        // `trait Iterator[T]:` and inherited by every `equip X with
+        // Iterator[T]:` block).
         let mut matched: Option<ast::FunctionDef> = None;
         for equip in &equip_blocks {
             for m in &equip.items {
@@ -1038,6 +1053,11 @@ impl GenericCollector {
             if matched.is_some() {
                 break;
             }
+        }
+        if matched.is_none() {
+            matched = self.find_default_trait_method(
+                &equip_blocks, &method_name.node, method_targs.len(),
+            );
         }
         if matched.is_none() {
             return;
@@ -1088,6 +1108,51 @@ impl GenericCollector {
             method_type_args: method_targs.to_vec(),
             mangled_symbol,
         });
+    }
+
+    /// Look for a method-level-generic default trait method matching `name`
+    /// on any trait this set of equip blocks implements. Returns the matching
+    /// FunctionDef (cloned) when one is found.
+    ///
+    /// Used by the per-call-site mono path: when the equip block doesn't
+    /// override the method, we fall back to the trait's default body so
+    /// callers like `v.iter().any[bool(int)](pred)` still resolve when
+    /// `any` is declared on `trait Iterator[T]:` and inherited by every
+    /// equipping type.
+    pub(crate) fn find_default_trait_method(
+        &self,
+        equip_blocks: &[ast::EquipBlock],
+        name: &str,
+        method_targs_len: usize,
+    ) -> Option<ast::FunctionDef> {
+        for equip in equip_blocks {
+            let trait_ref = equip.trait_.as_ref()?;
+            let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+            if trait_name.is_empty() {
+                continue;
+            }
+            let trait_def = match self.trait_defs.get(&trait_name) {
+                Some(td) => td,
+                None => continue,
+            };
+            // Skip default methods overridden in this equip block.
+            for trait_item in &trait_def.items {
+                if let ast::TraitItem::Method(m) = &trait_item.node {
+                    if m.name.node != name { continue; }
+                    let gp_len = m.generic_params.as_ref()
+                        .map(|gp| gp.node.params.len()).unwrap_or(0);
+                    if gp_len != method_targs_len { continue; }
+                    if matches!(m.body, ast::FunctionBody::Declaration | ast::FunctionBody::Extern(_)) {
+                        continue;
+                    }
+                    let overridden = equip.items.iter()
+                        .any(|im| im.node.name.node == name);
+                    if overridden { continue; }
+                    return Some(m.clone());
+                }
+            }
+        }
+        None
     }
 
     /// Best-effort AST-level type inference for MethodCall discovery. Does NOT
@@ -1536,8 +1601,11 @@ impl GenericCollector {
                 Some(b) => b,
                 None => continue,
             };
-            // Find the matching equip + method AST pair.
-            let mut found: Option<(&ast::EquipBlock, &ast::FunctionDef)> = None;
+            // Find the matching equip + method AST pair. Falls through to
+            // the trait's default body when the equip block doesn't override.
+            // Defaults aren't held by the equip block, so we own a clone here.
+            let mut found_equip: Option<&ast::EquipBlock> = None;
+            let mut found_method: Option<ast::FunctionDef> = None;
             for equip in equip_blocks {
                 for m in &equip.items {
                     if m.node.name.node == mi.method_name
@@ -1545,16 +1613,31 @@ impl GenericCollector {
                             .map(|gp| gp.node.params.len() == mi.method_type_args.len())
                             .unwrap_or(false)
                     {
-                        found = Some((equip, &m.node));
+                        found_equip = Some(equip);
+                        found_method = Some(m.node.clone());
                         break;
                     }
                 }
-                if found.is_some() {
+                if found_method.is_some() {
                     break;
                 }
             }
-            let (equip, method) = match found {
-                Some(p) => p,
+            if found_method.is_none() {
+                if let Some(default_m) = self.find_default_trait_method(
+                    equip_blocks, &mi.method_name, mi.method_type_args.len(),
+                ) {
+                    if let Some(eq) = equip_blocks.first() {
+                        found_equip = Some(eq);
+                        found_method = Some(default_m);
+                    }
+                }
+            }
+            let equip = match found_equip {
+                Some(e) => e,
+                None => continue,
+            };
+            let method = match found_method.as_ref() {
+                Some(m) => m,
                 None => continue,
             };
 

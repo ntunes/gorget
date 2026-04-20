@@ -1222,10 +1222,27 @@ pub fn lower_generic_equip_methods_with_defaults(
                                     FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
                                     FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
                                 }
-                                // Emit as {mangled_type_name}__{method_name}
-                                lower_equip_method(
-                                    ctx, module, default_method,
-                                    mangled_type_name, &substituted_type,
+                                // Method-level-generic defaults (e.g.
+                                // `bool any[F](&self, F pred)`) follow the
+                                // same per-call-site mono path as inherent
+                                // method-generic equip methods — skip the
+                                // bulk lowering and let lower_method_instance
+                                // handle them at each call site.
+                                if default_method.generic_params.is_some() {
+                                    continue;
+                                }
+                                // Emit as {mangled_type_name}__{method_name}.
+                                // Threading the equip-level subs lets the
+                                // signature substitute `T → int64_t` (etc.)
+                                // before map_ast_type — without this,
+                                // `Option[T] last(&self)` resolves to
+                                // `Option[UNIT]` and the call site sees a
+                                // void return.
+                                let method_mangled = format!("{mangled_type_name}__{method_name}");
+                                lower_equip_method_with_subs(
+                                    ctx, module, default_method, &subs,
+                                    mangled_type_name, &method_mangled,
+                                    &substituted_type,
                                 );
                             }
                         }

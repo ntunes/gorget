@@ -1134,9 +1134,14 @@ pub fn lower_module(
     // Each MethodInstance captures the equip + method + concrete type args, and
     // lowers to a free-function-shaped symbol that the MethodCall dispatch path
     // targets directly (see src/ir/lowering/exprs/methods.rs).
+    //
+    // Falls back to default-trait-method bodies (e.g. `bool any[F](&self, F pred)`
+    // declared on `trait Iterator[T]:`) when the equip block doesn't override —
+    // mirrors `register_method_instance_sigs`'s lookup so sig and body stay in sync.
     for mi in generic_collector.method_instances().to_vec() {
         if let Some(equip_blocks) = generic_collector.get_equip_templates(&mi.equip_base) {
             let equip_blocks = equip_blocks.clone();
+            let mut emitted = false;
             'method_search: for equip in &equip_blocks {
                 for method in &equip.items {
                     if method.node.name.node == mi.method_name
@@ -1155,7 +1160,27 @@ pub fn lower_module(
                             &mi.mangled_type,
                             &mi.mangled_symbol,
                         );
+                        emitted = true;
                         break 'method_search;
+                    }
+                }
+            }
+            if !emitted {
+                if let Some(default_m) = generic_collector.find_default_trait_method(
+                    &equip_blocks, &mi.method_name, mi.method_type_args.len(),
+                ) {
+                    if let Some(equip) = equip_blocks.first() {
+                        ctx.gir_equip_methods.insert(mi.mangled_symbol.clone());
+                        functions::lower_method_instance(
+                            &mut ctx,
+                            &mut module,
+                            equip,
+                            &default_m,
+                            &mi.equip_type_args,
+                            &mi.method_type_args,
+                            &mi.mangled_type,
+                            &mi.mangled_symbol,
+                        );
                     }
                 }
             }
