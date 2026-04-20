@@ -1154,6 +1154,29 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int clone_dst = add_local(&ctx, ctx.locals.get(recv).unwrap().type_id, NO_NAME)
                 emit(&ctx, GIAssign(clone_dst, OpCopy(recv)))
                 return clone_dst
+            # Detect mutating-method-on-field-access pattern *before*
+            # lowering args, so we capture wb_base / wb_field while the
+            # recv_box AST is still in scope. `self.field.push(x)` and
+            # similar mutators are lowered as:
+            #   copy = __field_read_(base, idx)
+            #   method(&copy, args)
+            # …the mutation lives on `copy`; without a follow-up write-back,
+            # the original field never sees the change. Writing back after
+            # the call persists the mutation. Classic symptom: lex_emit's
+            # `self.lex_tokens.push(...)` silently drops every token and the
+            # self-compiled lexer returns 0 tokens.
+            bool is_mutating = mname == "push" or mname == "put" or mname == "set" or mname == "pop" or mname == "remove" or mname == "clear"
+            bool need_writeback = false
+            SpannedExpr wb_base = (*recv_box)
+            String wb_field = ""
+            if is_mutating:
+                match (*recv_box).expr:
+                    case EFieldAccess(wb_base_box, wb_f):
+                        need_writeback = true
+                        wb_base = *wb_base_box
+                        wb_field = wb_f
+                    else:
+                        pass
             # Method call: lower receiver as first arg (&self), then args.
             # Most collection/object methods take self by pointer.
             # We pass OpMove(recv) — the LIR lowerer will use SlotAddr for
@@ -1181,11 +1204,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
                 emit(&ctx, GICallExtern(-1, full_name, call_args))
+                if need_writeback:
+                    emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
                 int void_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(void_dst, OpConstUnit()))
                 return void_dst
             int mdst = add_local(&ctx, ret_tid, NO_NAME)
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
+            if need_writeback:
+                emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
             return mdst
         case EFieldAccess(base_box, field_name):
             int base = lower_expr(&ctx, *base_box, &gmod)
