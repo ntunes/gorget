@@ -1,0 +1,45 @@
+# Lazy adapters: .enumerate() and .zip(other).
+#
+# Both yield Option[(A, B)] from `next()` — verifies that tuple-payload
+# Option lowering composes with the Iterator default-method protocol
+# end to end.
+
+from std.collections import Vector
+from std.iter import VectorIter, EnumerateIter, ZipIter, WindowsIter, ChunksIter
+
+int main():
+    Vector[int] xs = [100, 200, 300]
+
+    # .enumerate()
+    EnumerateIter[VectorIter[int], int] e = xs.iter().enumerate()
+    for pair in e:
+        print(f"{pair._0}: {pair._1}")
+
+    print("--")
+
+    # .zip(other) — pair indices with values from a parallel iterator.
+    Vector[int] ys = [1, 2, 3, 99]
+    ZipIter[VectorIter[int], VectorIter[int], int, int] z = xs.iter().zip[int](ys.iter())
+    for p in z:
+        print(f"{p._0}={p._1}")
+
+    print("--")
+
+    # .lazy_windows(2) — sliding windows of size 2 over [1..5].
+    Vector[int] ws = [1, 2, 3, 4, 5]
+    WindowsIter[VectorIter[int], int] w = ws.iter().lazy_windows(2)
+    for win in w:
+        print(f"win {win.get(0).unwrap()},{win.get(1).unwrap()}")
+
+    print("--")
+
+    # .lazy_chunks(2) — non-overlapping chunks; the last is short.
+    ChunksIter[VectorIter[int], int] c = ws.iter().lazy_chunks(2)
+    for chunk in c:
+        int sz = chunk.len()
+        if sz == 2:
+            print(f"chunk {chunk.get(0).unwrap()},{chunk.get(1).unwrap()}")
+        else:
+            print(f"chunk {chunk.get(0).unwrap()}")
+
+    return 0

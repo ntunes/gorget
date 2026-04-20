@@ -6,8 +6,10 @@
 # `TakeIter[Iter, T]`, `SkipIter[Iter, T]`, `ChainIter[IterA, IterB, T]`,
 # `MapIter[Iter, T, U, F]`, `FilterIter[Iter, T, F]`,
 # `TakeWhileIter[Iter, T, F]`, `DropWhileIter[Iter, T, F]`,
-# `FilterMapIter[Iter, T, U, F]`, `InspectIter[Iter, T, F]` — each
-# is a state-machine struct, no trait-object dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
+# `FilterMapIter[Iter, T, U, F]`, `InspectIter[Iter, T, F]`,
+# `EnumerateIter[Iter, T]`, `ZipIter[IterA, IterB, A, B]`,
+# `WindowsIter[Iter, T]`, `ChunksIter[Iter, T]` — each is a
+# state-machine struct, no trait-object dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
 # `product_iter`, `any_iter`, `all_iter`, `fold_iter`, `find_iter`,
 # `find_index_iter`, `for_each_iter`, `min_iter`, `max_iter`,
 # `last_iter`, `nth_iter`, `join_iter`.
@@ -171,6 +173,18 @@ equip [T] VectorIter[T]:
 
     InspectIter[VectorIter[T], T, F] inspect[F](self, F f):
         return InspectIter[VectorIter[T], T, F](self, f)
+
+    EnumerateIter[VectorIter[T], T] enumerate(self):
+        return EnumerateIter[VectorIter[T], T](self, 0)
+
+    ZipIter[VectorIter[T], VectorIter[U], T, U] zip[U](self, VectorIter[U] other):
+        return ZipIter[VectorIter[T], VectorIter[U], T, U](self, other)
+
+    WindowsIter[VectorIter[T], T] lazy_windows(self, int n):
+        return WindowsIter[VectorIter[T], T](self, n, Vector[T](), false)
+
+    ChunksIter[VectorIter[T], T] lazy_chunks(self, int n):
+        return ChunksIter[VectorIter[T], T](self, n)
 
     # ── Terminal methods ───────────────────────────────────
     #
@@ -356,6 +370,126 @@ equip [Iter, T, F] InspectIter[Iter, T, F] with Iterator[T]:
                 return Some(!x)
             case None:
                 return None
+
+# ── Enumerate ────────────────────────────────────────────────
+#
+# Yields `(index, value)` pairs. The index counts from 0 and
+# increments per element, independent of the source iterator's
+# semantics — `enumerate()` of a filtered iterator yields indices
+# 0, 1, 2, … (positions in the *output*), not the original positions.
+
+struct EnumerateIter[Iter, T]:
+    Iter inner
+    int idx
+
+equip [Iter, T] EnumerateIter[Iter, T] with Iterator[(int, T)]:
+    Option[(int, T)] next(&self):
+        Option[T] v = self.inner.next()
+        match v:
+            case Some(x):
+                int cur = self.idx
+                self.idx = self.idx + 1
+                return Some((cur, !x))
+            case None:
+                return None
+
+# ── Zip ──────────────────────────────────────────────────────
+#
+# Yields pairs `(a, b)` drawn from two source iterators in lockstep.
+# Stops as soon as either source is exhausted.
+
+struct ZipIter[IterA, IterB, A, B]:
+    IterA a
+    IterB b
+
+equip [IterA, IterB, A, B] ZipIter[IterA, IterB, A, B] with Iterator[(A, B)]:
+    Option[(A, B)] next(&self):
+        Option[A] va = self.a.next()
+        match va:
+            case None:
+                return None
+            case Some(xa):
+                Option[B] vb = self.b.next()
+                match vb:
+                    case None:
+                        return None
+                    case Some(xb):
+                        return Some((!xa, !xb))
+
+# ── Windows / Chunks (lazy) ──────────────────────────────────
+#
+# `windows(n)` yields successive overlapping slices of size n via a
+# sliding deque-like buffer. Drains 1 element per `next()` call; when
+# the source can't refill the window, returns None. n must be >= 1.
+#
+# `chunks(n)` yields non-overlapping slices of size n, possibly with
+# a final short slice if the source length isn't a multiple of n.
+#
+# Both copy elements into the per-call Vector — for non-Copy T this
+# triggers per-element clone semantics through Vector.push. A future
+# zero-cost view-based variant could avoid the copies.
+
+struct WindowsIter[Iter, T]:
+    Iter inner
+    int n
+    Vector[T] buf
+    bool primed
+
+equip [Iter, T] WindowsIter[Iter, T] with Iterator[Vector[T]]:
+    Option[Vector[T]] next(&self):
+        if self.n <= 0:
+            return None
+        # Prime: pull the first n-1 elements into the buffer so the
+        # first window-yield only needs one fresh element. Subsequent
+        # calls drop the oldest via `remove(0)` and push the next.
+        if not self.primed:
+            int need = self.n - 1
+            int got = 0
+            while got < need:
+                Option[T] v = self.inner.next()
+                match v:
+                    case None:
+                        return None
+                    case Some(x):
+                        self.buf.push(!x)
+                        got = got + 1
+            self.primed = true
+        Option[T] nxt = self.inner.next()
+        match nxt:
+            case None:
+                return None
+            case Some(x):
+                self.buf.push(!x)
+                # Slide: drop head once buffer exceeds window size.
+                if self.buf.len() > self.n:
+                    self.buf.remove(0)
+                # Yield a clone of the current window so the caller
+                # gets an independent Vector — the buffer keeps
+                # mutating across iterations.
+                return Some(self.buf.clone())
+
+struct ChunksIter[Iter, T]:
+    Iter inner
+    int n
+
+equip [Iter, T] ChunksIter[Iter, T] with Iterator[Vector[T]]:
+    Option[Vector[T]] next(&self):
+        if self.n <= 0:
+            return None
+        Vector[T] chunk = Vector[T]()
+        int got = 0
+        bool source_done = false
+        while got < self.n and not source_done:
+            Option[T] v = self.inner.next()
+            match v:
+                case None:
+                    source_done = true
+                case Some(x):
+                    chunk.push(!x)
+                    got = got + 1
+        if chunk.len() == 0:
+            return None
+        return Some(!chunk)
 
 # ── Terminals ────────────────────────────────────────────────
 #

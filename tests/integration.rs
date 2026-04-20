@@ -2089,6 +2089,14 @@ fn iter_lazy_adapters() {
 }
 
 #[test]
+fn iter_enumerate_zip() {
+    run_gg(
+        "iter_enumerate_zip.gg",
+        "0: 100\n1: 200\n2: 300\n--\n100=1\n200=2\n300=3\n--\nwin 1,2\nwin 2,3\nwin 3,4\nwin 4,5\n--\nchunk 1,2\nchunk 3,4\nchunk 5",
+    );
+}
+
+#[test]
 fn stdlib_iter_set() {
     run_gg(
         "stdlib_iter_set.gg",
