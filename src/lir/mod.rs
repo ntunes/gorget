@@ -626,7 +626,10 @@ pub enum Inst {
     /// so the C backend can determine element types for drop function assignment.
     CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId>, original_name: Option<String>, arg_abis: Vec<crate::ir::abi::AbiKind> },
     /// Indirect call through a function pointer.
-    CallPtr { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId> },
+    /// `ret_ty` is explicit so backends pick the right return-type cast
+    /// and `infer_inst_type` doesn't have to guess (the old default was
+    /// `I64`, which broke aggregate-returning trait methods).
+    CallPtr { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId>, ret_ty: LirType },
     /// Indirect call through a closure (fn_ptr + env dispatch).
     /// `kind` distinguishes void*[2] (CallableParam) from GorgetClosure struct (EscapedClosure).
     /// `arg_abis` carries per-arg ABI decisions (deref for non-resource aggregates).

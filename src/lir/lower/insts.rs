@@ -597,10 +597,18 @@ impl<'a> FuncLowering<'a> {
                 let lir_args: Vec<ValueId> =
                     args.iter().map(|a| self.lower_operand(a, bb)).collect();
                 let result = dst.map(|_| self.lir_func.next_value());
+                let ret_ty = match dst {
+                    Some(d) => {
+                        let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+                        self.map_type(&gir_ty)
+                    }
+                    None => LirType::Void,
+                };
                 self.lir_func.block_mut(bb).insts.push(Inst::CallPtr {
                     dst: result,
                     callee: callee_val,
                     args: lir_args,
+                    ret_ty,
                 });
                 if let (Some(d), Some(r)) = (*dst, result) {
                     self.store_to_local(d, r, bb);
@@ -2702,6 +2710,25 @@ impl<'a> FuncLowering<'a> {
         mut lir_args: Vec<ValueId>,
         bb: BlockId,
     ) -> BlockId {
+        // ── Step 7 of BIR lift plan: TraitCall intercept ──
+        //
+        // **Deferred.** The `Inst::TraitCall` canonical op and its BIR
+        // expansion (`bir::lower::expand_func`) are in place, but emission
+        // from `Box__<Trait>__<method>` call sites is not wired up.
+        // Reason: expanding every trait call inline inflates generated C
+        // by ~6× per call site (one `CallExtern` becomes `FieldPtr + Load
+        // + FieldPtr + Load + FieldPtr + Load + CallPtr`). The self-host
+        // driver alone goes from ~170k to ~360k LoC of generated C, which
+        // doubles stage-1 compile time and blows the self_host_bootstrap
+        // integration-test budget.
+        //
+        // Re-enabling will need either: (a) a later LIR-level optimization
+        // that CSEs vtable and data loads across adjacent TraitCalls on
+        // the same object, (b) generating the expansion as a per-
+        // `(Trait, method)` helper function (synthesis, like the sort
+        // family) so the C compiler inlines it at its own discretion, or
+        // (c) carrying `arg_abis` on `CallPtr` so backends marshal
+        // aggregate args correctly without the current ambiguity.
         // ── Step 8 of BIR lift plan: HOF intercept ──
         // Vector `each` / `any` / `all` — emit `Inst::HofExpand` and let BIR
         // lowering generate the loop skeleton. Other HOF variants still flow

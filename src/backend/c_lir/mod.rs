@@ -2235,15 +2235,25 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::CallExtern { dst, name, args, arg_abis, .. } => {
             emit_call_extern::emit_call_extern(out, inst, dst, name, args, arg_abis, ctx);
         }
-        Inst::CallPtr { dst, callee, args } => {
+        Inst::CallPtr { dst, callee, args, ret_ty: call_ret_ty } => {
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();
             }
             // Build the function pointer cast using actual arg types instead of void*
             // to avoid ABI mismatches with struct-by-value parameters.
-            let ret_ty = dst.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
-                .map(|t| c_type_named(t, sn))
-                .unwrap_or_else(|| "void".to_string());
+            //
+            // Prefer the `ret_ty` carried on the instruction — it's
+            // authoritative and survives BIR expansion (e.g. TraitCall
+            // → CallPtr preserves the method's real return type). Fall
+            // back to `val_types[dst]` for legacy emission paths, and
+            // `void` if neither is known.
+            let ret_ty = if !matches!(call_ret_ty, LirType::Void) {
+                c_type_named(call_ret_ty, sn)
+            } else {
+                dst.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
+                    .map(|t| c_type_named(t, sn))
+                    .unwrap_or_else(|| "void".to_string())
+            };
             write!(out, "(({ret_ty}(*)(").unwrap();
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {

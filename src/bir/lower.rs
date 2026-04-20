@@ -218,6 +218,105 @@ fn expand_func(
                         field: field_idx,
                     });
                 }
+                Inst::TraitCall {
+                    dst,
+                    object,
+                    trait_name,
+                    method,
+                    args,
+                    arg_abis: _,
+                    ret_ty,
+                } => {
+                    // Expand a trait-object virtual call into primitive
+                    // vtable dispatch.
+                    //
+                    //   vtbl_ptr = FieldPtr  object, {Trait}_TraitObj.vtable
+                    //   vtbl     = Load      vtbl_ptr, Ptr
+                    //   fnp_ptr  = FieldPtr  vtbl,    {Trait}_VTable.method
+                    //   fnp      = Load      fnp_ptr, Ptr
+                    //   data_ptr = FieldPtr  object, {Trait}_TraitObj.data
+                    //   data     = Load      data_ptr, Ptr
+                    //   dst      = CallPtr   fnp, [data, args...]
+                    //
+                    // Both struct ids and the method's field index come
+                    // from `structs` by name. GIR always registers both
+                    // the TraitObj and VTable structs when a trait is
+                    // declared, so the emitter intercept (`try_emit_
+                    // trait_call` in `src/lir/lower/insts.rs`) only
+                    // produces TraitCall when both resolve.
+                    let trait_obj_sid = structs
+                        .iter()
+                        .position(|s| s.name == format!("{trait_name}_TraitObj"))
+                        .map(|i| StructId(i as u32))
+                        .expect("TraitCall: TraitObj struct must exist");
+                    let vtable_sid = structs
+                        .iter()
+                        .position(|s| s.name == format!("{trait_name}_VTable"))
+                        .map(|i| StructId(i as u32))
+                        .expect("TraitCall: VTable struct must exist");
+                    let method_idx: u32 = structs[vtable_sid.0 as usize]
+                        .fields
+                        .iter()
+                        .position(|(n, _)| n == &method)
+                        .map(|i| i as u32)
+                        .expect("TraitCall: method must be a VTable field");
+
+                    // vtable load
+                    let vtbl_ptr = alloc_value(&mut next);
+                    new_insts.push(Inst::FieldPtr {
+                        dst: vtbl_ptr,
+                        base: object,
+                        struct_id: trait_obj_sid,
+                        field: 1, // TraitObj.vtable
+                    });
+                    let vtbl = alloc_value(&mut next);
+                    new_insts.push(Inst::Load {
+                        dst: vtbl,
+                        ptr: vtbl_ptr,
+                        ty: LirType::Ptr,
+                    });
+                    // fn pointer load
+                    let fnp_ptr = alloc_value(&mut next);
+                    new_insts.push(Inst::FieldPtr {
+                        dst: fnp_ptr,
+                        base: vtbl,
+                        struct_id: vtable_sid,
+                        field: method_idx,
+                    });
+                    let fnp = alloc_value(&mut next);
+                    new_insts.push(Inst::Load {
+                        dst: fnp,
+                        ptr: fnp_ptr,
+                        ty: LirType::Ptr,
+                    });
+                    // data pointer load
+                    let data_ptr = alloc_value(&mut next);
+                    new_insts.push(Inst::FieldPtr {
+                        dst: data_ptr,
+                        base: object,
+                        struct_id: trait_obj_sid,
+                        field: 0, // TraitObj.data
+                    });
+                    let data = alloc_value(&mut next);
+                    new_insts.push(Inst::Load {
+                        dst: data,
+                        ptr: data_ptr,
+                        ty: LirType::Ptr,
+                    });
+                    // indirect call: fnp(data, args...)
+                    let mut call_args = vec![data];
+                    call_args.extend(args);
+                    new_insts.push(Inst::CallPtr {
+                        dst: if matches!(ret_ty, LirType::Void) {
+                            None
+                        } else {
+                            dst
+                        },
+                        callee: fnp,
+                        args: call_args,
+                        ret_ty: ret_ty.clone(),
+                    });
+                }
                 Inst::CowClone { dst, src, ty } => {
                     // For strings: call gorget_string_copy_cow(&out, src).
                     // For now, only String is supported — other CoW types can

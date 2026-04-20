@@ -247,8 +247,12 @@ fn infer_inst_type(
         Inst::CallExtern { name, args, .. } => {
             infer_call_extern_type(name, args, module, val_types)
         }
-        Inst::CallPtr { dst, .. } => {
-            if dst.is_some() { Some(LirType::I64) } else { None }
+        Inst::CallPtr { dst, ret_ty, .. } => {
+            if dst.is_some() && !matches!(ret_ty, LirType::Void) {
+                Some(ret_ty.clone())
+            } else {
+                None
+            }
         }
         Inst::CallClosure { ret_ty, .. } => {
             if *ret_ty != LirType::Void { Some(ret_ty.clone()) } else { None }

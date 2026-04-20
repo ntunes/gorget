@@ -1808,7 +1808,13 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
                     .or(Some(LirType::I64))
             }
         }
-        Inst::CallPtr { .. } => Some(LirType::I64), // default
+        Inst::CallPtr { ret_ty, .. } => {
+            if *ret_ty != LirType::Void {
+                Some(ret_ty.clone())
+            } else {
+                None
+            }
+        }
         Inst::CallClosure { ret_ty, .. } => {
             if *ret_ty != LirType::Void { Some(ret_ty.clone()) } else { None }
         }

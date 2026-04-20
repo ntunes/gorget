@@ -4957,7 +4957,7 @@ fn emit_inst(
                 }
             }
         }
-        Inst::CallPtr { dst, callee, args } => {
+        Inst::CallPtr { dst, callee, args, ret_ty: _ } => {
             // Indirect call through function pointer
             let arg_strs: Vec<String> = args.iter().map(|a| {
                 let pty = val_types.get(a.0 as usize)
