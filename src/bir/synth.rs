@@ -79,9 +79,25 @@ pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<Clos
     })
 }
 
+/// De-duplication key for synthesized trait-helper functions.
+///
+/// One helper per unique `(trait, method, signature)` shape. The
+/// signature mangle folds return type and user-param types together so
+/// two calls of the same method with different type substitutions (if
+/// any ever arise) don't collide. In normal usage a single
+/// `(trait, method)` pair has one signature and this collapses to the
+/// one-helper-per-pair guarantee the plan promises.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct TraitHelperKey {
+    pub trait_name: String,
+    pub method: String,
+    pub sig_mangle: String,
+}
+
 /// Pool of synthesized functions for one BIR lowering pass.
 pub(crate) struct SynthPool {
     cache: FxHashMap<SynthKey, FuncId>,
+    trait_cache: FxHashMap<TraitHelperKey, FuncId>,
     new_fns: Vec<LirFunction>,
     base_func_count: u32,
 }
@@ -90,6 +106,7 @@ impl SynthPool {
     pub fn new(base_func_count: u32) -> Self {
         Self {
             cache: FxHashMap::default(),
+            trait_cache: FxHashMap::default(),
             new_fns: Vec::new(),
             base_func_count,
         }
@@ -203,6 +220,56 @@ impl SynthPool {
 
         let fid = FuncId(self.base_func_count + self.new_fns.len() as u32);
         self.cache.insert(key, fid);
+        self.new_fns.push(func);
+        fid
+    }
+
+    /// Request (and if necessary emit) a trait-dispatch helper for
+    /// `{trait_name}::{method}` with the given user-param and return LIR
+    /// types. Callers use this to replace inline vtable dispatch with a
+    /// single `Call` to a dedup'd helper; the helper's body contains the
+    /// `FieldPtr+Load×3 + CallPtr` chain (same shape as the legacy inline
+    /// expansion in `bir::lower`).
+    ///
+    /// Signature: `fn(self: Ptr, ...user_params) -> ret_ty`. The `self`
+    /// param is the `{Trait}_TraitObj*`; user params are the method's
+    /// user parameters (the VTable FnPtr's `params[1..]`, skipping the
+    /// synthetic `void* data`).
+    pub fn get_or_emit_trait_helper(
+        &mut self,
+        structs: &[StructDef],
+        trait_name: &str,
+        method: &str,
+        user_param_tys: &[LirType],
+        ret_ty: &LirType,
+    ) -> FuncId {
+        let sig_mangle = std::iter::once(mangle_lir_type(ret_ty))
+            .chain(user_param_tys.iter().map(mangle_lir_type))
+            .collect::<Vec<_>>()
+            .join("_");
+        let key = TraitHelperKey {
+            trait_name: trait_name.to_string(),
+            method: method.to_string(),
+            sig_mangle,
+        };
+        if let Some(&fid) = self.trait_cache.get(&key) {
+            return fid;
+        }
+
+        let fname = format!("{SYNTH_PREFIX}trait_{trait_name}_{method}");
+        let mut params = Vec::with_capacity(1 + user_param_tys.len());
+        params.push(LirType::Ptr);
+        params.extend(user_param_tys.iter().cloned());
+        let mut func = LirFunction::new(fname, params, ret_ty.clone());
+        func.param_names = std::iter::once(Some("self".to_string()))
+            .chain((0..user_param_tys.len()).map(|i| Some(format!("arg{i}"))))
+            .collect();
+        func.const_params = vec![false; func.params.len()];
+
+        emit_trait_helper_body(&mut func, structs, trait_name, method, user_param_tys, ret_ty);
+
+        let fid = FuncId(self.base_func_count + self.new_fns.len() as u32);
+        self.trait_cache.insert(key, fid);
         self.new_fns.push(func);
         fid
     }
@@ -1140,6 +1207,140 @@ fn emit_sort_impl_body(
         free_bb,
         done_bb,
     );
+
+    func.set_next_value_raw(next);
+}
+
+/// Emit the body of a trait-dispatch helper:
+///
+/// ```text
+///   entry:
+///     self      = ParamRef 0, Ptr
+///     argN      = ParamRef N, <user_param_tys[N-1]>       (one per user arg)
+///     vtbl_ptr  = FieldPtr self, {Trait}_TraitObj.vtable    (field 1)
+///     vtbl      = Load vtbl_ptr, Ptr
+///     fnp_ptr   = FieldPtr vtbl, {Trait}_VTable.method      (field method_idx)
+///     fnp       = Load fnp_ptr, Ptr
+///     data_ptr  = FieldPtr self, {Trait}_TraitObj.data      (field 0)
+///     data      = Load data_ptr, Ptr
+///     result?   = CallPtr fnp, [data, args...], ret_ty
+///     Ret result | RetVoid
+/// ```
+///
+/// Field indices 1=vtable, 0=data are invariant — see
+/// `src/ir/lowering/traits.rs::register_trait_sigs`, which always
+/// registers `{Trait}_TraitObj` with `data` at index 0 and `vtable` at
+/// index 1. The VTable's method index is resolved by name-lookup on
+/// the VTable struct's fields.
+fn emit_trait_helper_body(
+    func: &mut LirFunction,
+    structs: &[StructDef],
+    trait_name: &str,
+    method: &str,
+    user_param_tys: &[LirType],
+    ret_ty: &LirType,
+) {
+    let trait_obj_sid = lookup_struct_id(structs, &format!("{trait_name}_TraitObj"))
+        .expect("trait helper: TraitObj struct must exist");
+    let vtable_sid = lookup_struct_id(structs, &format!("{trait_name}_VTable"))
+        .expect("trait helper: VTable struct must exist");
+    let method_idx: u32 = structs[vtable_sid.0 as usize]
+        .fields
+        .iter()
+        .position(|(n, _)| n == method)
+        .map(|i| i as u32)
+        .expect("trait helper: method must be a VTable field");
+
+    let mut next: u32 = 0;
+    let entry_bb = func.add_block();
+
+    // Param refs: self (0), then one per user param.
+    let self_v = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+        dst: self_v,
+        index: 0,
+        ty: LirType::Ptr,
+    });
+    let user_param_vs: Vec<ValueId> = user_param_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let v = alloc_value(&mut next);
+            func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+                dst: v,
+                index: (i + 1) as u32,
+                ty: ty.clone(),
+            });
+            v
+        })
+        .collect();
+
+    // vtbl_ptr = &self->vtable ; vtbl = *vtbl_ptr
+    let vtbl_ptr = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::FieldPtr {
+        dst: vtbl_ptr,
+        base: self_v,
+        struct_id: trait_obj_sid,
+        field: 1, // TraitObj.vtable
+    });
+    let vtbl = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::Load {
+        dst: vtbl,
+        ptr: vtbl_ptr,
+        ty: LirType::Ptr,
+    });
+    // fnp_ptr = &vtbl->method ; fnp = *fnp_ptr
+    let fnp_ptr = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::FieldPtr {
+        dst: fnp_ptr,
+        base: vtbl,
+        struct_id: vtable_sid,
+        field: method_idx,
+    });
+    let fnp = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::Load {
+        dst: fnp,
+        ptr: fnp_ptr,
+        ty: LirType::Ptr,
+    });
+    // data_ptr = &self->data ; data = *data_ptr
+    let data_ptr = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::FieldPtr {
+        dst: data_ptr,
+        base: self_v,
+        struct_id: trait_obj_sid,
+        field: 0, // TraitObj.data
+    });
+    let data = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::Load {
+        dst: data,
+        ptr: data_ptr,
+        ty: LirType::Ptr,
+    });
+
+    // fnp(data, user_params...)
+    let mut call_args = Vec::with_capacity(1 + user_param_vs.len());
+    call_args.push(data);
+    call_args.extend(user_param_vs);
+
+    if matches!(ret_ty, LirType::Void) {
+        func.block_mut(entry_bb).insts.push(Inst::CallPtr {
+            dst: None,
+            callee: fnp,
+            args: call_args,
+            ret_ty: ret_ty.clone(),
+        });
+        func.block_mut(entry_bb).terminator = Term::RetVoid;
+    } else {
+        let result = alloc_value(&mut next);
+        func.block_mut(entry_bb).insts.push(Inst::CallPtr {
+            dst: Some(result),
+            callee: fnp,
+            args: call_args,
+            ret_ty: ret_ty.clone(),
+        });
+        func.block_mut(entry_bb).terminator = Term::Ret(result);
+    }
 
     func.set_next_value_raw(next);
 }
