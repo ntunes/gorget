@@ -1291,25 +1291,35 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
-            # Lower each element — primarily for side effects (we don't
-            # actually populate the array here; the runtime stub just
-            # creates a zero-length GorgetArray with correct alloc).
+            # Lower each element — we'll push them in order after the
+            # array is constructed. Need to keep the value locals around
+            # so we can reference them in the subsequent push calls.
+            Vector[int] elem_locals = []
             int ei = 0
             while ei < elems.len():
                 SpannedExpr elem = elems.get(ei).unwrap()
-                lower_expr(&ctx, elem, &gmod)
+                int elem_val = lower_expr(&ctx, elem, &gmod)
+                elem_locals.push(elem_val)
                 ei += 1
             # Call gorget_array_new(elem_size) so the resulting array has a
             # valid `alloc` pointer from __gorget_current_alloc. Without
             # this, subsequent `.push()` on a zero-init'd GorgetArray
             # segfaults dereferencing arr->alloc->realloc(...). Element
-            # size defaults to 8 (int64_t / pointer / 64-bit struct) —
-            # wrong for byte-sized element Vectors but a better fallback
-            # than NULL alloc. Proper fix would thread element type
-            # information through from the SVarDecl declared type.
+            # size defaults to 8 — wrong for byte Vectors but a better
+            # fallback than NULL alloc.
             Vector[Operand] an_args = [OpConstI64(8)]
             int adst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetArray"), NO_NAME)
             emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
+            # Push each element into the just-created Vector. Without
+            # this, `[!init_insts]` and similar "array literal with
+            # explicit elements" produced an EMPTY array, and any
+            # subsequent `.get(0)` returned NULL.
+            int pi = 0
+            while pi < elem_locals.len():
+                int el = elem_locals.get(pi).unwrap()
+                Vector[Operand] push_args = [OpMove(adst), OpMove(el)]
+                emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
+                pi += 1
             return adst
         case ETupleLiteral(elems):
             int ti = 0
