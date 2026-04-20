@@ -750,9 +750,13 @@ fn emit_sort_impl_body(
             out
         }
         Some(k_ty) => {
-            // Key variant: cl(iv) -> K; cl(jv) -> K; compare keys directly.
-            // Scalar keys only — callers enforce this via is_aggregate check
-            // upstream. `Cmp Le` on K is valid for integer/bool/float types.
+            // Key variant: cl(iv) -> K; cl(jv) -> K; compare keys per K's
+            // natural ordering.
+            //
+            //   Scalar K (int/bool/float/...): direct `Cmp Le`.
+            //   Struct("GorgetString"|"Str"): `gorget_str_cmp(ki, kj) ≤ 0`.
+            //   Other struct K: `memcmp(&ki, &kj, sizeof(K)) ≤ 0` — matches
+            //     the previous TLS trampoline's fallback for unknown K.
             let ki = alloc_value(&mut next);
             func.block_mut(compare_bb).insts.push(Inst::CallClosure {
                 dst: Some(ki),
@@ -771,14 +775,104 @@ fn emit_sort_impl_body(
                 arg_abis: vec![arg_abi],
                 ret_ty: k_ty.clone(),
             });
-            let out = alloc_value(&mut next);
-            func.block_mut(compare_bb).insts.push(Inst::Cmp {
-                dst: out,
-                op: CmpOp::Le,
-                lhs: ki,
-                rhs: kj,
-            });
-            out
+            // Pick compare strategy by K's concrete shape.
+            let k_struct_name = match &k_ty {
+                LirType::Struct(sid) => structs
+                    .get(sid.0 as usize)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or(""),
+                _ => "",
+            };
+            if !k_ty.is_aggregate() {
+                // Scalar: direct Cmp Le.
+                let out = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::Cmp {
+                    dst: out,
+                    op: CmpOp::Le,
+                    lhs: ki,
+                    rhs: kj,
+                });
+                out
+            } else if matches!(k_struct_name, "GorgetString" | "Str") {
+                // Str key: gorget_str_cmp takes Str by value; pass the SSA
+                // struct values directly. Backend marshals per arg_abi.
+                let cmp_int = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::CallExtern {
+                    dst: Some(cmp_int),
+                    name: "gorget_str_cmp".to_string(),
+                    args: vec![ki, kj],
+                    original_name: None,
+                    arg_abis: vec![AbiKind::GorgetString, AbiKind::GorgetString],
+                });
+                let zero_cp = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::IConst {
+                    dst: zero_cp,
+                    ty: LirType::I64,
+                    value: 0,
+                });
+                let out = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::Cmp {
+                    dst: out,
+                    op: CmpOp::Le,
+                    lhs: cmp_int,
+                    rhs: zero_cp,
+                });
+                out
+            } else {
+                // Generic struct K: memcmp(&ki, &kj, sizeof(K)).
+                // Spill SSA values to slots to take addresses.
+                let ki_slot = func.add_slot(k_ty.clone(), None);
+                func.block_mut(compare_bb).insts.push(Inst::SlotStore {
+                    slot: ki_slot,
+                    value: ki,
+                    is_move: true,
+                });
+                let ki_ptr = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::SlotAddr {
+                    dst: ki_ptr,
+                    slot: ki_slot,
+                });
+                let kj_slot = func.add_slot(k_ty.clone(), None);
+                func.block_mut(compare_bb).insts.push(Inst::SlotStore {
+                    slot: kj_slot,
+                    value: kj,
+                    is_move: true,
+                });
+                let kj_ptr = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::SlotAddr {
+                    dst: kj_ptr,
+                    slot: kj_slot,
+                });
+                let k_size = c_sizeof_lir_type(&k_ty, structs) as i64;
+                let size_v = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::IConst {
+                    dst: size_v,
+                    ty: LirType::I64,
+                    value: k_size,
+                });
+                let cmp_int = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::CallExtern {
+                    dst: Some(cmp_int),
+                    name: "memcmp".to_string(),
+                    args: vec![ki_ptr, kj_ptr, size_v],
+                    original_name: None,
+                    arg_abis: vec![AbiKind::Opaque, AbiKind::Opaque, AbiKind::Scalar],
+                });
+                let zero_cp = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::IConst {
+                    dst: zero_cp,
+                    ty: LirType::I64,
+                    value: 0,
+                });
+                let out = alloc_value(&mut next);
+                func.block_mut(compare_bb).insts.push(Inst::Cmp {
+                    dst: out,
+                    op: CmpOp::Le,
+                    lhs: cmp_int,
+                    rhs: zero_cp,
+                });
+                out
+            }
         }
     };
     func.block_mut(compare_bb).terminator = Term::Branch {

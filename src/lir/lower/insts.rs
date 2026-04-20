@@ -2587,16 +2587,11 @@ impl<'a> FuncLowering<'a> {
         if is_sort && !sig_known {
             return None;
         }
-        // Sort-by-key: same sig requirement, plus the key type K must be
-        // scalar. Aggregate K (e.g. String) falls through to the TLS
-        // trampoline — handled in a follow-up commit.
-        if is_sort_key {
-            if !sig_known {
-                return None;
-            }
-            if closure_ret_ty.is_aggregate() {
-                return None;
-            }
+        // Sort-by-key: same sig requirement. Synth handles scalar K via
+        // direct `Cmp Le`, Str K via `gorget_str_cmp`, and other struct
+        // K via `memcmp`. No aggregate-K fallback to TLS anymore.
+        if is_sort_key && !sig_known {
+            return None;
         }
 
         // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
