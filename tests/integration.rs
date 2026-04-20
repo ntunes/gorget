@@ -2081,6 +2081,14 @@ fn method_generic_trait_dispatch() {
 }
 
 #[test]
+fn iter_lazy_adapters() {
+    run_gg(
+        "iter_lazy_adapters.gg",
+        "1\n2\n--\n4\n5\n6\n--\n4\n16\n36\n--\n1\n2\n3\n4\n5\n6",
+    );
+}
+
+#[test]
 fn stdlib_iter_set() {
     run_gg(
         "stdlib_iter_set.gg",

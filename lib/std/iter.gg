@@ -60,6 +60,18 @@ equip [T] VectorIter[T]:
     FilterIter[T, F] filter[F](self, F p):
         return FilterIter[T, F](self, p)
 
+    TakeWhileIter[T, F] take_while[F](self, F p):
+        return TakeWhileIter[T, F](self, p, false)
+
+    DropWhileIter[T, F] drop_while[F](self, F p):
+        return DropWhileIter[T, F](self, p, true)
+
+    FilterMapIter[T, U, F] filter_map[U, F](self, F f):
+        return FilterMapIter[T, U, F](self, f)
+
+    InspectIter[T, F] inspect[F](self, F f):
+        return InspectIter[T, F](self, f)
+
     # ── Terminal methods ───────────────────────────────────
     #
     # Bodies delegate to the free-function terminals defined below so
@@ -183,6 +195,95 @@ equip [T, F] FilterIter[T, F] with Iterator[T]:
                 case None:
                     return None
         return None
+
+# ── Conditional take/drop + combined filter-map + side-effect ─
+#
+# `take_while(p)` yields while p returns true, then terminates.
+# `drop_while(p)` skips while p returns true, then passes through.
+# `filter_map(f)` combines filter + map: `f: T -> Option[U]`.
+# `inspect(f)` is side-effect-only — f is called on each element,
+# value passes through unchanged. Useful for debug-printing
+# elements at a specific pipeline stage without collecting.
+
+struct TakeWhileIter[T, F]:
+    VectorIter[T] inner
+    F pred
+    bool done
+
+equip [T, F] TakeWhileIter[T, F] with Iterator[T]:
+    Option[T] next(&self):
+        if self.done:
+            return None
+        Option[T] v = self.inner.next()
+        match v:
+            case Some(x):
+                F cb = self.pred
+                if cb(x):
+                    return Some(!x)
+                self.done = true
+                return None
+            case None:
+                self.done = true
+                return None
+
+struct DropWhileIter[T, F]:
+    VectorIter[T] inner
+    F pred
+    bool dropping
+
+equip [T, F] DropWhileIter[T, F] with Iterator[T]:
+    Option[T] next(&self):
+        # Drain leading elements where pred(x) is true. Once we
+        # produce the first surviving element, flip `dropping` so
+        # subsequent calls bypass the predicate entirely.
+        while self.dropping:
+            Option[T] v = self.inner.next()
+            match v:
+                case Some(x):
+                    F cb = self.pred
+                    if not cb(x):
+                        self.dropping = false
+                        return Some(!x)
+                case None:
+                    self.dropping = false
+                    return None
+        return self.inner.next()
+
+struct FilterMapIter[T, U, F]:
+    VectorIter[T] inner
+    F f
+
+equip [T, U, F] FilterMapIter[T, U, F] with Iterator[U]:
+    Option[U] next(&self):
+        while true:
+            Option[T] v = self.inner.next()
+            match v:
+                case Some(x):
+                    F cb = self.f
+                    Option[U] out = cb(!x)
+                    match out:
+                        case Some(_):
+                            return !out
+                        case None:
+                            pass
+                case None:
+                    return None
+        return None
+
+struct InspectIter[T, F]:
+    VectorIter[T] inner
+    F f
+
+equip [T, F] InspectIter[T, F] with Iterator[T]:
+    Option[T] next(&self):
+        Option[T] v = self.inner.next()
+        match v:
+            case Some(x):
+                F cb = self.f
+                cb(x)
+                return Some(!x)
+            case None:
+                return None
 
 # ── Terminals ────────────────────────────────────────────────
 #

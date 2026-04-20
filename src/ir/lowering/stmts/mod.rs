@@ -17,6 +17,59 @@ use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
 
 /// If the operand came from a resource-type field load, emit a MoveZero for the source field
 /// to prevent double-free. Call this after assigning the operand to its destination.
+/// If the local's declared AST type is (or resolves to) a `Callable` or bare
+/// function type, return its mapped GIR return type. Used to thread
+/// `callable_return_types` entries for closure-typed locals — otherwise a
+/// call like `cb(x)` (where `cb` was bound via `F cb = self.f`) has no
+/// return-type info and falls back to I64.
+fn callable_local_return_type(ctx: &LoweringContext, ty: &ast::Type) -> Option<TypeId> {
+    callable_local_return_type_bounded(ctx, ty, 8)
+}
+
+fn callable_local_return_type_bounded(
+    ctx: &LoweringContext,
+    ty: &ast::Type,
+    depth: u32,
+) -> Option<TypeId> {
+    if depth == 0 {
+        return None;
+    }
+    match ty {
+        ast::Type::Named { name, generic_args } => {
+            let name_str = name.node.as_str();
+            if matches!(name_str, "Callable" | "MutCallable" | "ConsumeCallable") {
+                if let Some(func_type) = generic_args.first() {
+                    if let ast::Type::Function { return_type, .. } = &func_type.node {
+                        return Some(ctx.map_type_with_subs(&return_type.node));
+                    }
+                }
+                return None;
+            }
+            // Bare type param bound to a Function or Callable at the call
+            // site — look up the concrete substituted AST type and recurse.
+            // Essential for method-level-generic params like `F` inside
+            // `Option[U] next(&self): F cb = self.f; ...` where F resolves
+            // to `Option[int](int)` at this call site.
+            if generic_args.is_empty() {
+                if let Some(concrete) = ctx.generics.generic_param_ast_types.get(name_str).cloned() {
+                    // Degenerate self-loop guard: `T → Named{T, []}`.
+                    if let ast::Type::Named { name: cn, generic_args: cgs } = &concrete {
+                        if cgs.is_empty() && cn.node == *name_str {
+                            return None;
+                        }
+                    }
+                    return callable_local_return_type_bounded(ctx, &concrete, depth - 1);
+                }
+            }
+            None
+        }
+        ast::Type::Function { return_type, .. } => {
+            Some(ctx.map_type_with_subs(&return_type.node))
+        }
+        _ => None,
+    }
+}
+
 fn maybe_emit_field_move_zero(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -220,6 +273,13 @@ fn lower_var_decl(
                 .unwrap_or(false);
             let local_id = builder.add_local(gir_type, Some(name));
             ctx.register_local(name, local_id, gir_type);
+            // Track callable return types for locals declared with a Callable
+            // or bare-function type. Enables `cb(...)` call-site return-type
+            // inference when `F cb = self.f` binds a closure field and F is a
+            // method-level-generic param that resolves to a Function type.
+            if let Some(ret_type) = callable_local_return_type(ctx, &type_.node) {
+                ctx.func_state.callable_return_types.insert(local_id, ret_type);
+            }
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
             // Force-register Option/Result with resource payloads (needs_drop

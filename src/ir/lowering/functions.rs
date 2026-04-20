@@ -1117,12 +1117,14 @@ pub fn lower_generic_function(
             ctx.drops.pop_scope_no_emit();
             ctx.generics.type_name_subs.clear();
             ctx.generics.generic_type_params.clear();
+    ctx.generics.generic_param_ast_types.clear();
             return;
         }
     }
 
     ctx.generics.type_name_subs.clear();
     ctx.generics.generic_type_params.clear();
+    ctx.generics.generic_param_ast_types.clear();
     ctx.flush_ownership_to_locals(&mut builder);
     module.functions.push(builder.build());
 }
@@ -1235,6 +1237,7 @@ pub fn lower_generic_equip_methods_with_defaults(
 
     ctx.generics.type_name_subs.clear();
     ctx.generics.generic_type_params.clear();
+    ctx.generics.generic_param_ast_types.clear();
 }
 
 /// Lower a single equip method body with the given substitutions. Shared
@@ -1462,6 +1465,7 @@ pub fn lower_method_instance(
 
     ctx.generics.type_name_subs.clear();
     ctx.generics.generic_type_params.clear();
+    ctx.generics.generic_param_ast_types.clear();
 }
 
 /// Build type parameter substitutions from generic params + concrete type args.
@@ -1524,6 +1528,18 @@ fn extract_callable_return_type(
     subs: &[(String, Type)],
     ctx: &LoweringContext,
 ) -> Option<TypeId> {
+    extract_callable_return_type_bounded(ty, subs, ctx, 8)
+}
+
+fn extract_callable_return_type_bounded(
+    ty: &Type,
+    subs: &[(String, Type)],
+    ctx: &LoweringContext,
+    depth: u32,
+) -> Option<TypeId> {
+    if depth == 0 {
+        return None;
+    }
     match ty {
         // Callable[RetType(Params...)] or MutCallable[...] or ConsumeCallable[...]
         Type::Named { name, generic_args } => {
@@ -1534,6 +1550,24 @@ fn extract_callable_return_type(
                     if let Type::Function { return_type, .. } = &func_type.node {
                         let ret_type = substitute_and_map_type(ctx, &return_type.node, subs);
                         return Some(ret_type);
+                    }
+                }
+                return None;
+            }
+            // Generic type param bound to a Function or Callable at the call
+            // site — recurse after substitution so method-level-generic params
+            // like `F f` (F → int(int)) get their return type picked up.
+            if generic_args.is_empty() {
+                for (param, concrete) in subs {
+                    if param == name_str {
+                        // Guard against degenerate self-loops: `T → Named{T, []}`
+                        // (shouldn't happen, but cheap to check).
+                        if let Type::Named { name: cn, generic_args: cgs } = concrete {
+                            if cgs.is_empty() && cn.node == *name_str {
+                                return None;
+                            }
+                        }
+                        return extract_callable_return_type_bounded(concrete, subs, ctx, depth - 1);
                     }
                 }
             }
@@ -1555,9 +1589,11 @@ fn extract_callable_return_type(
 /// bare type parameters in variable declarations inside generic bodies.
 fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
     ctx.generics.generic_type_params.clear();
+    ctx.generics.generic_param_ast_types.clear();
     for (param_name, concrete_ty) in subs {
         let type_id = ctx.type_mapper.map_ast_type(concrete_ty);
         ctx.generics.generic_type_params.insert(param_name.clone(), type_id);
+        ctx.generics.generic_param_ast_types.insert(param_name.clone(), concrete_ty.clone());
     }
 }
 

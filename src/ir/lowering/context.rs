@@ -123,6 +123,13 @@ pub struct GenericState {
     /// Maps bare type parameters (e.g., "T") to their concrete TypeIds (e.g., I64_TYPE)
     /// during generic function body lowering.
     pub generic_type_params: FxHashMap<String, TypeId>,
+    /// Generic type parameter → full substituted AST type. Complements
+    /// `generic_type_params` (which stores GIR TypeIds) for cases where we
+    /// need the AST shape: closure-typed params (`F f` with F → `int(int)`)
+    /// can only be recognised as Callable/Function from the AST, since the
+    /// immutable TypeMapper collapses Function types to UNIT_TYPE at the GIR
+    /// boundary.
+    pub generic_param_ast_types: FxHashMap<String, crate::parser::ast::Type>,
 }
 
 /// State for spawn/concurrency tracking during lowering.

@@ -1,0 +1,52 @@
+# Lazy iterator adapters — take_while / drop_while / filter_map /
+# inspect. All four carry method-level generics (`[F]` for the
+# closure or `[U, F]` for map+filter), so each call site goes
+# through the per-call-site mono pipeline.
+
+from std.collections import Vector
+from std.iter import VectorIter
+
+bool less_than_3(int x):
+    return x < 3
+
+bool less_than_4(int x):
+    return x < 4
+
+Option[int] even_as_squared(int x):
+    if x % 2 == 0:
+        return Some(x * x)
+    return None
+
+void noop(int _x):
+    pass
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+
+    # take_while — yields while pred is true.
+    # 1 < 3 ✓, 2 < 3 ✓, 3 < 3 ✗ → stops after emitting 1, 2.
+    for x in v.iter().take_while[bool(int)](less_than_3):
+        print(x)
+
+    print("--")
+
+    # drop_while — skips while pred is true, then passes through.
+    # Drops 1, 2, 3 (all < 4), then yields 4, 5, 6.
+    for x in v.iter().drop_while[bool(int)](less_than_4):
+        print(x)
+
+    print("--")
+
+    # filter_map — filter + map in one pass. Yields squares of evens.
+    # 2 → 4, 4 → 16, 6 → 36; 1/3/5 filtered out.
+    for x in v.iter().filter_map[int, Option[int](int)](even_as_squared):
+        print(x)
+
+    print("--")
+
+    # inspect — side-effect only, value passes through. The `noop`
+    # call establishes the closure path; the loop just prints each x.
+    for x in v.iter().inspect[void(int)](noop):
+        print(x)
+
+    return 0
