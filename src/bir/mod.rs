@@ -26,6 +26,7 @@
 //! validator and an expansion in the lowering pass.
 
 pub mod lower;
+pub(crate) mod synth;
 pub mod validate;
 
 use crate::lir::LirModule;

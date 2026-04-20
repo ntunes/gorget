@@ -2668,10 +2668,11 @@ mod tests {
         for func in &mut lir_module.functions {
             crate::lir::ssa::construct_ssa(func);
         }
-        crate::lir::optimize::optimize_module(&mut lir_module);
         crate::lir::types::compute_module_value_types(&mut lir_module);
-        let bir_module = crate::bir::BirModule::from_lir(lir_module)
+        let mut bir_module = crate::bir::BirModule::from_lir(lir_module)
             .expect("BIR lowering failed in gir_to_lir_c test helper");
+        crate::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        crate::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         let backend = crate::backend::c_lir::CLirBackend;
         crate::backend::Backend::generate(&backend, &bir_module).code
     }

@@ -218,7 +218,7 @@ impl fmt::Display for CmpOp {
 /// Maps 1:1 onto the user-facing method names at the Gorget surface level.
 /// BIR lowering uses this tag to pick the right loop skeleton (early-exit
 /// vs full walk, element accumulator vs index only, etc.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HofOp {
     /// `v.each(|x| …)` — for side-effects. No dst.
     Each,

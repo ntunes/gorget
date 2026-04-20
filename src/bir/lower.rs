@@ -32,7 +32,22 @@ use crate::lir::{
 /// Returns the rewritten module. The caller (typically
 /// [`crate::bir::BirModule::from_lir`]) then runs the validator to confirm
 /// the invariant holds.
+///
+/// Module-level synthesis (see `bir::synth`) runs as part of this pass:
+/// a `SynthPool` collects synthesized `LirFunction`s that canonical-op
+/// expansion requests, and at pass exit the new functions are appended
+/// to `module.functions`. `value_types` for the appended functions is
+/// computed before returning so later stages (the BIR validator, the
+/// backends) see fully-populated function metadata.
 pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
+    // Guardrail: the `__gg_synth_` prefix is reserved for synthesis output.
+    // If any existing function already carries it, something upstream is
+    // producing names in our namespace.
+    crate::bir::synth::assert_no_synth_prefix(&module);
+
+    let base_func_count = module.functions.len() as u32;
+    let _pool = crate::bir::synth::SynthPool::new(base_func_count);
+
     // Swap `functions` out so we can iterate them mutably while holding an
     // immutable reference to `module.structs`. The structs table is the only
     // piece of module metadata the expansion reads (for c_sizeof / payload
@@ -42,6 +57,32 @@ pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
         expand_func(func, &module.structs);
     }
     module.functions = funcs;
+
+    // Splice synthesized functions onto the module tail. Commit 1: the pool
+    // is always empty here (no caller drives `get_or_emit_*` yet). Commit 2
+    // starts populating it.
+    let synth_fns = _pool.finish();
+    if !synth_fns.is_empty() {
+        // Sanity-check FuncId/index alignment — each synth fn's
+        // post-splice index must equal the `FuncId` we handed back to
+        // callers at emit time.
+        debug_assert_eq!(
+            module.functions.len() as u32,
+            base_func_count,
+            "lower_lir_to_bir: unexpected functions added outside the synth pool",
+        );
+        let synth_count = synth_fns.len();
+        module.functions.extend(synth_fns);
+        // Populate `value_types` for only the newly-appended functions.
+        // User functions had their value_types computed pre-BIR by
+        // `compute_module_value_types`; the synth fns were never seen
+        // by that pass.
+        let start = module.functions.len() - synth_count;
+        for i in start..module.functions.len() {
+            crate::lir::types::compute_function_value_types_at(&mut module, i);
+        }
+    }
+
     Ok(module)
 }
 

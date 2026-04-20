@@ -471,37 +471,44 @@ pub fn compute_value_types(func: &mut LirFunction, module: &LirModule) {
 
 /// Compute value types for all functions in a module.
 pub fn compute_module_value_types(module: &mut LirModule) {
-    // We need to borrow functions mutably one at a time while reading module metadata.
-    // Split the module to avoid double-borrow.
     for i in 0..module.functions.len() {
-        let n = module.functions[i].value_count() as usize;
-        let mut vt: Vec<Option<LirType>> = vec![None; n];
+        compute_function_value_types_at(module, i);
+    }
+}
 
-        // Block parameters carry explicit types.
-        for block in &module.functions[i].blocks {
-            for (vid, ty) in &block.params {
-                if (vid.0 as usize) < n {
-                    vt[vid.0 as usize] = Some(ty.clone());
-                }
+/// Compute value types for a single function at index `i` in `module.functions`.
+///
+/// Split out from `compute_module_value_types` so BIR synthesis can populate
+/// `value_types` for newly-appended synth functions without re-scanning the
+/// whole module.
+pub fn compute_function_value_types_at(module: &mut LirModule, i: usize) {
+    let n = module.functions[i].value_count() as usize;
+    let mut vt: Vec<Option<LirType>> = vec![None; n];
+
+    // Block parameters carry explicit types.
+    for block in &module.functions[i].blocks {
+        for (vid, ty) in &block.params {
+            if (vid.0 as usize) < n {
+                vt[vid.0 as usize] = Some(ty.clone());
             }
         }
+    }
 
-        // Instructions: derive from fields.
-        for block in &module.functions[i].blocks {
-            for inst in &block.insts {
-                if let Some(dst) = inst.dst() {
-                    if (dst.0 as usize) < n {
-                        let ty = infer_inst_type(inst, &module.functions[i], module, &vt);
-                        if ty.is_some() {
-                            vt[dst.0 as usize] = ty;
-                        }
+    // Instructions: derive from fields.
+    for block in &module.functions[i].blocks {
+        for inst in &block.insts {
+            if let Some(dst) = inst.dst() {
+                if (dst.0 as usize) < n {
+                    let ty = infer_inst_type(inst, &module.functions[i], module, &vt);
+                    if ty.is_some() {
+                        vt[dst.0 as usize] = ty;
                     }
                 }
             }
         }
-
-        module.functions[i].value_types = vt;
     }
+
+    module.functions[i].value_types = vt;
 }
 
 #[cfg(test)]

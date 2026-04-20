@@ -537,10 +537,12 @@ fn try_build_ir(
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
-        gorget::lir::optimize::optimize_module(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
-        let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+        let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        // Optimize runs post-BIR so synth fns (when present) get DCE/fold/CSE.
+        gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
         print!("{c_code}");
         let input_path = Path::new(filename);
@@ -552,18 +554,22 @@ fn try_build_ir(
     }
 
     // ── LIR → BIR → target source → binary ──────────
-    // Lower GIR → LIR → SSA → optimize → BIR → backend
+    // Lower GIR → LIR → SSA → value_types → BIR synthesis → optimize → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
-        gorget::lir::optimize::optimize_module(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
 
         // Save metadata we need after handing ownership to BirModule.
-        let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+        let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        // Optimize post-BIR so synth fns get DCE/fold/CSE, and so drop-elab
+        // sees the expanded primitives from canonical ops (HofExpand, EnumInit,
+        // etc.) rather than the opaque high-level shape.
+        gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
 
         let backend: Box<dyn gorget::backend::Backend> = match backend_name {
             "llvm" => Box::new(gorget::backend::llvm::LlvmBackend),
@@ -1209,20 +1215,22 @@ fn try_profile(
     }
     let lir_ssa_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Phase 8: LIR optimization
-    let t = Instant::now();
-    let lir_opt_stats = gorget::lir::optimize::optimize_module(&mut lir_module);
+    // Phase 8a: LIR value-types (pre-BIR) — optimize moves to post-BIR
+    // so synth fns benefit from DCE/fold/CSE.
     gorget::lir::types::compute_module_value_types(&mut lir_module);
-    let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
     let lir_functions = lir_module.functions.len();
     let lir_instructions: usize = lir_module.functions.iter()
         .map(|f| f.blocks.iter().map(|b| b.insts.len()).sum::<usize>())
         .sum();
 
-    // Phase 9: BIR lowering + C code generation
+    // Phase 9: BIR lowering + optimize + C code generation
     let t = Instant::now();
-    let bir_module = gorget::bir::BirModule::from_lir(lir_module)
+    let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
         .map_err(|e| format!("BIR lowering failed: {e}"))?;
+    let lir_opt_stats = gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+    gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
+    let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let t = Instant::now();
     let backend = gorget::backend::c_lir::CLirBackend;
     let output = gorget::backend::Backend::generate(&backend, &bir_module);
     let codegen_ms = t.elapsed().as_secs_f64() * 1000.0;
