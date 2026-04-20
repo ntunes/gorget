@@ -392,19 +392,36 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             tki += 1
             continue
         if tinfo.is_enum:
-            # Enum: tag (I32) + variant fields
+            # Enum: tag (I32) + variant fields. We build both the flat
+            # field list (for codegen's struct emission) AND compute
+            # `computed_c_size` up front so downstream `sizeof(T)` queries
+            # via type_elem_size_in_mod / lir_type_byte_size_in_mod land
+            # on the correct byte count. Without this the fallback in
+            # those helpers summed every variant's fields, giving
+            # 12376 bytes for union-layout enums like Item (real size
+            # 568) — and the `Vector[Item] items = Vector[Item]()` init
+            # in parser.gg got `gorget_array_new(12376)`, guaranteeing
+            # every push ran off the end of the allocation.
             Vector[StructField] efields = []
             efields.push(StructField("tag", LT_I32))
+            int max_variant_size = 0
+            int flat_payload_size = 0
             int vi = 0
             while vi < tinfo.variants.len():
                 GirEnumVariantInfo vinfo = tinfo.variants.get(vi).unwrap()
+                int variant_bytes = 0
                 int vfi = 0
                 while vfi < vinfo.fields.len():
                     GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
                     String fname = vinfo.name + "_" + int_to_str(vfi)
                     int fty = resolve_field_lir_type(finfo.type_name, &sr)
                     efields.push(StructField(fname, fty))
+                    int field_bytes = lir_type_byte_size_in_mod(fty, &m, 0)
+                    variant_bytes = variant_bytes + field_bytes
+                    flat_payload_size = flat_payload_size + field_bytes
                     vfi += 1
+                if variant_bytes > max_variant_size:
+                    max_variant_size = variant_bytes
                 vi += 1
             # Match Rust backend: union layout when field count > 4 (tag + >3 payload).
             bool is_union = efields.len() > 4
@@ -415,18 +432,45 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 ek = 2
             elif tinfo.variants.len() > 0:
                 ek = 3
-            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, -1, -1)
+            # Union layout: tag (4) + pad to 8 + max(variant payloads),
+            # aligned to 8. Flat layout: 4 (tag) + sum of all payload
+            # fields, aligned to 8.
+            int computed_size = 0
+            if is_union:
+                int padded_max = max_variant_size
+                int rem_u = padded_max % 8
+                if rem_u != 0:
+                    padded_max = padded_max + (8 - rem_u)
+                computed_size = 8 + padded_max
+            else:
+                int flat_total = 4 + flat_payload_size
+                int rem_f = flat_total % 8
+                if rem_f != 0:
+                    flat_total = flat_total + (8 - rem_f)
+                computed_size = flat_total
+            if computed_size == 0:
+                computed_size = 8
+            LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, computed_size, -1)
             m.structs.set(sid, new_sdef)
         else:
-            # Struct: map fields
+            # Struct: map fields + pre-compute byte size (sum of field
+            # sizes, aligned to 8) so sizeof(T) queries don't have to
+            # recurse through the byte-size helper at every use.
             Vector[StructField] sfields = []
             int sfi = 0
+            int s_total = 0
             while sfi < tinfo.fields.len():
                 GirFieldInfo finfo = tinfo.fields.get(sfi).unwrap()
                 int fty = resolve_field_lir_type(finfo.type_name, &sr)
                 sfields.push(StructField(finfo.name, fty))
+                s_total = s_total + lir_type_byte_size_in_mod(fty, &m, 0)
                 sfi += 1
-            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, -1, -1)
+            int s_rem = s_total % 8
+            if s_rem != 0:
+                s_total = s_total + (8 - s_rem)
+            if s_total == 0:
+                s_total = 8
+            LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, s_total, -1)
             m.structs.set(sid, new_sdef)
         tki += 1
 
@@ -493,6 +537,80 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1)
                 m.structs.set(psi, res_sdef)
         psi += 1
+
+    # Pass 4: Fixpoint re-computation of `computed_c_size` for every
+    # struct/enum. Pass 2 computes sizes eagerly while processing each
+    # type, but the iteration order over `ti_keys` can visit an enum
+    # BEFORE the struct it wraps in a variant payload — the wrapped
+    # type's fields are still empty placeholders, so `lir_type_byte_size_in_mod`
+    # falls back to 8, and the enum's `max_variant_size` underestimates.
+    # Iterating until no size changes converges in O(depth-of-type-graph)
+    # passes. Concrete bug this fixes: self-host's `Item` enum is
+    # wrapped in `Vector[Item]` by `parse_module`; initial Pass 2 saw
+    # `FunctionDef` (Item's biggest variant, 560 bytes) as 8 bytes and
+    # computed Item's size as 16 instead of 568 — `gorget_array_new(16)`
+    # then truncated every parsed top-level item to the first 16 bytes,
+    # losing function names, body refs, etc.
+    bool changed = true
+    int guard_iters = 0
+    while changed and guard_iters < 8:
+        changed = false
+        int rsi = 0
+        while rsi < m.structs.len():
+            LirStructDef rsdef = m.structs.get(rsi).unwrap()
+            if rsdef.fields.len() == 0:
+                rsi += 1
+                continue
+            int new_size = 0
+            if rsdef.is_union and rsdef.enum_kind > 0:
+                # Union-layout enum: tag (4, padded to 8) + max variant.
+                # Variant grouping by `VariantName_N` field-name prefix.
+                int max_v = 0
+                int cur_v = 0
+                String cur_pfx = ""
+                int rfi = 1
+                while rfi < rsdef.fields.len():
+                    StructField rsf = rsdef.fields.get(rfi).unwrap()
+                    int last_us = rsf.name.len() - 1
+                    while last_us > 0:
+                        String rch = rsf.name.slice(last_us, last_us + 1)
+                        if rch == "_":
+                            break
+                        last_us -= 1
+                    String pfx = rsf.name.slice(0, last_us)
+                    if pfx != cur_pfx:
+                        if cur_v > max_v:
+                            max_v = cur_v
+                        cur_v = 0
+                        cur_pfx = pfx
+                    cur_v = cur_v + lir_type_byte_size_in_mod(rsf.ty, &m, 0)
+                    rfi += 1
+                if cur_v > max_v:
+                    max_v = cur_v
+                int max_rem = max_v % 8
+                if max_rem != 0:
+                    max_v = max_v + (8 - max_rem)
+                new_size = 8 + max_v
+            else:
+                # Flat layout (struct or small enum): sum all fields, pad.
+                int total = 0
+                int rfi2 = 0
+                while rfi2 < rsdef.fields.len():
+                    int fty2 = rsdef.fields.get(rfi2).unwrap().ty
+                    total = total + lir_type_byte_size_in_mod(fty2, &m, 0)
+                    rfi2 += 1
+                int trem = total % 8
+                if trem != 0:
+                    total = total + (8 - trem)
+                new_size = total
+            if new_size == 0:
+                new_size = 8
+            if new_size != rsdef.computed_c_size:
+                changed = true
+                LirStructDef updated = LirStructDef(rsdef.name, rsdef.fields, rsdef.enum_kind, rsdef.is_union, new_size, rsdef.extra_info)
+                m.structs.set(rsi, updated)
+            rsi += 1
+        guard_iters += 1
 
 # ── Runtime function name mapping ───────────────────────────
 
@@ -1000,6 +1118,43 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
             LirStructDef sdef = m.structs.get(sid).unwrap()
             if sdef.computed_c_size > 0:
                 return sdef.computed_c_size
+            # Union-layout enums get tag (4) + pad + max variant payload.
+            # Flat layout (regular struct or small enum) gets sum of all
+            # field sizes, aligned to 8. Previously always summed; that
+            # overcounted union enums by ~Nx and routed 12376-byte
+            # allocations to 568-byte Item elements.
+            if sdef.is_union and sdef.enum_kind > 0:
+                int max_v_bytes = 0
+                int cur_v_bytes = 0
+                String cur_prefix = ""
+                int fi_u = 1
+                while fi_u < sdef.fields.len():
+                    StructField sf_u = sdef.fields.get(fi_u).unwrap()
+                    # Variant fields are named "VariantName_N"; sum across
+                    # the same prefix, reset on new variant.
+                    int under_pos = sf_u.name.len() - 1
+                    while under_pos > 0:
+                        String ch_u = sf_u.name.slice(under_pos, under_pos + 1)
+                        if ch_u == "_":
+                            break
+                        under_pos -= 1
+                    String name_prefix = sf_u.name.slice(0, under_pos)
+                    if name_prefix != cur_prefix:
+                        if cur_v_bytes > max_v_bytes:
+                            max_v_bytes = cur_v_bytes
+                        cur_v_bytes = 0
+                        cur_prefix = name_prefix
+                    cur_v_bytes = cur_v_bytes + lir_type_byte_size_in_mod(sf_u.ty, &m, depth + 1)
+                    fi_u += 1
+                if cur_v_bytes > max_v_bytes:
+                    max_v_bytes = cur_v_bytes
+                int rem_u = max_v_bytes % 8
+                if rem_u != 0:
+                    max_v_bytes = max_v_bytes + (8 - rem_u)
+                int u_total = 8 + max_v_bytes
+                if u_total == 0:
+                    return 8
+                return u_total
             int total = 0
             int fi = 0
             while fi < sdef.fields.len():
