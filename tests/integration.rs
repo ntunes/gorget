@@ -9,8 +9,12 @@ use gorget::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use gorget::parser::ast::*;
 use gorget::span::Spanned;
 
-/// Default timeout for the build step (60 seconds).
-const BUILD_TIMEOUT: Duration = Duration::from_secs(60);
+/// Default timeout for the build step. 2x headroom over the largest
+/// observed build (the self-host driver at ~42s user CPU on a cold
+/// machine). Disk-contended CI environments can inflate wall time
+/// significantly, so we keep a comfortable margin. If a build actually
+/// hangs indefinitely the outer cargo test deadline still catches it.
+const BUILD_TIMEOUT: Duration = Duration::from_secs(120);
 /// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
 /// for slower environments (e.g. CI).
 fn test_binary_timeout() -> Duration {
@@ -2069,6 +2073,11 @@ fn iter_terminal_method_sugar() {
         "iter_terminal_method_sugar.gg",
         "5\ntrue\ntrue\nfalse\n10\n-1\n0\n150\n50\n30\n-1\n5",
     );
+}
+
+#[test]
+fn method_generic_trait_dispatch() {
+    run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }
 
 #[test]

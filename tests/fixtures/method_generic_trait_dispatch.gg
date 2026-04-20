@@ -1,0 +1,36 @@
+# Method-level-generic equip methods with trait-bounded params now
+# monomorphise per call site. Before the fix, the generic body was
+# lowered with the type param unsubstituted and calls on the param-
+# typed receiver (e.g. `h.write_int(...)` where h: H) silently emitted
+# nothing.
+#
+# Validation: a `hash` method generic over any `Hasher H` feeds each
+# field into the passed Hasher. Using the concrete `FxHasher` gives
+# exactly the multiplicative-mix shape: `state = state *% 31 +% v`.
+
+from std.hash import Hasher, FxHasher
+
+struct Point:
+    int x
+    int y
+
+equip Point:
+    void custom_hash[Hasher H](self, H &h):
+        h.write_int(self.x)
+        h.write_int(self.y)
+
+int main():
+    Point p = Point(10, 20)
+
+    # state = 0, write_int(10) -> 10, write_int(20) -> 10 *% 31 +% 20 = 330
+    FxHasher h1 = FxHasher(0)
+    p.custom_hash[FxHasher](&h1)
+    print(h1.finish())
+
+    # Start with non-zero state to prove chained mixing is working.
+    FxHasher h2 = FxHasher(1)
+    p.custom_hash[FxHasher](&h2)
+    # 1 *% 31 +% 10 = 41, 41 *% 31 +% 20 = 1291
+    print(h2.finish())
+
+    return 0

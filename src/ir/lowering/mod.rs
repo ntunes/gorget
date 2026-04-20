@@ -1093,6 +1093,14 @@ pub fn lower_module(
 
             if let Some(type_name) = types::equip_target_name(&equip.type_.node) {
                 for method in &equip.items {
+                    // Method-level generics go through per-call-site mono
+                    // (lower_method_instance). Skip here so we don't emit a
+                    // stub body with unsubstituted generic params — that
+                    // silently drops calls like `h.write_int(...)` inside
+                    // the unresolvable template body.
+                    if method.node.generic_params.is_some() {
+                        continue;
+                    }
                     functions::lower_equip_method(
                         &mut ctx,
                         &mut module,

@@ -137,7 +137,15 @@ impl GenericCollector {
                 }
                 Item::Equip(equip) => {
                     if let Type::Named { name, generic_args } = &equip.type_.node {
-                        if !generic_args.is_empty() || equip.generic_params.is_some() {
+                        let has_generic_equip = !generic_args.is_empty() || equip.generic_params.is_some();
+                        let has_method_level_generic = equip.items.iter()
+                            .any(|m| m.node.generic_params.is_some());
+                        // Register the equip block whenever it carries anything
+                        // monomorphisable: equip-level generics (T → concrete)
+                        // OR method-level generics (U → concrete per call site).
+                        // The per-call-site mono path (discover_method_instances
+                        // → lower_method_instance) needs the AST for both.
+                        if has_generic_equip || has_method_level_generic {
                             self.equip_templates
                                 .entry(name.node.clone())
                                 .or_default()
