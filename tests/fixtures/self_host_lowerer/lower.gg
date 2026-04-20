@@ -1291,13 +1291,25 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
+            # Lower each element — primarily for side effects (we don't
+            # actually populate the array here; the runtime stub just
+            # creates a zero-length GorgetArray with correct alloc).
             int ei = 0
             while ei < elems.len():
                 SpannedExpr elem = elems.get(ei).unwrap()
                 lower_expr(&ctx, elem, &gmod)
                 ei += 1
-            int adst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(adst, OpConstI64(0)))
+            # Call gorget_array_new(elem_size) so the resulting array has a
+            # valid `alloc` pointer from __gorget_current_alloc. Without
+            # this, subsequent `.push()` on a zero-init'd GorgetArray
+            # segfaults dereferencing arr->alloc->realloc(...). Element
+            # size defaults to 8 (int64_t / pointer / 64-bit struct) —
+            # wrong for byte-sized element Vectors but a better fallback
+            # than NULL alloc. Proper fix would thread element type
+            # information through from the SVarDecl declared type.
+            Vector[Operand] an_args = [OpConstI64(8)]
+            int adst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetArray"), NO_NAME)
+            emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
             return adst
         case ETupleLiteral(elems):
             int ti = 0
@@ -1387,8 +1399,31 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return lower_expr(&ctx, *inner_box, &gmod)
         case ESpawnBlocking(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)
+        case EDictLiteral(dkeys, dvals):
+            # `{}` / `{k: v, …}` — lower each key/value for side effects,
+            # then call gorget_map_new(key_size=8, val_size=8) to produce
+            # a GorgetMap with valid `alloc`. Element sizes default to 8
+            # (int64_t / pointer / 64-bit struct) — sufficient for the
+            # common K/V combos in the self-host itself but wrong for
+            # byte/int32 keys. Without this, `{}`-initialized Dicts had
+            # alloc=NULL and `.put()` segfaulted on __gorget_map_grow's
+            # realloc call.
+            int dli = 0
+            while dli < dkeys.len():
+                SpannedExpr dk = dkeys.get(dli).unwrap()
+                lower_expr(&ctx, dk, &gmod)
+                dli += 1
+            int dvi = 0
+            while dvi < dvals.len():
+                SpannedExpr dv = dvals.get(dvi).unwrap()
+                lower_expr(&ctx, dv, &gmod)
+                dvi += 1
+            Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
+            int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), NO_NAME)
+            emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+            return ddst
         else:
-            # Remaining: EIt, EImplicitClosure, EDictLiteral, ESetComp,
+            # Remaining: EIt, EImplicitClosure, ESetComp,
             # EDictComp, EListComp, ERethrow, ECatch, EDo, ERange
             int fallback = add_local(&ctx, UNIT_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fallback, OpConstUnit()))
