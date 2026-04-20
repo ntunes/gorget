@@ -113,6 +113,19 @@ trait Iterator[T]:
             acc = f(acc, x)
         return acc
 
+    # NOTE: trait-bounded defaults (`min` / `max` / `sum` / `product`
+    # / `join` / `contains`) are deferred. Each requires an operator
+    # (`<` / `>` / `+` / `*` / `==`) or trait method (`.display()`)
+    # on the abstract `T`, which triggers self-host bootstrap
+    # regressions: the stage-0 driver monomorphises Iterator[T] for
+    # T's that don't satisfy the implicit bound and emits broken
+    # codegen. The free-function variants in std.iter
+    # (`min_iter` / `max_iter` / `sum_iter` / `product_iter` /
+    # `join_iter`) carry the bound explicitly via `T: Bound` and
+    # don't trigger the regression. Promotion to defaults waits on
+    # cleaner trait-bound declarations (e.g. `where T: Comparable`
+    # on a per-method basis) — see TODO Phase 2c.
+
     # NOTE: Lazy adapter constructors (take / skip / map / filter / chain
     # / take_while / drop_while / filter_map / inspect) currently live on
     # each producer's inherent equip block (VectorIter today). Lifting
