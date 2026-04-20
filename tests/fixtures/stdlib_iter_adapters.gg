@@ -12,13 +12,13 @@ int main():
 
     print("--take(2)--")
     VectorIter[int] vit_t = v.iter()
-    TakeIter[int] t = TakeIter[int](vit_t, 2)
+    TakeIter[VectorIter[int], int] t = TakeIter[VectorIter[int], int](vit_t, 2)
     for x in t:
         print(x)
 
     print("--skip(2)--")
     VectorIter[int] vit_s = v.iter()
-    SkipIter[int] s = SkipIter[int](vit_s, 2)
+    SkipIter[VectorIter[int], int] s = SkipIter[VectorIter[int], int](vit_s, 2)
     for x in s:
         print(x)
 

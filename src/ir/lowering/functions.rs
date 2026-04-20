@@ -1237,10 +1237,28 @@ pub fn lower_generic_equip_methods_with_defaults(
                                 // before map_ast_type — without this,
                                 // `Option[T] last(&self)` resolves to
                                 // `Option[UNIT]` and the call site sees a
-                                // void return.
+                                // void return. Defaults additionally bind
+                                // `Self` so adapter constructors like
+                                // `TakeIter[Self, T] take(self, int n)`
+                                // resolve to the equipping type.
+                                let mut default_subs = subs.clone();
+                                default_subs.push(("Self".to_string(), substituted_type.clone()));
                                 let method_mangled = format!("{mangled_type_name}__{method_name}");
+                                // Refresh generic_type_params so the body
+                                // lowering sees `Self → equipping_type`
+                                // when it resolves type-arg lists like
+                                // `TakeIter[Self, T](self, n)`.
+                                build_generic_type_params(ctx, &default_subs);
+                                // Pre-substitute the body so struct-constructor
+                                // type-arg lists resolve before mangling. Without
+                                // this `TakeIter[Self, T]` mangles to
+                                // `TakeIter__unknown__int64_t` because
+                                // `mangle_type_for_name(Self)` returns "unknown".
+                                let substituted_method = generics::substitute_function_body_pub(
+                                    default_method, &default_subs,
+                                );
                                 lower_equip_method_with_subs(
-                                    ctx, module, default_method, &subs,
+                                    ctx, module, &substituted_method, &default_subs,
                                     mangled_type_name, &method_mangled,
                                     &substituted_type,
                                 );

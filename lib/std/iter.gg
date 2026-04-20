@@ -108,6 +108,14 @@ trait Iterator[T]:
             acc = f(acc, x)
         return acc
 
+    # NOTE: Lazy adapter constructors (take / skip / map / filter / chain
+    # / take_while / drop_while / filter_map / inspect) currently live on
+    # each producer's inherent equip block (VectorIter today). Lifting
+    # them to defaults that construct `TakeIter[Self, T]` etc. requires
+    # the typecheck to instantiate generic trait return types per impl
+    # — Self/T in the trait-stored sig stay as placeholders today.
+    # Tracked as Phase 2c follow-up.
+
 struct VectorIter[T]:
     Vector[T] source
     int idx
@@ -134,11 +142,11 @@ equip [T] Vector[T]:
 # into a concrete state machine without boxing or trait-object
 # dispatch.
 equip [T] VectorIter[T]:
-    TakeIter[T] take(self, int n):
-        return TakeIter[T](self, n)
+    TakeIter[VectorIter[T], T] take(self, int n):
+        return TakeIter[VectorIter[T], T](self, n)
 
-    SkipIter[T] skip(self, int n):
-        return SkipIter[T](self, n)
+    SkipIter[VectorIter[T], T] skip(self, int n):
+        return SkipIter[VectorIter[T], T](self, n)
 
     ChainIter[T] chain(self, VectorIter[T] other):
         return ChainIter[T](self, other, true)
@@ -168,22 +176,22 @@ equip [T] VectorIter[T]:
     # bodies on `trait Iterator[T]:` — VectorIter inherits them
     # without per-type duplication.
 
-struct TakeIter[T]:
-    VectorIter[T] inner
+struct TakeIter[Iter, T]:
+    Iter inner
     int remaining
 
-equip [T] TakeIter[T] with Iterator[T]:
+equip [Iter, T] TakeIter[Iter, T] with Iterator[T]:
     Option[T] next(&self):
         if self.remaining <= 0:
             return None
         self.remaining = self.remaining - 1
         return self.inner.next()
 
-struct SkipIter[T]:
-    VectorIter[T] inner
+struct SkipIter[Iter, T]:
+    Iter inner
     int remaining
 
-equip [T] SkipIter[T] with Iterator[T]:
+equip [Iter, T] SkipIter[Iter, T] with Iterator[T]:
     Option[T] next(&self):
         while self.remaining > 0:
             Option[T] consumed = self.inner.next()

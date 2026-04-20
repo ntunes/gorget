@@ -36,7 +36,7 @@ int main():
     big.push(30)
     big.push(40)
     big.push(50)
-    String e = join_iter[TakeIter[int], int](big.iter().take(3), "+")
+    String e = join_iter[TakeIter[VectorIter[int], int], int](big.iter().take(3), "+")
     print(e)
 
     return 0

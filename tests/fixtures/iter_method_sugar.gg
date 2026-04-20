@@ -16,14 +16,14 @@ int main():
     Vector[int] v = [1, 2, 3, 4, 5]
 
     # take(n)
-    TakeIter[int] t = v.iter().take(3)
+    TakeIter[VectorIter[int], int] t = v.iter().take(3)
     for x in t:
         print(x)
 
     print("--")
 
     # skip(n)
-    SkipIter[int] s = v.iter().skip(2)
+    SkipIter[VectorIter[int], int] s = v.iter().skip(2)
     for x in s:
         print(x)
 

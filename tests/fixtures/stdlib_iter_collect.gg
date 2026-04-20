@@ -8,14 +8,14 @@ from std.iter import VectorIter, TakeIter, collect_vec, count_iter
 int main():
     Vector[int] v = [10, 20, 30, 40, 50]
     VectorIter[int] vit = v.iter()
-    TakeIter[int] t = TakeIter[int](vit, 3)
-    Vector[int] result = collect_vec[int, TakeIter[int]](t)
+    TakeIter[VectorIter[int], int] t = TakeIter[VectorIter[int], int](vit, 3)
+    Vector[int] result = collect_vec[int, TakeIter[VectorIter[int], int]](t)
     for x in result:
         print(x)
 
     VectorIter[int] vit2 = v.iter()
-    TakeIter[int] t2 = TakeIter[int](vit2, 4)
-    int n = count_iter[TakeIter[int]](t2)
+    TakeIter[VectorIter[int], int] t2 = TakeIter[VectorIter[int], int](vit2, 4)
+    int n = count_iter[TakeIter[VectorIter[int], int]](t2)
     print(n)
 
     return 0

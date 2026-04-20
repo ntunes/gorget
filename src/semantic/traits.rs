@@ -89,6 +89,27 @@ impl TraitRegistry {
             }
         }
 
+        // Trait default-method fallback: a type that equips trait T but
+        // doesn't override `m` still inherits `m` from T's default body
+        // (e.g. `take(n)` on Iterator[T]). Walk the trait impls for this
+        // type and consult each implemented trait's TraitInfo for a default.
+        for impl_info in &self.impls {
+            if impl_info.self_type != type_id { continue; }
+            let trait_def_id = match impl_info.trait_ {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                let has_default = trait_info.has_default_body
+                    .get(method).copied().unwrap_or(false);
+                if has_default {
+                    if let Some(sig) = trait_info.methods.get(method) {
+                        return Some((&trait_info.def_id, sig));
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -103,6 +124,23 @@ impl TraitRegistry {
             if impl_info.self_type_name == type_name {
                 if let Some((def_id, sig)) = impl_info.methods.get(method) {
                     return Some((def_id, sig));
+                }
+            }
+        }
+        // Same default-method fallback as `resolve_method`.
+        for impl_info in &self.impls {
+            if impl_info.self_type_name != type_name { continue; }
+            let trait_def_id = match impl_info.trait_ {
+                Some(id) => id,
+                None => continue,
+            };
+            if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                let has_default = trait_info.has_default_body
+                    .get(method).copied().unwrap_or(false);
+                if has_default {
+                    if let Some(sig) = trait_info.methods.get(method) {
+                        return Some((&trait_info.def_id, sig));
+                    }
                 }
             }
         }

@@ -24,15 +24,15 @@ int main():
 
     print("--")
 
-    # take on VectorIter (returned by set_iter) yields TakeIter[T].
-    TakeIter[int] t = set_iter[int](s).take(2)
+    # take on VectorIter (returned by set_iter) yields TakeIter[VectorIter[T], T].
+    TakeIter[VectorIter[int], int] t = set_iter[int](s).take(2)
     for x in t:
         print(x)
 
     print("--")
 
-    # skip on VectorIter yields SkipIter[T].
-    SkipIter[int] k = set_iter[int](s).skip(2)
+    # skip on VectorIter yields SkipIter[VectorIter[T], T].
+    SkipIter[VectorIter[int], int] k = set_iter[int](s).skip(2)
     for x in k:
         print(x)
 

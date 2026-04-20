@@ -10,6 +10,21 @@ pub fn substitute_type_pub(ty: &Type, subs: &[(String, Type)]) -> Type {
     substitute_type(ty, subs)
 }
 
+/// Public entry point for whole-function-body substitution.
+///
+/// Used by the default-trait-method lowering path (functions.rs) so a body
+/// like `return TakeIter[Self, T](self, n)` has every `Self` and `T`
+/// rewritten to concrete types BEFORE `lower_block` mangles the
+/// struct-constructor type-arg list. Without pre-substitution
+/// `mangle_type_for_name(Self)` produces "unknown" and the call site
+/// resolves to a phantom `TakeIter__unknown__int64_t` symbol.
+pub fn substitute_function_body_pub(
+    template: &ast::FunctionDef,
+    subs: &[(String, Type)],
+) -> ast::FunctionDef {
+    substitute_function_body(template, subs)
+}
+
 /// Recursively substitute type parameters in an AST type.
 pub(super) fn substitute_type(ty: &Type, subs: &[(String, Type)]) -> Type {
     match ty {

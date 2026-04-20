@@ -5,7 +5,7 @@
 
 mod substitute;
 
-pub use substitute::substitute_type_pub;
+pub use substitute::{substitute_type_pub, substitute_function_body_pub};
 use substitute::{substitute_type, substitute_function_body, inject_builtin_enums};
 
 use rustc_hash::FxHashMap;
