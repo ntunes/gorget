@@ -19,6 +19,29 @@
 
 from std.collections import Vector, Set
 
+# ── Iterator[T] trait ─────────────────────────────────────────
+#
+# User-space trait declaration. Carries the required `next(&self)`
+# method only; default-method bodies (count / any / all / find /
+# fold / collect …) layer on as Phase 2c progresses. The compiler
+# pre-registers `Iterator` as a builtin placeholder so existing
+# `equip X with Iterator[T]:` blocks parse before this declaration
+# is loaded — when the user-space declaration lands it shadows the
+# placeholder, and `register_equip_sigs_with_defaults` picks up
+# any default bodies declared here for every equipping type.
+trait Iterator[T]:
+    Option[T] next(&self)
+
+    # ── Default terminal methods ─────────────────────────────
+    # Count the elements remaining in the iterator. Consumes the
+    # iterator. Default body delegates to the for-loop protocol —
+    # same loop shape as the standalone `count_iter` free function.
+    int count(&self):
+        int n = 0
+        for _ in self:
+            n = n + 1
+        return n
+
 struct VectorIter[T]:
     Vector[T] source
     int idx
@@ -79,8 +102,7 @@ equip [T] VectorIter[T]:
     # has the concrete iterator type (VectorIter[T]) baked in, so the
     # per-call-site method-mono pipeline specialises these per call.
 
-    int count(self):
-        return count_iter[VectorIter[T]](self)
+    # `count(self)` provided as a default method on Iterator[T].
 
     Vector[T] collect(self):
         return collect_vec[T, VectorIter[T]](self)

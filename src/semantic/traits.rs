@@ -418,17 +418,11 @@ fn register_builtin_traits(
             });
             m
         }),
-        // Iterator[T]: Option[T] next(&self)  — &self parses as MutableBorrow
-        ("Iterator", {
-            let mut m = FxHashMap::default();
-            m.insert("next".into(), FunctionSig {
-                params: vec![],
-                return_type: types.error_id, // placeholder — Option[T] depends on concrete T
-                has_self: true,
-                self_ownership: Some(Ownership::MutableBorrow),
-            });
-            m
-        }),
+        // Iterator[T]: declared in `lib/std/iter.gg` as a user-space trait
+        // so default-method bodies (count / any / all / find / fold / collect)
+        // can ride on the standard `register_equip_sigs_with_defaults` path.
+        // The placeholder def reserved at `resolve.rs` lets equip blocks parse
+        // before the iter.gg declaration loads.
         // Iterable[T]: IterType iter(&self) — return type is placeholder (concrete from equip)
         ("Iterable", {
             let mut m = FxHashMap::default();
@@ -1315,8 +1309,8 @@ equip Circle with Drawable:
 ";
         let (registry, errors) = analyze(source);
         assert!(errors.is_empty(), "errors: {:?}", errors);
-        // 26 built-in traits + 1 user-defined trait
-        assert_eq!(registry.traits.len(), 27);
+        // 25 built-in traits + 1 user-defined trait (Iterator moved to user-space in lib/std/iter.gg)
+        assert_eq!(registry.traits.len(), 26);
         assert_eq!(registry.impls.len(), 1);
         assert!(registry.impls[0].trait_.is_some());
     }
@@ -1353,7 +1347,7 @@ equip Circle with Drawable:
         assert!(trait_names.contains(&"Cloneable"));
         assert!(trait_names.contains(&"Hashable"));
         assert!(trait_names.contains(&"Drop"));
-        assert!(trait_names.contains(&"Iterator"));
+        // Iterator moved to user-space (lib/std/iter.gg); only Iterable remains as a builtin placeholder.
         assert!(trait_names.contains(&"Iterable"));
         assert!(trait_names.contains(&"Measurable"));
     }
@@ -1435,7 +1429,12 @@ equip MyCollection with Iterable[int]:
 
     #[test]
     fn iterator_missing_next_method() {
+        // Inline trait declaration mirrors lib/std/iter.gg; the test
+        // doesn't import the stdlib so we declare the trait locally.
         let source = "\
+trait Iterator[T]:
+    Option[T] next(&self)
+
 struct Counter:
     int current
     int max
