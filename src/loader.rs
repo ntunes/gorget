@@ -311,6 +311,13 @@ impl ModuleLoader {
             self.load_recursive(&base_dir, &hash_segments, &mut results)?;
         }
 
+        // NOTE: auto-loading std.iter unconditionally was attempted but
+        // broke fixtures that define their own `VectorIter[T]` struct
+        // (vector_iter_userdef.gg) — duplicate impl. A finer-grained
+        // heuristic (auto-load only when the module calls `.iter()` or
+        // imports an Iterator-related name) needs more thought; for now
+        // callers continue to import `from std.iter import …` explicitly.
+
         // Recursively load each import
         for (segments, _span) in imports {
             self.load_recursive(&base_dir, &segments, &mut results)?;

@@ -964,9 +964,16 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
             let Some(trait_sig) = owner_trait_info.methods.get(method_name) else { continue };
             let Some((_def_id, impl_sig)) = impl_info.methods.get(method_name) else { continue };
 
-            // Return type — skip if trait uses error_id as a placeholder (e.g. Self or Option[T])
+            // Return type — skip if trait uses error_id as a placeholder
+            // (Self or generic T at the top level), or if the trait's return
+            // type is a generic that contains error_id internally
+            // (e.g. `Option[T]` where T resolves to error_id at trait
+            // registration). The latter shows up for user-space generic
+            // traits like `Iterator[T]: Option[T] next(&self)` — the impl
+            // has `Option[int]` but the trait sig has `Option[<error>]`.
             if trait_sig.return_type != types.error_id
                 && trait_sig.return_type != impl_sig.return_type
+                && !type_contains_error(types, trait_sig.return_type)
             {
                 let trait_display = types.display(trait_sig.return_type);
                 let impl_display = types.display(impl_sig.return_type);
@@ -1004,7 +1011,12 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
                     trait_sig.params.iter().zip(&impl_sig.params).enumerate()
                 {
                     // Skip if trait uses error_id as a placeholder (e.g. Self, generic T)
-                    if *trait_param == types.error_id {
+                    // — same logic as return-type check above. Generics that
+                    // contain error_id internally (e.g. `Vector[T]`) also
+                    // count as placeholders.
+                    if *trait_param == types.error_id
+                        || type_contains_error(types, *trait_param)
+                    {
                         continue;
                     }
                     if trait_param != impl_param {
@@ -1071,6 +1083,27 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
                 }
             }
         }
+    }
+}
+
+/// Recursively check whether a type contains `error_id` anywhere in its
+/// generic-arg tree. Trait method signatures store unresolved type
+/// parameters (T, Self) as `error_id`, so any composite type whose args
+/// reach `error_id` is effectively a placeholder waiting on substitution
+/// at the impl site.
+fn type_contains_error(types: &TypeTable, type_id: TypeId) -> bool {
+    if type_id == types.error_id {
+        return true;
+    }
+    use crate::semantic::types::ResolvedType;
+    match types.get(type_id) {
+        ResolvedType::Generic(_, args) => {
+            args.iter().any(|&arg| type_contains_error(types, arg))
+        }
+        ResolvedType::Tuple(elems) => {
+            elems.iter().any(|&e| type_contains_error(types, e))
+        }
+        _ => false,
     }
 }
 
