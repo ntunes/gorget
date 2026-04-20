@@ -2085,6 +2085,16 @@ fn iter_predicate_inference() {
 }
 
 #[test]
+fn iter_fold_inference() {
+    // Method-level generic inference (Shape 3: fold) — `.fold(init, f)`
+    // drops both `[A, F]` args. A binds from init's type, F binds from
+    // f's type — both via the shape-1 named-slot rule. Includes the
+    // cross-type case where the accumulator differs from the element
+    // type (float acc, int elements).
+    run_gg("iter_fold_inference.gg", "10\n110\n10.500000");
+}
+
+#[test]
 fn method_generic_trait_dispatch() {
     run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }

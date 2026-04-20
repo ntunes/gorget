@@ -2981,10 +2981,17 @@ impl<'a> TypeChecker<'a> {
     /// e.g. `bool any[F](&self, F pred)` called as `v.iter().any(is_even)`
     /// binds `F = bool(int)`.
     ///
-    /// Shapes 2 (map — structural) and 3 (fold — bind init first) are
-    /// added in subsequent commits. Returns `Some(Vec<Type>)` with one
-    /// AST type per generic param if every generic resolves; `None`
-    /// otherwise (caller falls back to existing dispatch).
+    /// Shape 3 (fold): `A fold[A, F](self, A init, F f)` is subsumed by
+    /// the shape-1 walk — both `A` (in `init`'s slot) and `F` (in `f`'s
+    /// slot) appear directly as named-slot params and bind in a single
+    /// pass. The design doc's "bind concrete args first" ordering only
+    /// matters once shape-2 (structural matching of generics inside a
+    /// callable's return-type position) lands.
+    ///
+    /// Shape 2 (map — structural): added in a subsequent commit.
+    /// Returns `Some(Vec<Type>)` with one AST type per generic param if
+    /// every generic resolves; `None` otherwise (caller falls back to
+    /// existing dispatch).
     fn try_infer_method_targs(
         &mut self,
         shape: &super::traits::MethodSigShape,
