@@ -6,12 +6,6 @@
 //!
 //! See `docs/internals/bir-module-synthesis-plan.md` for the design.
 //!
-//! ## Current state (Commit 1 — infrastructure)
-//!
-//! `SynthPool` is constructed in `lower_lir_to_bir` but no caller emits
-//! synthesized functions yet. `get_or_emit_sort_impl` panics; the first
-//! caller lands in Commit 2 alongside the SortBy expansion.
-//!
 //! ## Opaque-closure invariant
 //!
 //! Synthesized bodies dispatch closures exclusively via `Inst::CallClosure`.
@@ -22,17 +16,18 @@
 //! pass distinct closure pointers at runtime; since the body only talks
 //! to the closure through CallClosure, env layout is irrelevant.
 //!
-//! A post-synthesis test (`assert_opaque_closures`) walks every emitted
-//! body and asserts no `FieldPtr { base: closure_param, .. }` appears.
-//! Kept as a debug guardrail.
-//!
 //! ## Naming
 //!
 //! All synthesized functions use the reserved prefix `__gg_synth_`.
 //! Monomorphization never produces names starting with this prefix;
 //! `lower_lir_to_bir` asserts on entry that the invariant holds.
 
-use crate::lir::{FuncId, HofOp, LirFunction, LirModule, LirType};
+use crate::ir::abi::AbiKind;
+use crate::lir::lower::types::c_sizeof_lir_type;
+use crate::lir::{
+    BlockId, CmpOp, ClosureDispatchKind, FuncId, HofOp, Inst, LirFunction, LirModule, LirType,
+    Overflow, StructDef, StructId, Term, ValueId,
+};
 use rustc_hash::FxHashMap;
 
 /// Reserved prefix for all synthesized function names.
@@ -41,23 +36,28 @@ pub const SYNTH_PREFIX: &str = "__gg_synth_";
 /// De-duplication key for synthesized functions.
 ///
 /// Two call sites with the same `SynthKey` share one synthesized body.
+/// Keyed by the info actually used inside the body: element type,
+/// closure arg ABIs, and closure return type. The closure's `__call`
+/// function name is NOT part of the key because the body dispatches
+/// through the closure pointer via `CallClosure`, never by direct name
+/// — two different closures with the same ABI shape share one body.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct SynthKey {
     /// Which HOF this specializes.
     pub op: HofOp,
-    /// Mangled element type (via `LirType`'s stable Debug format today;
-    /// swap to `display::mangle_lir_type` when that helper exists).
+    /// Mangled element type.
     pub element_ty: String,
-    /// Name of the closure's `__call` function (e.g. `__Closure_7__call`),
-    /// or a FuncRef target name for bare function references.
-    pub closure_call: String,
+    /// Mangled closure arg-ABI list.
+    pub closure_arg_abis: String,
+    /// Mangled closure return type.
+    pub closure_ret_ty: String,
 }
 
 /// Closure signature snapshot — params (env stripped for `__Closure_N__call`)
 /// plus return type. Synthesis needs both to pick per-arg ABIs inside
 /// synthesized `CallClosure`s.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // consumed in Commit 2 when body emitters wire up
+#[allow(dead_code)] // consumed by SortByKey / SortedByKey in a follow-up commit
 pub(crate) struct ClosureSig {
     pub param_tys: Vec<LirType>,
     pub ret_ty: LirType,
@@ -65,12 +65,7 @@ pub(crate) struct ClosureSig {
 
 /// Look up the call signature of a closure's `__call` function (or a bare
 /// FuncRef target) from the module's current function list.
-///
-/// Mirrors `LoweringContext::closure_call_sigs` but re-derived at BIR time
-/// from `LirModule.functions` — no new module-level state. The `__Closure_N`
-/// env param is skipped to align with what the emitter treats as "user
-/// params."
-#[allow(dead_code)] // consumed in Commit 2 when body emitters wire up
+#[allow(dead_code)] // consumed by SortByKey / SortedByKey in a follow-up commit
 pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<ClosureSig> {
     let f = module.functions.iter().find(|f| f.name == name)?;
     let skip = if name.starts_with("__Closure_") && name.ends_with("__call") {
@@ -85,30 +80,13 @@ pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<Clos
 }
 
 /// Pool of synthesized functions for one BIR lowering pass.
-///
-/// Owned by `lower_lir_to_bir` for the duration of the pass. Call
-/// `get_or_emit_*` during block walks; at the end, call `finish()` and
-/// splice the returned `Vec<LirFunction>` onto `module.functions`.
 pub(crate) struct SynthPool {
-    /// (key → FuncId) — once assigned, reused for every call site with
-    /// the same key. The `FuncId` is computed from
-    /// `base_func_count + new_fns.len()` at insertion time, so it's
-    /// stable across the splice.
     cache: FxHashMap<SynthKey, FuncId>,
-    /// New functions to append. Fresh `LirFunction` objects with SSA-form
-    /// bodies — no SlotStore/SlotLoad of values that cross blocks.
     new_fns: Vec<LirFunction>,
-    /// `FuncId.0` baseline — equals `module.functions.len()` at pass entry.
-    /// A synthesized fn's FuncId is `base_func_count + new_fns.len()` at
-    /// the moment it's pushed, matching the slot it'll occupy after
-    /// splicing.
-    #[allow(dead_code)] // consumed in Commit 2 when body emitters wire up
     base_func_count: u32,
 }
 
 impl SynthPool {
-    /// Create an empty pool. `base_func_count` should be
-    /// `module.functions.len()` at pass entry.
     pub fn new(base_func_count: u32) -> Self {
         Self {
             cache: FxHashMap::default(),
@@ -117,45 +95,64 @@ impl SynthPool {
         }
     }
 
-    /// Number of synthesized functions queued so far. Useful for tests and
-    /// for verifying dedup is working.
     #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.new_fns.len()
     }
 
-    /// Request (and if necessary emit) the synth fn for `(op, element_ty,
-    /// closure_call)`. Returns the `FuncId` of the synthesized function
-    /// post-splice.
+    /// Request (and if necessary emit) the synth fn for
+    /// `(op, element_ty, closure_arg_abis, closure_ret_ty)`. Returns the
+    /// `FuncId` of the synthesized function post-splice.
     ///
-    /// Commit 1 stub: panics unconditionally. Commit 2 adds the SortBy
-    /// body; later commits add SortByKey.
-    #[allow(dead_code, unused_variables)]
+    /// Supports SortBy / SortedBy today; SortByKey / SortedByKey land in
+    /// a follow-up commit. Both variants share the same underlying sort
+    /// implementation — the caller inlines `clone → Call impl → return clone`
+    /// for the Sorted* form at the call site; there is no separate synth
+    /// fn per in-place vs. returning shape.
     pub fn get_or_emit_sort_impl(
         &mut self,
-        module: &LirModule,
+        structs: &[StructDef],
         op: HofOp,
         element_ty: &LirType,
-        closure_call: &str,
+        closure_arg_abis: &[AbiKind],
+        closure_ret_ty: &LirType,
     ) -> FuncId {
+        debug_assert!(
+            matches!(op, HofOp::SortBy | HofOp::SortedBy),
+            "get_or_emit_sort_impl: unexpected HofOp {op:?}",
+        );
+        // SortBy and SortedBy share the same impl — the caller wraps the
+        // Sorted variant with clone+return. Key off the in-place shape.
+        let canonical_op = HofOp::SortBy;
+
+        let element_ty_mangle = mangle_lir_type(element_ty);
+        let abis_mangle = mangle_abi_list(closure_arg_abis);
+        let ret_mangle = mangle_lir_type(closure_ret_ty);
         let key = SynthKey {
-            op,
-            element_ty: format!("{element_ty:?}"),
-            closure_call: closure_call.to_string(),
+            op: canonical_op,
+            element_ty: element_ty_mangle.clone(),
+            closure_arg_abis: abis_mangle.clone(),
+            closure_ret_ty: ret_mangle.clone(),
         };
         if let Some(&fid) = self.cache.get(&key) {
             return fid;
         }
-        // Placeholder — Commit 2 plugs in `emit_sort_impl_body` here.
-        panic!(
-            "SynthPool::get_or_emit_sort_impl: body emitter not yet wired \
-             (op={op:?}, element_ty={element_ty:?}, closure_call={closure_call}). \
-             Landing in Commit 2 of the BIR module-synthesis plan."
+        let fname = format!(
+            "{SYNTH_PREFIX}sort_impl_{element_ty_mangle}_{abis_mangle}_{ret_mangle}"
         );
+        let mut func =
+            LirFunction::new(fname, vec![LirType::Ptr, LirType::Ptr], LirType::Void);
+        func.param_names = vec![Some("arr".into()), Some("cl".into())];
+        func.const_params = vec![false, false];
+
+        emit_sort_impl_body(&mut func, structs, element_ty, closure_arg_abis);
+
+        let fid = FuncId(self.base_func_count + self.new_fns.len() as u32);
+        self.cache.insert(key, fid);
+        self.new_fns.push(func);
+        fid
     }
 
-    /// Consume the pool and return the synthesized functions for the
-    /// caller to splice into `module.functions`.
     pub fn finish(self) -> Vec<LirFunction> {
         self.new_fns
     }
@@ -176,6 +173,1032 @@ pub(crate) fn assert_no_synth_prefix(module: &LirModule) {
             f.name
         );
     }
+}
+
+/// Mangle an `AbiKind` list into a string suitable for function-name suffixing.
+fn mangle_abi_list(abis: &[AbiKind]) -> String {
+    abis.iter()
+        .map(|a| match a {
+            AbiKind::Auto => "a",
+            AbiKind::CStr => "c",
+            AbiKind::BytePtr => "b",
+            AbiKind::GorgetString => "g",
+            AbiKind::Scalar => "s",
+            AbiKind::Ptr => "p",
+            AbiKind::Opaque => "o",
+            AbiKind::ByValue => "v",
+            AbiKind::VoidElem => "e",
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+/// Mangle a `LirType` into a string suitable for function-name suffixing.
+fn mangle_lir_type(ty: &LirType) -> String {
+    match ty {
+        LirType::I8 => "i8".into(),
+        LirType::I16 => "i16".into(),
+        LirType::I32 => "i32".into(),
+        LirType::I64 => "i64".into(),
+        LirType::U8 => "u8".into(),
+        LirType::U16 => "u16".into(),
+        LirType::U32 => "u32".into(),
+        LirType::U64 => "u64".into(),
+        LirType::F32 => "f32".into(),
+        LirType::F64 => "f64".into(),
+        LirType::Bool => "bool".into(),
+        LirType::Void => "void".into(),
+        LirType::Ptr => "ptr".into(),
+        LirType::PtrTo(sid) => format!("ptrTo{}", sid.0),
+        LirType::Struct(sid) => format!("s{}", sid.0),
+    }
+}
+
+/// Look up a struct ID by name.
+fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {
+    structs
+        .iter()
+        .position(|s| s.name == name)
+        .map(|i| StructId(i as u32))
+}
+
+fn alloc_value(next: &mut u32) -> ValueId {
+    let v = ValueId(*next);
+    *next += 1;
+    v
+}
+
+/// Emit the full body of a `sort_impl(arr: Ptr, cl: Ptr) -> Void` function
+/// implementing iterative bottom-up stable mergesort.
+///
+/// Aux buffer is raw bytes allocated via `CallExtern "malloc"`; elements
+/// are moved around via `Memcpy` so the body is uniform for scalar and
+/// aggregate element types. The closure is dispatched via `CallClosure`
+/// with the caller-provided `closure_arg_abis` — for scalar-ABI closures
+/// we `Load` element values before passing; for pointer-ABI closures we
+/// pass the `ElemPtr` directly.
+///
+/// Block layout (high level):
+/// ```text
+///   entry:         n = arr.len; if n<2 → done_nofree; else alloc aux
+///   pass_loop:     width = 1, 2, 4, ... while < n
+///     run_loop:    left = 0, 2*width, ... while < n
+///       merge:     merge arr[left..mid] + arr[mid..right] into aux
+///       copy_back: memcpy aux[left..right] back into arr[left..right]
+///   free:          free(aux); return
+///   done_nofree:   return (n<2 path)
+/// ```
+fn emit_sort_impl_body(
+    func: &mut LirFunction,
+    structs: &[StructDef],
+    element_ty: &LirType,
+    closure_arg_abis: &[AbiKind],
+) {
+    let elem_size = c_sizeof_lir_type(element_ty, structs) as u32;
+    let array_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
+    let mut next: u32 = 0;
+
+    // ── Block allocation ──
+    let entry_bb = func.add_block();
+    let alloc_bb = func.add_block();
+    let pass_check_bb = func.add_block();
+    let run_check_bb = func.add_block();
+    let compute_mid_bb = func.add_block();
+    let skip_run_bb = func.add_block();
+    let compute_right_bb = func.add_block();
+    let merge_loop_bb = func.add_block();
+    let check_j_bb = func.add_block();
+    let compare_bb = func.add_block();
+    let take_i_bb = func.add_block();
+    let take_j_bb = func.add_block();
+    let drain_left_bb = func.add_block();
+    let drain_right_bb = func.add_block();
+    let copy_back_bb = func.add_block();
+    let next_width_bb = func.add_block();
+    let free_bb = func.add_block();
+    let done_bb = func.add_block();
+
+    // Param refs.
+    let arr = alloc_value(&mut next);
+    let cl = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+        dst: arr,
+        index: 0,
+        ty: LirType::Ptr,
+    });
+    func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+        dst: cl,
+        index: 1,
+        ty: LirType::Ptr,
+    });
+
+    // ── entry: load n = arr.len, short-circuit if n < 2 ──
+    let lenp = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::FieldPtr {
+        dst: lenp,
+        base: arr,
+        struct_id: array_sid,
+        field: 2, // GorgetArray.len
+    });
+    let n = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::Load {
+        dst: n,
+        ptr: lenp,
+        ty: LirType::I64,
+    });
+    let two = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::IConst {
+        dst: two,
+        ty: LirType::I64,
+        value: 2,
+    });
+    let lt2 = alloc_value(&mut next);
+    func.block_mut(entry_bb).insts.push(Inst::Cmp {
+        dst: lt2,
+        op: CmpOp::Lt,
+        lhs: n,
+        rhs: two,
+    });
+    func.block_mut(entry_bb).terminator = Term::Branch {
+        cond: lt2,
+        then_block: done_bb,
+        then_args: vec![],
+        else_block: alloc_bb,
+        else_args: vec![],
+    };
+
+    // ── alloc: bytes = n * elem_size; aux = malloc(bytes); width = 1 ──
+    let elsz = alloc_value(&mut next);
+    func.block_mut(alloc_bb).insts.push(Inst::IConst {
+        dst: elsz,
+        ty: LirType::I64,
+        value: elem_size as i64,
+    });
+    let bytes = alloc_value(&mut next);
+    func.block_mut(alloc_bb).insts.push(Inst::Mul {
+        dst: bytes,
+        ty: LirType::I64,
+        lhs: n,
+        rhs: elsz,
+        overflow: Overflow::Wrap,
+    });
+    let aux = alloc_value(&mut next);
+    func.block_mut(alloc_bb).insts.push(Inst::CallExtern {
+        dst: Some(aux),
+        name: "malloc".to_string(),
+        args: vec![bytes],
+        original_name: None,
+        arg_abis: vec![AbiKind::Scalar],
+    });
+    let one = alloc_value(&mut next);
+    func.block_mut(alloc_bb).insts.push(Inst::IConst {
+        dst: one,
+        ty: LirType::I64,
+        value: 1,
+    });
+    func.block_mut(alloc_bb).terminator = Term::Jump(pass_check_bb, vec![one]);
+
+    // ── pass_check(width): if width < n, enter the pass; else free & return ──
+    let width = alloc_value(&mut next);
+    func.block_mut(pass_check_bb)
+        .params
+        .push((width, LirType::I64));
+    let width_lt_n = alloc_value(&mut next);
+    func.block_mut(pass_check_bb).insts.push(Inst::Cmp {
+        dst: width_lt_n,
+        op: CmpOp::Lt,
+        lhs: width,
+        rhs: n,
+    });
+    let zero = alloc_value(&mut next);
+    func.block_mut(pass_check_bb).insts.push(Inst::IConst {
+        dst: zero,
+        ty: LirType::I64,
+        value: 0,
+    });
+    func.block_mut(pass_check_bb).terminator = Term::Branch {
+        cond: width_lt_n,
+        then_block: run_check_bb,
+        then_args: vec![zero, width],
+        else_block: free_bb,
+        else_args: vec![],
+    };
+
+    // ── run_check(left, width): if left < n, enter merge; else next_width ──
+    let left = alloc_value(&mut next);
+    let w_rc = alloc_value(&mut next);
+    func.block_mut(run_check_bb).params.push((left, LirType::I64));
+    func.block_mut(run_check_bb).params.push((w_rc, LirType::I64));
+    let left_lt_n = alloc_value(&mut next);
+    func.block_mut(run_check_bb).insts.push(Inst::Cmp {
+        dst: left_lt_n,
+        op: CmpOp::Lt,
+        lhs: left,
+        rhs: n,
+    });
+    func.block_mut(run_check_bb).terminator = Term::Branch {
+        cond: left_lt_n,
+        then_block: compute_mid_bb,
+        then_args: vec![left, w_rc],
+        else_block: next_width_bb,
+        else_args: vec![w_rc],
+    };
+
+    // ── compute_mid(left, width): mid = left + width; if mid>=n skip run ──
+    let l_cm = alloc_value(&mut next);
+    let w_cm = alloc_value(&mut next);
+    func.block_mut(compute_mid_bb)
+        .params
+        .push((l_cm, LirType::I64));
+    func.block_mut(compute_mid_bb)
+        .params
+        .push((w_cm, LirType::I64));
+    let mid_raw = alloc_value(&mut next);
+    func.block_mut(compute_mid_bb).insts.push(Inst::Add {
+        dst: mid_raw,
+        ty: LirType::I64,
+        lhs: l_cm,
+        rhs: w_cm,
+        overflow: Overflow::Wrap,
+    });
+    let mid_ge_n = alloc_value(&mut next);
+    func.block_mut(compute_mid_bb).insts.push(Inst::Cmp {
+        dst: mid_ge_n,
+        op: CmpOp::Ge,
+        lhs: mid_raw,
+        rhs: n,
+    });
+    func.block_mut(compute_mid_bb).terminator = Term::Branch {
+        cond: mid_ge_n,
+        then_block: skip_run_bb,
+        then_args: vec![l_cm, w_cm],
+        else_block: compute_right_bb,
+        else_args: vec![l_cm, w_cm, mid_raw],
+    };
+
+    // ── skip_run(left, width): advance left by 2*width, back to run_check ──
+    let l_sr = alloc_value(&mut next);
+    let w_sr = alloc_value(&mut next);
+    func.block_mut(skip_run_bb).params.push((l_sr, LirType::I64));
+    func.block_mut(skip_run_bb).params.push((w_sr, LirType::I64));
+    let ww_sr = alloc_value(&mut next);
+    func.block_mut(skip_run_bb).insts.push(Inst::Add {
+        dst: ww_sr,
+        ty: LirType::I64,
+        lhs: w_sr,
+        rhs: w_sr,
+        overflow: Overflow::Wrap,
+    });
+    let new_l_sr = alloc_value(&mut next);
+    func.block_mut(skip_run_bb).insts.push(Inst::Add {
+        dst: new_l_sr,
+        ty: LirType::I64,
+        lhs: l_sr,
+        rhs: ww_sr,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(skip_run_bb).terminator = Term::Jump(run_check_bb, vec![new_l_sr, w_sr]);
+
+    // ── compute_right(left, width, mid): right = min(left + 2*width, n);
+    //                                     start merge ──
+    let l_cr = alloc_value(&mut next);
+    let w_cr = alloc_value(&mut next);
+    let mid_cr = alloc_value(&mut next);
+    func.block_mut(compute_right_bb)
+        .params
+        .push((l_cr, LirType::I64));
+    func.block_mut(compute_right_bb)
+        .params
+        .push((w_cr, LirType::I64));
+    func.block_mut(compute_right_bb)
+        .params
+        .push((mid_cr, LirType::I64));
+    let ww_cr = alloc_value(&mut next);
+    func.block_mut(compute_right_bb).insts.push(Inst::Add {
+        dst: ww_cr,
+        ty: LirType::I64,
+        lhs: w_cr,
+        rhs: w_cr,
+        overflow: Overflow::Wrap,
+    });
+    let right_raw = alloc_value(&mut next);
+    func.block_mut(compute_right_bb).insts.push(Inst::Add {
+        dst: right_raw,
+        ty: LirType::I64,
+        lhs: l_cr,
+        rhs: ww_cr,
+        overflow: Overflow::Wrap,
+    });
+    // right = right_raw < n ? right_raw : n — via a small branch is painful;
+    // emit as an unconditional min via Sub-compare pattern would need Select,
+    // which we don't use. Use two Jumps to merge_loop with the right value.
+    // Simpler: have two mini-blocks? That's more blocks. Cheapest: compute
+    // right = right_raw - ((right_raw > n) ? (right_raw - n) : 0) … still
+    // needs conditional. So: use a tiny helper block that clamps.
+    //
+    // But we can simulate Select with just arithmetic for this specific
+    // bounded case: since 0 ≤ right_raw and right_raw ≤ 2n (roughly), we
+    // can compute right = n < right_raw ? n : right_raw via:
+    //   ge = (right_raw >= n)   // bool, 0 or 1 — but LIR Cmp produces bool
+    //   diff = right_raw - n
+    // Still needs branching to materialize the result conditionally on bool.
+    //
+    // Cleanest path: emit two Jump targets inline. Add a conditional Branch
+    // into merge_loop_bb with either `right_raw` or `n` passed.
+    let rr_lt_n = alloc_value(&mut next);
+    func.block_mut(compute_right_bb).insts.push(Inst::Cmp {
+        dst: rr_lt_n,
+        op: CmpOp::Lt,
+        lhs: right_raw,
+        rhs: n,
+    });
+    // Two-target Branch passing the appropriate clamped value.
+    func.block_mut(compute_right_bb).terminator = Term::Branch {
+        cond: rr_lt_n,
+        then_block: merge_loop_bb,
+        then_args: vec![l_cr, w_cr, mid_cr, right_raw, l_cr, mid_cr, l_cr],
+        else_block: merge_loop_bb,
+        else_args: vec![l_cr, w_cr, mid_cr, n, l_cr, mid_cr, l_cr],
+    };
+
+    // ── merge_loop(left, width, mid, right, i, j, k): main merge ──
+    let l_ml = alloc_value(&mut next);
+    let w_ml = alloc_value(&mut next);
+    let mid_ml = alloc_value(&mut next);
+    let right_ml = alloc_value(&mut next);
+    let i_ml = alloc_value(&mut next);
+    let j_ml = alloc_value(&mut next);
+    let k_ml = alloc_value(&mut next);
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((l_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((w_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((mid_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((right_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((i_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((j_ml, LirType::I64));
+    func.block_mut(merge_loop_bb)
+        .params
+        .push((k_ml, LirType::I64));
+    let i_lt_mid = alloc_value(&mut next);
+    func.block_mut(merge_loop_bb).insts.push(Inst::Cmp {
+        dst: i_lt_mid,
+        op: CmpOp::Lt,
+        lhs: i_ml,
+        rhs: mid_ml,
+    });
+    func.block_mut(merge_loop_bb).terminator = Term::Branch {
+        cond: i_lt_mid,
+        then_block: check_j_bb,
+        then_args: vec![l_ml, w_ml, mid_ml, right_ml, i_ml, j_ml, k_ml],
+        else_block: drain_right_bb,
+        else_args: vec![l_ml, w_ml, mid_ml, right_ml, i_ml, j_ml, k_ml],
+    };
+
+    // ── check_j: if j < right, compare; else drain left ──
+    let l_cj = alloc_value(&mut next);
+    let w_cj = alloc_value(&mut next);
+    let mid_cj = alloc_value(&mut next);
+    let right_cj = alloc_value(&mut next);
+    let i_cj = alloc_value(&mut next);
+    let j_cj = alloc_value(&mut next);
+    let k_cj = alloc_value(&mut next);
+    func.block_mut(check_j_bb).params.push((l_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((w_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((mid_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((right_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((i_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((j_cj, LirType::I64));
+    func.block_mut(check_j_bb).params.push((k_cj, LirType::I64));
+    let j_lt_right = alloc_value(&mut next);
+    func.block_mut(check_j_bb).insts.push(Inst::Cmp {
+        dst: j_lt_right,
+        op: CmpOp::Lt,
+        lhs: j_cj,
+        rhs: right_cj,
+    });
+    func.block_mut(check_j_bb).terminator = Term::Branch {
+        cond: j_lt_right,
+        then_block: compare_bb,
+        then_args: vec![l_cj, w_cj, mid_cj, right_cj, i_cj, j_cj, k_cj],
+        else_block: drain_left_bb,
+        else_args: vec![l_cj, w_cj, mid_cj, right_cj, i_cj, j_cj, k_cj],
+    };
+
+    // ── compare: CallClosure(cl, arr[i], arr[j]); if ≤0 take i, else j ──
+    let l_cp = alloc_value(&mut next);
+    let w_cp = alloc_value(&mut next);
+    let mid_cp = alloc_value(&mut next);
+    let right_cp = alloc_value(&mut next);
+    let i_cp = alloc_value(&mut next);
+    let j_cp = alloc_value(&mut next);
+    let k_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).params.push((l_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((w_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((mid_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((right_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((i_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((j_cp, LirType::I64));
+    func.block_mut(compare_bb).params.push((k_cp, LirType::I64));
+    // data = arr.data
+    let datap_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::FieldPtr {
+        dst: datap_cp,
+        base: arr,
+        struct_id: array_sid,
+        field: 0,
+    });
+    let data_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::Load {
+        dst: data_cp,
+        ptr: datap_cp,
+        ty: LirType::Ptr,
+    });
+    // ip = &data[i]; jp = &data[j]
+    let ip_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::ElemPtr {
+        dst: ip_cp,
+        base: data_cp,
+        index: i_cp,
+        elem_size,
+    });
+    let jp_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::ElemPtr {
+        dst: jp_cp,
+        base: data_cp,
+        index: j_cp,
+        elem_size,
+    });
+    // Compare: closure signature dictates whether we Load or pass pointer.
+    let (ivarg, jvarg, arg_abi) = match closure_arg_abis.first().copied() {
+        Some(AbiKind::Ptr) => (ip_cp, jp_cp, AbiKind::Ptr),
+        _ => {
+            let iv = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::Load {
+                dst: iv,
+                ptr: ip_cp,
+                ty: element_ty.clone(),
+            });
+            let jv = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::Load {
+                dst: jv,
+                ptr: jp_cp,
+                ty: element_ty.clone(),
+            });
+            (iv, jv, AbiKind::Scalar)
+        }
+    };
+    let cmpr = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::CallClosure {
+        dst: Some(cmpr),
+        kind: ClosureDispatchKind::EscapedClosure,
+        closure: cl,
+        args: vec![ivarg, jvarg],
+        arg_abis: vec![arg_abi, arg_abi],
+        ret_ty: LirType::I64,
+    });
+    let zero_cp = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::IConst {
+        dst: zero_cp,
+        ty: LirType::I64,
+        value: 0,
+    });
+    let le0 = alloc_value(&mut next);
+    func.block_mut(compare_bb).insts.push(Inst::Cmp {
+        dst: le0,
+        op: CmpOp::Le,
+        lhs: cmpr,
+        rhs: zero_cp,
+    });
+    func.block_mut(compare_bb).terminator = Term::Branch {
+        cond: le0,
+        then_block: take_i_bb,
+        then_args: vec![l_cp, w_cp, mid_cp, right_cp, i_cp, j_cp, k_cp],
+        else_block: take_j_bb,
+        else_args: vec![l_cp, w_cp, mid_cp, right_cp, i_cp, j_cp, k_cp],
+    };
+
+    // ── take_i: Memcpy(aux[k], data[i], sz); i++; k++ ──
+    emit_take_block(
+        func,
+        &mut next,
+        take_i_bb,
+        merge_loop_bb,
+        arr,
+        aux,
+        array_sid,
+        elsz,
+        elem_size,
+        /* take_i = */ true,
+    );
+
+    // ── take_j: Memcpy(aux[k], data[j], sz); j++; k++ ──
+    emit_take_block(
+        func,
+        &mut next,
+        take_j_bb,
+        merge_loop_bb,
+        arr,
+        aux,
+        array_sid,
+        elsz,
+        elem_size,
+        /* take_i = */ false,
+    );
+
+    // ── drain_left(l,w,mid,right,i,j,k): if i<mid copy i→k, i++,k++; else copy_back ──
+    let l_dl = alloc_value(&mut next);
+    let w_dl = alloc_value(&mut next);
+    let mid_dl = alloc_value(&mut next);
+    let right_dl = alloc_value(&mut next);
+    let i_dl = alloc_value(&mut next);
+    let j_dl = alloc_value(&mut next);
+    let k_dl = alloc_value(&mut next);
+    func.block_mut(drain_left_bb)
+        .params
+        .push((l_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((w_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((mid_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((right_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((i_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((j_dl, LirType::I64));
+    func.block_mut(drain_left_bb)
+        .params
+        .push((k_dl, LirType::I64));
+    emit_drain_block(
+        func,
+        &mut next,
+        drain_left_bb,
+        copy_back_bb,
+        arr,
+        aux,
+        array_sid,
+        elsz,
+        elem_size,
+        /* drain_i = */ true,
+        l_dl,
+        w_dl,
+        mid_dl,
+        right_dl,
+        i_dl,
+        j_dl,
+        k_dl,
+    );
+
+    // ── drain_right: same shape, advancing j ──
+    let l_dr = alloc_value(&mut next);
+    let w_dr = alloc_value(&mut next);
+    let mid_dr = alloc_value(&mut next);
+    let right_dr = alloc_value(&mut next);
+    let i_dr = alloc_value(&mut next);
+    let j_dr = alloc_value(&mut next);
+    let k_dr = alloc_value(&mut next);
+    func.block_mut(drain_right_bb)
+        .params
+        .push((l_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((w_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((mid_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((right_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((i_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((j_dr, LirType::I64));
+    func.block_mut(drain_right_bb)
+        .params
+        .push((k_dr, LirType::I64));
+    emit_drain_block(
+        func,
+        &mut next,
+        drain_right_bb,
+        copy_back_bb,
+        arr,
+        aux,
+        array_sid,
+        elsz,
+        elem_size,
+        /* drain_i = */ false,
+        l_dr,
+        w_dr,
+        mid_dr,
+        right_dr,
+        i_dr,
+        j_dr,
+        k_dr,
+    );
+
+    // ── copy_back(l, w, right): memcpy aux[l..right] back into data[l..right] ──
+    let l_cb = alloc_value(&mut next);
+    let w_cb = alloc_value(&mut next);
+    let right_cb = alloc_value(&mut next);
+    func.block_mut(copy_back_bb)
+        .params
+        .push((l_cb, LirType::I64));
+    func.block_mut(copy_back_bb)
+        .params
+        .push((w_cb, LirType::I64));
+    func.block_mut(copy_back_bb)
+        .params
+        .push((right_cb, LirType::I64));
+    let span = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::Sub {
+        dst: span,
+        ty: LirType::I64,
+        lhs: right_cb,
+        rhs: l_cb,
+        overflow: Overflow::Wrap,
+    });
+    let span_bytes = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::Mul {
+        dst: span_bytes,
+        ty: LirType::I64,
+        lhs: span,
+        rhs: elsz,
+        overflow: Overflow::Wrap,
+    });
+    let datap_cb = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::FieldPtr {
+        dst: datap_cb,
+        base: arr,
+        struct_id: array_sid,
+        field: 0,
+    });
+    let data_cb = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::Load {
+        dst: data_cb,
+        ptr: datap_cb,
+        ty: LirType::Ptr,
+    });
+    let dstp = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::ElemPtr {
+        dst: dstp,
+        base: data_cb,
+        index: l_cb,
+        elem_size,
+    });
+    let srcp = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::ElemPtr {
+        dst: srcp,
+        base: aux,
+        index: l_cb,
+        elem_size,
+    });
+    func.block_mut(copy_back_bb).insts.push(Inst::Memcpy {
+        dst_ptr: dstp,
+        src_ptr: srcp,
+        size: span_bytes,
+    });
+    // new_left = l + 2*width
+    let ww_cb = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::Add {
+        dst: ww_cb,
+        ty: LirType::I64,
+        lhs: w_cb,
+        rhs: w_cb,
+        overflow: Overflow::Wrap,
+    });
+    let new_l_cb = alloc_value(&mut next);
+    func.block_mut(copy_back_bb).insts.push(Inst::Add {
+        dst: new_l_cb,
+        ty: LirType::I64,
+        lhs: l_cb,
+        rhs: ww_cb,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(copy_back_bb).terminator = Term::Jump(run_check_bb, vec![new_l_cb, w_cb]);
+
+    // ── next_width(width): width *= 2, back to pass_check ──
+    let w_nw = alloc_value(&mut next);
+    func.block_mut(next_width_bb)
+        .params
+        .push((w_nw, LirType::I64));
+    let new_w = alloc_value(&mut next);
+    func.block_mut(next_width_bb).insts.push(Inst::Add {
+        dst: new_w,
+        ty: LirType::I64,
+        lhs: w_nw,
+        rhs: w_nw,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(next_width_bb).terminator = Term::Jump(pass_check_bb, vec![new_w]);
+
+    // ── free: free(aux); jump done ──
+    func.block_mut(free_bb).insts.push(Inst::CallExtern {
+        dst: None,
+        name: "free".to_string(),
+        args: vec![aux],
+        original_name: None,
+        arg_abis: vec![AbiKind::Opaque],
+    });
+    func.block_mut(free_bb).terminator = Term::Jump(done_bb, vec![]);
+
+    // ── done: return void ──
+    func.block_mut(done_bb).terminator = Term::RetVoid;
+
+    // Block id sanity: `BlockId` assignment order matters only for display —
+    // we use the IDs returned by `add_block` consistently above. Rebinding
+    // wasn't needed; BlockId values are stable.
+    let _ = (
+        entry_bb,
+        alloc_bb,
+        pass_check_bb,
+        run_check_bb,
+        compute_mid_bb,
+        skip_run_bb,
+        compute_right_bb,
+        merge_loop_bb,
+        check_j_bb,
+        compare_bb,
+        take_i_bb,
+        take_j_bb,
+        drain_left_bb,
+        drain_right_bb,
+        copy_back_bb,
+        next_width_bb,
+        free_bb,
+        done_bb,
+    );
+
+    func.set_next_value_raw(next);
+}
+
+/// Emit the body of `take_i` or `take_j`:
+/// - Memcpy aux[k] ← data[i or j]
+/// - advance i or j by 1, always advance k by 1
+/// - jump merge_loop with updated (i,j,k)
+#[allow(clippy::too_many_arguments)]
+fn emit_take_block(
+    func: &mut LirFunction,
+    next: &mut u32,
+    take_bb: BlockId,
+    merge_loop_bb: BlockId,
+    arr: ValueId,
+    aux: ValueId,
+    array_sid: StructId,
+    elsz: ValueId,
+    elem_size: u32,
+    take_i: bool,
+) {
+    let l = alloc_value(next);
+    let w = alloc_value(next);
+    let mid = alloc_value(next);
+    let right = alloc_value(next);
+    let i = alloc_value(next);
+    let j = alloc_value(next);
+    let k = alloc_value(next);
+    func.block_mut(take_bb).params.push((l, LirType::I64));
+    func.block_mut(take_bb).params.push((w, LirType::I64));
+    func.block_mut(take_bb).params.push((mid, LirType::I64));
+    func.block_mut(take_bb).params.push((right, LirType::I64));
+    func.block_mut(take_bb).params.push((i, LirType::I64));
+    func.block_mut(take_bb).params.push((j, LirType::I64));
+    func.block_mut(take_bb).params.push((k, LirType::I64));
+
+    // data = arr.data
+    let datap = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::FieldPtr {
+        dst: datap,
+        base: arr,
+        struct_id: array_sid,
+        field: 0,
+    });
+    let data = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::Load {
+        dst: data,
+        ptr: datap,
+        ty: LirType::Ptr,
+    });
+    // src ptr in arr
+    let src_idx = if take_i { i } else { j };
+    let srcp = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::ElemPtr {
+        dst: srcp,
+        base: data,
+        index: src_idx,
+        elem_size,
+    });
+    // dst ptr in aux
+    let dstp = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::ElemPtr {
+        dst: dstp,
+        base: aux,
+        index: k,
+        elem_size,
+    });
+    func.block_mut(take_bb).insts.push(Inst::Memcpy {
+        dst_ptr: dstp,
+        src_ptr: srcp,
+        size: elsz,
+    });
+    let one = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::IConst {
+        dst: one,
+        ty: LirType::I64,
+        value: 1,
+    });
+    let new_i;
+    let new_j;
+    if take_i {
+        let ni = alloc_value(next);
+        func.block_mut(take_bb).insts.push(Inst::Add {
+            dst: ni,
+            ty: LirType::I64,
+            lhs: i,
+            rhs: one,
+            overflow: Overflow::Wrap,
+        });
+        new_i = ni;
+        new_j = j;
+    } else {
+        let nj = alloc_value(next);
+        func.block_mut(take_bb).insts.push(Inst::Add {
+            dst: nj,
+            ty: LirType::I64,
+            lhs: j,
+            rhs: one,
+            overflow: Overflow::Wrap,
+        });
+        new_i = i;
+        new_j = nj;
+    }
+    let new_k = alloc_value(next);
+    func.block_mut(take_bb).insts.push(Inst::Add {
+        dst: new_k,
+        ty: LirType::I64,
+        lhs: k,
+        rhs: one,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(take_bb).terminator =
+        Term::Jump(merge_loop_bb, vec![l, w, mid, right, new_i, new_j, new_k]);
+}
+
+/// Emit the body of drain_left / drain_right (iterative tail copy).
+/// `drain_i = true` means copy remaining from left side (index i < mid);
+/// `drain_i = false` means copy remaining from right side (index j < right).
+///
+/// Uses the already-populated block params (caller set them).
+#[allow(clippy::too_many_arguments)]
+fn emit_drain_block(
+    func: &mut LirFunction,
+    next: &mut u32,
+    drain_bb: BlockId,
+    copy_back_bb: BlockId,
+    arr: ValueId,
+    aux: ValueId,
+    array_sid: StructId,
+    elsz: ValueId,
+    elem_size: u32,
+    drain_i: bool,
+    l: ValueId,
+    w: ValueId,
+    mid: ValueId,
+    right: ValueId,
+    i: ValueId,
+    j: ValueId,
+    k: ValueId,
+) {
+    // Loop cond: (drain_i? i < mid : j < right)
+    let cur = if drain_i { i } else { j };
+    let lim = if drain_i { mid } else { right };
+    let cond = alloc_value(next);
+    func.block_mut(drain_bb).insts.push(Inst::Cmp {
+        dst: cond,
+        op: CmpOp::Lt,
+        lhs: cur,
+        rhs: lim,
+    });
+    // Branch: if cond, do the copy inline and jump back; else copy_back.
+    // To keep the body a straight-line extension of drain_bb, we insert a
+    // nested helper block for the body and jump back to drain_bb itself
+    // with updated state.
+    let body_bb = func.add_block();
+    func.block_mut(drain_bb).terminator = Term::Branch {
+        cond,
+        then_block: body_bb,
+        then_args: vec![l, w, mid, right, i, j, k],
+        else_block: copy_back_bb,
+        else_args: vec![l, w, right],
+    };
+
+    // body_bb params mirror drain_bb's.
+    let l2 = alloc_value(next);
+    let w2 = alloc_value(next);
+    let mid2 = alloc_value(next);
+    let right2 = alloc_value(next);
+    let i2 = alloc_value(next);
+    let j2 = alloc_value(next);
+    let k2 = alloc_value(next);
+    func.block_mut(body_bb).params.push((l2, LirType::I64));
+    func.block_mut(body_bb).params.push((w2, LirType::I64));
+    func.block_mut(body_bb).params.push((mid2, LirType::I64));
+    func.block_mut(body_bb).params.push((right2, LirType::I64));
+    func.block_mut(body_bb).params.push((i2, LirType::I64));
+    func.block_mut(body_bb).params.push((j2, LirType::I64));
+    func.block_mut(body_bb).params.push((k2, LirType::I64));
+
+    // Memcpy the current element from source (arr.data[cur]) to aux[k].
+    let datap = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::FieldPtr {
+        dst: datap,
+        base: arr,
+        struct_id: array_sid,
+        field: 0,
+    });
+    let data = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Load {
+        dst: data,
+        ptr: datap,
+        ty: LirType::Ptr,
+    });
+    let src_idx = if drain_i { i2 } else { j2 };
+    let srcp = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: srcp,
+        base: data,
+        index: src_idx,
+        elem_size,
+    });
+    let dstp = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::ElemPtr {
+        dst: dstp,
+        base: aux,
+        index: k2,
+        elem_size,
+    });
+    func.block_mut(body_bb).insts.push(Inst::Memcpy {
+        dst_ptr: dstp,
+        src_ptr: srcp,
+        size: elsz,
+    });
+    let one = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::IConst {
+        dst: one,
+        ty: LirType::I64,
+        value: 1,
+    });
+    let new_i;
+    let new_j;
+    if drain_i {
+        let ni = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Add {
+            dst: ni,
+            ty: LirType::I64,
+            lhs: i2,
+            rhs: one,
+            overflow: Overflow::Wrap,
+        });
+        new_i = ni;
+        new_j = j2;
+    } else {
+        let nj = alloc_value(next);
+        func.block_mut(body_bb).insts.push(Inst::Add {
+            dst: nj,
+            ty: LirType::I64,
+            lhs: j2,
+            rhs: one,
+            overflow: Overflow::Wrap,
+        });
+        new_i = i2;
+        new_j = nj;
+    }
+    let new_k = alloc_value(next);
+    func.block_mut(body_bb).insts.push(Inst::Add {
+        dst: new_k,
+        ty: LirType::I64,
+        lhs: k2,
+        rhs: one,
+        overflow: Overflow::Wrap,
+    });
+    func.block_mut(body_bb).terminator =
+        Term::Jump(drain_bb, vec![l2, w2, mid2, right2, new_i, new_j, new_k]);
 }
 
 #[cfg(test)]
@@ -199,7 +1222,6 @@ mod tests {
             LirType::I64,
         ));
         let sig = closure_call_sig_of(&module, "__Closure_3__call").unwrap();
-        // Env param dropped; two user params remain.
         assert_eq!(sig.param_tys, vec![LirType::I64, LirType::I64]);
         assert_eq!(sig.ret_ty, LirType::I64);
     }
@@ -213,7 +1235,6 @@ mod tests {
             LirType::I64,
         ));
         let sig = closure_call_sig_of(&module, "user_cmp").unwrap();
-        // No env to strip — both params kept.
         assert_eq!(sig.param_tys, vec![LirType::I64, LirType::I64]);
     }
 

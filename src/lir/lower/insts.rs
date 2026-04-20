@@ -2439,19 +2439,23 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map, is_flat_map) =
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map, is_flat_map, is_sort) =
             match method {
-                "each" => (HofOp::Each, false, false, false, false, false, false, false, false, false),
-                "any" => (HofOp::Any, true, false, false, false, false, false, false, false, false),
-                "all" => (HofOp::All, true, false, false, false, false, false, false, false, false),
-                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false, false),
-                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false, false),
-                "count" => (HofOp::Count, true, false, false, true, false, false, false, false, false),
-                "find" => (HofOp::Find, true, false, false, false, true, false, false, false, false),
-                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false, false),
-                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false, false),
-                "map" => (HofOp::Map, true, false, false, false, false, false, false, true, false),
-                "flat_map" => (HofOp::FlatMap, true, false, false, false, false, false, false, false, true),
+                "each" => (HofOp::Each, false, false, false, false, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false, false, false, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false, false, false, false, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false, false, false),
+                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false, false, false),
+                "map" => (HofOp::Map, true, false, false, false, false, false, false, true, false, false),
+                "flat_map" => (HofOp::FlatMap, true, false, false, false, false, false, false, false, true, false),
+                // Sort family: in-place (no dst) or returning (dst is Vector[T]).
+                // Both route through the BIR SynthPool's sort_impl (mergesort body).
+                "sort_by" => (HofOp::SortBy, false, false, false, false, false, false, false, false, false, true),
+                "sorted_by" => (HofOp::SortedBy, true, false, false, false, false, false, false, false, false, true),
                 _ => return None,
             };
         if lir_args.len() < 2 {
@@ -2508,17 +2512,17 @@ impl<'a> FuncLowering<'a> {
         });
 
         // For fold/reduce the closure return type = the accumulator
-        // type = dst's declared type. For `map` / `flat_map` use the
-        // closure's actual return type (from the signature snapshot)
-        // — the dst's declared element type can diverge for
-        // cross-typed maps. For predicate-style HOFs
-        // (any/all/count/find/find_index) it's `Bool`; for `each`
-        // it's `Void`.
+        // type = dst's declared type. For `map` / `flat_map` / `sort*`
+        // use the closure's actual return type (from the signature
+        // snapshot) — for maps the dst's declared element type can
+        // diverge; for sort the closure returns an int. For
+        // predicate-style HOFs (any/all/count/find/find_index) it's
+        // `Bool`; for `each` it's `Void`.
         let closure_ret_ty = if is_fold || is_reduce {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
-        } else if is_map || is_flat_map {
+        } else if is_map || is_flat_map || is_sort {
             match &closure_call_sig {
                 Some(sig) => sig.ret_ty.clone(),
                 None => return None,
@@ -2533,7 +2537,7 @@ impl<'a> FuncLowering<'a> {
             .map(|sig| sig.param_tys.clone())
             .unwrap_or_default();
         let sig_known = closure_call_sig.is_some();
-        let _ = (is_count, is_find_index, is_filter, is_flat_map);
+        let _ = (is_count, is_find_index, is_filter, is_flat_map, is_sort);
 
         // Aggregate-element HOFs require knowing the closure's
         // parameter ABI (pass-by-value vs pass-by-pointer), which we
@@ -2574,6 +2578,12 @@ impl<'a> FuncLowering<'a> {
         if is_flat_map && element_ty.is_aggregate() && !sig_known {
             return None;
         }
+        // Sort body needs closure ABI to pick scalar-Load vs pass-by-ptr
+        // for the compare call. Without a sig, fall back to the backend
+        // TLS trampoline for now.
+        if is_sort && !sig_known {
+            return None;
+        }
 
         // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
         // expansion can dispatch via `Inst::CallClosure { EscapedClosure }`.
@@ -2604,8 +2614,9 @@ impl<'a> FuncLowering<'a> {
             .unwrap_or(fallback_elem_abi);
 
         // closure_arg_abis layout depends on the HOF:
-        //   each/any/all:  [elem_abi]
-        //   fold / reduce: [acc_abi, elem_abi]
+        //   each/any/all:   [elem_abi]
+        //   fold / reduce:  [acc_abi, elem_abi]
+        //   sort_by/sorted: [elem_abi, elem_abi]  (closure takes two T's)
         let closure_arg_abis = if is_fold || is_reduce {
             let fallback_acc_abi = if closure_ret_ty.is_aggregate() {
                 crate::ir::abi::AbiKind::Ptr
@@ -2617,6 +2628,8 @@ impl<'a> FuncLowering<'a> {
                 .map(|ty| abi_from_param_ty(ty))
                 .unwrap_or(fallback_acc_abi);
             vec![acc_abi, elem_abi]
+        } else if is_sort {
+            vec![elem_abi, elem_abi]
         } else {
             vec![elem_abi]
         };

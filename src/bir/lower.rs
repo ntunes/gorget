@@ -46,7 +46,7 @@ pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
     crate::bir::synth::assert_no_synth_prefix(&module);
 
     let base_func_count = module.functions.len() as u32;
-    let _pool = crate::bir::synth::SynthPool::new(base_func_count);
+    let mut pool = crate::bir::synth::SynthPool::new(base_func_count);
 
     // Swap `functions` out so we can iterate them mutably while holding an
     // immutable reference to `module.structs`. The structs table is the only
@@ -54,18 +54,13 @@ pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
     // type lookups); swapping functions is O(1), cloning structs would be O(N).
     let mut funcs = std::mem::take(&mut module.functions);
     for func in funcs.iter_mut() {
-        expand_func(func, &module.structs);
+        expand_func(func, &module.structs, &mut pool);
     }
     module.functions = funcs;
 
-    // Splice synthesized functions onto the module tail. Commit 1: the pool
-    // is always empty here (no caller drives `get_or_emit_*` yet). Commit 2
-    // starts populating it.
-    let synth_fns = _pool.finish();
+    // Splice synthesized functions onto the module tail.
+    let synth_fns = pool.finish();
     if !synth_fns.is_empty() {
-        // Sanity-check FuncId/index alignment — each synth fn's
-        // post-splice index must equal the `FuncId` we handed back to
-        // callers at emit time.
         debug_assert_eq!(
             module.functions.len() as u32,
             base_func_count,
@@ -74,9 +69,6 @@ pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
         let synth_count = synth_fns.len();
         module.functions.extend(synth_fns);
         // Populate `value_types` for only the newly-appended functions.
-        // User functions had their value_types computed pre-BIR by
-        // `compute_module_value_types`; the synth fns were never seen
-        // by that pass.
         let start = module.functions.len() - synth_count;
         for i in start..module.functions.len() {
             crate::lir::types::compute_function_value_types_at(&mut module, i);
@@ -86,7 +78,11 @@ pub fn lower_lir_to_bir(mut module: LirModule) -> Result<LirModule, BirError> {
     Ok(module)
 }
 
-fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
+fn expand_func(
+    func: &mut LirFunction,
+    structs: &[StructDef],
+    pool: &mut crate::bir::synth::SynthPool,
+) {
     // Fast path: skip the entire rebuild if no canonical ops are present.
     // Walking insts without cloning is O(n); rebuilding is O(n) plus allocation.
     if !func_needs_expansion(func) {
@@ -272,6 +268,76 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                     init,
                 } => {
                     match hof_op {
+                        HofOp::SortBy | HofOp::SortedBy => {
+                            // Sort family: synthesize a dedicated sort_impl
+                            // function (shared across SortBy / SortedBy) and
+                            // rewrite the call site.
+                            let fid = pool.get_or_emit_sort_impl(
+                                structs,
+                                hof_op,
+                                &element_ty,
+                                &closure_arg_abis,
+                                &closure_ret_ty,
+                            );
+                            let gorget_array_sid = structs
+                                .iter()
+                                .position(|s| s.name == "GorgetArray")
+                                .map(|i| StructId(i as u32))
+                                .unwrap_or(StructId(0));
+                            match hof_op {
+                                HofOp::SortBy => {
+                                    // Direct call: sort_impl(coll, closure).
+                                    new_insts.push(Inst::Call {
+                                        dst: None,
+                                        func: fid,
+                                        args: vec![coll, closure],
+                                    });
+                                }
+                                HofOp::SortedBy => {
+                                    // Inline: ret = gorget_array_clone(coll);
+                                    //         ret_ptr = &ret;
+                                    //         sort_impl(ret_ptr, closure);
+                                    //         dst = *ret_ptr
+                                    let d = dst
+                                        .expect("SortedBy must carry a dst ValueId");
+                                    let clone_val = alloc_value(&mut next);
+                                    new_insts.push(Inst::CallExtern {
+                                        dst: Some(clone_val),
+                                        name: "gorget_array_clone".to_string(),
+                                        args: vec![coll],
+                                        original_name: None,
+                                        arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
+                                    });
+                                    // Spill to slot so we can take address.
+                                    let slot = func.add_slot(
+                                        LirType::Struct(gorget_array_sid),
+                                        None,
+                                    );
+                                    new_insts.push(Inst::SlotStore {
+                                        slot,
+                                        value: clone_val,
+                                        is_move: true,
+                                    });
+                                    let clone_ptr = alloc_value(&mut next);
+                                    new_insts.push(Inst::SlotAddr {
+                                        dst: clone_ptr,
+                                        slot,
+                                    });
+                                    new_insts.push(Inst::Call {
+                                        dst: None,
+                                        func: fid,
+                                        args: vec![clone_ptr, closure],
+                                    });
+                                    // Reload sorted array as the HofExpand result.
+                                    new_insts.push(Inst::SlotLoad {
+                                        dst: d,
+                                        slot,
+                                        ty: LirType::Struct(gorget_array_sid),
+                                    });
+                                }
+                                _ => unreachable!(),
+                            }
+                        }
                         HofOp::Each
                         | HofOp::Any
                         | HofOp::All
