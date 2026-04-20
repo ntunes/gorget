@@ -144,6 +144,70 @@ impl TraitRegistry {
         None
     }
 
+    /// Look up a method's AST signature shape on a type, mirroring
+    /// `resolve_method`. Returns `Some(&MethodSigShape)` only for
+    /// method-level-generic methods; non-generic methods return `None`.
+    /// Used by typecheck's call-site method-generic inference.
+    pub fn resolve_method_shape(
+        &self,
+        type_id: TypeId,
+        method: &str,
+    ) -> Option<&MethodSigShape> {
+        // Check inherent impls first
+        if let Some(impl_indices) = self.inherent_impls.get(&type_id) {
+            for &idx in impl_indices {
+                if let Some(shape) = self.impls[idx].method_shapes.get(method) {
+                    return Some(shape);
+                }
+            }
+        }
+        // Check trait impls (overrides)
+        for impl_info in &self.impls {
+            if impl_info.self_type == type_id && impl_info.trait_.is_some() {
+                if let Some(shape) = impl_info.method_shapes.get(method) {
+                    return Some(shape);
+                }
+            }
+        }
+        // Fallback: trait default-method shape
+        for impl_info in &self.impls {
+            if impl_info.self_type != type_id { continue; }
+            let trait_def_id = match impl_info.trait_ { Some(id) => id, None => continue };
+            if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                if let Some(shape) = trait_info.method_shapes.get(method) {
+                    return Some(shape);
+                }
+            }
+        }
+        None
+    }
+
+    /// Same as `resolve_method_shape`, but looks up by type name. Mirrors
+    /// `resolve_method_by_name`.
+    pub fn resolve_method_shape_by_name(
+        &self,
+        type_name: &str,
+        method: &str,
+    ) -> Option<&MethodSigShape> {
+        for impl_info in &self.impls {
+            if impl_info.self_type_name == type_name {
+                if let Some(shape) = impl_info.method_shapes.get(method) {
+                    return Some(shape);
+                }
+            }
+        }
+        for impl_info in &self.impls {
+            if impl_info.self_type_name != type_name { continue; }
+            let trait_def_id = match impl_info.trait_ { Some(id) => id, None => continue };
+            if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                if let Some(shape) = trait_info.method_shapes.get(method) {
+                    return Some(shape);
+                }
+            }
+        }
+        None
+    }
+
     /// Fallback: look up a method by type name (string) when TypeId-based lookup fails.
     /// Used for cross-module equip blocks where TypeIds don't match.
     pub fn resolve_method_by_name(

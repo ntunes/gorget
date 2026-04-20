@@ -2076,6 +2076,15 @@ fn iter_terminal_method_sugar() {
 }
 
 #[test]
+fn iter_predicate_inference() {
+    // Method-level generic inference (Shape 1: predicate) — `.any(p)`,
+    // `.all(p)`, `.find(p)`, `.find_index(p)` all drop the explicit
+    // `[bool(int)]` arg; typecheck binds F = arg.type at the call site
+    // and the AST rewriter syncs the binding into MethodCall.generic_args.
+    run_gg("iter_predicate_inference.gg", "true\nfalse\n10\n0");
+}
+
+#[test]
 fn method_generic_trait_dispatch() {
     run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }

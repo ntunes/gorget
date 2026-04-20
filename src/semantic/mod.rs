@@ -228,7 +228,7 @@ pub fn analyze_with_source_dir(
     derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions) = typecheck::check_module(
+    let (expr_types, method_resolutions, inferred_method_targs) = typecheck::check_module(
         module,
         &mut scopes,
         &mut types,
@@ -241,6 +241,16 @@ pub fn analyze_with_source_dir(
         &resolve_ctx.struct_generic_bounds,
         &mut errors,
     );
+
+    // Pass 4.5: Sync typecheck-inferred method-generic args into the AST.
+    // Typecheck records `v.my_map(double)` → `[int, int(int)]` in a side-
+    // table (method-level inference — shape 1/2/3); this walk mutates the
+    // matching MethodCall nodes' `generic_args` from None to Some(inferred)
+    // so the downstream generic-collector + IR lowering see them just like
+    // explicit `[T1, T2]` args. See docs/internals/method-level-inference.md.
+    if !inferred_method_targs.is_empty() {
+        typecheck::apply_inferred_method_targs(module, &inferred_method_targs);
+    }
 
     // Populate struct/enum field types on DefInfo for is_copy_type.
     populate_def_field_types(module, &mut scopes, &types);

@@ -1,0 +1,49 @@
+# Method-level generic inference — Shape 1 (predicate).
+#
+# Predicate methods like `bool any[F](&self, F pred)` and
+# `Option[T] find[F](&self, F pred)` have a single method-level
+# generic `F` that appears directly as a sig-param type. The
+# typecheck binds `F = arg.type` so the call site can drop the
+# explicit `[bool(int)]` args.
+#
+# `iter_terminal_method_sugar.gg` covers the WITH-explicit-args
+# version of the same calls. This fixture is the inferred-no-args
+# counterpart — both must pass.
+
+from std.collections import Vector
+from std.iter import VectorIter
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool is_big(int x):
+    return x > 100
+
+int main():
+    Vector[int] v = [10, 21, 30, 41, 50]
+
+    # .any(pred) — F inferred to bool(int)
+    bool has_even = v.iter().any(is_even)
+    print(has_even)
+
+    # .all(pred) — F inferred
+    bool all_big = v.iter().all(is_big)
+    print(all_big)
+
+    # .find(pred) — F inferred; returns Option[int]
+    Option[int] first_even = v.iter().find(is_even)
+    match first_even:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    # .find_index(pred) — F inferred
+    Option[int] idx = v.iter().find_index(is_even)
+    match idx:
+        case Some(i):
+            print(i)
+        case None:
+            print(-1)
+
+    return 0

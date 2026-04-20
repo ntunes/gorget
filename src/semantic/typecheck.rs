@@ -351,6 +351,13 @@ struct TypeChecker<'a> {
     loop_depth: usize,
     /// Generic type parameter bounds for structs/enums (from resolve).
     struct_generic_bounds: &'a FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
+    /// Side-table of inferred method-level generic args, keyed on the
+    /// MethodCall expression's `span.start`. Populated whenever the typecheck
+    /// MethodCall arm successfully infers all method-level generic params
+    /// from the call's arg types. A post-typecheck rewriter copies these
+    /// into `MethodCall.generic_args` so the IR-lowering / generic-collector
+    /// path picks them up via the same code path as explicit `[T1, T2]` args.
+    inferred_method_targs: FxHashMap<usize, Vec<Type>>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -389,6 +396,7 @@ impl<'a> TypeChecker<'a> {
             current_trait_bounds: Vec::new(),
             loop_depth: 0,
             struct_generic_bounds,
+            inferred_method_targs: FxHashMap::default(),
         }
     }
 
@@ -1329,7 +1337,7 @@ impl<'a> TypeChecker<'a> {
                 receiver,
                 method,
                 args,
-                ..
+                generic_args,
             } => {
                 // Static method calls on type names: int.parse(), float.default()
                 if let Expr::Identifier(name) = &receiver.node {
@@ -1357,8 +1365,37 @@ impl<'a> TypeChecker<'a> {
                             expr.span,
                         );
                     }
-                    for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
-                        let arg_type = self.infer_expr(&arg.node.value);
+                    // Pre-infer arg types so we can both unify against the
+                    // sig (existing behaviour) AND attempt method-level
+                    // generic inference if the method has unresolved
+                    // generic params and the call site has no explicit
+                    // `[T1, T2]` args.
+                    let mut arg_types: Vec<TypeId> = Vec::with_capacity(args.len());
+                    for arg in args.iter() {
+                        arg_types.push(self.infer_expr(&arg.node.value));
+                    }
+                    // Method-level generic inference: when the trait sig has
+                    // generic params (held in MethodSigShape) and the call
+                    // omits explicit args, run the shape-1 (predicate)
+                    // inference rule. Successful inference lands in the
+                    // side-table; an AST-rewriter (Pass 4.5 in
+                    // `semantic::analyze`) copies it into
+                    // `MethodCall.generic_args` so the IR-lowering /
+                    // generic-collector path picks it up.
+                    let needs_inference = generic_args.as_ref()
+                        .map(|gs| gs.is_empty())
+                        .unwrap_or(true);
+                    if needs_inference {
+                        if let Some(shape) = self.traits
+                            .resolve_method_shape(resolved_receiver, &method.node)
+                        {
+                            let shape = shape.clone();
+                            if let Some(inferred) = self.try_infer_method_targs(&shape, &arg_types) {
+                                self.inferred_method_targs.insert(method.span.start, inferred);
+                            }
+                        }
+                    }
+                    for ((arg, &param_type), &arg_type) in args.iter().zip(sig.params.iter()).zip(arg_types.iter()) {
                         self.unify(param_type, arg_type, arg.span);
                     }
                     // Record the method call's own type so downstream consumers
@@ -2851,6 +2888,142 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
+    /// Convert a resolved TypeId back to an AST `Type`. Used by method-
+    /// generic inference to materialise inferred bindings as AST types
+    /// suitable for `MethodCall.generic_args`. Returns None for shapes the
+    /// downstream consumers (mangling, generic collector) don't accept,
+    /// in which case the caller skips inference for that call.
+    fn typeid_to_ast_type(&self, type_id: TypeId) -> Option<Type> {
+        let resolved = self.resolve_type(type_id);
+        let dummy = Span { start: 0, end: 0 };
+        match self.types.get(resolved) {
+            ResolvedType::Primitive(prim) => Some(Type::Primitive(*prim)),
+            ResolvedType::Defined(def_id) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                Some(Type::Named {
+                    name: Spanned { node: name, span: dummy },
+                    generic_args: vec![],
+                })
+            }
+            ResolvedType::Generic(def_id, args) => {
+                let name = self.scopes.get_def(*def_id).name.clone();
+                let args = args.clone();
+                let mut new_args = Vec::with_capacity(args.len());
+                for a in args {
+                    new_args.push(Spanned {
+                        node: self.typeid_to_ast_type(a)?,
+                        span: dummy,
+                    });
+                }
+                Some(Type::Named {
+                    name: Spanned { node: name, span: dummy },
+                    generic_args: new_args,
+                })
+            }
+            ResolvedType::Tuple(elems) => {
+                let elems = elems.clone();
+                let mut new_elems = Vec::with_capacity(elems.len());
+                for e in elems {
+                    new_elems.push(Spanned {
+                        node: self.typeid_to_ast_type(e)?,
+                        span: dummy,
+                    });
+                }
+                Some(Type::Tuple(new_elems))
+            }
+            ResolvedType::Function { params, param_ownerships, return_type } => {
+                let params = params.clone();
+                let param_ownerships = param_ownerships.clone();
+                let return_type = *return_type;
+                let mut new_params = Vec::with_capacity(params.len());
+                for p in params {
+                    new_params.push(Spanned {
+                        node: self.typeid_to_ast_type(p)?,
+                        span: dummy,
+                    });
+                }
+                Some(Type::Function {
+                    return_type: Box::new(Spanned {
+                        node: self.typeid_to_ast_type(return_type)?,
+                        span: dummy,
+                    }),
+                    params: new_params,
+                    param_ownerships,
+                })
+            }
+            ResolvedType::Ref(inner) => {
+                let inner = *inner;
+                Some(Type::Ref(Box::new(Spanned {
+                    node: self.typeid_to_ast_type(inner)?,
+                    span: dummy,
+                })))
+            }
+            ResolvedType::Owned(inner) => {
+                let inner = *inner;
+                Some(Type::Owned(Box::new(Spanned {
+                    node: self.typeid_to_ast_type(inner)?,
+                    span: dummy,
+                })))
+            }
+            // Trait objects, callable wrappers, and inference variables
+            // are intentionally not convertible — they shouldn't appear as
+            // an inferred method-generic binding in well-typed code, and
+            // failing the conversion makes the caller skip inference
+            // gracefully (falls back to the existing dispatch).
+            _ => None,
+        }
+    }
+
+    /// Try to infer method-level generic args for a method call.
+    ///
+    /// Shape 1 (predicate): when a method-level generic `G` appears
+    /// directly as the type of a non-callable param, bind `G = arg.type`.
+    /// e.g. `bool any[F](&self, F pred)` called as `v.iter().any(is_even)`
+    /// binds `F = bool(int)`.
+    ///
+    /// Shapes 2 (map — structural) and 3 (fold — bind init first) are
+    /// added in subsequent commits. Returns `Some(Vec<Type>)` with one
+    /// AST type per generic param if every generic resolves; `None`
+    /// otherwise (caller falls back to existing dispatch).
+    fn try_infer_method_targs(
+        &mut self,
+        shape: &super::traits::MethodSigShape,
+        arg_types: &[TypeId],
+    ) -> Option<Vec<Type>> {
+        if shape.param_types.len() != arg_types.len() {
+            return None;
+        }
+        let mut bindings: FxHashMap<String, TypeId> = FxHashMap::default();
+        let generic_set: std::collections::HashSet<&str> =
+            shape.generic_params.iter().map(|s| s.as_str()).collect();
+
+        // Shape 1: bind G when it appears as `Type::Named { name: G, [] }`
+        // directly as a param's type (non-callable, non-composite slot).
+        for (param_ty, &arg_ty) in shape.param_types.iter().zip(arg_types.iter()) {
+            if let Type::Named { name, generic_args } = param_ty {
+                if generic_args.is_empty() && generic_set.contains(name.node.as_str()) {
+                    let resolved = self.resolve_type(arg_ty);
+                    if resolved == self.types.error_id {
+                        // Argument failed to type — skip inference cleanly.
+                        return None;
+                    }
+                    bindings.entry(name.node.clone()).or_insert(resolved);
+                }
+            }
+        }
+
+        // Materialise bindings in declaration order. If any param is
+        // unbound at this point, shape-1 alone can't resolve — bail and
+        // let later commits (shape-2 / shape-3) take over.
+        let mut out = Vec::with_capacity(shape.generic_params.len());
+        for name in &shape.generic_params {
+            let tid = *bindings.get(name)?;
+            let ast = self.typeid_to_ast_type(tid)?;
+            out.push(ast);
+        }
+        Some(out)
+    }
+
     /// Infer the return type of closure-taking methods like .map(), .and_then(), .or_else()
     /// on Option[T] and Result[T,E]. Returns None if this isn't such a method.
     fn infer_closure_method_type(
@@ -3949,7 +4122,7 @@ pub fn check_module(
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     struct_generic_bounds: &FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
     errors: &mut Vec<SemanticError>,
-) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>) {
+) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>, FxHashMap<usize, Vec<Type>>) {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes, struct_generic_bounds);
 
     // Pre-pass: register function signatures so callers can infer return types.
@@ -3972,7 +4145,191 @@ pub fn check_module(
     }
 
     errors.extend(checker.errors);
-    (checker.expr_types, checker.method_resolutions)
+    (checker.expr_types, checker.method_resolutions, checker.inferred_method_targs)
+}
+
+/// Walk the module AST and patch every `MethodCall` whose `span.start` is a
+/// key in `inferred` to set `generic_args = Some(<types>)`. Skips calls that
+/// already have explicit args (those are user-supplied and authoritative).
+///
+/// Called as Pass 4.5 from `semantic::analyze` after typecheck. The downstream
+/// IR-lowering / generic-collector path reads `MethodCall.generic_args`
+/// uniformly — by syncing the typecheck-inferred bindings into the AST,
+/// per-call-site monomorphisation works the same whether the user wrote
+/// `[T1, T2]` explicitly or relied on inference.
+pub fn apply_inferred_method_targs(
+    module: &mut Module,
+    inferred: &FxHashMap<usize, Vec<Type>>,
+) {
+    fn walk_items(items: &mut [Spanned<Item>], inferred: &FxHashMap<usize, Vec<Type>>) {
+        for item in items {
+            match &mut item.node {
+                Item::Module { items: inner, .. } => walk_items(inner, inferred),
+                Item::Function(f) => walk_function(f, inferred),
+                Item::Equip(eq) => {
+                    for m in &mut eq.items {
+                        walk_function(&mut m.node, inferred);
+                    }
+                }
+                Item::Trait(td) => {
+                    for ti in &mut td.items {
+                        if let TraitItem::Method(m) = &mut ti.node {
+                            walk_function(m, inferred);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn walk_function(f: &mut FunctionDef, inferred: &FxHashMap<usize, Vec<Type>>) {
+        match &mut f.body {
+            FunctionBody::Block(b) => walk_block(b, inferred),
+            FunctionBody::Expression(e) => walk_expr(e, inferred),
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+    }
+    fn walk_block(b: &mut Block, inferred: &FxHashMap<usize, Vec<Type>>) {
+        for stmt in &mut b.stmts {
+            walk_stmt(&mut stmt.node, inferred);
+        }
+    }
+    fn walk_stmt(s: &mut Stmt, inferred: &FxHashMap<usize, Vec<Type>>) {
+        match s {
+            Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, inferred),
+            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e, inferred),
+            Stmt::VarDecl { value, .. } => walk_expr(value, inferred),
+            Stmt::Assign { target, value } => {
+                walk_expr(target, inferred);
+                walk_expr(value, inferred);
+            }
+            Stmt::CompoundAssign { target, value, .. } => {
+                walk_expr(target, inferred);
+                walk_expr(value, inferred);
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                walk_expr(condition, inferred);
+                walk_block(then_body, inferred);
+                for (cond, body) in elif_branches.iter_mut() {
+                    walk_expr(cond, inferred);
+                    walk_block(body, inferred);
+                }
+                if let Some(eb) = else_body {
+                    walk_block(eb, inferred);
+                }
+            }
+            Stmt::While { condition, body, else_body } => {
+                walk_expr(condition, inferred);
+                walk_block(body, inferred);
+                if let Some(eb) = else_body { walk_block(eb, inferred); }
+            }
+            Stmt::For { iterable, body, else_body, .. } => {
+                walk_expr(iterable, inferred);
+                walk_block(body, inferred);
+                if let Some(eb) = else_body { walk_block(eb, inferred); }
+            }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                walk_expr(scrutinee, inferred);
+                for item in arms {
+                    if let crate::parser::ast::MatchItem::Arm(arm) = item {
+                        walk_expr(&mut arm.body, inferred);
+                        if let Some(g) = &mut arm.guard {
+                            walk_expr(g, inferred);
+                        }
+                    }
+                }
+                if let Some(b) = else_arm {
+                    walk_block(b, inferred);
+                }
+            }
+            Stmt::With { bindings, body } => {
+                for binding in bindings {
+                    walk_expr(&mut binding.expr, inferred);
+                }
+                walk_block(body, inferred);
+            }
+            Stmt::Loop { body }
+            | Stmt::Unsafe { body }
+            | Stmt::NamedScope { body, .. }
+            | Stmt::OnError { body } => walk_block(body, inferred),
+            Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
+                walk_expr(condition, inferred);
+                if let Some(m) = message { walk_expr(m, inferred); }
+            }
+            _ => {}
+        }
+    }
+    fn walk_expr(e: &mut Spanned<Expr>, inferred: &FxHashMap<usize, Vec<Type>>) {
+        match &mut e.node {
+            Expr::MethodCall { receiver, generic_args, args, method } => {
+                walk_expr(receiver, inferred);
+                for arg in args.iter_mut() {
+                    walk_expr(&mut arg.node.value, inferred);
+                }
+                let already_has = generic_args.as_ref()
+                    .map(|gs| !gs.is_empty())
+                    .unwrap_or(false);
+                if !already_has {
+                    if let Some(types) = inferred.get(&method.span.start) {
+                        let dummy = Span { start: 0, end: 0 };
+                        let spanned: Vec<Spanned<Type>> = types.iter()
+                            .map(|t| Spanned { node: t.clone(), span: dummy })
+                            .collect();
+                        *generic_args = Some(spanned);
+                    }
+                }
+            }
+            Expr::Call { callee, args, .. } => {
+                walk_expr(callee, inferred);
+                for arg in args.iter_mut() {
+                    walk_expr(&mut arg.node.value, inferred);
+                }
+            }
+            Expr::StructLiteral { args, .. } => {
+                for arg in args.iter_mut() {
+                    walk_expr(arg, inferred);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                walk_expr(left, inferred);
+                walk_expr(right, inferred);
+            }
+            Expr::UnaryOp { operand, .. } => walk_expr(operand, inferred),
+            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+                walk_expr(object, inferred);
+            }
+            Expr::Index { object, index } => {
+                walk_expr(object, inferred);
+                walk_expr(index, inferred);
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                walk_expr(condition, inferred);
+                walk_expr(then_branch, inferred);
+                if let Some(eb) = else_branch {
+                    walk_expr(eb, inferred);
+                }
+            }
+            Expr::Range { start, end, .. } => {
+                if let Some(s) = start { walk_expr(s, inferred); }
+                if let Some(en) = end { walk_expr(en, inferred); }
+            }
+            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            | Expr::OptionalChain { object: inner, .. } => walk_expr(inner, inferred),
+            Expr::DefaultOp { lhs, rhs } => {
+                walk_expr(lhs, inferred);
+                walk_expr(rhs, inferred);
+            }
+            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+                walk_expr(body, inferred);
+            }
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+                for e in elems.iter_mut() { walk_expr(e, inferred); }
+            }
+            Expr::Block(b) => walk_block(b, inferred),
+            _ => {}
+        }
+    }
+    walk_items(&mut module.items, inferred);
 }
 
 /// Recursively register function signatures, descending into `Item::Module` wrappers
