@@ -835,8 +835,13 @@ pub(super) fn emit_call_extern(
             }
 
             // ── Inline Set higher-order methods ─────────────
+            // Note: `filter` / `fold` / `each` / `any` / `all` are all
+            // migrated to `Inst::HofExpand`; this block is dead code
+            // paths that the LIR-level HOF intercept no longer routes
+            // here. Kept for the fallback dispatch when the intercept
+            // bails (e.g. unresolved closure signature).
             if let Some((elem_ty, method)) = parse_set_higher_order(emit_name) {
-                let has_closure = matches!(method, "filter" | "fold" | "each" | "any" | "all");
+                let has_closure = matches!(method, "fold" | "each" | "any" | "all");
                 if has_closure && (dst.is_some() || method == "each") {
                     let d_opt = dst;
                     let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
@@ -853,22 +858,12 @@ pub(super) fn emit_call_extern(
                     let set_needs_ref = closure_params_need_ref(module, &call_fn);
                     let ser = if set_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
                     let set_is_ordered = !emit_name.starts_with("HashSet__");
-                    let set_ctor = if set_is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
                     let (set_iter_var, set_iter_cond, set_idx_decl) = if set_is_ordered {
                         ("__j", "__src.order_len", "size_t __i = __src.order[__j]; if (__src.states[__i] != 1) continue; ")
                     } else {
                         ("__i", "__src.cap", "if (__src.states[__i] != 1) continue; ")
                     };
                     match method {
-                        "filter" => {
-                            write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                GorgetSet __result = {set_ctor}(sizeof({elem_c})); \
-                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
-                                {set_idx_decl}\
-                                {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}({set_fn_ref}, {ser}__elem)) gorget_set_add(&__result, &__elem); \
-                                }} __result; }});").unwrap();
-                        }
                         "fold" if emit_args.len() >= 3 => {
                             let acc_arg = v(emit_args[1]);
                             let fn_a = v(emit_args[2]);

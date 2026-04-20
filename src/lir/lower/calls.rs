@@ -267,6 +267,11 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_dict_new_str" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar]),
         // gorget_map_put(map*, key*, val*)
         "gorget_map_put" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem, VoidElem]),
+        // gorget_map_put_cloned(map*, key*, val*) — like put but deep-
+        // clones key/val via the map's key_clone/val_clone hooks. Used
+        // by HOF BIR expansions (`filter`, `map`, `union`, …) when
+        // lifting elements from another map/set into a fresh result.
+        "gorget_map_put_cloned" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, VoidElem, VoidElem]),
         // gorget_map_get(map*, key*) → void*
         "gorget_map_get" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, VoidElem]),
         "gorget_map_remove" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, VoidElem]),
@@ -288,6 +293,11 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_set_is_empty" => sig(vec![LirType::Ptr], LirType::Bool, vec![Ptr]),
         "gorget_set_clear" | "gorget_set_free" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
         "gorget_set_clone" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![Ptr]),
+        // gorget_set_new_like(const GorgetSet*) — fresh empty set that
+        // mirrors the source's hash/eq/drop/clone/materialize config.
+        // Used by the BIR expansion of `Set.filter` / `Set.map` so the
+        // result inherits the correct per-element-type wiring.
+        "gorget_set_new_like" => sig(vec![LirType::Ptr], LirType::Struct(sr.lookup("GorgetSet").unwrap_or(StructId(0))), vec![Ptr]),
         "gorget_set_to_array" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
         // Heap methods
         "gorget_heap_new" => sig(vec![LirType::I64], LirType::Ptr, vec![Scalar]),

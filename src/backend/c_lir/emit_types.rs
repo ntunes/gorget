@@ -24,8 +24,11 @@ pub(super) const DICT_INLINE_METHODS: &[&str] = &[
     // dispatched via `map_monomorphized_to_runtime`.
 ];
 pub(super) const SET_INLINE_METHODS: &[&str] = &[
-    "filter", "map",
-    // `fold` / `each` / `any` / `all` are migrated to `Inst::HofExpand`.
+    "map",
+    // `fold` / `each` / `any` / `all` / `filter` are migrated to
+    // `Inst::HofExpand`. `filter` pre-constructs its result via the
+    // `gorget_set_new_like` runtime helper so one BIR expansion
+    // covers every element type.
     // `is_subset` / `is_superset` / `is_disjoint` route to generic
     // runtime stubs (`gorget_set_is_{subset,superset,disjoint}`)
     // dispatched via `map_monomorphized_to_runtime` — no per-type
@@ -326,52 +329,14 @@ pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, v
 }
 
 /// Emit inline C helpers for Set higher-order and inline methods.
-pub(super) fn emit_set_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, closure_ty: &str, call_fn: &str, module: &LirModule) {
-    // Set__ uses insertion order (order array), HashSet__ uses bucket order
-    let is_ordered = !full_name.starts_with("HashSet__");
-    let iter_loop = if is_ordered {
-        format!(
-            "for (size_t __j = 0; __j < __src.order_len; __j++) {{ \
-            size_t __i = __src.order[__j]; \
-            if (__src.states[__i] != 1) continue;"
-        )
-    } else {
-        format!(
-            "for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-            if (__src.states[__i] != 1) continue;"
-        )
-    };
-    // Use the _str variants when the element type is String so __result has
-    // content-based hash/eq (otherwise pointer-compare would fail to dedupe
-    // semantically equal strings from different allocations).
-    let elem_is_str = elem_c == "Str" || elem_c == "GorgetString";
-    let (ctor, ctor_args) = match (is_ordered, elem_is_str) {
-        (true, true)  => ("gorget_ordered_set_new_str", String::new()),
-        (true, false) => ("gorget_ordered_set_new", format!("sizeof({elem_c})")),
-        (false, true) => ("gorget_set_new_str", String::new()),
-        (false, false)=> ("gorget_set_new", format!("sizeof({elem_c})")),
-    };
-    let elem_read = format!("{elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size);");
-
-    // Determine which closure params need & prefix (Ptr ABI for resource types)
-    let needs_ref = closure_params_need_ref(module, call_fn);
-    let er = if needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-    match method {
-        "filter" => {
-            writeln!(out, "static inline GorgetSet {full_name}(void* __set_ptr, {closure_ty} __fn) {{").unwrap();
-            writeln!(out, "    GorgetSet __src = *(GorgetSet*)__set_ptr;").unwrap();
-            writeln!(out, "    GorgetSet __result = {ctor}({ctor_args});").unwrap();
-            writeln!(out, "    {iter_loop}").unwrap();
-            writeln!(out, "        {elem_read}").unwrap();
-            writeln!(out, "        if ({call_fn}(&__fn, {er}__elem)) gorget_map_put_cloned(&__result, &__elem, NULL);").unwrap();
-            writeln!(out, "    }}").unwrap();
-            writeln!(out, "    return __result;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        _ => {
-            writeln!(out, "// TODO: set {full_name} not yet implemented in c_lir").unwrap();
-        }
-    }
+pub(super) fn emit_set_helper(out: &mut String, full_name: &str, _elem_c: &str, _method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
+    // All Set HOFs are migrated: `filter` / `fold` / `each` / `any` /
+    // `all` go through `Inst::HofExpand`, and `union` / `intersection` /
+    // `difference` / `symmetric_difference` / `is_subset` / `is_superset` /
+    // `is_disjoint` route to generic runtime stubs via
+    // `map_monomorphized_to_runtime`. `Set.map` has no backend
+    // implementation (and no fixture exercises it).
+    writeln!(out, "// TODO: set {full_name} not yet implemented in c_lir").unwrap();
 }
 /// Find the __call function name for a closure struct type.
 pub(super) fn find_closure_call_fn(module: &LirModule, struct_c_name: &str, sn: &HashMap<u32, String>) -> String {
@@ -2788,11 +2753,17 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // the result inherits hash/eq/drop/clone/materialize from `__self`
     // via `gorget_set_new_like`. One stub covers every element type
     // since the iteration is driven by runtime `key_size`.
-    let has_set_op = has_extern("gorget_set_union")
+    //
+    // `gorget_set_new_like` is also used directly by the BIR expansion
+    // of `Set.filter` (see src/bir/lower.rs::expand_set_filter), so
+    // gate its emission on any of the set-ops OR the helper itself
+    // appearing as an extern.
+    if has_extern("gorget_set_new_like")
+        || has_extern("gorget_set_union")
         || has_extern("gorget_set_intersection")
         || has_extern("gorget_set_difference")
-        || has_extern("gorget_set_symmetric_difference");
-    if has_set_op {
+        || has_extern("gorget_set_symmetric_difference")
+    {
         // Fresh GorgetSet that mirrors `src`'s config fields.
         writeln!(out, "static inline GorgetSet gorget_set_new_like(const GorgetSet* __src) {{ \
             GorgetSet __dst = __src->order \

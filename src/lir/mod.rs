@@ -286,6 +286,12 @@ pub enum HofOp {
     SetAny,
     /// `s.all(|x| pred(x))` — returns `bool`.
     SetAll,
+    /// `s.filter(|x| pred(x))` — returns a fresh `Set<T>` (or
+    /// `HashSet<T>`) containing the elements that satisfy `pred`.
+    /// BIR expansion pre-constructs the result via
+    /// `gorget_set_new_like(src)` so hash/eq/drop/clone/materialize
+    /// match the source's per-element-type wiring.
+    SetFilter,
 }
 
 // ── Closure dispatch kind ──────────────────────────────────────────────────

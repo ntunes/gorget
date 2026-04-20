@@ -605,10 +605,14 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      construction — ctor dispatch by key type, val-drop wiring for
      resource vals), `get_or`, `get_or_put` (per-type clone on
      String vals).
-   - Set migrated via HofExpand: `each`, `fold`, `any`, `all`.
-     New BIR scaffold `emit_set_hof_loop_scaffold` handles both
-     `Set__` (ordered, `order[]` walk) and `HashSet__` (unordered,
-     cap/states walk); `is_ordered` is encoded via `value_ty`.
+   - Set migrated via HofExpand: `each`, `fold`, `any`, `all`,
+     `filter`. New BIR scaffold `emit_set_hof_loop_scaffold` handles
+     both `Set__` (ordered, `order[]` walk) and `HashSet__`
+     (unordered, cap/states walk); `is_ordered` is encoded via
+     `value_ty`. `filter` pre-constructs its result via the
+     `gorget_set_new_like(src)` runtime helper — the result
+     inherits src's hash/eq/drop/clone/materialize, so one BIR
+     expansion covers every element type.
    - Set routed to runtime stubs: `is_subset`, `is_superset`,
      `is_disjoint` → `gorget_set_is_{subset,superset,disjoint}`
      (type-independent read-only predicates); `union`,
@@ -617,9 +621,8 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      with `gorget_set_new_like(src)` mirroring the source's
      hash/eq/drop/clone/materialize config so one stub per op
      covers every element type.
-   - Set still in backends: `filter`, `map` — need result-set
-     construction (will also use `gorget_set_new_like` once
-     migrated via HofExpand).
+   - Set still in backends: `map` (no fixture exercises it —
+     the existing helper arm was a TODO stub).
 
    After this round of cleanup, backend helper generators
    (`emit_vector_helper` / `emit_dict_helper` / `emit_set_helper`

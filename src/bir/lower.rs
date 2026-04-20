@@ -249,7 +249,8 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                         | HofOp::SetEach
                         | HofOp::SetFold
                         | HofOp::SetAny
-                        | HofOp::SetAll => {
+                        | HofOp::SetAll
+                        | HofOp::SetFilter => {
                             // Capture the tail of the block; it moves to done_bb.
                             let remaining: Vec<Inst> = iter.by_ref().collect();
                             let orig_term = std::mem::replace(
@@ -482,6 +483,26 @@ fn expand_func(func: &mut LirFunction, structs: &[StructDef]) {
                                         closure,
                                         closure_arg_abis,
                                         dst.expect("SetAny/All must carry dst"),
+                                        is_ordered,
+                                        remaining,
+                                        orig_term,
+                                    );
+                                }
+                                HofOp::SetFilter => {
+                                    let is_ordered = !matches!(
+                                        value_ty_inner,
+                                        Some(LirType::Ptr)
+                                    );
+                                    expand_set_filter(
+                                        func,
+                                        bb_idx,
+                                        &mut next,
+                                        structs,
+                                        coll,
+                                        element_ty,
+                                        closure,
+                                        closure_arg_abis,
+                                        dst.expect("SetFilter must carry dst"),
                                         is_ordered,
                                         remaining,
                                         orig_term,
@@ -3063,6 +3084,128 @@ fn expand_set_any_all(
         else_block,
         else_args,
     };
+}
+
+/// Expand `HofExpand { hof_op: SetFilter, dst }` — build a fresh
+/// `GorgetSet` of elements that satisfy the predicate.
+///
+/// current_bb: CallExtern `gorget_set_new_like(src)` → result;
+/// SlotStore into result_slot. The helper mirrors hash/eq/drop/
+/// clone/materialize from src, so the result works for any element
+/// type without per-type ctor dispatch.
+///
+/// body_bb: `pred = closure(elem)`; Branch(pred, push_bb, advance_bb).
+/// push_bb: `gorget_map_put_cloned(result_addr, elem_ptr, NULL)` then
+/// Jump(advance_bb). done_bb SlotLoads the result into dst.
+#[allow(clippy::too_many_arguments)]
+fn expand_set_filter(
+    func: &mut LirFunction,
+    current_bb: usize,
+    next: &mut u32,
+    structs: &[StructDef],
+    coll: ValueId,
+    elem_ty: LirType,
+    closure: ValueId,
+    closure_arg_abis: Vec<crate::ir::abi::AbiKind>,
+    dst: ValueId,
+    is_ordered: bool,
+    remaining: Vec<Inst>,
+    orig_term: Term,
+) {
+    let gset_sid = lookup_struct_id(structs, "GorgetSet")
+        .or_else(|| lookup_struct_id(structs, "GorgetMap"))
+        .unwrap_or(StructId(0));
+    let gset_ty = LirType::Struct(gset_sid);
+    let cur = BlockId(current_bb as u32);
+
+    // current_bb: allocate result slot + init via gorget_set_new_like(coll).
+    let result_slot = func.add_slot(gset_ty.clone(), None);
+    let set_val = alloc_value(next);
+    func.block_mut(cur).insts.push(Inst::CallExtern {
+        dst: Some(set_val),
+        name: "gorget_set_new_like".to_string(),
+        args: vec![coll],
+        original_name: None,
+        arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
+    });
+    func.block_mut(cur).insts.push(Inst::SlotStore {
+        slot: result_slot,
+        value: set_val,
+        is_move: true,
+    });
+
+    let elem_abi_hint = closure_arg_abis.first().copied();
+    let ctx = emit_set_hof_loop_scaffold(
+        func,
+        current_bb,
+        next,
+        structs,
+        coll,
+        &elem_ty,
+        elem_abi_hint,
+        vec![],
+        is_ordered,
+    );
+
+    // body_bb: call closure(elem) → pred.
+    let pred = alloc_value(next);
+    func.block_mut(ctx.body_bb).insts.push(Inst::CallClosure {
+        dst: Some(pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.elem_arg],
+        arg_abis: vec![ctx.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+
+    // check_bb: cond ? state_bb : done_bb.
+    func.block_mut(ctx.check_bb).terminator = Term::Branch {
+        cond: ctx.cap_cond,
+        then_block: ctx.state_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+
+    // body_bb: pred ? push_bb : advance_bb.
+    let push_bb = func.add_block();
+    func.block_mut(ctx.body_bb).terminator = Term::Branch {
+        cond: pred,
+        then_block: push_bb,
+        then_args: vec![],
+        else_block: ctx.advance_bb,
+        else_args: vec![],
+    };
+
+    // push_bb: gorget_map_put_cloned(&result, elem_ptr, NULL).
+    let result_addr = alloc_value(next);
+    func.block_mut(push_bb).insts.push(Inst::SlotAddr {
+        dst: result_addr,
+        slot: result_slot,
+    });
+    let null_val = alloc_value(next);
+    func.block_mut(push_bb).insts.push(Inst::NullPtr { dst: null_val });
+    func.block_mut(push_bb).insts.push(Inst::CallExtern {
+        dst: None,
+        name: "gorget_map_put_cloned".to_string(),
+        args: vec![result_addr, ctx.elem_ptr, null_val],
+        original_name: None,
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+    func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+
+    // done_bb: SlotLoad the result set into dst + remaining + orig_term.
+    func.block_mut(ctx.done_bb).insts.push(Inst::SlotLoad {
+        dst,
+        slot: result_slot,
+        ty: gset_ty,
+    });
+    func.block_mut(ctx.done_bb).insts.extend(remaining);
+    func.block_mut(ctx.done_bb).terminator = orig_term;
 }
 
 fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {

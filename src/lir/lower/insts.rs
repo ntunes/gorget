@@ -2046,11 +2046,12 @@ impl<'a> FuncLowering<'a> {
         };
         let sep_pos = rest.rfind("__")?;
         let method = &rest[sep_pos + 2..];
-        let (hof_op, produces_result, is_fold) = match method {
-            "each" => (HofOp::SetEach, false, false),
-            "fold" => (HofOp::SetFold, true, true),
-            "any" => (HofOp::SetAny, true, false),
-            "all" => (HofOp::SetAll, true, false),
+        let (hof_op, produces_result, is_fold, is_filter) = match method {
+            "each" => (HofOp::SetEach, false, false, false),
+            "fold" => (HofOp::SetFold, true, true, false),
+            "any" => (HofOp::SetAny, true, false, false),
+            "all" => (HofOp::SetAll, true, false, false),
+            "filter" => (HofOp::SetFilter, true, false, true),
             _ => return None,
         };
         if lir_args.len() < 2 {
@@ -2125,6 +2126,19 @@ impl<'a> FuncLowering<'a> {
         let mut lir_args_wrapped = lir_args.to_vec();
         self.wrap_closure_call_args(args, &mut lir_args_wrapped, bb);
 
+        // filter / map produce a fresh GorgetSet — pre-register the
+        // runtime helper the BIR expansion will call to mint the result
+        // with src's hash/eq/drop/clone config mirrored.
+        if is_filter {
+            let set_ty = self.struct_reg
+                .lookup("GorgetSet")
+                .map(LirType::Struct)
+                .unwrap_or(LirType::Ptr);
+            self.ensure_extern("gorget_set_new_like", &[LirType::Ptr], &set_ty);
+            self.ensure_extern("gorget_map_put_cloned",
+                &[LirType::Ptr, LirType::Ptr, LirType::Ptr], &LirType::Void);
+        }
+
         let closure_ret_ty = if is_fold {
             let d = dst.as_ref().expect("fold requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
@@ -2141,6 +2155,10 @@ impl<'a> FuncLowering<'a> {
         };
 
         let result_id = if produces_result {
+            // filter routes its dst through SlotLoad in the BIR
+            // expansion, so the HofExpand dst is an aggregate
+            // ValueId; any/all/fold still produce scalar/aggregate
+            // results the same way.
             Some(self.lir_func.next_value())
         } else {
             None
