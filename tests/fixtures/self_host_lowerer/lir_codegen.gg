@@ -2230,6 +2230,17 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                                 out = out + "(" + pty_name + "){0}"
                             ai += 1
                             continue
+                        # Scalar param, pointer arg — deref the pointer. This
+                        # is the `Vector[scalar].get(i).unwrap()` path: the
+                        # runtime safe_get returns void* to the element, and
+                        # self-host's unwrap is a passthrough. Without this
+                        # deref, int params receive pointer-sized values.
+                        bool pty_is_scalar = not lir_is_aggregate(pty) and pty != LT_PTR and (pty < LT_PTR_TO_BASE or pty >= LT_STRUCT_BASE) and pty != LT_VOID
+                        if pty_is_scalar and is_ptr:
+                            String pty_name_s = c_type_name(pty, &sn)
+                            out = out + "*(" + pty_name_s + "*)" + v(arg_id)
+                            ai += 1
+                            continue
                     out = out + v(arg_id)
                     ai += 1
                 out = out + ");"
@@ -3104,6 +3115,14 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     # Callee expects a pointer, caller has an aggregate by
                     # value — wrap with `&` to pass its address.
                     out = out + "&" + v(arg_id)
+                elif is_ptr and not lir_is_aggregate(pty) and pty != LT_PTR and (pty < LT_PTR_TO_BASE or pty >= LT_STRUCT_BASE) and pty != LT_VOID:
+                    # Scalar param, pointer arg — deref the pointer. The
+                    # `Vector[scalar].get(i).unwrap()` path: runtime safe_get
+                    # returns void* to the element and unwrap is a passthrough,
+                    # so int params would otherwise receive pointer-sized
+                    # values and segfault in typechecker / scope lookups.
+                    String pty_name_deref = c_type_name(pty, &sn)
+                    out = out + "*(" + pty_name_deref + "*)" + v(arg_id)
                 else:
                     out = out + v(arg_id)
             else:
