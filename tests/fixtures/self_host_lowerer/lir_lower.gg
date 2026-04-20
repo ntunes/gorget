@@ -2317,6 +2317,12 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             while vi_v < tinfo_v.variants.len():
                 GirEnumVariantInfo v_v = tinfo_v.variants.get(vi_v).unwrap()
                 m.enum_variant_parent.put(v_v.name, tname_v)
+                # The variant's ordinal position in the source enum declaration
+                # IS its runtime tag. The codegen's struct-field-scan heuristic
+                # (emit_call_extern) gets this wrong for unit variants, because
+                # unit variants contribute no payload fields. Record the right
+                # tag here so callers can look it up.
+                m.enum_variant_tag.put(v_v.name, vi_v)
                 vi_v += 1
         tivi += 1
 

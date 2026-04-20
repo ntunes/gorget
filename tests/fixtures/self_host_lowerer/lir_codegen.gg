@@ -2978,44 +2978,49 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if parent_sid >= LT_STRUCT_BASE:
             int parent_idx = parent_sid - LT_STRUCT_BASE
             LirStructDef pdef = m.structs.get(parent_idx).unwrap()
-            # Find variant tag (its ordinal among non-tag fields whose
-            # name prefix matches `name`).
+            # Prefer the pre-computed enum_variant_tag map populated by
+            # lir_lower. That uses the variant's ordinal position in the
+            # source enum declaration, which is the CORRECT runtime tag and
+            # matches what `match`-pattern tests against. The old heuristic
+            # (scan struct fields, collect distinct VariantName prefixes)
+            # only saw variants-with-payload, so unit variants like TkEof
+            # got tag = seen_variants.len() (6) instead of their real
+            # ordinal (63) — and match-ing TkEof at runtime never hit.
             int variant_tag = -1
-            int vt_i = 1
-            Vector[String] seen_variants = []
-            while vt_i < pdef.fields.len():
-                StructField sf = pdef.fields.get(vt_i).unwrap()
-                # Field name format: "VariantName_N" (0-indexed per variant).
-                # Scan for last underscore.
-                int underscore = -1
-                int ci = 0
-                while ci < sf.name.byte_len():
-                    if sf.name.byte_at(ci) == 0x5F:
-                        underscore = ci
-                    ci += 1
-                if underscore > 0:
-                    String vname = sf.name.slice(0, underscore)
-                    bool seen = false
-                    int svi = 0
-                    while svi < seen_variants.len():
-                        if seen_variants.get(svi).unwrap() == vname:
-                            seen = true
-                            break
-                        svi += 1
-                    if not seen:
-                        seen_variants.push(vname.clone())
-                vt_i += 1
-            # Lookup variant tag via seen_variants ordinal.
-            int sv_i = 0
-            while sv_i < seen_variants.len():
-                if seen_variants.get(sv_i).unwrap() == ev_name:
-                    variant_tag = sv_i
-                    break
-                sv_i += 1
-            # If variant name has no fields in pdef (variant has no payload),
-            # assign it the next available tag based on current `seen`.
+            if m.enum_variant_tag.contains(ev_name):
+                variant_tag = m.enum_variant_tag.get(ev_name).unwrap()
+            # Fallback: old heuristic for any variants the map missed.
             if variant_tag < 0:
-                variant_tag = seen_variants.len()
+                int vt_i = 1
+                Vector[String] seen_variants = []
+                while vt_i < pdef.fields.len():
+                    StructField sf = pdef.fields.get(vt_i).unwrap()
+                    int underscore = -1
+                    int ci = 0
+                    while ci < sf.name.byte_len():
+                        if sf.name.byte_at(ci) == 0x5F:
+                            underscore = ci
+                        ci += 1
+                    if underscore > 0:
+                        String vname = sf.name.slice(0, underscore)
+                        bool seen = false
+                        int svi = 0
+                        while svi < seen_variants.len():
+                            if seen_variants.get(svi).unwrap() == vname:
+                                seen = true
+                                break
+                            svi += 1
+                        if not seen:
+                            seen_variants.push(vname.clone())
+                    vt_i += 1
+                int sv_i = 0
+                while sv_i < seen_variants.len():
+                    if seen_variants.get(sv_i).unwrap() == ev_name:
+                        variant_tag = sv_i
+                        break
+                    sv_i += 1
+                if variant_tag < 0:
+                    variant_tag = seen_variants.len()
             String parent_c = c_type_name(parent_sid, &sn)
             # Look up variant field types to coerce mismatched arg values.
             # Variant payload field names are "VariantName_N"; we pull the
