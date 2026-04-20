@@ -475,6 +475,12 @@ pub enum Inst {
         method: String,
         args: Vec<ValueId>,
         arg_abis: Vec<crate::ir::abi::AbiKind>,
+        /// Method's user-param LIR types, resolved at emit time from the
+        /// VTable's GIR FnPtr (which has the real concrete types — Str
+        /// by-value, aggregate structs, etc. — via `resolve_param_type`
+        /// in `register_trait_sigs`). BIR synthesis uses these to build
+        /// the helper function's typed signature.
+        param_tys: Vec<LirType>,
         ret_ty: LirType,
     },
 

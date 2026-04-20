@@ -225,96 +225,42 @@ fn expand_func(
                     method,
                     args,
                     arg_abis: _,
+                    param_tys,
                     ret_ty,
                 } => {
-                    // Expand a trait-object virtual call into primitive
-                    // vtable dispatch.
+                    // Rewrite the TraitCall into `Call(helper)` where
+                    // `helper` is a synth'd function (one per unique
+                    // `(trait, method, signature)`) whose body carries
+                    // the vtable dispatch chain (FieldPtr+Load×3 +
+                    // CallPtr). The helper has a typed signature, so
+                    // backend Call coercion handles aggregate args
+                    // without the CallPtr arg-ABI ambiguity.
                     //
-                    //   vtbl_ptr = FieldPtr  object, {Trait}_TraitObj.vtable
-                    //   vtbl     = Load      vtbl_ptr, Ptr
-                    //   fnp_ptr  = FieldPtr  vtbl,    {Trait}_VTable.method
-                    //   fnp      = Load      fnp_ptr, Ptr
-                    //   data_ptr = FieldPtr  object, {Trait}_TraitObj.data
-                    //   data     = Load      data_ptr, Ptr
-                    //   dst      = CallPtr   fnp, [data, args...]
-                    //
-                    // Both struct ids and the method's field index come
-                    // from `structs` by name. GIR always registers both
-                    // the TraitObj and VTable structs when a trait is
-                    // declared, so the emitter intercept (`try_emit_
-                    // trait_call` in `src/lir/lower/insts.rs`) only
-                    // produces TraitCall when both resolve.
-                    let trait_obj_sid = structs
-                        .iter()
-                        .position(|s| s.name == format!("{trait_name}_TraitObj"))
-                        .map(|i| StructId(i as u32))
-                        .expect("TraitCall: TraitObj struct must exist");
-                    let vtable_sid = structs
-                        .iter()
-                        .position(|s| s.name == format!("{trait_name}_VTable"))
-                        .map(|i| StructId(i as u32))
-                        .expect("TraitCall: VTable struct must exist");
-                    let method_idx: u32 = structs[vtable_sid.0 as usize]
-                        .fields
-                        .iter()
-                        .position(|(n, _)| n == &method)
-                        .map(|i| i as u32)
-                        .expect("TraitCall: method must be a VTable field");
+                    // `param_tys` carries the method's user-param LIR
+                    // types as resolved at emit time from the VTable
+                    // FnPtr — which has the concrete Str-by-value /
+                    // aggregate-struct types (not the opaque `void*`
+                    // the extern declaration carries). See
+                    // `try_emit_trait_call` in `lir::lower::insts`.
+                    let fid = pool.get_or_emit_trait_helper(
+                        structs,
+                        &trait_name,
+                        &method,
+                        &param_tys,
+                        &ret_ty,
+                    );
 
-                    // vtable load
-                    let vtbl_ptr = alloc_value(&mut next);
-                    new_insts.push(Inst::FieldPtr {
-                        dst: vtbl_ptr,
-                        base: object,
-                        struct_id: trait_obj_sid,
-                        field: 1, // TraitObj.vtable
-                    });
-                    let vtbl = alloc_value(&mut next);
-                    new_insts.push(Inst::Load {
-                        dst: vtbl,
-                        ptr: vtbl_ptr,
-                        ty: LirType::Ptr,
-                    });
-                    // fn pointer load
-                    let fnp_ptr = alloc_value(&mut next);
-                    new_insts.push(Inst::FieldPtr {
-                        dst: fnp_ptr,
-                        base: vtbl,
-                        struct_id: vtable_sid,
-                        field: method_idx,
-                    });
-                    let fnp = alloc_value(&mut next);
-                    new_insts.push(Inst::Load {
-                        dst: fnp,
-                        ptr: fnp_ptr,
-                        ty: LirType::Ptr,
-                    });
-                    // data pointer load
-                    let data_ptr = alloc_value(&mut next);
-                    new_insts.push(Inst::FieldPtr {
-                        dst: data_ptr,
-                        base: object,
-                        struct_id: trait_obj_sid,
-                        field: 0, // TraitObj.data
-                    });
-                    let data = alloc_value(&mut next);
-                    new_insts.push(Inst::Load {
-                        dst: data,
-                        ptr: data_ptr,
-                        ty: LirType::Ptr,
-                    });
-                    // indirect call: fnp(data, args...)
-                    let mut call_args = vec![data];
+                    let mut call_args = Vec::with_capacity(1 + args.len());
+                    call_args.push(object);
                     call_args.extend(args);
-                    new_insts.push(Inst::CallPtr {
+                    new_insts.push(Inst::Call {
                         dst: if matches!(ret_ty, LirType::Void) {
                             None
                         } else {
                             dst
                         },
-                        callee: fnp,
+                        func: fid,
                         args: call_args,
-                        ret_ty: ret_ty.clone(),
                     });
                 }
                 Inst::CowClone { dst, src, ty } => {

@@ -1846,6 +1846,158 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// If `original_name` is `Box__<Trait>__<method>`, emit
+    /// `Inst::TraitCall` in place of the generic extern call. BIR
+    /// synthesis then rewrites each TraitCall into a `Call` to one
+    /// dedup'd `__gg_synth_trait_*` helper whose body is the vtable
+    /// dispatch chain. Returns `None` if the call doesn't match the
+    /// pattern or the trait metadata isn't fully registered.
+    fn try_emit_trait_call(
+        &mut self,
+        original_name: &str,
+        dst: &Option<ir::types::LocalId>,
+        args: &[Operand],
+        lir_args: &[ValueId],
+        bb: BlockId,
+    ) -> Option<BlockId> {
+        // Parse `Box__<Trait>__<method>`. Method is everything after the
+        // last `__`; trait name is between `Box__` and that separator.
+        let rest = original_name.strip_prefix("Box__")?;
+        let sep = rest.rfind("__")?;
+        let trait_name = &rest[..sep];
+        let method = &rest[sep + 2..];
+
+        // GIR side: the VTable must exist and must carry the method as a
+        // FnPtr-typed field. We reach into GIR for the method signature
+        // because the extern declaration for `Box__Trait__method` was
+        // registered with `void*` self and generic aggregate-as-Ptr
+        // params — the VTable FnPtr carries the concrete types
+        // (resolve_param_type in register_trait_sigs).
+        let vtable_name = format!("{trait_name}_VTable");
+        let trait_obj_name = format!("{trait_name}_TraitObj");
+        // Both type defs must be registered in GIR (belt-and-braces).
+        self.gir_types.get_type_def(&trait_obj_name)?;
+        let vtable_def = self.gir_types.get_type_def(&vtable_name)?;
+        let vtable_struct = match &vtable_def.kind {
+            ir::types::TypeDefKind::Struct(s) => s,
+            _ => return None,
+        };
+        let method_field = vtable_struct.fields.iter().find(|f| f.name == method)?;
+        let (fn_params, fn_ret): (Vec<ir::types::TypeId>, ir::types::TypeId) = match self
+            .gir_types
+            .get(method_field.type_id)?
+        {
+            ir::types::GirType::FnPtr { params, return_type } => {
+                (params.clone(), *return_type)
+            }
+            _ => return None,
+        };
+        // `params[0]` is the synthetic void* data (self); user params
+        // start at index 1. A zero-length FnPtr shouldn't be possible
+        // for a VTable entry, but guard against it to avoid panics.
+        if fn_params.is_empty() {
+            return None;
+        }
+
+        // LIR side: both structs must also be in the struct registry so
+        // BIR synthesis can resolve StructIds inside the helper body.
+        self.struct_reg.lookup(&trait_obj_name)?;
+        self.struct_reg.lookup(&vtable_name)?;
+
+        // lir_args[0] is the `Box__Trait` (TraitObj*) self; the rest are
+        // user args in order. An empty arg list is a broken call-site.
+        if lir_args.is_empty() {
+            return None;
+        }
+        let self_val = lir_args[0];
+
+        // Per-arg ABI coercion: for each user arg, if the VTable's GIR
+        // FnPtr param is `Ptr(T)`/`MutPtr(T)` but the caller's value is
+        // an aggregate (not already a pointer), emit `Inst::AddressOf`
+        // to spill the aggregate to a stack slot and produce a `Ptr`
+        // suitable for the impl's `void*` param. This mirrors
+        // `emit_call_extern`'s arg-abi marshalling — the old static-
+        // inline wrapper path relied on that marshalling to auto-
+        // address aggregate borrow args, and the synth helper needs
+        // the same conversion in LIR primitives since it bypasses
+        // emit_call_extern.
+        let user_param_tys: Vec<LirType> = fn_params[1..]
+            .iter()
+            .map(|tid| self.map_type(tid))
+            .collect();
+        let ret_ty = self.map_type(&fn_ret);
+
+        let mut user_args: Vec<ValueId> = Vec::with_capacity(lir_args.len() - 1);
+        for (i, &arg_val) in lir_args[1..].iter().enumerate() {
+            let vtable_pty = &fn_params[i + 1];
+            let callee_expects_ptr = matches!(
+                self.gir_types.get(*vtable_pty),
+                Some(ir::types::GirType::Ptr(_)) | Some(ir::types::GirType::MutPtr(_))
+            );
+            // Whether the caller's value is already a pointer — check
+            // the caller-side GIR operand type. If it's a Copy/Move of
+            // a local whose GIR type is Ptr/MutPtr, the value itself is
+            // a pointer; skip the address-of.
+            let caller_already_ptr = match args.get(i + 1) {
+                Some(Operand::Copy(p)) | Some(Operand::Move(p)) => {
+                    self.gir_func.locals.get(p.local.0 as usize).map_or(false, |l| {
+                        matches!(
+                            self.gir_types.get(l.type_id),
+                            Some(ir::types::GirType::Ptr(_))
+                                | Some(ir::types::GirType::MutPtr(_))
+                        )
+                    })
+                }
+                _ => false,
+            };
+
+            if callee_expects_ptr && !caller_already_ptr {
+                let inner_gid = match self.gir_types.get(*vtable_pty) {
+                    Some(ir::types::GirType::Ptr(inner))
+                    | Some(ir::types::GirType::MutPtr(inner)) => *inner,
+                    _ => unreachable!("checked by callee_expects_ptr"),
+                };
+                let inner_lty = self.map_type(&inner_gid);
+                let addr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::AddressOf {
+                    dst: addr,
+                    value: arg_val,
+                    ty: inner_lty,
+                });
+                user_args.push(addr);
+            } else {
+                user_args.push(arg_val);
+            }
+        }
+
+        // Pull arg_abis from the extern decl as authored by the GIR
+        // lowering — BIR synthesis ignores this field today (the helper
+        // has a typed signature), but we preserve it for future
+        // inspection and for the invariant that TraitCall and the
+        // CallExtern it replaces carry equivalent metadata.
+        let arg_abis = self.lookup_arg_abis(original_name);
+
+        // Allocate a ValueId for the result if the call produces one.
+        let dst_val = dst.map(|_| self.lir_func.next_value());
+
+        self.lir_func.block_mut(bb).insts.push(Inst::TraitCall {
+            dst: dst_val,
+            object: self_val,
+            trait_name: trait_name.to_string(),
+            method: method.to_string(),
+            args: user_args,
+            arg_abis,
+            param_tys: user_param_tys,
+            ret_ty,
+        });
+
+        if let (Some(d), Some(v)) = (*dst, dst_val) {
+            self.store_to_local(d, v, bb);
+        }
+
+        Some(bb)
+    }
+
     /// If `original_name` is a `Vector__<elem>__<method>` HOF we've
     /// migrated (each, any, all), emit `Inst::HofExpand` in place of the
     /// generic extern call and return the (possibly updated) block id.
@@ -2712,23 +2864,19 @@ impl<'a> FuncLowering<'a> {
     ) -> BlockId {
         // ── Step 7 of BIR lift plan: TraitCall intercept ──
         //
-        // **Deferred.** The `Inst::TraitCall` canonical op and its BIR
-        // expansion (`bir::lower::expand_func`) are in place, but emission
-        // from `Box__<Trait>__<method>` call sites is not wired up.
-        // Reason: expanding every trait call inline inflates generated C
-        // by ~6× per call site (one `CallExtern` becomes `FieldPtr + Load
-        // + FieldPtr + Load + FieldPtr + Load + CallPtr`). The self-host
-        // driver alone goes from ~170k to ~360k LoC of generated C, which
-        // doubles stage-1 compile time and blows the self_host_bootstrap
-        // integration-test budget.
-        //
-        // Re-enabling will need either: (a) a later LIR-level optimization
-        // that CSEs vtable and data loads across adjacent TraitCalls on
-        // the same object, (b) generating the expansion as a per-
-        // `(Trait, method)` helper function (synthesis, like the sort
-        // family) so the C compiler inlines it at its own discretion, or
-        // (c) carrying `arg_abis` on `CallPtr` so backends marshal
-        // aggregate args correctly without the current ambiguity.
+        // Trait-object virtual calls — `Box__<Trait>__<method>(obj, ...)` —
+        // become `Inst::TraitCall`. BIR synthesis then rewrites each
+        // TraitCall into a `Call` to one dedup'd `__gg_synth_trait_*`
+        // helper whose body carries the vtable-dispatch chain. The synth
+        // helper has a typed signature, so the C backend's normal Call
+        // coercion marshals aggregate args (Str by-value, etc.) without
+        // the old static-inline's impl-param peeking. See
+        // `docs/internals/lir-backend-lift-plan.md` Step 7 and
+        // `bir::synth::get_or_emit_trait_helper`.
+        if let Some(bb2) = self.try_emit_trait_call(original_name, dst, args, &lir_args, bb) {
+            self.emit_post_call_zeros(args, bb2);
+            return bb2;
+        }
         // ── Step 8 of BIR lift plan: HOF intercept ──
         // Vector `each` / `any` / `all` — emit `Inst::HofExpand` and let BIR
         // lowering generate the loop skeleton. Other HOF variants still flow
