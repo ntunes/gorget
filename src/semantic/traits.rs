@@ -18,6 +18,28 @@ pub struct FunctionSig {
     pub self_ownership: Option<Ownership>,
 }
 
+/// AST-level signature shape preserved for late-bound method-generic inference.
+///
+/// `FunctionSig` stores resolved TypeIds with method-level generics erased to
+/// `error_id` (because their param defs aren't in scope at trait-collection /
+/// impl-collection time — see ec694db6). Inference at the call site needs the
+/// AST-level structure intact: which named generic appears in which param-
+/// type slot, which params are callables whose return type carries another
+/// generic, etc.
+///
+/// Populated for every trait method and every equip method whose
+/// `generic_params` is non-empty. Skipped (None) for non-generic methods to
+/// keep the registry small.
+#[derive(Debug, Clone)]
+pub struct MethodSigShape {
+    /// Method-level generic param names in declaration order.
+    pub generic_params: Vec<String>,
+    /// AST param types in declaration order, excluding `self`.
+    pub param_types: Vec<Type>,
+    /// AST return type.
+    pub return_type: Type,
+}
+
 /// Information about a trait definition.
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
@@ -26,6 +48,10 @@ pub struct TraitInfo {
     pub methods: FxHashMap<String, FunctionSig>,
     pub has_default_body: FxHashMap<String, bool>,
     pub extends: Vec<DefId>,
+    /// AST-level signature shapes for method-level-generic methods. Used by
+    /// the call-site method-generic inference in typecheck. Populated only
+    /// for methods whose `generic_params` is non-empty.
+    pub method_shapes: FxHashMap<String, MethodSigShape>,
 }
 
 /// Information about an equip block.
@@ -41,6 +67,11 @@ pub struct EquipInfo {
     pub trait_generic_args: Vec<Type>,
     /// Field name for `via` delegation (auto-forward unimplemented methods through this field).
     pub via_field: Option<String>,
+    /// AST-level signature shapes for method-level-generic methods declared
+    /// inside this equip block. Used by the call-site method-generic
+    /// inference in typecheck. Populated only for methods whose
+    /// `generic_params` is non-empty.
+    pub method_shapes: FxHashMap<String, MethodSigShape>,
 }
 
 /// Registry of all traits and implementations.
@@ -667,6 +698,7 @@ fn register_builtin_traits(
                 methods,
                 has_default_body,
                 extends: Vec::new(),
+                method_shapes: FxHashMap::default(),
             });
         }
     }
@@ -696,6 +728,7 @@ fn collect_trait(
 
     let mut methods = FxHashMap::default();
     let mut has_default_body = FxHashMap::default();
+    let mut method_shapes = FxHashMap::default();
 
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
@@ -704,6 +737,9 @@ fn collect_trait(
             let has_body = !matches!(method.body, FunctionBody::Declaration | FunctionBody::Extern(_));
             has_default_body.insert(method.name.node.clone(), has_body);
             methods.insert(method.name.node.clone(), sig);
+            if let Some(shape) = build_method_sig_shape(method) {
+                method_shapes.insert(method.name.node.clone(), shape);
+            }
         }
     }
 
@@ -723,6 +759,7 @@ fn collect_trait(
             methods,
             has_default_body,
             extends,
+            method_shapes,
         },
     );
 }
@@ -833,11 +870,15 @@ fn process_impl(
 
     // Collect methods
     let mut methods = FxHashMap::default();
+    let mut method_shapes = FxHashMap::default();
     for method in &impl_block.items {
         let method_def_id = scopes.lookup_def_by_span(&method.node.name.node, method.node.name.span);
         let sig = build_function_sig(&method.node, scopes, types);
         let def_id = method_def_id.unwrap_or(DefId(0));
         methods.insert(method.node.name.node.clone(), (def_id, sig));
+        if let Some(shape) = build_method_sig_shape(&method.node) {
+            method_shapes.insert(method.node.name.node.clone(), shape);
+        }
     }
 
     // Extract generic args from the trait type (e.g., [int] from Iterator[int])
@@ -861,6 +902,7 @@ fn process_impl(
         span: impl_block.span,
         trait_generic_args,
         via_field,
+        method_shapes,
     });
 
     if let Some(trait_id) = trait_def_id {
@@ -1263,6 +1305,96 @@ fn collect_all_required_methods_inner(
     }
 
     methods
+}
+
+/// Build a `MethodSigShape` from a method's AST `FunctionDef`. Returns `None`
+/// for non-generic methods.
+pub fn build_method_sig_shape(func: &FunctionDef) -> Option<MethodSigShape> {
+    let gp = func.generic_params.as_ref()?;
+    let names: Vec<String> = gp.node.params.iter().filter_map(|p| match &p.node {
+        GenericParam::Type { name, .. } => Some(name.node.clone()),
+        GenericParam::Const { .. } => None,
+    }).collect();
+    if names.is_empty() {
+        return None;
+    }
+    let param_types: Vec<Type> = func.params.iter()
+        .filter(|p| p.node.name.node != "self")
+        .map(|p| p.node.type_.node.clone())
+        .collect();
+    Some(MethodSigShape {
+        generic_params: names,
+        param_types,
+        return_type: func.return_type.node.clone(),
+    })
+}
+
+/// Substitute named method-level generic params in an AST `Type` against a
+/// binding map. Walks the type recursively, replacing every
+/// `Type::Named { name, generic_args: [] }` whose `name` is a key in the
+/// bindings with the bound AST type. Other shapes recurse into their
+/// children.
+///
+/// This is the core kernel for method-level generic inference — once
+/// inference resolves `F → bool(int)` and `U → int`, callers use this to
+/// produce a fully-instantiated AST sig (no remaining generic placeholders).
+pub fn substitute_ast_type(ty: &Type, bindings: &FxHashMap<String, Type>) -> Type {
+    match ty {
+        Type::Named { name, generic_args } => {
+            if generic_args.is_empty() {
+                if let Some(replacement) = bindings.get(&name.node) {
+                    return replacement.clone();
+                }
+                return ty.clone();
+            }
+            let new_args: Vec<Spanned<Type>> = generic_args.iter().map(|a| Spanned {
+                node: substitute_ast_type(&a.node, bindings),
+                span: a.span,
+            }).collect();
+            Type::Named { name: name.clone(), generic_args: new_args }
+        }
+        Type::Array { element, size } => Type::Array {
+            element: Box::new(Spanned {
+                node: substitute_ast_type(&element.node, bindings),
+                span: element.span,
+            }),
+            size: size.clone(),
+        },
+        Type::Slice { element } => Type::Slice {
+            element: Box::new(Spanned {
+                node: substitute_ast_type(&element.node, bindings),
+                span: element.span,
+            }),
+        },
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| Spanned {
+            node: substitute_ast_type(&e.node, bindings),
+            span: e.span,
+        }).collect()),
+        Type::Function { return_type, params, param_ownerships } => Type::Function {
+            return_type: Box::new(Spanned {
+                node: substitute_ast_type(&return_type.node, bindings),
+                span: return_type.span,
+            }),
+            params: params.iter().map(|p| Spanned {
+                node: substitute_ast_type(&p.node, bindings),
+                span: p.span,
+            }).collect(),
+            param_ownerships: param_ownerships.clone(),
+        },
+        Type::Ref(inner) => Type::Ref(Box::new(Spanned {
+            node: substitute_ast_type(&inner.node, bindings),
+            span: inner.span,
+        })),
+        Type::Owned(inner) => Type::Owned(Box::new(Spanned {
+            node: substitute_ast_type(&inner.node, bindings),
+            span: inner.span,
+        })),
+        Type::Pointer(inner) => Type::Pointer(Box::new(Spanned {
+            node: substitute_ast_type(&inner.node, bindings),
+            span: inner.span,
+        })),
+        Type::Primitive(_) | Type::SelfType | Type::Inferred => ty.clone(),
+    }
 }
 
 fn build_function_sig(func: &FunctionDef, scopes: &ScopeTable, types: &mut TypeTable) -> FunctionSig {
@@ -1997,5 +2129,125 @@ trait Child extends Base:
             &e.kind,
             SemanticErrorKind::TraitCycle { .. }
         )), "correct inheritance should produce no cycle errors: {:?}", errors);
+    }
+
+    fn ident(s: &str) -> Type {
+        Type::Named {
+            name: Spanned { node: s.to_string(), span: Span { start: 0, end: 0 } },
+            generic_args: vec![],
+        }
+    }
+    fn spanned<T>(node: T) -> Spanned<T> {
+        Spanned { node, span: Span { start: 0, end: 0 } }
+    }
+
+    #[test]
+    fn substitute_ast_type_replaces_named_generics() {
+        let mut bindings = FxHashMap::default();
+        bindings.insert("T".to_string(), Type::Primitive(crate::parser::ast::PrimitiveType::Int));
+        bindings.insert("U".to_string(), ident("String"));
+        // T → int
+        assert!(matches!(
+            substitute_ast_type(&ident("T"), &bindings),
+            Type::Primitive(crate::parser::ast::PrimitiveType::Int)
+        ));
+        // Vector[T] → Vector[int]
+        let v_t = Type::Named {
+            name: spanned("Vector".to_string()),
+            generic_args: vec![spanned(ident("T"))],
+        };
+        match substitute_ast_type(&v_t, &bindings) {
+            Type::Named { name, generic_args } => {
+                assert_eq!(name.node, "Vector");
+                assert_eq!(generic_args.len(), 1);
+                assert!(matches!(generic_args[0].node,
+                    Type::Primitive(crate::parser::ast::PrimitiveType::Int)));
+            }
+            _ => panic!("expected Named"),
+        }
+        // (T, U) → (int, String)
+        let tup = Type::Tuple(vec![spanned(ident("T")), spanned(ident("U"))]);
+        match substitute_ast_type(&tup, &bindings) {
+            Type::Tuple(elems) => {
+                assert_eq!(elems.len(), 2);
+                assert!(matches!(elems[0].node,
+                    Type::Primitive(crate::parser::ast::PrimitiveType::Int)));
+                assert!(matches!(&elems[1].node,
+                    Type::Named { name, .. } if name.node == "String"));
+            }
+            _ => panic!("expected Tuple"),
+        }
+        // Function: U(T) → String(int)
+        let fn_t = Type::Function {
+            return_type: Box::new(spanned(ident("U"))),
+            params: vec![spanned(ident("T"))],
+            param_ownerships: vec![Ownership::Borrow],
+        };
+        match substitute_ast_type(&fn_t, &bindings) {
+            Type::Function { return_type, params, .. } => {
+                assert!(matches!(&return_type.node,
+                    Type::Named { name, .. } if name.node == "String"));
+                assert!(matches!(&params[0].node,
+                    Type::Primitive(crate::parser::ast::PrimitiveType::Int)));
+            }
+            _ => panic!("expected Function"),
+        }
+    }
+
+    #[test]
+    fn substitute_ast_type_leaves_unbound_alone() {
+        let bindings: FxHashMap<String, Type> = FxHashMap::default();
+        // T stays T (no binding)
+        assert!(matches!(substitute_ast_type(&ident("T"), &bindings),
+            Type::Named { name, .. } if name.node == "T"));
+        // Generic args with no bindings: structure preserved.
+        let v_t = Type::Named {
+            name: spanned("Vector".to_string()),
+            generic_args: vec![spanned(ident("T"))],
+        };
+        match substitute_ast_type(&v_t, &bindings) {
+            Type::Named { name, generic_args } => {
+                assert_eq!(name.node, "Vector");
+                assert!(matches!(&generic_args[0].node,
+                    Type::Named { name, .. } if name.node == "T"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn build_method_sig_shape_extracts_generic_method() {
+        let source = "\
+trait Iter[T]:
+    bool any[F](&self, F pred):
+        return false
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        let trait_info = registry.traits.values()
+            .find(|t| t.name == "Iter")
+            .expect("Iter trait registered");
+        let shape = trait_info.method_shapes.get("any")
+            .expect("any has a shape (method-level generic)");
+        assert_eq!(shape.generic_params, vec!["F".to_string()]);
+        assert_eq!(shape.param_types.len(), 1);
+        assert!(matches!(&shape.param_types[0],
+            Type::Named { name, .. } if name.node == "F"));
+        assert!(matches!(&shape.return_type, Type::Primitive(_)));
+    }
+
+    #[test]
+    fn build_method_sig_shape_skips_non_generic_method() {
+        let source = "\
+trait Plain:
+    void noop(self)
+";
+        let (registry, errors) = analyze(source);
+        assert!(errors.is_empty(), "errors: {:?}", errors);
+        let trait_info = registry.traits.values()
+            .find(|t| t.name == "Plain")
+            .expect("Plain trait registered");
+        assert!(trait_info.method_shapes.get("noop").is_none(),
+            "non-generic methods should not get shapes");
     }
 }
