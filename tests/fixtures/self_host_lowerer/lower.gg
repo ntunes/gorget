@@ -1827,13 +1827,23 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
         case PWildcard:
             set_terminator(&ctx, GTJump(match_bb))
         case PBinding(name):
-            # Always match; bind scrutinee into a fresh local under `name`.
-            int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
-            Option[String] name_opt = Some(name.clone())
-            int bound = add_local(&ctx, scr_tid, name_opt)
-            emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
-            ctx.named_locals.put(name, bound)
-            set_terminator(&ctx, GTJump(match_bb))
+            # The parser produces PBinding for any bare identifier — both
+            # real variable bindings (`case x:`) AND unit enum variants
+            # (`case KwInt:`). If `name` is a known variant of the current
+            # enum, treat it as a zero-arg PConstructor so we emit a proper
+            # tag check instead of an always-true catch-all.
+            if enum_name != "" and match_variant_index(enum_name, name, &gmod) >= 0:
+                Vector[SpannedPattern] no_sub_pats = []
+                lower_ctor_pattern(&ctx, scrutinee, name, no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+            else:
+                # Real binding: always match; bind scrutinee into a fresh
+                # local under `name`.
+                int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                Option[String] name_opt = Some(name.clone())
+                int bound = add_local(&ctx, scr_tid, name_opt)
+                emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
+                ctx.named_locals.put(name, bound)
+                set_terminator(&ctx, GTJump(match_bb))
         case PConstructor(variant_name, sub_pats):
             lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
         case PDotShorthand(variant_name, sub_pats):
@@ -1867,6 +1877,14 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
     int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
     emit(&ctx, GICmp(is_match, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(expected)))
+    # Unit variants (no sub_pats): skip the intermediate bind_bb — branch
+    # straight to match_bb on success. Saves 1 block per arm, which matters
+    # for matches on big imported enums (Keyword has ~60 variants; without
+    # this the GIR block count explodes and stage-0 OOMs during self-host
+    # compile).
+    if sub_pats.len() == 0:
+        set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
+        return
     int bind_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(is_match), bind_bb, no_match_bb))
     switch_to(&ctx, bind_bb)
