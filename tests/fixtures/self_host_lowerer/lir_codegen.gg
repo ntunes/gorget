@@ -1038,6 +1038,14 @@ bool runtime_takes_str_by_value(String name):
     return false
 
 int runtime_fn_return_type(String name, LirModule &m):
+    # Typed container allocators (`Vector[T] x = []`, `Dict[K,V] x = {}`)
+    # expand at C emission to gorget_array_new(sizeof(T)) / gorget_map_new;
+    # report the same return types so the caller's slot gets the right
+    # ISlotStore shape.
+    if name.starts_with("__gorget_array_new_sized_"):
+        return find_struct_type("GorgetArray", &m)
+    if name.starts_with("__gorget_map_new_sized_"):
+        return find_struct_type("GorgetMap", &m)
     # Array functions returning GorgetArray
     if name == "gorget_array_new" or name == "gorget_array_new_drop" or name == "gorget_array_with_capacity":
         return find_struct_type("GorgetArray", &m)
@@ -1281,6 +1289,33 @@ bool is_struct_constructor(String name, LirModule &m):
             return true
         i += 1
     return false
+
+# Resolve a Gorget type name to the C type name suitable for `sizeof(...)`.
+# Used by the typed-literal allocator magic names (`__gorget_array_new_sized_T`
+# / `__gorget_map_new_sized_K__GGSEP__V`). Handles the three resolution cases:
+#   1. Collection aliases (Vector__* / Dict__* / etc.) → runtime struct name
+#      (GorgetArray / GorgetMap / GorgetSet). These have no standalone C type —
+#      they're all typedef'd to the generic runtime container.
+#   2. Primitives / well-known C types (int64_t, double, bool, …) pass through.
+#   3. User structs registered in m.structs → their emitted C name
+#      (typically `__gg_<TypeName>`), via find_c_struct_name.
+String resolve_sizeof_c_type(String tyname, LirModule &m, Dict[String, String] &sn):
+    if tyname.starts_with("Vector__"):
+        return "GorgetArray"
+    if tyname.starts_with("Dict__") or tyname.starts_with("HashMap__") or tyname.starts_with("Map__") or tyname.starts_with("OrderedDict__"):
+        return "GorgetMap"
+    if tyname.starts_with("Set__") or tyname.starts_with("HashSet__") or tyname.starts_with("OrderedSet__"):
+        return "GorgetSet"
+    if tyname.starts_with("Box__") or tyname.starts_with("Channel__") or tyname.starts_with("Shared__") or tyname.starts_with("Weak__"):
+        return "void*"
+    if tyname.starts_with("Task__"):
+        return "TaskHandle"
+    if tyname.starts_with("Mutex__") or tyname.starts_with("RWLock__"):
+        return "void*"
+    if tyname == "String":
+        return "GorgetString"
+    # Fall through to struct-registry lookup for user types and runtime aliases.
+    return find_c_struct_name(tyname, &m, &sn)
 
 String find_c_struct_name(String name, LirModule &m, Dict[String, String] &sn):
     int i = 0
@@ -2720,6 +2755,32 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 String c_field = c_field_name(field)
                 return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
         return "/* bad field read */;"
+
+    # ── Typed container allocators for literals (`Vector[T] x = []`, `Dict[K,V] x = {}`) ──
+    # The GIR lowerer emits these magic names when it has an element-type
+    # hint from the declaring SVarDecl. They expand to a runtime allocator
+    # call with `sizeof(T)` drawn from the C type system — the only way
+    # for the size to track aggregate layouts (e.g. 128 bytes for
+    # LirStructDef). Without this pipe, every aggregate Vector defaulted
+    # to elem_size=8 and pushes silently corrupted adjacent slots; stage-1
+    # crashed on the very first memcpy past index 0.
+    if name.starts_with("__gorget_array_new_sized_"):
+        if dst >= 0:
+            String arr_tyname = name.slice(25, name.len())
+            String arr_c_tname = resolve_sizeof_c_type(arr_tyname, &m, &sn)
+            return v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
+        return ";"
+    if name.starts_with("__gorget_map_new_sized_"):
+        if dst >= 0:
+            String rest_kv = name.slice(23, name.len())
+            int sep_pos = find_substr(rest_kv, "__GGSEP__")
+            if sep_pos > 0:
+                String k_tyname = rest_kv.slice(0, sep_pos)
+                String v_tyname = rest_kv.slice(sep_pos + 9, rest_kv.len())
+                String k_c_tname = resolve_sizeof_c_type(k_tyname, &m, &sn)
+                String v_c_tname = resolve_sizeof_c_type(v_tyname, &m, &sn)
+                return v(dst) + " = gorget_map_new(sizeof(" + k_c_tname + "), sizeof(" + v_c_tname + "));"
+        return ";"
 
     # DropIfAlive guard.
     if name.starts_with("__gorget_drop_if_alive_open__"):

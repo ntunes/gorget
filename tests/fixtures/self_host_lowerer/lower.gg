@@ -30,6 +30,14 @@ struct LowerCtx:
     # Gorget doesn't have easy tuple storage in fields.
     Vector[int] loop_continue_stack
     Vector[int] loop_break_stack
+    # Element-type hint threaded from SVarDecl (`Vector[T] x = []`) down
+    # into EArrayLiteral / EDictLiteral so the allocator call receives
+    # sizeof(T) instead of a hardcoded 8. Empty string means "no hint —
+    # caller didn't know the container's element type". Consumed (cleared)
+    # as soon as the literal handler reads them.
+    String pending_vec_elem_tyname
+    String pending_dict_key_tyname
+    String pending_dict_val_tyname
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -1291,6 +1299,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
+            # Consume element-type hint set by SVarDecl (`Vector[T] x = []`).
+            # An empty hint means the declared type was not a concrete
+            # Vector[T] — fall back to pointer size, which is correct for
+            # scalar-element Vectors used as temporaries.
+            String vec_tyname = ctx.pending_vec_elem_tyname
+            ctx.pending_vec_elem_tyname = ""
             # Lower each element — we'll push them in order after the
             # array is constructed. Need to keep the value locals around
             # so we can reference them in the subsequent push calls.
@@ -1304,12 +1318,21 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Call gorget_array_new(elem_size) so the resulting array has a
             # valid `alloc` pointer from __gorget_current_alloc. Without
             # this, subsequent `.push()` on a zero-init'd GorgetArray
-            # segfaults dereferencing arr->alloc->realloc(...). Element
-            # size defaults to 8 — wrong for byte Vectors but a better
-            # fallback than NULL alloc.
-            Vector[Operand] an_args = [OpConstI64(8)]
+            # segfaults dereferencing arr->alloc->realloc(...).
+            # With a type hint we emit a magic call `__gorget_array_new_sized_<T>()`
+            # which the C codegen expands to `gorget_array_new(sizeof(T))` —
+            # that's the only way for the size to track the real aggregate
+            # footprint (e.g. 128 bytes for LirStructDef). Without the hint
+            # we fall back to 8, which still works for pointer-/int-sized
+            # element types (the common case for local temporaries).
             int adst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetArray"), NO_NAME)
-            emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
+            if vec_tyname != "":
+                String magic_name = "__gorget_array_new_sized_" + vec_tyname
+                Vector[Operand] an_args_typed = []
+                emit(&ctx, GICallExtern(adst, magic_name, an_args_typed))
+            else:
+                Vector[Operand] an_args = [OpConstI64(8)]
+                emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
             # Push each element into the just-created Vector. Without
             # this, `[!init_insts]` and similar "array literal with
             # explicit elements" produced an EMPTY array, and any
@@ -1411,13 +1434,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDictLiteral(dkeys, dvals):
             # `{}` / `{k: v, …}` — lower each key/value for side effects,
-            # then call gorget_map_new(key_size=8, val_size=8) to produce
-            # a GorgetMap with valid `alloc`. Element sizes default to 8
-            # (int64_t / pointer / 64-bit struct) — sufficient for the
-            # common K/V combos in the self-host itself but wrong for
-            # byte/int32 keys. Without this, `{}`-initialized Dicts had
-            # alloc=NULL and `.put()` segfaulted on __gorget_map_grow's
-            # realloc call.
+            # then call gorget_map_new(key_size, val_size) to produce a
+            # GorgetMap with valid `alloc`. Without a Dict[K, V] hint from
+            # SVarDecl the sizes fall back to 8 (pointer/int); with the
+            # hint we emit `__gorget_map_new_sized_K__<K>__V__<V>` which
+            # the codegen expands to `gorget_map_new(sizeof(K), sizeof(V))` —
+            # required whenever K or V is an aggregate (LirStructDef et al.).
+            String dict_kname = ctx.pending_dict_key_tyname
+            String dict_vname = ctx.pending_dict_val_tyname
+            ctx.pending_dict_key_tyname = ""
+            ctx.pending_dict_val_tyname = ""
             int dli = 0
             while dli < dkeys.len():
                 SpannedExpr dk = dkeys.get(dli).unwrap()
@@ -1428,9 +1454,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 SpannedExpr dv = dvals.get(dvi).unwrap()
                 lower_expr(&ctx, dv, &gmod)
                 dvi += 1
-            Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
             int ddst = add_local(&ctx, lookup_or_register_named(&gmod, "GorgetMap"), NO_NAME)
-            emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+            if dict_kname != "" and dict_vname != "":
+                # Sentinel `__GGSEP__` separates K and V type names — zero
+                # collision risk with real type names (no "GGSEP" pattern
+                # appears in any monomorphized Gorget type).
+                String magic_dict = "__gorget_map_new_sized_" + dict_kname + "__GGSEP__" + dict_vname
+                Vector[Operand] dn_args_typed = []
+                emit(&ctx, GICallExtern(ddst, magic_dict, dn_args_typed))
+            else:
+                Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
+                emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
             return ddst
         else:
             # Remaining: EIt, EImplicitClosure, ESetComp,
@@ -1440,6 +1474,72 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return fallback
 
 # ── Call lowering ────────────────────────────────────────
+
+# Set ctx.pending_*_tyname hints for a container-literal arg at a struct
+# constructor call site. Early-exits when arg is NOT an empty container
+# literal — the normal-case fast path — so per-arg overhead stays O(1)
+# in the common case. Only when we've identified a container literal do
+# we pay for the `gmod.type_infos.get(ctor_name)` lookup (a Dict probe +
+# GirTypeInfo copy).
+void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, SpannedExpr arg, GirModule &gmod):
+    # Fast reject for non-container-literal args (the common case).
+    bool is_arr_lit = false
+    bool is_dict_lit = false
+    match arg.expr:
+        case EArrayLiteral(_):
+            is_arr_lit = true
+        case EDictLiteral(_, _):
+            is_dict_lit = true
+        else:
+            return
+    if not gmod.type_infos.contains(ctor_name):
+        return
+    GirTypeInfo cti_info = gmod.type_infos.get(ctor_name).unwrap()
+    if cti_info.is_enum:
+        return
+    if ai >= cti_info.fields.len():
+        return
+    String fty_name = cti_info.fields.get(ai).unwrap().type_name
+    if is_arr_lit:
+        if fty_name.starts_with("Vector__"):
+            # `.slice(...)` returns a view (cap=0) into fty_name's buffer;
+            # fty_name is dropped at function exit and the view becomes
+            # dangling. Materialize to an owned String before storing on
+            # the LowerCtx field — the downstream magic-name concat would
+            # otherwise read stale bytes and emit garbage like
+            # `sizeof(��0XA./)` in stage-1's C.
+            String elem_slice = fty_name.slice(8, fty_name.len())
+            ctx.pending_vec_elem_tyname = elem_slice.clone()
+    elif is_dict_lit:
+        # Dict__<K>__<V> / HashMap__<K>__<V>. Simple first-split only;
+        # nested generics (Dict__Vector__int64_t__int64_t) stay unhinted
+        # and fall back to size 8.
+        int d_prefix_len = -1
+        if fty_name.starts_with("Dict__"):
+            d_prefix_len = 6
+        elif fty_name.starts_with("HashMap__"):
+            d_prefix_len = 9
+        elif fty_name.starts_with("Map__"):
+            d_prefix_len = 5
+        elif fty_name.starts_with("OrderedDict__"):
+            d_prefix_len = 13
+        if d_prefix_len > 0:
+            String d_rest = fty_name.slice(d_prefix_len, fty_name.len())
+            int d_sep = -1
+            int d_i = 0
+            while d_i + 1 < d_rest.byte_len():
+                if d_rest.byte_at(d_i) == 0x5F and d_rest.byte_at(d_i + 1) == 0x5F:
+                    d_sep = d_i
+                    break
+                d_i += 1
+            if d_sep > 0:
+                String k_only = d_rest.slice(0, d_sep)
+                String v_only = d_rest.slice(d_sep + 2, d_rest.len())
+                if not k_only.contains("__") and not v_only.contains("__"):
+                    # Same view-lifetime concern as the Vector case —
+                    # clone to owned before storing.
+                    ctx.pending_dict_key_tyname = k_only.clone()
+                    ctx.pending_dict_val_tyname = v_only.clone()
 
 int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
@@ -1488,6 +1588,15 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int ai = 0
         while ai < args.len():
             SpannedExpr arg = args.get(ai).unwrap()
+            # For struct-constructor calls, hint the container-literal
+            # element size for each positional arg using the target field's
+            # declared type. Look up type_infos inline (per-arg) — keeping
+            # the GirTypeInfo as a local across iterations tripped a
+            # field-move issue in the self-host compiler; querying anew
+            # each time sidesteps it. Without this, `LowerCtx([], ..., {},
+            # ...)` keeps scalar-sized allocators for the Vector/Dict
+            # fields and later pushes corrupt adjacent slots.
+            apply_container_hint_for_ctor_arg(&ctx, call_name, ai, arg, &gmod)
             int arg_local = lower_expr(&ctx, arg, &gmod)
             # Detect &arg (borrow) or pre-scanned borrow param
             bool is_borrow = false
@@ -1557,6 +1666,40 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
 void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
     match stmt:
         case SVarDecl(stype, name, init_expr, _, _, _):
+            # Element-type hint for container literals: `Vector[T] x = []`
+            # needs `gorget_array_new(sizeof(T))`, not the hardcoded 8.
+            # Lift T from stype and park it on ctx; the EArrayLiteral /
+            # EDictLiteral handlers consume and clear it. Without this hint
+            # every aggregate Vector got elem_size=8, so pushes of 128-byte
+            # LirStructDef structs corrupted adjacent elements — stage-1
+            # crashed in lower_type_defs's `safe_get(i)` memcpy.
+            match init_expr.expr:
+                case EArrayLiteral(_):
+                    match stype.ty:
+                        case TNamed(tn_v, targs_v):
+                            if (tn_v == "Vector" or tn_v == "Array" or tn_v == "Set" or tn_v == "HashSet" or tn_v == "OrderedSet") and targs_v.len() >= 1:
+                                SpannedType elem_st = targs_v.get(0).unwrap()
+                                # type_to_c_name may return a view (literal or
+                                # borrowed slice); clone so the String outlives
+                                # the temporary.
+                                String vec_tc = type_to_c_name(elem_st, &gmod)
+                                ctx.pending_vec_elem_tyname = vec_tc.clone()
+                        else:
+                            pass
+                case EDictLiteral(_, _):
+                    match stype.ty:
+                        case TNamed(tn_d, targs_d):
+                            if (tn_d == "Dict" or tn_d == "HashMap" or tn_d == "Map" or tn_d == "OrderedDict") and targs_d.len() >= 2:
+                                SpannedType key_st = targs_d.get(0).unwrap()
+                                SpannedType val_st = targs_d.get(1).unwrap()
+                                String key_tc = type_to_c_name(key_st, &gmod)
+                                String val_tc = type_to_c_name(val_st, &gmod)
+                                ctx.pending_dict_key_tyname = key_tc.clone()
+                                ctx.pending_dict_val_tyname = val_tc.clone()
+                        else:
+                            pass
+                else:
+                    pass
             int val = lower_expr(&ctx, init_expr, &gmod)
             int var_type = ctx.locals.get(val).unwrap().type_id
             # Prefer the declared type when it carries more info than the
@@ -2095,7 +2238,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Terminator] block_terms = [GTNone()]
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk, "", "", "")
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -2220,7 +2363,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2)
+        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2, "", "", "")
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -3985,7 +4128,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3, "", "", "")
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
