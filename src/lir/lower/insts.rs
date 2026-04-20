@@ -2439,23 +2439,26 @@ impl<'a> FuncLowering<'a> {
         // `closure_ret_ty` for result-producing variants is derived from the
         // caller's dst declared type (populated below). The `each` variant
         // sets it to Void since the closure returns nothing.
-        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map, is_flat_map, is_sort) =
+        let (hof_op, produces_result, is_fold, is_reduce, is_count, is_find, is_find_index, is_filter, is_map, is_flat_map, is_sort, is_sort_key) =
             match method {
-                "each" => (HofOp::Each, false, false, false, false, false, false, false, false, false, false),
-                "any" => (HofOp::Any, true, false, false, false, false, false, false, false, false, false),
-                "all" => (HofOp::All, true, false, false, false, false, false, false, false, false, false),
-                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false, false, false),
-                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false, false, false),
-                "count" => (HofOp::Count, true, false, false, true, false, false, false, false, false, false),
-                "find" => (HofOp::Find, true, false, false, false, true, false, false, false, false, false),
-                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false, false, false),
-                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false, false, false),
-                "map" => (HofOp::Map, true, false, false, false, false, false, false, true, false, false),
-                "flat_map" => (HofOp::FlatMap, true, false, false, false, false, false, false, false, true, false),
-                // Sort family: in-place (no dst) or returning (dst is Vector[T]).
-                // Both route through the BIR SynthPool's sort_impl (mergesort body).
-                "sort_by" => (HofOp::SortBy, false, false, false, false, false, false, false, false, false, true),
-                "sorted_by" => (HofOp::SortedBy, true, false, false, false, false, false, false, false, false, true),
+                "each" => (HofOp::Each, false, false, false, false, false, false, false, false, false, false, false),
+                "any" => (HofOp::Any, true, false, false, false, false, false, false, false, false, false, false),
+                "all" => (HofOp::All, true, false, false, false, false, false, false, false, false, false, false),
+                "fold" => (HofOp::Fold, true, true, false, false, false, false, false, false, false, false, false),
+                "reduce" => (HofOp::Reduce, true, false, true, false, false, false, false, false, false, false, false),
+                "count" => (HofOp::Count, true, false, false, true, false, false, false, false, false, false, false),
+                "find" => (HofOp::Find, true, false, false, false, true, false, false, false, false, false, false),
+                "find_index" => (HofOp::FindIndex, true, false, false, false, false, true, false, false, false, false, false),
+                "filter" => (HofOp::Filter, true, false, false, false, false, false, true, false, false, false, false),
+                "map" => (HofOp::Map, true, false, false, false, false, false, false, true, false, false, false),
+                "flat_map" => (HofOp::FlatMap, true, false, false, false, false, false, false, false, true, false, false),
+                // Sort family: both the comparator (T, T -> int) and key-
+                // function (T -> K) variants route through BIR SynthPool's
+                // sort_impl (iterative bottom-up mergesort).
+                "sort_by" => (HofOp::SortBy, false, false, false, false, false, false, false, false, false, true, false),
+                "sorted_by" => (HofOp::SortedBy, true, false, false, false, false, false, false, false, false, true, false),
+                "sort_by_key" => (HofOp::SortByKey, false, false, false, false, false, false, false, false, false, false, true),
+                "sorted_by_key" => (HofOp::SortedByKey, true, false, false, false, false, false, false, false, false, false, true),
                 _ => return None,
             };
         if lir_args.len() < 2 {
@@ -2522,7 +2525,7 @@ impl<'a> FuncLowering<'a> {
             let d = dst.as_ref().expect("fold/reduce requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             self.map_type(&gir_ty)
-        } else if is_map || is_flat_map || is_sort {
+        } else if is_map || is_flat_map || is_sort || is_sort_key {
             match &closure_call_sig {
                 Some(sig) => sig.ret_ty.clone(),
                 None => return None,
@@ -2537,7 +2540,7 @@ impl<'a> FuncLowering<'a> {
             .map(|sig| sig.param_tys.clone())
             .unwrap_or_default();
         let sig_known = closure_call_sig.is_some();
-        let _ = (is_count, is_find_index, is_filter, is_flat_map, is_sort);
+        let _ = (is_count, is_find_index, is_filter, is_flat_map, is_sort, is_sort_key);
 
         // Aggregate-element HOFs require knowing the closure's
         // parameter ABI (pass-by-value vs pass-by-pointer), which we
@@ -2583,6 +2586,17 @@ impl<'a> FuncLowering<'a> {
         // TLS trampoline for now.
         if is_sort && !sig_known {
             return None;
+        }
+        // Sort-by-key: same sig requirement, plus the key type K must be
+        // scalar. Aggregate K (e.g. String) falls through to the TLS
+        // trampoline — handled in a follow-up commit.
+        if is_sort_key {
+            if !sig_known {
+                return None;
+            }
+            if closure_ret_ty.is_aggregate() {
+                return None;
+            }
         }
 
         // Wrap the closure arg into a `Ptr` to `GorgetClosure` so the BIR
@@ -2630,6 +2644,9 @@ impl<'a> FuncLowering<'a> {
             vec![acc_abi, elem_abi]
         } else if is_sort {
             vec![elem_abi, elem_abi]
+        } else if is_sort_key {
+            // Key extractor takes one element; returns K (≠ Vector[T]'s T).
+            vec![elem_abi]
         } else {
             vec![elem_abi]
         };

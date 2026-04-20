@@ -100,15 +100,10 @@ impl SynthPool {
         self.new_fns.len()
     }
 
-    /// Request (and if necessary emit) the synth fn for
-    /// `(op, element_ty, closure_arg_abis, closure_ret_ty)`. Returns the
-    /// `FuncId` of the synthesized function post-splice.
-    ///
-    /// Supports SortBy / SortedBy today; SortByKey / SortedByKey land in
-    /// a follow-up commit. Both variants share the same underlying sort
-    /// implementation — the caller inlines `clone → Call impl → return clone`
-    /// for the Sorted* form at the call site; there is no separate synth
-    /// fn per in-place vs. returning shape.
+    /// Request (and if necessary emit) the sort_by / sorted_by synth fn for
+    /// `(element_ty, closure_arg_abis, closure_ret_ty)`. SortBy and
+    /// SortedBy share the same impl — the caller wraps the Sorted
+    /// variant with clone+return at the call site.
     pub fn get_or_emit_sort_impl(
         &mut self,
         structs: &[StructDef],
@@ -121,10 +116,59 @@ impl SynthPool {
             matches!(op, HofOp::SortBy | HofOp::SortedBy),
             "get_or_emit_sort_impl: unexpected HofOp {op:?}",
         );
-        // SortBy and SortedBy share the same impl — the caller wraps the
-        // Sorted variant with clone+return. Key off the in-place shape.
-        let canonical_op = HofOp::SortBy;
+        self.emit_or_reuse_sort(
+            structs,
+            HofOp::SortBy,
+            element_ty,
+            closure_arg_abis,
+            closure_ret_ty,
+            "sort_impl",
+            /* is_key_variant = */ false,
+        )
+    }
 
+    /// Request the sort_by_key / sorted_by_key synth fn. Closure is `K(T)`:
+    /// takes a single element, returns a key of type K. The body extracts
+    /// keys from both elements per compare and branches on `K`'s natural
+    /// ordering.
+    ///
+    /// Scalar keys only (K is not aggregate) — if K is a struct (e.g.
+    /// `Str`), this returns `None` via the emit-time guard in
+    /// `try_emit_vector_each_hof`, and the call falls through to the TLS
+    /// trampoline until a follow-up commit adds aggregate-key support.
+    pub fn get_or_emit_sort_by_key_impl(
+        &mut self,
+        structs: &[StructDef],
+        op: HofOp,
+        element_ty: &LirType,
+        closure_arg_abis: &[AbiKind],
+        closure_ret_ty: &LirType,
+    ) -> FuncId {
+        debug_assert!(
+            matches!(op, HofOp::SortByKey | HofOp::SortedByKey),
+            "get_or_emit_sort_by_key_impl: unexpected HofOp {op:?}",
+        );
+        self.emit_or_reuse_sort(
+            structs,
+            HofOp::SortByKey,
+            element_ty,
+            closure_arg_abis,
+            closure_ret_ty,
+            "sort_impl_key",
+            /* is_key_variant = */ true,
+        )
+    }
+
+    fn emit_or_reuse_sort(
+        &mut self,
+        structs: &[StructDef],
+        canonical_op: HofOp,
+        element_ty: &LirType,
+        closure_arg_abis: &[AbiKind],
+        closure_ret_ty: &LirType,
+        name_prefix: &str,
+        is_key_variant: bool,
+    ) -> FuncId {
         let element_ty_mangle = mangle_lir_type(element_ty);
         let abis_mangle = mangle_abi_list(closure_arg_abis);
         let ret_mangle = mangle_lir_type(closure_ret_ty);
@@ -138,14 +182,24 @@ impl SynthPool {
             return fid;
         }
         let fname = format!(
-            "{SYNTH_PREFIX}sort_impl_{element_ty_mangle}_{abis_mangle}_{ret_mangle}"
+            "{SYNTH_PREFIX}{name_prefix}_{element_ty_mangle}_{abis_mangle}_{ret_mangle}"
         );
         let mut func =
             LirFunction::new(fname, vec![LirType::Ptr, LirType::Ptr], LirType::Void);
         func.param_names = vec![Some("arr".into()), Some("cl".into())];
         func.const_params = vec![false, false];
 
-        emit_sort_impl_body(&mut func, structs, element_ty, closure_arg_abis);
+        emit_sort_impl_body(
+            &mut func,
+            structs,
+            element_ty,
+            closure_arg_abis,
+            if is_key_variant {
+                Some(closure_ret_ty.clone())
+            } else {
+                None
+            },
+        );
 
         let fid = FuncId(self.base_func_count + self.new_fns.len() as u32);
         self.cache.insert(key, fid);
@@ -248,11 +302,19 @@ fn alloc_value(next: &mut u32) -> ValueId {
 ///   free:          free(aux); return
 ///   done_nofree:   return (n<2 path)
 /// ```
+/// If `key_ty` is `Some(K)`, the closure is `K(T)`: extract a key from each
+/// element before comparing. Compare dispatches on `K`'s shape — numeric/bool
+/// keys use direct `Cmp Le`, aggregate keys are rejected upstream in
+/// `try_emit_vector_each_hof` (no aggregate-key support in this commit).
+///
+/// If `key_ty` is `None`, the closure is `int(T, T)`: classic comparator;
+/// compare its result against zero.
 fn emit_sort_impl_body(
     func: &mut LirFunction,
     structs: &[StructDef],
     element_ty: &LirType,
     closure_arg_abis: &[AbiKind],
+    key_ty: Option<LirType>,
 ) {
     let elem_size = c_sizeof_lir_type(element_ty, structs) as u32;
     let array_sid = lookup_struct_id(structs, "GorgetArray").unwrap_or(StructId(0));
@@ -639,7 +701,8 @@ fn emit_sort_impl_body(
         index: j_cp,
         elem_size,
     });
-    // Compare: closure signature dictates whether we Load or pass pointer.
+    // Compare: closure signature dictates whether we Load or pass pointer
+    // for each element arg.
     let (ivarg, jvarg, arg_abi) = match closure_arg_abis.first().copied() {
         Some(AbiKind::Ptr) => (ip_cp, jp_cp, AbiKind::Ptr),
         _ => {
@@ -658,28 +721,66 @@ fn emit_sort_impl_body(
             (iv, jv, AbiKind::Scalar)
         }
     };
-    let cmpr = alloc_value(&mut next);
-    func.block_mut(compare_bb).insts.push(Inst::CallClosure {
-        dst: Some(cmpr),
-        kind: ClosureDispatchKind::EscapedClosure,
-        closure: cl,
-        args: vec![ivarg, jvarg],
-        arg_abis: vec![arg_abi, arg_abi],
-        ret_ty: LirType::I64,
-    });
-    let zero_cp = alloc_value(&mut next);
-    func.block_mut(compare_bb).insts.push(Inst::IConst {
-        dst: zero_cp,
-        ty: LirType::I64,
-        value: 0,
-    });
-    let le0 = alloc_value(&mut next);
-    func.block_mut(compare_bb).insts.push(Inst::Cmp {
-        dst: le0,
-        op: CmpOp::Le,
-        lhs: cmpr,
-        rhs: zero_cp,
-    });
+    let le0 = match &key_ty {
+        None => {
+            // Classic comparator: cl(iv, jv) -> int. Branch on result ≤ 0
+            // (stable: ties take the left element).
+            let cmpr = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::CallClosure {
+                dst: Some(cmpr),
+                kind: ClosureDispatchKind::EscapedClosure,
+                closure: cl,
+                args: vec![ivarg, jvarg],
+                arg_abis: vec![arg_abi, arg_abi],
+                ret_ty: LirType::I64,
+            });
+            let zero_cp = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::IConst {
+                dst: zero_cp,
+                ty: LirType::I64,
+                value: 0,
+            });
+            let out = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::Cmp {
+                dst: out,
+                op: CmpOp::Le,
+                lhs: cmpr,
+                rhs: zero_cp,
+            });
+            out
+        }
+        Some(k_ty) => {
+            // Key variant: cl(iv) -> K; cl(jv) -> K; compare keys directly.
+            // Scalar keys only — callers enforce this via is_aggregate check
+            // upstream. `Cmp Le` on K is valid for integer/bool/float types.
+            let ki = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::CallClosure {
+                dst: Some(ki),
+                kind: ClosureDispatchKind::EscapedClosure,
+                closure: cl,
+                args: vec![ivarg],
+                arg_abis: vec![arg_abi],
+                ret_ty: k_ty.clone(),
+            });
+            let kj = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::CallClosure {
+                dst: Some(kj),
+                kind: ClosureDispatchKind::EscapedClosure,
+                closure: cl,
+                args: vec![jvarg],
+                arg_abis: vec![arg_abi],
+                ret_ty: k_ty.clone(),
+            });
+            let out = alloc_value(&mut next);
+            func.block_mut(compare_bb).insts.push(Inst::Cmp {
+                dst: out,
+                op: CmpOp::Le,
+                lhs: ki,
+                rhs: kj,
+            });
+            out
+        }
+    };
     func.block_mut(compare_bb).terminator = Term::Branch {
         cond: le0,
         then_block: take_i_bb,

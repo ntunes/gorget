@@ -268,74 +268,84 @@ fn expand_func(
                     init,
                 } => {
                     match hof_op {
-                        HofOp::SortBy | HofOp::SortedBy => {
+                        HofOp::SortBy
+                        | HofOp::SortedBy
+                        | HofOp::SortByKey
+                        | HofOp::SortedByKey => {
                             // Sort family: synthesize a dedicated sort_impl
-                            // function (shared across SortBy / SortedBy) and
-                            // rewrite the call site.
-                            let fid = pool.get_or_emit_sort_impl(
-                                structs,
-                                hof_op,
-                                &element_ty,
-                                &closure_arg_abis,
-                                &closure_ret_ty,
-                            );
+                            // function (shared across in-place and returning
+                            // variants) and rewrite the call site.
+                            let is_key =
+                                matches!(hof_op, HofOp::SortByKey | HofOp::SortedByKey);
+                            let is_returning =
+                                matches!(hof_op, HofOp::SortedBy | HofOp::SortedByKey);
+                            let fid = if is_key {
+                                pool.get_or_emit_sort_by_key_impl(
+                                    structs,
+                                    hof_op,
+                                    &element_ty,
+                                    &closure_arg_abis,
+                                    &closure_ret_ty,
+                                )
+                            } else {
+                                pool.get_or_emit_sort_impl(
+                                    structs,
+                                    hof_op,
+                                    &element_ty,
+                                    &closure_arg_abis,
+                                    &closure_ret_ty,
+                                )
+                            };
                             let gorget_array_sid = structs
                                 .iter()
                                 .position(|s| s.name == "GorgetArray")
                                 .map(|i| StructId(i as u32))
                                 .unwrap_or(StructId(0));
-                            match hof_op {
-                                HofOp::SortBy => {
-                                    // Direct call: sort_impl(coll, closure).
-                                    new_insts.push(Inst::Call {
-                                        dst: None,
-                                        func: fid,
-                                        args: vec![coll, closure],
-                                    });
-                                }
-                                HofOp::SortedBy => {
-                                    // Inline: ret = gorget_array_clone(coll);
-                                    //         ret_ptr = &ret;
-                                    //         sort_impl(ret_ptr, closure);
-                                    //         dst = *ret_ptr
-                                    let d = dst
-                                        .expect("SortedBy must carry a dst ValueId");
-                                    let clone_val = alloc_value(&mut next);
-                                    new_insts.push(Inst::CallExtern {
-                                        dst: Some(clone_val),
-                                        name: "gorget_array_clone".to_string(),
-                                        args: vec![coll],
-                                        original_name: None,
-                                        arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
-                                    });
-                                    // Spill to slot so we can take address.
-                                    let slot = func.add_slot(
-                                        LirType::Struct(gorget_array_sid),
-                                        None,
-                                    );
-                                    new_insts.push(Inst::SlotStore {
-                                        slot,
-                                        value: clone_val,
-                                        is_move: true,
-                                    });
-                                    let clone_ptr = alloc_value(&mut next);
-                                    new_insts.push(Inst::SlotAddr {
-                                        dst: clone_ptr,
-                                        slot,
-                                    });
-                                    new_insts.push(Inst::Call {
-                                        dst: None,
-                                        func: fid,
-                                        args: vec![clone_ptr, closure],
-                                    });
-                                    // Reload sorted array as the HofExpand result.
-                                    new_insts.push(Inst::SlotLoad {
-                                        dst: d,
-                                        slot,
-                                        ty: LirType::Struct(gorget_array_sid),
-                                    });
-                                }
-                                _ => unreachable!(),
+                            if is_returning {
+                                // Inline: ret = gorget_array_clone(coll);
+                                //         ret_ptr = &ret;
+                                //         sort_impl(ret_ptr, closure);
+                                //         dst = *ret_ptr
+                                let d = dst.expect(
+                                    "SortedBy/SortedByKey must carry a dst ValueId",
+                                );
+                                let clone_val = alloc_value(&mut next);
+                                new_insts.push(Inst::CallExtern {
+                                    dst: Some(clone_val),
+                                    name: "gorget_array_clone".to_string(),
+                                    args: vec![coll],
+                                    original_name: None,
+                                    arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
+                                });
+                                let slot =
+                                    func.add_slot(LirType::Struct(gorget_array_sid), None);
+                                new_insts.push(Inst::SlotStore {
+                                    slot,
+                                    value: clone_val,
+                                    is_move: true,
+                                });
+                                let clone_ptr = alloc_value(&mut next);
+                                new_insts.push(Inst::SlotAddr {
+                                    dst: clone_ptr,
+                                    slot,
+                                });
+                                new_insts.push(Inst::Call {
+                                    dst: None,
+                                    func: fid,
+                                    args: vec![clone_ptr, closure],
+                                });
+                                new_insts.push(Inst::SlotLoad {
+                                    dst: d,
+                                    slot,
+                                    ty: LirType::Struct(gorget_array_sid),
+                                });
+                            } else {
+                                // Direct call: sort_impl(coll, closure).
+                                new_insts.push(Inst::Call {
+                                    dst: None,
+                                    func: fid,
+                                    args: vec![coll, closure],
+                                });
                             }
                         }
                         HofOp::Each
