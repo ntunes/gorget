@@ -1366,6 +1366,25 @@ int extract_elem_size_from_name(String name, StructRegistry &sr):
 
 # Size-aware variant used at lower_instruction's `gorget_array_contains`
 # site where the element may be a user struct requiring real size lookup.
+# True for runtime functions that return a void* pointing to an element
+# inside a collection (`Vector.get / .safe_get / .first / .last / .pop`,
+# `Dict.get / .remove`). The self-host's `infer_method_return_type`
+# flattens these to return the element type directly, but at the C level
+# they still return void*. For scalar-element callers, the pointer must
+# be dereferenced into the scalar — otherwise the pointer address flows
+# downstream as if it were the value. Called from the GICallExtern
+# lowering to decide whether to insert an ILoad before the SlotStore.
+bool returns_ptr_to_element(String name):
+    if name == "gorget_array_get" or name == "gorget_array_safe_get":
+        return true
+    if name == "gorget_map_get":
+        return true
+    if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
+        return true
+    if name == "gorget_map_remove" or name == "gorget_array_remove_opt":
+        return true
+    return false
+
 int extract_elem_size_from_name_in_mod(String name, StructRegistry &sr, LirModule &m):
     String elem = ""
     if name.starts_with("Vector__"):
@@ -2021,9 +2040,31 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 f.blocks.set(bb, blk)
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
-                    LirBlock blk2 = f.blocks.get(bb).unwrap()
-                    blk2.insts.push(ISlotStore(dst_slot, dst, false))
-                    f.blocks.set(bb, blk2)
+                    int dst_slot_ty = f.slots.get(dst_slot).unwrap().ty
+                    # Pointer-returning runtime calls (`gorget_array_safe_get`
+                    # etc.) return a void* pointing to the element. When the
+                    # GIR caller typed the result slot as the element type
+                    # (from `infer_method_return_type` flattening `.get()` on
+                    # Vector[scalar] to the scalar element directly), emit an
+                    # explicit ILoad to dereference the pointer into a scalar
+                    # before the SlotStore. Codegen-side fixes don't survive
+                    # the SSA pass's scalar-slot promotion (stores/loads get
+                    # eliminated, leaving the raw void* flowing downstream
+                    # as if it were the int — the `bb = &block_map[i]` bug).
+                    bool is_ptr_ret = returns_ptr_to_element(call_name)
+                    bool slot_is_ptr_kind = (dst_slot_ty == LT_PTR) or (dst_slot_ty >= LT_PTR_TO_BASE and dst_slot_ty < LT_STRUCT_BASE)
+                    if is_ptr_ret and lir_is_scalar(dst_slot_ty) and not slot_is_ptr_kind:
+                        int loaded = lir_fn_next_value(&f)
+                        LirBlock blk_l = f.blocks.get(bb).unwrap()
+                        blk_l.insts.push(ILoad(loaded, dst, dst_slot_ty))
+                        f.blocks.set(bb, blk_l)
+                        LirBlock blk2 = f.blocks.get(bb).unwrap()
+                        blk2.insts.push(ISlotStore(dst_slot, loaded, false))
+                        f.blocks.set(bb, blk2)
+                    else:
+                        LirBlock blk2 = f.blocks.get(bb).unwrap()
+                        blk2.insts.push(ISlotStore(dst_slot, dst, false))
+                        f.blocks.set(bb, blk2)
 
         case GIDrop(local_id):
             # Emit drop as extern call: Type__drop(&place)

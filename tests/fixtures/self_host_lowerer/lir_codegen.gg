@@ -1919,6 +1919,24 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
             # cause. Discard the aggregate, assign zero.
             if not lir_is_aggregate(slot_ty) and lir_is_aggregate(vty):
                 return s(slot) + " = 0;"
+            # Non-pointer scalar slot (I64/I32/bool/F64/…) receiving a
+            # pointer value. The self-host's `infer_method_return_type`
+            # flattens `.get()/.first()/.last()/.pop()` on
+            # `Vector[scalar]` to return the element type directly (no
+            # Option wrapper), but at LIR the call still goes through
+            # `gorget_array_safe_get` et al. which return `void*` — a
+            # pointer TO the element. A plain `slot = ptr` stores the
+            # pointer address as the scalar value, which then gets
+            # consumed downstream as if it were the element (the `bb =
+            # &block_map[i]` bug that crashed stage-1 in lower_operand).
+            # Dereference as the slot's scalar type so the scalar value
+            # flows correctly. Excludes LT_PTR / LT_PTR_TO_BASE slots —
+            # those are genuine pointer slots that should receive the
+            # pointer value, not deref it.
+            bool slot_is_ptr_kind = (slot_ty == LT_PTR) or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE)
+            if lir_is_scalar(slot_ty) and not slot_is_ptr_kind and (vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE)):
+                String st_name = c_type_name(slot_ty, &sn)
+                return s(slot) + " = *((" + st_name + "*)" + v(value) + ");"
             return s(slot) + " = " + v(value) + ";"
 
         case ISlotLoad(dst, slot, _):
@@ -3269,6 +3287,7 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[Str
         bool bp_agg = lir_is_aggregate(bp_ty)
         bool arg_agg = lir_is_aggregate(arg_ty)
         bool bp_ptr = (bp_ty == LT_PTR) or (bp_ty >= LT_PTR_TO_BASE and bp_ty < LT_STRUCT_BASE)
+        bool arg_ptr = (arg_ty == LT_PTR) or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
         if bp_ptr and arg_agg:
             # Pointer bp receiving an aggregate value — take the address
             # of the aggregate stack temp. This happens for `!Aggregate`
@@ -3285,6 +3304,18 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[Str
             # Different aggregate types — fall back to zero-init rather
             # than risking a struct-size memcpy mismatch.
             out = out + "__bp" + int_to_str(bp.value_id) + " = (" + c_type_name(bp_ty, &sn) + "){0}; "
+        elif lir_is_scalar(bp_ty) and not bp_ptr and arg_ptr:
+            # NON-POINTER scalar bp (I64/I32/bool/F64/...) receiving a
+            # pointer arg — mirrors the ISlotStore fix for
+            # `Vector[scalar].get(i)` et al. where the self-host flattens
+            # the return type to the scalar element but the call actually
+            # returns a pointer-to-element. Dereference as the bp's
+            # scalar type so the scalar value flows into the next block.
+            # Excluding `bp_ptr` is critical — pointer-to-pointer
+            # transfers (`void* __bp = __v0` when both are pointers) must
+            # stay as plain assignment, not an aliasing deref.
+            String bp_ty_name = c_type_name(bp_ty, &sn)
+            out = out + "__bp" + int_to_str(bp.value_id) + " = *((" + bp_ty_name + "*)__v" + int_to_str(arg) + "); "
         else:
             out = out + "__bp" + int_to_str(bp.value_id) + " = __v" + int_to_str(arg) + "; "
         i += 1
