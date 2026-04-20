@@ -593,8 +593,15 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      dispatched by element type; `windows` / `chunks` → generic
      `gorget_array_<method>` stubs using the source array's
      `elem_size` (one stub covers every T).
-   - Vector still in backends (qsort TLS trampoline): `sort_by`,
-     `sorted_by`, `sort_by_key`, `sorted_by_key`.
+   - Vector migrated via BIR module-level synthesis (sort family):
+     `sort_by`, `sorted_by`, `sort_by_key`, `sorted_by_key` →
+     `__gg_synth_sort_impl_*` / `__gg_synth_sort_impl_key_*`
+     synthesized at BIR time by `bir::synth::SynthPool`. Iterative
+     bottom-up stable mergesort; aux buffer via `malloc`/`free`.
+     Key compare dispatches on K: scalar → `Cmp Le`, `Str` →
+     `gorget_str_cmp`, other struct → `memcmp`. Dedup by
+     `(op, element_ty, closure_arg_abis, closure_ret_ty)` tuple.
+     See `docs/internals/bir-module-synthesis-plan.md`.
    - Dict migrated via HofExpand: `each`, `fold`, `any`, `all`,
      `filter`. The BIR scaffold `emit_dict_hof_loop_scaffold` walks
      the hash table and threads extras through both the state-skip
