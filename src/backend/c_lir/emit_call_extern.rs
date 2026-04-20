@@ -695,42 +695,13 @@ pub(super) fn emit_call_extern(
                 }).unwrap_or_else(|| find_closure_call_fn(module, "void*", sn))
             };
 
-            if let Some((_elem_ty, method)) = parse_vector_higher_order(emit_name) {
-                // All closure-taking Vector HOFs plus sort/sorted/unique/
-                // windows/chunks are lowered upstream — via `Inst::HofExpand`
-                // or via `map_monomorphized_to_runtime` routing to typed /
-                // generic runtime stubs. Only the qsort TLS trampoline
-                // variants (`sort_by` / `sorted_by` / `sort_by_key` /
-                // `sorted_by_key`) remain inline.
-                if (dst.is_some() || method == "sort_by" || method == "sort_by_key")
-                    && matches!(method,
-                        "sort_by" | "sorted_by" | "sort_by_key" | "sorted_by_key"
-                    )
-                {
-                    let d_opt = dst;
-                    let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
-                    let arr_arg = v(emit_args[0]);
-                    let closure_arg = emit_args.last().copied();
-                    let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
-                    let closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    // Delegate to the helper emitted by emit_vector_helper.
-                    // The helper takes the closure as const void* and stores a
-                    // pointer in TLS (save/restored across calls). Pass either
-                    // the closure pointer directly or the address of the struct.
-                    let closure_pass = if closure_is_ptr {
-                        fn_arg.clone()
-                    } else {
-                        format!("&{fn_arg}")
-                    };
-                    let is_mutating = method == "sort_by" || method == "sort_by_key";
-                    if is_mutating {
-                        write!(out, "{emit_name}({arr_arg}, {closure_pass});").unwrap();
-                    } else {
-                        write!(out, "{dv} = {emit_name}({arr_arg}, {closure_pass});").unwrap();
-                    }
-                    return;
-                }
-            }
+            // Vector higher-order methods no longer dispatch here: every
+            // surface method has a path — HofExpand (filter/map/fold/
+            // reduce/any/all/each/find/find_index/count/flat_map),
+            // runtime stubs (sort/sorted/unique/windows/chunks), or the
+            // BIR SynthPool (sort_by / sorted_by / sort_by_key /
+            // sorted_by_key). If a call ever falls through, the linker
+            // surfaces it — we no longer quietly swallow it.
 
             // ── Inline Dict higher-order methods ─────────────
             // Note: `filter` / `fold` / `each` / `any` / `all` are all

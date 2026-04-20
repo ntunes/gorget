@@ -4,16 +4,18 @@
 use super::*;
 
 /// Higher-order collection methods that the old C backend generates inline.
-pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
-    // sort_by / sorted_by are migrated to BIR SynthPool (Commit 2 of the
-    // bir-module-synthesis plan). sort_by_key / sorted_by_key still flow
-    // through the TLS trampoline until Commit 3 lands.
-    "sorted_by_key", "sort_by_key",
-    // Most HOF methods (filter, map, fold, reduce, any, all, each, flat_map,
-    // find, find_index, count) are migrated to `Inst::HofExpand` upstream.
-    // `sort` / `sorted` / `unique` / `windows` / `chunks` all go through
-    // runtime stubs dispatched in `map_monomorphized_to_runtime`.
-];
+///
+/// **Empty** as of the bir-module-synthesis Commit 4 — all Vector
+/// higher-order methods have been migrated:
+/// - filter / map / fold / reduce / any / all / each / flat_map /
+///   find / find_index / count → `Inst::HofExpand`
+/// - sort / sorted / unique / windows / chunks → runtime stubs
+/// - sort_by / sorted_by / sort_by_key / sorted_by_key → BIR SynthPool
+///   (`__gg_synth_sort_impl_*` / `__gg_synth_sort_impl_key_*`)
+///
+/// The const is kept as a hook for future migrations; the
+/// parse/dispatch machinery exits early when empty.
+pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[];
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
 pub(super) const DICT_INLINE_METHODS: &[&str] = &[
@@ -91,10 +93,11 @@ pub(super) fn parse_vector_higher_order(name: &str) -> Option<(&str, &str)> {
     let elem = &rest[..sep_pos];
     Some((elem, method))
 }
-/// Collection helper descriptor — Vector, Dict, or Set.
+/// Collection helper descriptor — Dict or Set.
+///
+/// Vector entries are no longer emitted: all Vector higher-order
+/// methods have migrated to BIR SynthPool / HofExpand / runtime stubs.
 pub(super) enum CollHelper {
-    /// (full_name, elem_c, method, closure_ty, call_fn)
-    Vector(String, String, String, String, String),
     /// (full_name, key_c, val_c, method, closure_ty, call_fn)
     Dict(String, String, String, String, String, String),
     /// (full_name, elem_c, method, closure_ty, call_fn)
@@ -122,12 +125,7 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
                         .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "void*".into());
                     let call_fn_name = find_closure_call_fn(module, &closure_c_type, sn);
 
-                    if let Some((elem_ty, method)) = parse_vector_higher_order(name) {
-                        helpers.push(CollHelper::Vector(
-                            name.clone(), elem_type_to_c_with_sn(elem_ty, &orig_to_c), method.to_string(),
-                            closure_c_type, call_fn_name,
-                        ));
-                    } else if let Some((key_ty, val_ty, method)) = parse_dict_higher_order(name) {
+                    if let Some((key_ty, val_ty, method)) = parse_dict_higher_order(name) {
                         helpers.push(CollHelper::Dict(
                             name.clone(), elem_type_to_c_with_sn(key_ty, &orig_to_c), elem_type_to_c_with_sn(val_ty, &orig_to_c),
                             method.to_string(), closure_c_type, call_fn_name,
@@ -153,9 +151,6 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
     writeln!(out, "/* ── Higher-order collection helpers ── */").unwrap();
     for helper in &helpers {
         match helper {
-            CollHelper::Vector(full_name, elem_c, method, closure_ty, call_fn) => {
-                emit_vector_helper(out, full_name, elem_c, method, closure_ty, call_fn, module, sn);
-            }
             CollHelper::Dict(full_name, key_c, val_c, method, closure_ty, call_fn) => {
                 emit_dict_helper(out, full_name, key_c, val_c, method, closure_ty, call_fn, module);
             }
@@ -164,71 +159,6 @@ pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &Li
             }
         }
         writeln!(out).unwrap();
-    }
-}
-
-pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str, method: &str, _closure_ty: &str, call_fn: &str, module: &LirModule, sn: &HashMap<u32, String>) {
-    // Skip closure-dependent helpers when we can't resolve the closure call function.
-    // Methods that don't use closures (sort, sorted, unique, count, windows, chunks) always emit.
-    let closure_free = matches!(method, "sort" | "sorted" | "unique" | "count" | "windows" | "chunks");
-    if !closure_free && call_fn.contains("UNKNOWN_CLOSURE_CALL") {
-        return;
-    }
-    // Determine which closure params need & prefix (Ptr ABI for resource types)
-    let needs_ref = closure_params_need_ref(module, call_fn);
-    match method {
-        "sort_by_key" | "sorted_by_key" => {
-            // Key-function sort: closure is K(T); comparator extracts keys from
-            // both elements and compares using type-specific key comparator.
-            // TLS stores the active closure for the qsort callback to access.
-            let key_c = closure_call_return_type(module, call_fn, sn).unwrap_or_else(|| "int64_t".into());
-            let needs_ref0 = needs_ref.first().copied().unwrap_or(false);
-            let a_arg = if needs_ref0 { format!("(const {elem_c}*)__pa") } else { format!("*(const {elem_c}*)__pa") };
-            let b_arg = if needs_ref0 { format!("(const {elem_c}*)__pb") } else { format!("*(const {elem_c}*)__pb") };
-            let tls_sym = format!("__tls_{full_name}");
-            let cmp_sym = format!("__cmp_{full_name}");
-            // Compare two keys inline — type-specific.
-            let key_cmp = match key_c.as_str() {
-                "int64_t" | "int32_t" | "int16_t" | "int8_t"
-                | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" =>
-                    "(int)((__ka > __kb) - (__ka < __kb))".to_string(),
-                "double" | "float" =>
-                    "(__ka < __kb) ? -1 : (__ka > __kb) ? 1 : 0".to_string(),
-                "Str" | "GorgetString" =>
-                    "gorget_str_cmp(__ka, __kb)".to_string(),
-                "bool" | "_Bool" =>
-                    "(int)((__ka > __kb) - (__ka < __kb))".to_string(),
-                _ => {
-                    // Fallback: byte-compare via memcmp (works for POD).
-                    format!("memcmp(&__ka, &__kb, sizeof({key_c}))")
-                }
-            };
-            writeln!(out, "static _Thread_local const void* {tls_sym};").unwrap();
-            writeln!(out, "static int {cmp_sym}(const void* __pa, const void* __pb) {{").unwrap();
-            writeln!(out, "    {key_c} __ka = {call_fn}({tls_sym}, {a_arg});").unwrap();
-            writeln!(out, "    {key_c} __kb = {call_fn}({tls_sym}, {b_arg});").unwrap();
-            writeln!(out, "    return {key_cmp};").unwrap();
-            writeln!(out, "}}").unwrap();
-            if method == "sort_by_key" {
-                writeln!(out, "static inline void {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
-                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
-                writeln!(out, "    GorgetArray* __a = (GorgetArray*)__arr_ptr;").unwrap();
-                writeln!(out, "    qsort(__a->data, __a->len, __a->elem_size, {cmp_sym});").unwrap();
-                writeln!(out, "    {tls_sym} = __prev;").unwrap();
-                writeln!(out, "}}").unwrap();
-            } else {
-                writeln!(out, "static inline GorgetArray {full_name}(void* __arr_ptr, const void* __fn) {{").unwrap();
-                writeln!(out, "    const void* __prev = {tls_sym}; {tls_sym} = __fn;").unwrap();
-                writeln!(out, "    GorgetArray __result = gorget_array_clone((GorgetArray*)__arr_ptr);").unwrap();
-                writeln!(out, "    qsort(__result.data, __result.len, __result.elem_size, {cmp_sym});").unwrap();
-                writeln!(out, "    {tls_sym} = __prev;").unwrap();
-                writeln!(out, "    return __result;").unwrap();
-                writeln!(out, "}}").unwrap();
-            }
-        }
-        _ => {
-            writeln!(out, "// TODO: {full_name} not yet implemented in c_lir").unwrap();
-        }
     }
 }
 
