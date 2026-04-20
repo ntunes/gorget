@@ -2090,19 +2090,36 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
 
         # Canonical box-alloc: heap-allocate sizeof(inner_ty), store value there.
         # Expands to the same scalar/aggregate dispatch IStore uses, with the
-        # allocation + store fused into one statement.
+        # allocation + store fused into one statement. When `value` is already
+        # a pointer (LT_PTR / LT_PTR_TO_BASE) — e.g. the SSA value holding a
+        # consumed `!SpannedExpr` parameter threaded through block params —
+        # use the pointer directly instead of its stack address.
         case IBoxAlloc(dst, inner_ty, value):
             String ty_name = c_type_name(inner_ty, &sn)
+            int ba_vty = LT_VOID
+            if val_types.contains(value):
+                ba_vty = val_types.get(value).unwrap()
+            bool ba_value_is_ptr = ba_vty == LT_PTR or (ba_vty >= LT_PTR_TO_BASE and ba_vty < LT_STRUCT_BASE)
             if lir_is_aggregate(inner_ty):
+                if ba_value_is_ptr:
+                    return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); memcpy(" + v(dst) + ", " + v(value) + ", sizeof(" + ty_name + "));"
                 return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); memcpy(" + v(dst) + ", &" + v(value) + ", sizeof(" + ty_name + "));"
             return v(dst) + " = GORGET_ALLOC(sizeof(" + ty_name + ")); *(" + ty_name + "*)(" + v(dst) + ") = (" + ty_name + ")" + v(value) + ";"
 
         # Canonical address-of: copy value into the function-scope __at<dst>
-        # temp declared in the prologue, then take its address.
+        # temp declared in the prologue, then take its address. Same
+        # pointer-aware twist as IBoxAlloc when the SSA value is already a
+        # pointer.
         case IAddressOf(dst, value, ty):
             String at_name = "__at" + int_to_str(dst)
             String ty_name = c_type_name(ty, &sn)
+            int ao_vty = LT_VOID
+            if val_types.contains(value):
+                ao_vty = val_types.get(value).unwrap()
+            bool ao_value_is_ptr = ao_vty == LT_PTR or (ao_vty >= LT_PTR_TO_BASE and ao_vty < LT_STRUCT_BASE)
             if lir_is_aggregate(ty):
+                if ao_value_is_ptr:
+                    return "memcpy(&" + at_name + ", " + v(value) + ", sizeof(" + ty_name + ")); " + v(dst) + " = &" + at_name + ";"
                 return "memcpy(&" + at_name + ", &" + v(value) + ", sizeof(" + ty_name + ")); " + v(dst) + " = &" + at_name + ";"
             return at_name + " = (" + ty_name + ")" + v(value) + "; " + v(dst) + " = &" + at_name + ";"
 
@@ -3168,10 +3185,13 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[Str
         bool arg_agg = lir_is_aggregate(arg_ty)
         bool bp_ptr = (bp_ty == LT_PTR) or (bp_ty >= LT_PTR_TO_BASE and bp_ty < LT_STRUCT_BASE)
         if bp_ptr and arg_agg:
-            # Pointer bp receiving an aggregate value — mirrors the
-            # ISlotStore fallback that writes NULL. Data is lost, but the
-            # surrounding code already accepted this at the SlotStore site.
-            out = out + "__bp" + int_to_str(bp.value_id) + " = NULL; "
+            # Pointer bp receiving an aggregate value — take the address
+            # of the aggregate stack temp. This happens for `!Aggregate`
+            # consuming params, whose slot is LT_PTR (ABI is pointer-pass)
+            # but the user assigns new aggregate values. Previously wrote
+            # NULL — silently lost all mutations and segfaulted downstream
+            # on the threaded pointer.
+            out = out + "__bp" + int_to_str(bp.value_id) + " = &__v" + int_to_str(arg) + "; "
         elif bp_agg and not arg_agg:
             # Aggregate bp receiving a non-aggregate — zero-init matches
             # ISlotStore's coercion for lost-type-info arguments.
