@@ -18,11 +18,15 @@ pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
 pub(super) const DICT_INLINE_METHODS: &[&str] = &[
-    "map", "get_or", "get_or_put",
+    "map",
     // `fold` / `each` / `any` / `all` / `filter` are migrated to
     // `Inst::HofExpand`. `filter` pre-constructs its result via the
     // `gorget_map_new_like` runtime helper so one BIR expansion
     // covers every K/V.
+    // `get_or` / `get_or_put` are intercepted at LIR emit time
+    // (src/lir/lower/insts.rs::try_emit_dict_get_or) — they block-
+    // split into `gorget_map_get` + null-check + conditional
+    // clone/insert without a per-type inline helper.
     // `update` routes to generic runtime stub `gorget_map_update`
     // dispatched via `map_monomorphized_to_runtime`.
 ];
@@ -263,38 +267,13 @@ pub(super) fn emit_vector_helper(out: &mut String, full_name: &str, elem_c: &str
 
 /// Emit inline C helpers for Dict higher-order and inline methods.
 ///
-/// Only `get_or` / `get_or_put` (and `map`, which is unimplemented) still
-/// need per-type inline helpers — `filter` / `fold` / `each` / `any` /
-/// `all` / `update` are all migrated to BIR expansions or runtime stubs.
-pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, key_c: &str, val_c: &str, method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
-    match method {
-        "get_or" => {
-            // get_or(key, default) → val_type
-            // For String values, clone to prevent aliasing the map's internal storage.
-            // This matches dict.get() which clones String values into Option payloads.
-            let val_is_str = val_c == "Str" || val_c == "GorgetString";
-            let deref = if val_is_str { "gorget_string_clone_to_owned(__ptr)" } else { "*__ptr" };
-            writeln!(out, "static inline {val_c} {full_name}(void* __map_ptr, {key_c} __key, {val_c} __default) {{").unwrap();
-            writeln!(out, "    {val_c}* __ptr = ({val_c}*)gorget_map_get((GorgetMap*)__map_ptr, &__key);").unwrap();
-            writeln!(out, "    return __ptr ? {deref} : __default;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        "get_or_put" => {
-            // get_or_put(key, default) → val_type — insert default if missing
-            let val_is_str = val_c == "Str" || val_c == "GorgetString";
-            let deref = if val_is_str { "gorget_string_clone_to_owned(__ptr)" } else { "*__ptr" };
-            writeln!(out, "static inline {val_c} {full_name}(void* __map_ptr, {key_c} __key, {val_c} __default) {{").unwrap();
-            writeln!(out, "    GorgetMap* __m = (GorgetMap*)__map_ptr;").unwrap();
-            writeln!(out, "    {val_c}* __ptr = ({val_c}*)gorget_map_get(__m, &__key);").unwrap();
-            writeln!(out, "    if (__ptr) return {deref};").unwrap();
-            writeln!(out, "    gorget_map_put(__m, &__key, &__default);").unwrap();
-            writeln!(out, "    return __default;").unwrap();
-            writeln!(out, "}}").unwrap();
-        }
-        _ => {
-            writeln!(out, "// TODO: dict {full_name} not yet implemented in c_lir").unwrap();
-        }
-    }
+/// All previously-inlined Dict methods (`filter` / `fold` / `each` /
+/// `any` / `all`) are migrated to `Inst::HofExpand`; `update` routes
+/// to a generic runtime stub; `get_or` / `get_or_put` are intercepted
+/// at LIR emit time via `try_emit_dict_get_or`. `map` (with a
+/// different V type) has no fixture exercising it.
+pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, _key_c: &str, _val_c: &str, _method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
+    writeln!(out, "// TODO: dict {full_name} not yet implemented in c_lir").unwrap();
 }
 
 /// Emit inline C helpers for Set higher-order and inline methods.

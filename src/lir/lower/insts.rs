@@ -2211,6 +2211,215 @@ impl<'a> FuncLowering<'a> {
         Some(bb)
     }
 
+    /// Intercept `Dict__K__V__get_or(map, key, default)` and the
+    /// `__get_or_put` variant — both collapse into a
+    /// `gorget_map_get` + null-check + conditional clone/insert at LIR
+    /// emit time (no new canonical op, no per-type inline helper in
+    /// the C backend, LLVM backend stays dumb).
+    ///
+    /// On hit, the value is loaded from the map's slot; for `String`
+    /// vals the load is replaced with `gorget_string_clone_to_owned`
+    /// so the result is independently owned. `__get_or_put` also
+    /// inserts the default into the map on miss via `gorget_map_put`.
+    ///
+    /// Keys are spilled via `Inst::AddressOf` so the key arg can be
+    /// a scalar or aggregate indifferently.
+    fn try_emit_dict_get_or(
+        &mut self,
+        original_name: &str,
+        dst: &Option<ir::types::LocalId>,
+        args: &[Operand],
+        lir_args: &[ValueId],
+        bb: BlockId,
+    ) -> Option<BlockId> {
+        use crate::ir::abi::AbiKind;
+        let rest = original_name
+            .strip_prefix("Dict__")
+            .or_else(|| original_name.strip_prefix("HashMap__"))?;
+        let (is_put, base) = if let Some(b) = rest.strip_suffix("__get_or_put") {
+            (true, b)
+        } else if let Some(b) = rest.strip_suffix("__get_or") {
+            (false, b)
+        } else {
+            return None;
+        };
+        let d = (*dst)?;
+        if lir_args.len() < 3 {
+            return None;
+        }
+        // Split base into K__V at the first `__` — simple types don't
+        // nest `__` so this is unambiguous for every fixture shape.
+        let key_sep = base.find("__")?;
+        let val_c = &base[key_sep + 2..];
+        let val_is_str = val_c == "GorgetString" || val_c == "Str";
+
+        let map_arg = lir_args[0];
+        let key_arg = lir_args[1];
+        let default_arg = lir_args[2];
+        // `operand_lir_type` maps `Constant::Str` to `Ptr`, but the
+        // actual LIR value materialized for a string literal arg is
+        // the `GorgetString` struct — the slot we're about to spill
+        // into needs to match. Other constants (Int, Bool, Float)
+        // have scalar types that `operand_lir_type` gets right.
+        let key_ty = match &args[1] {
+            Operand::Constant(Constant::Str(_)) => self
+                .struct_reg
+                .lookup("GorgetString")
+                .map(LirType::Struct)
+                .unwrap_or(LirType::Ptr),
+            _ => self.operand_lir_type(&args[1]),
+        };
+        let val_ty = {
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            self.map_type(&gir_ty)
+        };
+
+        // Pre-register runtime externs the expansion will call.
+        self.ensure_extern(
+            "gorget_map_get",
+            &[LirType::Ptr, LirType::Ptr],
+            &LirType::Ptr,
+        );
+        if is_put {
+            self.ensure_extern(
+                "gorget_map_put",
+                &[LirType::Ptr, LirType::Ptr, LirType::Ptr],
+                &LirType::Void,
+            );
+        }
+        if val_is_str {
+            let str_ty = self
+                .struct_reg
+                .lookup("GorgetString")
+                .map(LirType::Struct)
+                .unwrap_or(LirType::Ptr);
+            self.ensure_extern(
+                "gorget_string_clone_to_owned",
+                &[LirType::Ptr],
+                &str_ty,
+            );
+        }
+
+        // key_addr = &key. Handles scalar and aggregate keys uniformly
+        // via AddressOf (spills to a slot if the source isn't already
+        // slot-backed).
+        let key_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::AddressOf {
+            dst: key_addr,
+            value: key_arg,
+            ty: key_ty,
+        });
+
+        // result_slot ← default. Used as the merge path for miss (and
+        // as the starting value for get_or_put's put side, which also
+        // needs default-by-address further below).
+        let result_slot = self.lir_func.add_slot(val_ty.clone(), None);
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+            slot: result_slot,
+            value: default_arg,
+            is_move: false,
+        });
+
+        // ptr = gorget_map_get(map, key_addr).
+        let ptr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            dst: Some(ptr),
+            name: "gorget_map_get".to_string(),
+            args: vec![map_arg, key_addr],
+            original_name: None,
+            arg_abis: vec![AbiKind::Ptr, AbiKind::VoidElem],
+        });
+
+        // is_present = ptr != NULL.
+        let null_val = self.lir_func.next_value();
+        self.lir_func
+            .block_mut(bb)
+            .insts
+            .push(Inst::NullPtr { dst: null_val });
+        let is_present = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+            dst: is_present,
+            op: CmpOp::Ne,
+            lhs: ptr,
+            rhs: null_val,
+        });
+
+        let hit_bb = self.lir_func.add_block();
+        let merge_bb = self.lir_func.add_block();
+        let miss_bb = if is_put {
+            self.lir_func.add_block()
+        } else {
+            merge_bb
+        };
+
+        self.lir_func.block_mut(bb).terminator = Term::Branch {
+            cond: is_present,
+            then_block: hit_bb,
+            then_args: vec![],
+            else_block: miss_bb,
+            else_args: vec![],
+        };
+
+        // hit_bb: load (or clone-from) the map's value into result_slot.
+        let payload_val = self.lir_func.next_value();
+        if val_is_str {
+            self.lir_func.block_mut(hit_bb).insts.push(Inst::CallExtern {
+                dst: Some(payload_val),
+                name: "gorget_string_clone_to_owned".to_string(),
+                args: vec![ptr],
+                original_name: None,
+                arg_abis: vec![AbiKind::Ptr],
+            });
+        } else {
+            self.lir_func.block_mut(hit_bb).insts.push(Inst::Load {
+                dst: payload_val,
+                ptr,
+                ty: val_ty.clone(),
+            });
+        }
+        self.lir_func.block_mut(hit_bb).insts.push(Inst::SlotStore {
+            slot: result_slot,
+            value: payload_val,
+            is_move: false,
+        });
+        self.lir_func.block_mut(hit_bb).terminator =
+            Term::Jump(merge_bb, vec![]);
+
+        // miss_bb (get_or_put only): insert default into map; fall
+        // through to merge. result_slot already holds default from
+        // the initial SlotStore, so nothing else is needed.
+        if is_put {
+            let default_addr = self.lir_func.next_value();
+            self.lir_func.block_mut(miss_bb).insts.push(Inst::AddressOf {
+                dst: default_addr,
+                value: default_arg,
+                ty: val_ty.clone(),
+            });
+            self.lir_func
+                .block_mut(miss_bb)
+                .insts
+                .push(Inst::CallExtern {
+                    dst: None,
+                    name: "gorget_map_put".to_string(),
+                    args: vec![map_arg, key_addr, default_addr],
+                    original_name: None,
+                    arg_abis: vec![AbiKind::Ptr, AbiKind::VoidElem, AbiKind::VoidElem],
+                });
+            self.lir_func.block_mut(miss_bb).terminator =
+                Term::Jump(merge_bb, vec![]);
+        }
+
+        // merge_bb: result = SlotLoad(result_slot); store to dst.
+        let result = self.lir_func.next_value();
+        self.lir_func.block_mut(merge_bb).insts.push(Inst::SlotLoad {
+            dst: result,
+            slot: result_slot,
+            ty: val_ty,
+        });
+        self.store_to_local(d, result, merge_bb);
+        Some(merge_bb)
+    }
+
     /// The closure argument is packed into a `GorgetClosure` pointer via
     /// `wrap_closure_call_args` so the BIR expansion can dispatch it through
     /// `Inst::CallClosure { kind: EscapedClosure }`. Closure arg ABI is set
@@ -2473,6 +2682,10 @@ impl<'a> FuncLowering<'a> {
         // lowering generate the loop skeleton. Other HOF variants still flow
         // through the per-backend inline expanders until they are migrated.
         if let Some(bb2) = self.try_emit_dict_hof(original_name, dst, args, &lir_args, bb) {
+            self.emit_post_call_zeros(args, bb2);
+            return bb2;
+        }
+        if let Some(bb2) = self.try_emit_dict_get_or(original_name, dst, args, &lir_args, bb) {
             self.emit_post_call_zeros(args, bb2);
             return bb2;
         }

@@ -605,9 +605,16 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      covers every K/V.
    - Dict routed to runtime stubs: `update` → `gorget_map_update`
      (type-independent).
+   - Dict intercepted at LIR emit time (no HofExpand, no per-type
+     C helper): `get_or` / `get_or_put` —
+     `src/lir/lower/insts.rs::try_emit_dict_get_or` block-splits
+     into `gorget_map_get` + null check + conditional
+     `gorget_string_clone_to_owned` (String vals only) / `Load`,
+     with the default sitting in a pre-initialized result slot.
+     `get_or_put` also calls `gorget_map_put` on the miss path.
+     Works for scalar and aggregate V uniformly.
    - Dict still in backends: `map` (result-dict with different V
-     type — no fixture exercises it), `get_or`, `get_or_put`
-     (per-type clone on String vals).
+     type — no fixture exercises it).
    - Set migrated via HofExpand: `each`, `fold`, `any`, `all`,
      `filter`. New BIR scaffold `emit_set_hof_loop_scaffold` handles
      both `Set__` (ordered, `order[]` walk) and `HashSet__`
