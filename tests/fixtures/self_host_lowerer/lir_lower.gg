@@ -721,6 +721,8 @@ String map_runtime_name(String name):
         return "gorget_file_read_bytes_buf"
     if name == "int64_t___flush_buffer" or name == "File___flush_buffer":
         return "gorget_file_flush"
+    if name == "int64_t__close" or name == "File__close":
+        return "gorget_file_close"
     if name == "_file_open_try":
         return "gorget_file_open_try"
     # Trait-method dispatch: File__write / File__read resolves to the

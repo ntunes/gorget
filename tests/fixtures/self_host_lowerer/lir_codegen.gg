@@ -1228,6 +1228,8 @@ bool is_void_runtime_fn(String name):
         return true
     if name == "gorget_init_args" or name == "gorget_print_capture_flush":
         return true
+    if name == "gorget_file_close" or name == "gorget_file_flush":
+        return true
     if name == "gorget_channel_send" or name == "gorget_channel_close":
         return true
     if name == "gorget_task_group_join" or name == "gorget_task_group_free":
