@@ -27,3 +27,11 @@ scripts/self_host_mem_baseline.sh --compare scripts/baselines/phase1_pre_cow_fix
   but correct: the extension stops ownership-state leaks across branch
   boundaries, so some materializations that were being skipped (incorrectly)
   now fire. Zero array_clone change, zero RSS change. Case C still dormant.
+
+- **phase3c_branch_local_clearing.json** (2026-04-21) — after restore_locals
+  clears branch-local CollectionRef/CowBorrow states at scope exit
+  (Phase 3c). Same numbers as phase3b because Case C still dormant —
+  the clearing is pure safety infrastructure that eliminates a class of
+  post-scope UAF patterns (e.g. first-loop borrow re-materialised by
+  second-loop field mutation on the same struct). Prereq for a safe
+  Case C activation.

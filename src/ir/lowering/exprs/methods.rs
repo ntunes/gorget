@@ -1950,11 +1950,11 @@ pub(super) fn lower_method_call(
             // Track collection provenance for Option__Ref_ results.
             // Case A: named-local receiver → `Local(recv)`.
             // Case B: field-access receiver with NO recv temp → `FieldPath(...)`.
-            // Case C: anon recv temp + field_path — still dormant. save_locals
-            //   now covers local_ownership + has ancestor-aware prescan, but
-            //   self_host_bootstrap still SIGSEGVs with Case C enabled. One
-            //   remaining gap (closure capture mutation? alias provenance?)
-            //   not yet captured. Tracked in TODO.
+            // Case C: anon recv temp + field_path — currently still dormant.
+            //   Enabling it breaks example_todo_app (wrong element read at
+            //   `Task t = store.tasks.get(1).unwrap()`) — the field-path CoW
+            //   is mis-tracking at a straight-line (no-loop) access site.
+            //   Needs more investigation.
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
                 if ret_name.starts_with("Option__Ref_") {
                     if let Some(recv_local) = recv_local_for_move_zero {

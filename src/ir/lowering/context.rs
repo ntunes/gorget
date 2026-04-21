@@ -1155,11 +1155,17 @@ impl<'a> LoweringContext<'a> {
     /// ownership state is restored for pre-existing locals whose declared type
     /// hasn't changed, and preserved for locals whose type was upgraded in the
     /// branch (e.g. Ptr(T)→T CoW upgrade) or locals created after save.
+    ///
+    /// *Targeted fix*: for locals created inside the scope (lid ≥ boundary),
+    /// clear any `CollectionRef` or `CowBorrow` ownership state — those states
+    /// register the local with `cow_before_field_mutation` / `cow_before_mutation`,
+    /// and a later mutation of the (still-live) source collection would re-
+    /// materialise the now-out-of-scope local, reading dead slot memory.
+    /// Other ownership states (Owned, Ref, Alias, BareParam, ViewOf) are kept
+    /// — they're either pure metadata or reference aliasing that's already
+    /// severed by runtime CoW on mutation of the aliased source.
     pub fn restore_locals(&mut self, builder: &crate::ir::builder::FunctionBuilder, saved: SavedScope) {
         self.func_state.locals = saved.locals;
-        // Rebuild local_ownership: start from saved state, then override for
-        // (a) locals created post-save (ID >= boundary) and (b) locals whose
-        // declared type was flipped during the scope (type upgrade is permanent).
         let boundary = saved.local_id_boundary;
         let saved_types = &saved.local_types_at_save;
         let mut restored = saved.local_ownership.clone();
@@ -1167,7 +1173,19 @@ impl<'a> LoweringContext<'a> {
             let post_save = lid.0 >= boundary;
             let type_flipped = saved_types.get(lid)
                 .map_or(false, |orig| *orig != builder.local_type(*lid));
-            if post_save || type_flipped {
+            if post_save {
+                // Branch-local CollectionRef/CowBorrow entries keep the local
+                // registered for future field-mutation fire-on-match. At scope
+                // exit, the local itself is dead, so the registration is stale.
+                // Drop it to prevent cow_before_field_mutation from finding it
+                // and issuing a materialise-read on a dead slot.
+                if matches!(state, LocalOwnershipState::CollectionRef { .. }
+                                 | LocalOwnershipState::CowBorrow) {
+                    // skip — don't include in restored
+                } else {
+                    restored.insert(*lid, state.clone());
+                }
+            } else if type_flipped {
                 restored.insert(*lid, state.clone());
             }
         }
