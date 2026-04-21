@@ -2,6 +2,8 @@
 /target
 # Generated C files and compiled binaries from `gg build`
 tests/fixtures/*.c
+examples/*/main.c
+examples/*/main
 tests/fixtures/*_error
 tests/fixtures/*_asan
 tests/fixtures/*_dbg
