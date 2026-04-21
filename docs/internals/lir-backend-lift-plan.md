@@ -576,6 +576,22 @@ Each step is a single commit, each removes code, each demonstrates payoff:
 
 8. **Step 7** — Add `TraitCall` + BIR expansion. Fixes trait method ABI issues.
 
+   **Migration status:** Complete (2026-04-21). `try_emit_trait_call`
+   in `src/lir/lower/insts.rs` intercepts `Box__<Trait>__<method>`
+   CallExterns at LIR emit time, reads user-param LIR types from the
+   VTable's GIR FnPtr, and emits `Inst::AddressOf` on aggregate borrow
+   args (mirrors emit_call_extern's arg-ABI marshalling). BIR
+   synthesis (`bir::synth::get_or_emit_trait_helper`) builds one
+   `__gg_synth_trait_<Trait>_<method>` helper per unique
+   `(trait, method, signature)` tuple; dedup by `TraitHelperKey`. The
+   helper body is the vtable dispatch chain: `ParamRef` + 3×
+   `(FieldPtr, Load)` + `CallPtr` + `Ret`. BIR expansion rewrites each
+   TraitCall into a `Call(helper_fid, [object, args...])`. The
+   helper's typed signature lets the C backend's normal Call coercion
+   marshal aggregate args — no more static-inline impl-param peeking.
+   Old `emit_box_wrapper` trait-dispatch branch in
+   `src/backend/c_lir/helpers.rs` deleted.
+
 9. **Step 8** — The big one. `HofExpand` variant + BIR expansion pass
    generating loop blocks + CallClosure. Remove HOF inlining from both
    backends.
