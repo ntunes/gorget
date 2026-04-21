@@ -260,6 +260,71 @@ int map_gir_type(int type_id, GirModule &gmod, StructRegistry &sr):
 # ── Type definition lowering ────────────────────────────────
 
 # Map a type name (from GirFieldInfo) to an LIR type constant.
+# Identify runtime struct names whose `computed_c_size` was set by
+# `register_builtin_structs` to match C's actual layout (with
+# runtime-only fields like `alloc` that aren't modelled in LirStructDef).
+# Pass 4 must skip these — recomputing from the 4 visible fields would
+# shrink GorgetArray from 64 to 32 and similarly regress others.
+bool is_builtin_runtime_struct(String name):
+    if name == "GorgetString" or name == "Str":
+        return true
+    if name == "GorgetArray" or name == "GorgetMap" or name == "GorgetSet":
+        return true
+    if name == "GorgetClosure" or name == "TraitObj":
+        return true
+    if name == "TaskHandle" or name == "GorgetRange":
+        return true
+    return false
+
+# Ensure a field's type name is resolvable via `sr` so
+# `resolve_field_lir_type` doesn't fall through to `LT_PTR`. Called
+# from Pass 1c for every struct field and every enum variant field.
+# Handles the collection aliases (Vector__*, Dict__*, Set__*, etc.)
+# that only appear as field types and never get `lookup_or_register_named`
+# treatment during GIR lowering. Silently no-ops for primitives / names
+# already registered / types lir_lower doesn't know how to size.
+void register_field_type_in_sr(String tname, StructRegistry &sr, LirModule &m):
+    if sr_lookup(&sr, tname) >= 0:
+        return
+    # Primitives: no registration needed — resolve_field_lir_type returns
+    # the scalar LirType directly.
+    if tname == "int64_t" or tname == "int32_t" or tname == "int16_t" or tname == "int8_t":
+        return
+    if tname == "uint64_t" or tname == "uint32_t" or tname == "uint16_t" or tname == "uint8_t":
+        return
+    if tname == "double" or tname == "float64" or tname == "float" or tname == "float32":
+        return
+    if tname == "bool" or tname == "void":
+        return
+    # Collection aliases → map to the pre-registered runtime struct.
+    String rt = collection_runtime_type(tname)
+    if rt != "":
+        int rt_sid = sr_lookup(&sr, rt)
+        if rt_sid >= 0:
+            sr_register(&sr, tname, rt_sid)
+            return
+    # Box / Guard / opaque / prelude types we know how to stamp. Falls
+    # back to the shared collection-runtime treatment if the name matches
+    # a known prefix; else leaves unregistered (resolve_field_lir_type
+    # will emit LT_PTR, which is correct for unknown opaque types).
+    if tname.starts_with("Box__"):
+        Vector[StructField] box_fields = []
+        box_fields.push(StructField("_0", LT_PTR))
+        String box_name_ctor = tname.clone()
+        int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, 8, -1))
+        sr_register(&sr, tname, box_id)
+        return
+    if is_opaque_pointer_type(tname):
+        return
+    if is_guard_struct_type(tname):
+        Vector[StructField] guard_fields = []
+        guard_fields.push(StructField("owner", LT_PTR))
+        guard_fields.push(StructField("ptr", LT_PTR))
+        String guard_name_ctor = tname.clone()
+        int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name_ctor, guard_fields, 0, false, 16, -1))
+        sr_register(&sr, tname, guard_id)
+        return
+
 int resolve_field_lir_type(String type_name, StructRegistry &sr):
     if type_name == "int64_t" or type_name == "int":
         return LT_I64
@@ -376,6 +441,35 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
             sr_register(&sr, tname, sid)
         tki_pre += 1
+
+    # Pass 1c: Register collection types referenced only as field types.
+    # `Vector[int]` used only inside `MNamed(String, Vector[int])` never
+    # appears in `gmod.type_table` (no `map_ast_type` call triggers on a
+    # variant-field type), so Pass 1/1b miss it. `resolve_field_lir_type`
+    # then falls back to `LT_PTR` (8 bytes), and the containing enum's
+    # union-variant max-size calculation undercounts by
+    # `sizeof(GorgetArray) - 8 = 56` per occurrence.
+    int pc_i = 0
+    while pc_i < ti_keys.len():
+        String pc_tname = ti_keys.get(pc_i).unwrap()
+        GirTypeInfo pc_info = gmod.type_infos.get(pc_tname).unwrap()
+        # Struct fields
+        int pcf_i = 0
+        while pcf_i < pc_info.fields.len():
+            GirFieldInfo pcf = pc_info.fields.get(pcf_i).unwrap()
+            register_field_type_in_sr(pcf.type_name, &sr, &m)
+            pcf_i += 1
+        # Enum variant fields
+        int pcv_i = 0
+        while pcv_i < pc_info.variants.len():
+            GirEnumVariantInfo pcv = pc_info.variants.get(pcv_i).unwrap()
+            int pcvf_i = 0
+            while pcvf_i < pcv.fields.len():
+                GirFieldInfo pcvf = pcv.fields.get(pcvf_i).unwrap()
+                register_field_type_in_sr(pcvf.type_name, &sr, &m)
+                pcvf_i += 1
+            pcv_i += 1
+        pc_i += 1
 
     # Pass 2: Fill in struct/enum fields from GIR type info
     int tki = 0
@@ -561,8 +655,17 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             if rsdef.fields.len() == 0:
                 rsi += 1
                 continue
+            # Skip builtin runtime structs — `register_builtin_structs`
+            # set their `computed_c_size` to match C's actual layout,
+            # which includes runtime-only fields (alloc, elem_drop,
+            # elem_clone, …) that aren't in the self-host's LirStructDef
+            # field list. Recomputing from the 4 visible fields would
+            # OVERWRITE 64 bytes with 32 for GorgetArray, etc.
+            if is_builtin_runtime_struct(rsdef.name):
+                rsi += 1
+                continue
             int new_size = 0
-            if rsdef.is_union and rsdef.enum_kind > 0:
+            if rsdef.is_union_layout and rsdef.enum_kind > 0:
                 # Union-layout enum: tag (4, padded to 8) + max variant.
                 # Variant grouping by `VariantName_N` field-name prefix.
                 int max_v = 0
@@ -578,12 +681,13 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                             break
                         last_us -= 1
                     String pfx = rsf.name.slice(0, last_us)
+                    int field_sz = lir_type_byte_size_in_mod(rsf.ty, &m, 0)
                     if pfx != cur_pfx:
                         if cur_v > max_v:
                             max_v = cur_v
                         cur_v = 0
                         cur_pfx = pfx
-                    cur_v = cur_v + lir_type_byte_size_in_mod(rsf.ty, &m, 0)
+                    cur_v = cur_v + field_sz
                     rfi += 1
                 if cur_v > max_v:
                     max_v = cur_v
@@ -607,7 +711,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 new_size = 8
             if new_size != rsdef.computed_c_size:
                 changed = true
-                LirStructDef updated = LirStructDef(rsdef.name, rsdef.fields, rsdef.enum_kind, rsdef.is_union, new_size, rsdef.extra_info)
+                LirStructDef updated = LirStructDef(rsdef.name, rsdef.fields, rsdef.enum_kind, rsdef.is_union_layout, new_size, rsdef.computed_c_align)
                 m.structs.set(rsi, updated)
             rsi += 1
         guard_iters += 1
@@ -1123,7 +1227,7 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
             # field sizes, aligned to 8. Previously always summed; that
             # overcounted union enums by ~Nx and routed 12376-byte
             # allocations to 568-byte Item elements.
-            if sdef.is_union and sdef.enum_kind > 0:
+            if sdef.is_union_layout and sdef.enum_kind > 0:
                 int max_v_bytes = 0
                 int cur_v_bytes = 0
                 String cur_prefix = ""
