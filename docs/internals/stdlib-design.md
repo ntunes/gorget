@@ -976,35 +976,75 @@ This phase has **real type-system prerequisites** — see §4.2, §4.3, and §3.
 
 #### Phase 2c: Trait definitions + equip methods (LAZY FROM DAY ONE)
 
-1. Define `Iterator[T]`, `Iterable[T]`, `IntoIterable[T]` per §3.
-2. Implement all equip methods from §4.4 on `Iterator[T]` — lazy from the
-   start, no eager Vector-intermediate implementation. (An eager interim
-   trains users onto the old Vector API permanently.)
-3. Vector/Dict/Set convenience wrappers (`v.map(f)` ≡
-   `v.iter().map(f).collect()`). Cheap shells over the Iterator methods.
-4. Add `swap_remove`, `retain`, `fill`, `swap` on Vector.
-5. Single inferred `collect()` — infers target from binding/turbofish.
-   Drop `to_set()` / `to_dict()` from the surface; they all go through `collect()`.
+**Status as of 2026-04-20:** Substantially shipped. Trait declared,
+all eager terminals on Iterator as default-method bodies, all 9
+adapter structs generic over a source `Iter` parameter, all four
+"missing lazy adapters" shipped. Five compiler items remain — each
+blocked on a specific compiler feature itemised below the checklist.
 
-**Interim — eager terminals shipped as free functions (2026-04-19):**
-Full set now in `std.iter`:
+##### Shipped
 
-- Aggregation: `sum_iter`, `product_iter`, `count_iter`, `fold_iter`,
-  `min_iter`, `max_iter` (int), `any_iter`, `all_iter`.
+1. ✅ Define `Iterator[T]` in `lib/std/iter.gg`. Builtin entry at
+   `src/semantic/traits.rs:421-431` deleted; the placeholder DefId
+   reserved at `resolve.rs:109` lets equip blocks parse before
+   the user-space declaration loads.
+2. ✅ Default-body terminals on `Iterator[T]` — `count` / `collect` /
+   `last` / `nth` / `any[F]` / `all[F]` / `find[F]` /
+   `find_index[F]` / `for_each[F]` / `fold[A, F]`. Method-level-
+   generic defaults flow through per-call-site mono via a new
+   `find_default_trait_method` helper in the generic collector.
+3. ✅ All 9 adapter structs generic over source `Iter`:
+   `TakeIter[Iter, T]`, `SkipIter[Iter, T]`,
+   `ChainIter[IterA, IterB, T]`, `MapIter[Iter, T, U, F]`,
+   `FilterIter[Iter, T, F]`, `TakeWhileIter[Iter, T, F]`,
+   `DropWhileIter[Iter, T, F]`, `FilterMapIter[Iter, T, U, F]`,
+   `InspectIter[Iter, T, F]`.
+4. ✅ Lazy adapters: `EnumerateIter[Iter, T]`,
+   `ZipIter[IterA, IterB, A, B]`, `WindowsIter[Iter, T]`,
+   `ChunksIter[Iter, T]`. `Option[(int, T)]` tuple lowering verified
+   end-to-end before commit.
+5. ✅ Compiler infrastructure surfaced and fixed along the way:
+   `Self → equipping_type` substitution for default trait methods,
+   default-method per-call-site mono, body pre-substitution in
+   `lower_method_instance` (handles nested generic type-arg lists
+   like `MapIter[VectorIter[T], T, U, F]` that the post-mangling
+   string substitution couldn't), `error_id`-aware
+   `validate_trait_impls` for user-space generic trait sigs,
+   default-method fallback in `TraitRegistry::resolve_method`.
+
+##### Deferred (each blocked on a specific compiler feature)
+
+| Item | Blocked on | Plan doc |
+|---|---|---|
+| Adapter constructor defaults (`take(n)` / `skip(n)` / `map[U,F](f)` / `filter[F](p)` etc. lifted from inherent equip methods to `Iterator[T]` defaults returning `TakeIter[Self, T]` etc.) — enables `v.iter().take(3).filter(p)` chains past one step | typecheck-side `Self` substitution in trait sig return types at the call site; today resolve_method returns the sig with `Self` as a placeholder | _to be written; see method-level-inference.md for shape_ |
+| Vector/Dict/Set convenience wrappers (`v.map(f)` ≡ `v.iter().map(f).collect()`, drop `to_set()` / `to_dict()`, retire `_iter` free functions) | method-level generic type inference — without it `v.map(f)` requires explicit `[U, F]` args at every call site, regressing usability vs the BuiltinTypeProtocol path | `docs/internals/method-level-inference.md` |
+| Comparable-bounded defaults (`min` / `max` / `sum` / `product` / `join` / `contains` as Iterator defaults) | per-method trait-bound declarations (e.g. `where T: Comparable`) + bulk-emission skip logic for impls that fail the bound; without this, default-method emission specialises Iterator[T] for self-host driver Ts that don't satisfy `<` / `+` / `.display()` etc. and emits broken codegen — verified by self_host_bootstrap regression on 2026-04-20 | _to be written_ |
+| Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) | LHS-type threading into method-call resolution — mirror the `Some(x)` payload-type inference path that already exists for enum variant constructors | _to be written_ |
+| Auto-import std.iter via the loader | selective auto-load heuristic (only when the entry module references `.iter()` / `Iterator` / one of the adapter struct names) — unconditional auto-load collides with `vector_iter_userdef.gg`-style fixtures that shadow `VectorIter[T]` | _to be written if the heuristic gets fancy; otherwise just a loader patch_ |
+
+Items 4 (`swap_remove`, `retain`, `fill`, `swap` on Vector) and the
+`lazy_windows` / `lazy_chunks` rename to drop the `lazy_` prefix
+both depend on Vector's eager `.windows(n)` / `.chunks(n)` becoming
+thin shells — which itself blocks on method-level inference (item 1
+above). Sequencing: inference → wrappers → rename.
+
+**Interim — eager terminals still shipped as free functions in
+`std.iter`** (kept as a working alternative for the bound-needing
+ones until per-method trait bounds land):
+
+- Aggregation: `sum_iter`, `product_iter`, `count_iter`,
+  `fold_iter`, `min_iter`, `max_iter` (int), `any_iter`, `all_iter`.
 - Search: `find_iter`, `find_index_iter`.
 - Positional: `last_iter`, `nth_iter`.
 - Side-effect: `for_each_iter`.
 - Collection: `collect_vec`, `join_iter` (Displayable-based).
 
-Called as `find_iter[T, Iter, F](iter, pred)` — ergonomically
-equivalent to `iter.find(pred)` once per-call-site method mono lands
-on method calls (TODO item under Medium). Terminals have no new
-state-machine structs, so they compose with any `Iterator[T]`
-without the Phase 2b adapter generalization. Lazy transformation
-adapters (`filter_map`, `enumerate`, `zip`, `take_while`,
-`drop_while`, `windows`, `chunks`, `inspect`) still wait on Phase
-2b. Comparable-bounded `min`/`max`/`sort_by_key` generalizations
-wait on method-level generic dispatch (Phase 4 remainder).
+`count` / `collect` / `last` / `nth` / `any` / `all` / `find` /
+`find_index` / `for_each` / `fold` callers should migrate to the
+method form (`v.iter().count()` etc.) — the free functions become
+unreachable once those test fixtures move over (`stdlib_iter_*.gg`,
+~4 fixtures). Aggregation / `join_iter` callers wait on the
+trait-bound work.
 
 #### Phase 2d: Advanced adapters
 
