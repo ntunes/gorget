@@ -718,7 +718,7 @@ impl GenericCollector {
     /// registered as `VectorIter[int]`. Without this, generic equip methods that construct
     /// other generic types silently skip the dependent type's monomorphization and the
     /// GIR validator later panics on "reference to undefined type".
-    pub fn discover_transitive(&mut self, ast_module: Option<&ast::Module>) {
+    pub fn discover_transitive(&mut self, _ast_module: Option<&ast::Module>) {
         let mut i = 0;
         while i < self.instances.len() {
             let (base_name, type_args, _, kind) = self.instances[i].clone();
@@ -764,50 +764,24 @@ impl GenericCollector {
                             self.scan_function(&substituted);
                             self.current_generic_params = prev;
                         }
-                        // Trait default-method bodies aren't in the equip's
-                        // items. Scan them too, so struct constructors inside
-                        // defaults like `TakeIter[Self, T] take(self, int n):
-                        // return TakeIter[Self, T](self, n)` register their
-                        // monomorphised instantiation (`TakeIter[VectorIter
-                        // [int], int]` here). Without this the constructor
-                        // is only declared (via fn_sigs) and undefined at
-                        // link time.
-                        if let (Some(ast_mod), Some(trait_ref)) = (ast_module, &equip.trait_) {
-                            let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
-                            if !trait_name.is_empty() {
-                                let implemented: Vec<String> = equip.items.iter()
-                                    .map(|m| m.node.name.node.clone())
-                                    .collect();
-                                let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
-                                let mut default_subs = subs.clone();
-                                default_subs.push(("Self".to_string(), substituted_equipped));
-                                for item in &ast_mod.items {
-                                    if let ast::Item::Trait(trait_def) = &item.node {
-                                        if trait_def.name.node == trait_name {
-                                            for trait_item in &trait_def.items {
-                                                if let ast::TraitItem::Method(dm) = &trait_item.node {
-                                                    if implemented.contains(&dm.name.node) { continue; }
-                                                    if !matches!(&dm.body, ast::FunctionBody::Block(_) | ast::FunctionBody::Expression(_)) {
-                                                        continue;
-                                                    }
-                                                    // Skip method-generic defaults —
-                                                    // those go through per-call-site mono
-                                                    // (discover_method_instances handles
-                                                    // them with merged equip+method subs).
-                                                    if dm.generic_params.is_some() {
-                                                        continue;
-                                                    }
-                                                    let prev = self.current_generic_params.take();
-                                                    let substituted = substitute_function_body(dm, &default_subs);
-                                                    self.scan_function(&substituted);
-                                                    self.current_generic_params = prev;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        // NOTE: Trait default-method bodies deliberately
+                        // NOT scanned here. An earlier revision added a
+                        // scanner with `Self → substituted equipped type`
+                        // so defaults like `TakeIter[Self, T] take(self,
+                        // int n): return TakeIter[Self, T](self, n)` would
+                        // register `TakeIter[VectorIter[int], int]` when
+                        // processing the VectorIter[int] instance. That
+                        // produced an infinite loop: each new instance
+                        // (TakeIter[VectorIter[int], int]) is itself an
+                        // Iterator[T] impl, so the next pass through the
+                        // while-loop would scan ITS `take` default and
+                        // register `TakeIter[TakeIter[..], int]`, ad
+                        // infinitum. Correct handling wants to register
+                        // only the instances actually hit by user-code
+                        // call sites (via `discover_method_instances` or
+                        // typecheck's expr_types) — not speculatively
+                        // expand every Iterator implementor's full
+                        // adapter surface. Tracked as Phase 2c follow-up.
                     }
                 }
             }
