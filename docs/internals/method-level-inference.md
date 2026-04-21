@@ -351,6 +351,17 @@ is real, refactor in a third commit.
    chains 4-5 methods deep this is fine. Worst case: a hot fn body
    with many method-generic calls. Measure if a fixture trips.
 
+5. **F-string interpolation bypass.** Surfaced 2026-04-21 during
+   the convenience-wrapper migration: `f"{v.iter().any(p)}"`
+   link-fails because IR-lowering re-parses the interp segment
+   text, bypassing typecheck, the AST rewriter, and every other
+   semantic pass. Bind-to-local is the workaround; the real fix
+   ("parse interp segments to real Expr nodes at parse time")
+   has its own design doc at
+   `docs/internals/fstring-interp-as-expr.md`. Worth tracking
+   here because the inference work is the symptom that surfaced
+   it, not because inference owns the fix.
+
 ## Sequencing After This Lands
 
 1. Replace the BuiltinTypeProtocol Vector HOF arms (`map`, `filter`,
