@@ -1,0 +1,40 @@
+# Iterator chain past one step.
+#
+# With adapter constructors lifted to `Iterator[T]` defaults in
+# `lib/std/iter.gg`, every iterator implementor (VectorIter, TakeIter,
+# FilterIter, MapIter, ...) inherits the adapter surface. This fixture
+# validates that multi-step chains compose end to end:
+# `.take().filter().map().collect()` dispatches through the lifted
+# defaults per hop, with typecheck resolving `Self → concrete iterator`
+# at each call site.
+
+from std.iter import VectorIter
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int double(int x):
+    return x * 2
+
+int main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+
+    # --- Chained through auto-inferred adapter types ---
+    auto chain = v.iter().take(4).filter(is_even).map(double)
+    for x in chain:
+        print(x)
+
+    print("--")
+
+    # --- Terminal .collect() composed with the chain ---
+    # Explicit `Vector[int]` annotation — typecheck's `.collect()`
+    # return inference through a chain of lifted-default adapters still
+    # doesn't flow the element type to the binding (separate gap from
+    # Self-substitution; tracked in TODO as the "inferred collect
+    # target" item).
+    Vector[int] out = v.iter().take(4).filter(is_even).map(double).collect()
+    print(out.len())
+    print(out.get(0).unwrap())
+    print(out.get(1).unwrap())
+
+    return 0

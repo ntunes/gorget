@@ -2068,6 +2068,14 @@ fn iter_map_filter_method_sugar() {
 }
 
 #[test]
+fn iter_chain_past_one_step() {
+    run_gg(
+        "iter_chain_past_one_step.gg",
+        "4\n8\n--\n2\n4\n8",
+    );
+}
+
+#[test]
 fn iter_terminal_method_sugar() {
     run_gg(
         "iter_terminal_method_sugar.gg",

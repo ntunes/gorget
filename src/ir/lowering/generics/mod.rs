@@ -960,6 +960,18 @@ impl GenericCollector {
                 }
                 if let Some(method_targs) = generic_args {
                     self.try_register_method_instance(receiver, method, method_targs, env);
+                } else {
+                    // Non-method-generic call. If the method resolves to a
+                    // trait default whose return type mentions `Self` or the
+                    // trait's own generics, register the monomorphised
+                    // return-type struct so its constructor + inherent
+                    // methods lower (e.g. `v.iter().take(3)` registers
+                    // `TakeIter[VectorIter[int], int]` ahead of its `next()`
+                    // call). Only covers DIRECT return-type registration —
+                    // the registered instance's own trait defaults are left
+                    // dormant to avoid the `TakeIter[TakeIter[..], ..]`
+                    // infinite cascade.
+                    self.try_register_default_return_type(receiver, method, env);
                 }
             }
             Expr::Call { callee, args, .. } => {
@@ -1094,9 +1106,11 @@ impl GenericCollector {
         // falls back to I64 instead of Option[int].
         let equip_blocks = self.equip_templates.get(&equip_base).cloned().unwrap_or_default();
         let mut merged_subs: Vec<(String, Type)> = Vec::new();
+        let mut substituted_equipped: Option<Type> = None;
         for equip in &equip_blocks {
             let eq_subs = build_equip_type_substitutions(equip, &equip_type_args);
             if !eq_subs.is_empty() {
+                substituted_equipped = Some(substitute::substitute_type_pub(&equip.type_.node, &eq_subs));
                 merged_subs = eq_subs;
                 break;
             }
@@ -1109,6 +1123,17 @@ impl GenericCollector {
                 };
                 merged_subs.push((name, arg.node.clone()));
             }
+        }
+        // Bind `Self` for trait-default bodies whose return type or
+        // struct literals mention `Self` (lifted adapter constructors
+        // like `FilterIter[Self, T, F] filter[F](self, F p): return
+        // FilterIter[Self, T, F](self, p)`). Without this, scan_function
+        // sees `FilterIter[SelfType, int, bool(int)]` — the unresolved
+        // SelfType trips `type_has_generic_param` (for each equip T) OR
+        // falls through as a literal `Self` name that never mangles to
+        // a real registered type.
+        if let Some(eq_ty) = substituted_equipped {
+            merged_subs.push(("Self".to_string(), eq_ty));
         }
         if !merged_subs.is_empty() {
             let prev = self.current_generic_params.take();
@@ -1152,6 +1177,89 @@ impl GenericCollector {
             method_type_args: method_targs.to_vec(),
             mangled_symbol,
         });
+    }
+
+    /// Discover the return-type struct instance produced by a
+    /// non-method-generic trait-default method call. Demand-driven
+    /// complement to `try_register_method_instance`: when
+    /// `v.iter().take(3)` hits an `Iterator[T]` default with signature
+    /// `TakeIter[Self, T] take(self, int n)`, substitute `Self → receiver
+    /// type` + impl-level generic params against the receiver's concrete
+    /// args, then `scan_type` the substituted return so the resulting
+    /// `TakeIter[VectorIter[int], int]` gets registered as a struct
+    /// instance ahead of IR lowering.
+    ///
+    /// Only registers the DIRECT return-type nominal — the newly-registered
+    /// instance's own trait defaults stay dormant (avoiding the
+    /// `TakeIter[TakeIter[..], int]` infinite cascade).
+    fn try_register_default_return_type(
+        &mut self,
+        receiver: &Spanned<Expr>,
+        method_name: &Spanned<String>,
+        env: &LocalTypeEnv,
+    ) {
+        let recv_ast = match self.infer_expr_ast_type(receiver, env) {
+            Some(t) => t,
+            None => return,
+        };
+        let (equip_base, equip_type_args) = match extract_base_and_args(&recv_ast) {
+            Some(pair) => pair,
+            None => return,
+        };
+        let equip_blocks = match self.equip_templates.get(&equip_base) {
+            Some(b) => b.clone(),
+            None => return,
+        };
+        // Skip if any equip block has an inherent (non-generic) override —
+        // those already lower via the normal path. We only need
+        // registration when the call will dispatch to the trait default.
+        for equip in &equip_blocks {
+            for m in &equip.items {
+                if m.node.name.node == method_name.node
+                    && m.node.generic_params.is_none()
+                {
+                    return;
+                }
+            }
+        }
+        // Look up the non-method-generic trait default.
+        let default_m = match self.find_default_trait_method(&equip_blocks, &method_name.node, 0) {
+            Some(m) => m,
+            None => return,
+        };
+        if default_m.generic_params.is_some() {
+            return;
+        }
+        // Pick the equip block that matches the receiver's template (the
+        // one whose subs are non-empty for our type args).
+        let (equip_type_ast, subs) = {
+            let mut chosen: Option<(Type, Vec<(String, Type)>)> = None;
+            for eq in &equip_blocks {
+                let s = build_equip_type_substitutions(eq, &equip_type_args);
+                if !s.is_empty() {
+                    chosen = Some((eq.type_.node.clone(), s));
+                    break;
+                }
+            }
+            match chosen {
+                Some(pair) => pair,
+                None => return,
+            }
+        };
+        // Self → concrete equipped type (mirrors the Self binding already
+        // threaded through register_equip_sigs_with_defaults and
+        // lower_method_instance).
+        let substituted_equipped = substitute::substitute_type_pub(&equip_type_ast, &subs);
+        let mut full_subs = subs;
+        full_subs.push(("Self".to_string(), substituted_equipped));
+        // Substitute the return type AST and scan it so every nominal
+        // inside (including nested ones) registers as a struct/enum
+        // instance.
+        let substituted_ret = substitute::substitute_type_pub(&default_m.return_type.node, &full_subs);
+        let spanned_ret = Spanned { node: substituted_ret, span: default_m.return_type.span };
+        let prev = self.current_generic_params.take();
+        self.scan_type(&spanned_ret);
+        self.current_generic_params = prev;
     }
 
     /// Look for a method-level-generic default trait method matching `name`
@@ -1238,7 +1346,41 @@ impl GenericCollector {
                         return Some(substitute::substitute_type_pub(&m.node.return_type.node, &subs));
                     }
                 }
-                None
+                // Fall through to trait-default resolution. With adapter
+                // constructors lifted to `Iterator[T]` defaults
+                // (`TakeIter[Self, T] take(self, int n)`), inherent equip
+                // blocks don't carry them anymore — the chain inference
+                // above misses. Look up the default method on the trait
+                // the equip block implements and substitute against the
+                // receiver's concrete args.
+                let targs_len = generic_args.as_ref().map(|g| g.len()).unwrap_or(0);
+                let default_m = self.find_default_trait_method(equip_blocks, &method.node, targs_len)?;
+                // Build subs: impl locals from receiver, method generics
+                // from the call's targs, plus Self → receiver.
+                let (equip_ty, eq_subs) = {
+                    let mut chosen: Option<(Type, Vec<(String, Type)>)> = None;
+                    for eq in equip_blocks {
+                        let s = build_equip_type_substitutions(eq, &args);
+                        if !s.is_empty() {
+                            chosen = Some((eq.type_.node.clone(), s));
+                            break;
+                        }
+                    }
+                    chosen?
+                };
+                let mut subs = eq_subs;
+                if let (Some(gp), Some(targs)) = (default_m.generic_params.as_ref(), generic_args.as_ref()) {
+                    for (param, arg) in gp.node.params.iter().zip(targs.iter()) {
+                        let name = match &param.node {
+                            GenericParam::Type { name: s, .. } => s.node.clone(),
+                            GenericParam::Const { name, .. } => name.node.clone(),
+                        };
+                        subs.push((name, arg.node.clone()));
+                    }
+                }
+                let substituted_equipped = substitute::substitute_type_pub(&equip_ty, &subs);
+                subs.push(("Self".to_string(), substituted_equipped));
+                Some(substitute::substitute_type_pub(&default_m.return_type.node, &subs))
             }
             Expr::Call { callee, generic_args, .. } => {
                 // Free-function call: look up the fn template and substitute the return type

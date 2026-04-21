@@ -11,6 +11,48 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// Walk an AST type and return true only if every nominal (named struct /
+/// enum) reachable through it has already been registered in the type
+/// mapper. Used to demand-gate bulk default-method emission: if a
+/// lifted-default adapter constructor like `TakeIter[Self, T] take(self,
+/// int n)` substitutes to `TakeIter[X, int]` for some X where
+/// `TakeIter__<mangled X>__int64_t` was never registered from a user
+/// call site, skip the emission — otherwise we'd cascade into emitting
+/// every adapter's `.take() / .skip() / …` for every Iterator
+/// implementor forever.
+fn all_return_nominals_registered(ctx: &LoweringContext, ty: &Type) -> bool {
+    match ty {
+        Type::Named { name, generic_args } => {
+            // Primitive aliases / unused bare names pass through (they
+            // mangle directly to int64_t / etc. and don't need a named-
+            // type registration).
+            if generic_args.is_empty() {
+                return true;
+            }
+            // Mangled name for this instance — has to exist in
+            // type_mapper.named_types.
+            let mangled = super::types::mangle_generic_name(&name.node, generic_args);
+            if ctx.type_mapper.lookup_named(&mangled).is_none() {
+                return false;
+            }
+            // Recurse into generic args.
+            generic_args.iter().all(|a| all_return_nominals_registered(ctx, &a.node))
+        }
+        Type::Tuple(elems) => elems.iter().all(|e| all_return_nominals_registered(ctx, &e.node)),
+        Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
+            all_return_nominals_registered(ctx, &inner.node)
+        }
+        Type::Function { return_type, params, .. } => {
+            all_return_nominals_registered(ctx, &return_type.node)
+                && params.iter().all(|p| all_return_nominals_registered(ctx, &p.node))
+        }
+        Type::Array { element, .. } | Type::Slice { element } => {
+            all_return_nominals_registered(ctx, &element.node)
+        }
+        Type::Primitive(_) | Type::SelfType | Type::Inferred => true,
+    }
+}
+
 /// Pre-scan a function body to find variable names unsafe for CoW aliasing:
 /// reassigned, !-moved, or used as RHS for Move-type VarDecls.
 /// CoW skips aliasing for these because the LIR can't change local types
@@ -1332,6 +1374,21 @@ pub fn lower_generic_equip_methods_with_defaults(
                                 // resolve to the equipping type.
                                 let mut default_subs = subs.clone();
                                 default_subs.push(("Self".to_string(), substituted_type.clone()));
+                                // Demand-gate adapter-returning defaults:
+                                // if the substituted return type references
+                                // a generic struct (e.g. `TakeIter[...]`)
+                                // that hasn't been registered as an instance,
+                                // skip emission. `discover_method_instances`
+                                // registers these demand-driven from user
+                                // call sites; anything missing here is dead
+                                // code that would otherwise cascade forever
+                                // through every Iterator implementor.
+                                let substituted_ret = generics::substitute_type_pub(
+                                    &default_method.return_type.node, &default_subs,
+                                );
+                                if !all_return_nominals_registered(ctx, &substituted_ret) {
+                                    continue;
+                                }
                                 let method_mangled = format!("{mangled_type_name}__{method_name}");
                                 // Refresh generic_type_params so the body
                                 // lowering sees `Self → equipping_type`

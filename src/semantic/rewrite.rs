@@ -409,7 +409,19 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
                 return;
             }
             let callee_span_start = callee.span.start;
-            if let Some(&def_id) = res.get(&callee_span_start) {
+            // Prefer the resolution-map entry (respects shadowing /
+            // scope-specific names). Fall back to a name lookup when the
+            // resolver didn't record an entry — happens for identifiers
+            // inside trait default-method bodies, which the resolver
+            // currently doesn't walk. Without this fallback, a struct
+            // constructor like `TakeIter[Self, T](self, n)` inside an
+            // `Iterator[T]` default body stays an `Expr::Call` and lowers
+            // as a function call to `TakeIter__...` (undefined at link
+            // time) instead of a struct literal that emits field-by-field.
+            let def_id_opt = res.get(&callee_span_start)
+                .copied()
+                .or_else(|| scopes.lookup(cname));
+            if let Some(def_id) = def_id_opt {
                 let def = scopes.get_def(def_id);
                 // Verify the definition name matches the callee name.
                 // This prevents span collisions from derive-generated code

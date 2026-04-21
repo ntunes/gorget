@@ -140,20 +140,43 @@ trait Iterator[T]:
     # cleaner trait-bound declarations (e.g. `where T: Comparable`
     # on a per-method basis) — see TODO Phase 2c.
 
-    # NOTE: Lazy adapter constructors (take / skip / map / filter / chain
-    # / take_while / drop_while / filter_map / inspect) currently live on
-    # each producer's inherent equip block (VectorIter today). Lifting
-    # them to defaults that construct `TakeIter[Self, T]` etc. is partially
-    # unblocked: typecheck now substitutes Self/T when resolving trait
-    # default sigs, and IR lowering mirrors the binding through
-    # `register_equip_sigs_with_defaults` + `register_method_instance_sigs`
-    # + `discover_transitive` + `lower_method_instance`. What remains:
-    # LIR codegen drops the struct-typed return value at call sites for
-    # default methods that return a fresh adapter struct (the call is
-    # emitted but its result isn't stored into the caller's slot). Once
-    # that lands the adapters here should move to `trait Iterator[T]:`
-    # defaults and enable `v.iter().take(3).filter(p).map(f)` chains.
-    # Tracked as Phase 2c follow-up.
+    # Lazy adapter constructors — defaults on Iterator[T]. Every
+    # implementor (VectorIter, TakeIter, FilterIter, …) inherits the
+    # adapter surface, so chains can compose past one step
+    # (`v.iter().take(3).filter(is_even).map(double)`). Each returns
+    # `AdapterIter[Self, T, …]`; `Self` resolves to the concrete
+    # iterator via typecheck's trait-default substitution (traits.rs +
+    # typecheck.rs) and IR lowering's Self-binding (lower_method_instance
+    # + register_equip_sigs_with_defaults). Method-level generics
+    # `[U, F]`/`[F]` are inferred from the closure arg at the call site.
+    # `self` is consumed by value — the adapter takes ownership.
+
+    TakeIter[Self, T] take(self, int n):
+        return TakeIter[Self, T](self, n)
+
+    SkipIter[Self, T] skip(self, int n):
+        return SkipIter[Self, T](self, n)
+
+    MapIter[Self, T, U, F] map[U, F](self, F f):
+        return MapIter[Self, T, U, F](self, f)
+
+    FilterIter[Self, T, F] filter[F](self, F p):
+        return FilterIter[Self, T, F](self, p)
+
+    TakeWhileIter[Self, T, F] take_while[F](self, F p):
+        return TakeWhileIter[Self, T, F](self, p, false)
+
+    DropWhileIter[Self, T, F] drop_while[F](self, F p):
+        return DropWhileIter[Self, T, F](self, p, true)
+
+    FilterMapIter[Self, T, U, F] filter_map[U, F](self, F f):
+        return FilterMapIter[Self, T, U, F](self, f)
+
+    InspectIter[Self, T, F] inspect[F](self, F f):
+        return InspectIter[Self, T, F](self, f)
+
+    EnumerateIter[Self, T] enumerate(self):
+        return EnumerateIter[Self, T](self, 0)
 
 struct VectorIter[T]:
     Vector[T] source
@@ -223,45 +246,18 @@ equip [T] Vector[T]:
     Vector[T] filter[F](&self, F p):
         return self.iter().filter[F](p).collect()
 
-# Method-style adapter sugar on VectorIter. Each method constructs the
-# corresponding concrete adapter struct and returns it by value.
-# Callers chain with `v.iter().take(n)` / `v.iter().skip(2).chain(w.iter())` etc.
-#
-# `.map[U, F]` / `.filter[F]` are method-level-generic — the compiler
-# specialises each call site via per-call-site monomorphisation, so
-# chains like `v.iter().map[int, int(int)](double)` fuse the adapter
-# into a concrete state machine without boxing or trait-object
-# dispatch.
+# Producer-specific adapter methods that stay on VectorIter because
+# the "other" parameter is `VectorIter[T]` / `VectorIter[U]`. Lifting
+# these to iterator-generic defaults would require `other` to be its
+# own generic param (`Other`), which the adapter struct's stored
+# field then needs to thread through — a Shape-2-style inference dance
+# we haven't implemented yet. Also `lazy_windows` / `lazy_chunks`
+# which don't reference `Self` but whose bodies construct `Vector[T]`
+# locals; keeping them here avoids repeated Vector[T] instantiation
+# scans across every Iterator implementor.
 equip [T] VectorIter[T]:
-    TakeIter[VectorIter[T], T] take(self, int n):
-        return TakeIter[VectorIter[T], T](self, n)
-
-    SkipIter[VectorIter[T], T] skip(self, int n):
-        return SkipIter[VectorIter[T], T](self, n)
-
     ChainIter[VectorIter[T], VectorIter[T], T] chain(self, VectorIter[T] other):
         return ChainIter[VectorIter[T], VectorIter[T], T](self, other, true)
-
-    MapIter[VectorIter[T], T, U, F] map[U, F](self, F f):
-        return MapIter[VectorIter[T], T, U, F](self, f)
-
-    FilterIter[VectorIter[T], T, F] filter[F](self, F p):
-        return FilterIter[VectorIter[T], T, F](self, p)
-
-    TakeWhileIter[VectorIter[T], T, F] take_while[F](self, F p):
-        return TakeWhileIter[VectorIter[T], T, F](self, p, false)
-
-    DropWhileIter[VectorIter[T], T, F] drop_while[F](self, F p):
-        return DropWhileIter[VectorIter[T], T, F](self, p, true)
-
-    FilterMapIter[VectorIter[T], T, U, F] filter_map[U, F](self, F f):
-        return FilterMapIter[VectorIter[T], T, U, F](self, f)
-
-    InspectIter[VectorIter[T], T, F] inspect[F](self, F f):
-        return InspectIter[VectorIter[T], T, F](self, f)
-
-    EnumerateIter[VectorIter[T], T] enumerate(self):
-        return EnumerateIter[VectorIter[T], T](self, 0)
 
     ZipIter[VectorIter[T], VectorIter[U], T, U] zip[U](self, VectorIter[U] other):
         return ZipIter[VectorIter[T], VectorIter[U], T, U](self, other)
