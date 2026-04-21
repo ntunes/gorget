@@ -1017,7 +1017,7 @@ blocked on a specific compiler feature itemised below the checklist.
 | Item | Blocked on | Plan doc |
 |---|---|---|
 | Adapter constructor defaults (`take(n)` / `skip(n)` / `map[U,F](f)` / `filter[F](p)` etc. lifted from inherent equip methods to `Iterator[T]` defaults returning `TakeIter[Self, T]` etc.) — enables `v.iter().take(3).filter(p)` chains past one step | typecheck-side `Self` substitution in trait sig return types at the call site; today resolve_method returns the sig with `Self` as a placeholder | _to be written; see method-level-inference.md for shape_ |
-| Vector/Dict/Set convenience wrappers (`v.map(f)` ≡ `v.iter().map(f).collect()`, drop `to_set()` / `to_dict()`, retire `_iter` free functions) | method-level generic type inference — without it `v.map(f)` requires explicit `[U, F]` args at every call site, regressing usability vs the BuiltinTypeProtocol path | `docs/internals/method-level-inference.md` |
+| Vector/Dict/Set convenience wrappers — **partially shipped 2026-04-21** for Vector (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter` all delegate to `v.iter().method()` via the inference pipeline). Unbound `_iter` free fns retired. Dict/Set deferred — different iterator surface (Dict[K,V] iter element shape unclear; Set lacks an `.iter()` method today). `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 4) | row 4 + Dict/Set `.iter()` design | `docs/internals/method-level-inference.md` |
 | Comparable-bounded defaults (`min` / `max` / `sum` / `product` / `join` / `contains` as Iterator defaults) | per-method trait-bound declarations (e.g. `where T: Comparable`) + bulk-emission skip logic for impls that fail the bound; without this, default-method emission specialises Iterator[T] for self-host driver Ts that don't satisfy `<` / `+` / `.display()` etc. and emits broken codegen — verified by self_host_bootstrap regression on 2026-04-20 | _to be written_ |
 | Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) | LHS-type threading into method-call resolution — mirror the `Some(x)` payload-type inference path that already exists for enum variant constructors | _to be written_ |
 | Auto-import std.iter via the loader | selective auto-load heuristic (only when the entry module references `.iter()` / `Iterator` / one of the adapter struct names) — unconditional auto-load collides with `vector_iter_userdef.gg`-style fixtures that shadow `VectorIter[T]` | _to be written if the heuristic gets fancy; otherwise just a loader patch_ |
@@ -1028,23 +1028,23 @@ both depend on Vector's eager `.windows(n)` / `.chunks(n)` becoming
 thin shells — which itself blocks on method-level inference (item 1
 above). Sequencing: inference → wrappers → rename.
 
-**Interim — eager terminals still shipped as free functions in
-`std.iter`** (kept as a working alternative for the bound-needing
-ones until per-method trait bounds land):
+**Bound-needing terminals still shipped as free functions in
+`std.iter`** (kept as a working alternative for callers that can't
+go through the trait-default path until per-method trait bounds
+land):
 
-- Aggregation: `sum_iter`, `product_iter`, `count_iter`,
-  `fold_iter`, `min_iter`, `max_iter` (int), `any_iter`, `all_iter`.
-- Search: `find_iter`, `find_index_iter`.
-- Positional: `last_iter`, `nth_iter`.
-- Side-effect: `for_each_iter`.
-- Collection: `collect_vec`, `join_iter` (Displayable-based).
+- Aggregation: `sum_iter`, `product_iter`, `min_iter` (int),
+  `max_iter` (int).
+- Collection: `join_iter` (Displayable-based).
 
-`count` / `collect` / `last` / `nth` / `any` / `all` / `find` /
-`find_index` / `for_each` / `fold` callers should migrate to the
-method form (`v.iter().count()` etc.) — the free functions become
-unreachable once those test fixtures move over (`stdlib_iter_*.gg`,
-~4 fixtures). Aggregation / `join_iter` callers wait on the
-trait-bound work.
+The unbound counterparts (`collect_vec`, `count_iter`, `fold_iter`,
+`any_iter`, `all_iter`, `find_iter`, `find_index_iter`, `last_iter`,
+`nth_iter`, `for_each_iter`) were retired in the Phase 2c
+convenience-wrapper migration (2026-04-21). All of those terminals
+live as default-method bodies on `Iterator[T]`; callers use the
+method form (`v.iter().count()` / `v.count()` via the Vector
+wrapper / `take_iter.collect()` etc.) and the four
+`stdlib_iter_*.gg` fixtures were rewritten accordingly.
 
 #### Phase 2d: Advanced adapters
 

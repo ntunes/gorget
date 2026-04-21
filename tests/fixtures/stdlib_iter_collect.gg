@@ -1,21 +1,22 @@
-# Exercises `collect_vec` and `count_iter` — terminal functions that
-# turn any Iterator[T] back into Vector[T] or an element count via the
-# for-loop protocol. Generic over the concrete iterator type — no
-# trait-object dispatch.
+# Exercises `.collect()` and `.count()` on TakeIter — both terminals
+# live as Iterator[T] default-method bodies, so any iterator that
+# `equip`s the trait inherits them. Replaces the previous
+# `collect_vec` / `count_iter` free-function calls (retired in the
+# Phase 2c convenience-wrapper migration).
 
-from std.iter import VectorIter, TakeIter, collect_vec, count_iter
+from std.iter import VectorIter, TakeIter
 
 int main():
     Vector[int] v = [10, 20, 30, 40, 50]
     VectorIter[int] vit = v.iter()
     TakeIter[VectorIter[int], int] t = TakeIter[VectorIter[int], int](vit, 3)
-    Vector[int] result = collect_vec[int, TakeIter[VectorIter[int], int]](t)
+    Vector[int] result = t.collect()
     for x in result:
         print(x)
 
     VectorIter[int] vit2 = v.iter()
     TakeIter[VectorIter[int], int] t2 = TakeIter[VectorIter[int], int](vit2, 4)
-    int n = count_iter[TakeIter[VectorIter[int], int]](t2)
+    int n = t2.count()
     print(n)
 
     return 0

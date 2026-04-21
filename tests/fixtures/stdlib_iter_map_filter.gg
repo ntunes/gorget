@@ -1,12 +1,17 @@
-# std.iter — MapIter / FilterIter + sum / any / all terminals.
+# std.iter — MapIter / FilterIter via the `.collect()` terminal +
+# `.any()` / `.all()` short-circuiting terminals on the iterator
+# itself. `sum_iter` keeps its free-function form (bound-needing,
+# stays free until per-method bounds land — see stdlib-design.md
+# §10 row 3).
 #
 # Constructs adapters directly (MapIter[T, U, F] / FilterIter[T, F])
-# because method-sugar on VectorIter tripping the monomorphization
-# ordering gap is still open. Terminal functions are generic over
-# the concrete iterator type to avoid trait-object dispatch.
+# because the wrapper-style sugar (`v.iter().map[U,F](f)`) is
+# covered by the `iter_map_filter_method_sugar.gg` fixture; this
+# one validates the lower-level "build the adapter struct, then
+# terminal" path.
 
 from std.collections import Vector
-from std.iter import VectorIter, MapIter, FilterIter, collect_vec, sum_iter, any_iter, all_iter
+from std.iter import VectorIter, MapIter, FilterIter, sum_iter
 
 int doubled(int x):
     return x * 2
@@ -20,7 +25,7 @@ int main():
     # map → [2, 4, 6, 8, 10]
     VectorIter[int] it1 = v.iter()
     MapIter[VectorIter[int], int, int, int(int)] mi = MapIter[VectorIter[int], int, int, int(int)](it1, doubled)
-    Vector[int] m = collect_vec[int, MapIter[VectorIter[int], int, int, int(int)]](mi)
+    Vector[int] m = mi.collect()
     print(m.len())
     print(m.get(0).unwrap())
     print(m.get(4).unwrap())
@@ -28,14 +33,14 @@ int main():
     # filter → [3, 4, 5]
     VectorIter[int] it2 = v.iter()
     FilterIter[VectorIter[int], int, bool(int)] fi = FilterIter[VectorIter[int], int, bool(int)](it2, is_big)
-    Vector[int] f = collect_vec[int, FilterIter[VectorIter[int], int, bool(int)]](fi)
+    Vector[int] f = fi.collect()
     print(f.len())
 
-    # sum (terminal)
+    # sum (terminal) — bound-needing, free function.
     print(sum_iter[VectorIter[int]](v.iter()))
 
-    # any / all (short-circuiting terminals)
-    print(any_iter[int, VectorIter[int], bool(int)](v.iter(), is_big))
-    print(all_iter[int, VectorIter[int], bool(int)](v.iter(), is_big))
+    # any / all via method form (short-circuiting terminals).
+    print(v.iter().any(is_big))
+    print(v.iter().all(is_big))
 
     return 0

@@ -9,18 +9,32 @@
 # `FilterMapIter[Iter, T, U, F]`, `InspectIter[Iter, T, F]`,
 # `EnumerateIter[Iter, T]`, `ZipIter[IterA, IterB, A, B]`,
 # `WindowsIter[Iter, T]`, `ChunksIter[Iter, T]` — each is a
-# state-machine struct, no trait-object dispatch. Terminals: `collect_vec`, `count_iter`, `sum_iter`,
-# `product_iter`, `any_iter`, `all_iter`, `fold_iter`, `find_iter`,
-# `find_index_iter`, `for_each_iter`, `min_iter`, `max_iter`,
-# `last_iter`, `nth_iter`, `join_iter`.
+# state-machine struct, no trait-object dispatch.
+#
+# Eager terminals (`count` / `collect` / `last` / `nth` / `any[F]` /
+# `all[F]` / `find[F]` / `find_index[F]` / `for_each[F]` /
+# `fold[A, F]`) live as default-method bodies on the `Iterator[T]`
+# trait — every adapter that `equip`s the trait inherits them.
+# Bound-needing terminals stay as free functions until per-method
+# trait bounds land: `sum_iter[Iter]` / `product_iter[Iter]` (int),
+# `min_iter[Iter]` / `max_iter[Iter]` (int), `join_iter[Iter,
+# Displayable T]`. `set_iter[T]` wraps a Set as a VectorIter for
+# now (will become `s.iter()` once the Set side gets the same
+# treatment as Vector).
 #
 # Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` /
-# `.map[U, F](f)` / `.filter[F](p)` on `VectorIter[T]` each return the
+# `.map(f)` / `.filter(p)` etc. on `VectorIter[T]` each return the
 # corresponding concrete adapter by value. Chains like
-# `v.iter().take(3).map[int, int(int)](double).filter[bool(int)](is_even)`
-# compose end to end; method-level generics on `.map` / `.filter`
-# currently need explicit type args at the call site until Gorget's
-# inference propagates closure return types into method generics.
+# `v.iter().take(3).map(double).filter(is_even)` compose end to end;
+# method-level generic args (`[U, F]`, `[F]`) at call sites are
+# inferred from the closure-arg types via the Phase 2c inference
+# pipeline.
+#
+# Vector convenience wrappers (`v.map(f)`, `v.fold(0, sum)`, `v.any
+# (p)`, …) live in the `equip [T] Vector[T]:` block below — each
+# delegates to `self.iter().method().collect()` (adapters) or
+# `self.iter().method()` (terminals). The builtin HOF expansions in
+# the IR-lowerer remain as fallbacks.
 
 from std.collections import Vector, Set
 
@@ -556,25 +570,19 @@ equip [Iter, T] ChunksIter[Iter, T] with Iterator[Vector[T]]:
             return None
         return Some(!chunk)
 
-# ── Terminals ────────────────────────────────────────────────
+# ── Terminals (free functions) ───────────────────────────────
 #
-# All terminals take the concrete iterator type as a type param
-# to avoid trait-object dispatch.
-
-# Materialize any iterator of type Iter into a Vector[T] using the
-# for-loop protocol. `Iter` must implement `Iterator[T]`.
-Vector[T] collect_vec[T, Iter](Iter iter):
-    Vector[T] out = Vector[T]()
-    for x in iter:
-        out.push(x)
-    return !out
-
-# Count the elements produced by any Iterator-shaped iter.
-int count_iter[Iter](Iter iter):
-    int n = 0
-    for _ in iter:
-        n = n + 1
-    return n
+# Bound-needing terminals stay as free functions until per-method
+# trait bounds land — promotion to Iterator[T] defaults would
+# specialise the trait for Ts that don't satisfy `<` / `+` /
+# `.display()` etc. and emit broken codegen (verified by self-host
+# bootstrap regression on 2026-04-20).
+#
+# The unbound counterparts (`collect_vec`, `count_iter`, `fold_iter`,
+# `any_iter`, `all_iter`, `find_iter`, `find_index_iter`, `last_iter`,
+# `nth_iter`, `for_each_iter`) were retired in the Phase 2c
+# convenience-wrapper migration — callers use the method form
+# (`v.iter().method()` or `v.method()` via the Vector wrappers).
 
 # Sum all elements of an int-iterator.
 int sum_iter[Iter](Iter iter):
@@ -582,74 +590,6 @@ int sum_iter[Iter](Iter iter):
     for x in iter:
         acc = acc + x
     return acc
-
-# Left fold with an initial accumulator.
-# `f` takes `(acc, element)` and returns the next acc.
-A fold_iter[A, T, Iter, F](Iter iter, A init, F f):
-    A acc = init
-    for x in iter:
-        acc = f(acc, x)
-    return acc
-
-# Short-circuiting terminals: return as soon as the predicate
-# decides the result.
-bool any_iter[T, Iter, F](Iter iter, F pred):
-    for x in iter:
-        if pred(x):
-            return true
-    return false
-
-bool all_iter[T, Iter, F](Iter iter, F pred):
-    for x in iter:
-        if not pred(x):
-            return false
-    return true
-
-# Find the first element matching `pred`. Returns None if the iterator
-# is exhausted without a match. Short-circuiting.
-Option[T] find_iter[T, Iter, F](Iter iter, F pred):
-    for x in iter:
-        if pred(x):
-            return Some(x)
-    return None
-
-# Index of the first element matching `pred`. Returns None if no match.
-# Short-circuiting. Mirror of `find_iter` for the case where you want
-# positional info instead of the value.
-Option[int] find_index_iter[T, Iter, F](Iter iter, F pred):
-    int i = 0
-    for x in iter:
-        if pred(x):
-            return Some(i)
-        i = i + 1
-    return None
-
-# Last element of the iterator. Walks to exhaustion — O(n). For
-# bounded iterators only; infinite iterators never terminate.
-Option[T] last_iter[T, Iter](Iter iter):
-    Option[T] out = None
-    for x in iter:
-        out = Some(x)
-    return !out
-
-# Element at position `n` (0-indexed). Consumes up to n+1 elements.
-# Returns None if the iterator ends before reaching `n`. Negative `n`
-# always returns None.
-Option[T] nth_iter[T, Iter](Iter iter, int n):
-    if n < 0:
-        return None
-    int i = 0
-    for x in iter:
-        if i == n:
-            return Some(x)
-        i = i + 1
-    return None
-
-# Run `f` on every element for side effects; no return value. Sibling of
-# `fold_iter` for the case where the accumulator would be `void`.
-void for_each_iter[T, Iter, F](Iter iter, F f):
-    for x in iter:
-        f(x)
 
 # Product of int elements. Identity is 1 — an empty iterator returns 1.
 int product_iter[Iter](Iter iter):
