@@ -281,70 +281,16 @@ pub(super) fn emit_rwlock_wrapper(out: &mut String, type_name: &str, method: &st
     }
 }
 
-pub(super) fn emit_box_wrapper(out: &mut String, type_name: &str, method: &str, elem: &str, module: &LirModule, orig_to_c: &HashMap<String, String>) {
-    // Build struct_names map for type lookups from orig_to_c
-    let sn: HashMap<u32, String> = module.structs.iter().enumerate()
-        .map(|(i, def)| (i as u32, orig_to_c.get(&def.name).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
-        .collect();
+pub(super) fn emit_box_wrapper(out: &mut String, type_name: &str, method: &str, elem: &str, _module: &LirModule, _orig_to_c: &HashMap<String, String>) {
+    // Trait-object dispatch wrappers (previously a `_ =>` branch here)
+    // have been retired: Step 7 moved that to `__gg_synth_trait_*`
+    // helpers synthesized via `bir::synth::get_or_emit_trait_helper`.
+    // See `docs/internals/lir-backend-lift-plan.md`.
     match method {
         "get" => writeln!(out, "static inline {elem} {type_name}__get({type_name} self) {{ return *({elem}*)self; }}").unwrap(),
         "set" => writeln!(out, "static inline void {type_name}__set({type_name} self, {elem} val) {{ *({elem}*)self = val; }}").unwrap(),
         "drop" | "free" => writeln!(out, "static inline void {type_name}__drop({type_name} self) {{ GORGET_FREE(self, sizeof({elem})); }}").unwrap(),
-        _ => {
-            // Trait vtable dispatch wrapper: Box__Trait__method(self, ...) → self->vtable->method(self->data, ...)
-            if is_trait_box(module, type_name) {
-                let trait_name = type_name.strip_prefix("Box__").unwrap_or(elem);
-                let ret_type = find_trait_method_return_type(module, trait_name, method, &sn);
-                // Look up parameter list from extern declaration, but prefer impl function
-                // param types when the extern has Ptr (which may actually be Str).
-                let extern_name = format!("{type_name}__{method}");
-                // Find an impl function: Trait_for_*__method
-                let impl_params: Option<&[LirType]> = module.functions.iter()
-                    .find(|f| {
-                        let prefix = format!("{trait_name}_for_");
-                        let suffix = format!("__{method}");
-                        f.name.starts_with(&prefix) && f.name.ends_with(&suffix)
-                    })
-                    .map(|f| f.params.as_slice());
-                let extra_params: Vec<String> = module.externs.iter()
-                    .find(|e| e.name == extern_name)
-                    .map(|e| {
-                        // Skip first param (self) — remaining are forwarded
-                        e.params.iter().skip(1).enumerate()
-                            .map(|(i, t)| {
-                                // If extern says Ptr but impl function says Struct(Str), use Str.
-                                let effective_ty = if matches!(t, LirType::Ptr) {
-                                    impl_params
-                                        .and_then(|ps| ps.get(i + 1)) // +1 to skip self in impl too
-                                        .filter(|it| matches!(it, LirType::Struct(_)))
-                                        .unwrap_or(t)
-                                } else {
-                                    t
-                                };
-                                let ct = c_type_named(effective_ty, &sn);
-                                format!("{ct} __p{}", i + 1)
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let param_decls = if extra_params.is_empty() {
-                    String::new()
-                } else {
-                    format!(", {}", extra_params.join(", "))
-                };
-                let param_fwd = if extra_params.is_empty() {
-                    String::new()
-                } else {
-                    let fwd: Vec<String> = (1..=extra_params.len()).map(|i| format!("__p{i}")).collect();
-                    format!(", {}", fwd.join(", "))
-                };
-                if ret_type == "void" {
-                    writeln!(out, "static inline void {type_name}__{method}(const {type_name}* self{param_decls}) {{ self->vtable->{method}(self->data{param_fwd}); }}").unwrap();
-                } else {
-                    writeln!(out, "static inline {ret_type} {type_name}__{method}(const {type_name}* self{param_decls}) {{ return self->vtable->{method}(self->data{param_fwd}); }}").unwrap();
-                }
-            }
-        }
+        _ => {}
     }
 }
 
