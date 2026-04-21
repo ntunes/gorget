@@ -636,8 +636,11 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      with the default sitting in a pre-initialized result slot.
      `get_or_put` also calls `gorget_map_put` on the miss path.
      Works for scalar and aggregate V uniformly.
-   - Dict still in backends: `map` (result-dict with different V
-     type — no fixture exercises it).
+   - Dict `map`: removed 2026-04-21. Method decl + TODO backend
+     stub carried forward dead since the original HOF migration;
+     no fixture/stdlib caller ever exercised it. If Dict-value
+     mapping is needed later it can come back as an Iterator trait
+     default in Phase 2c.
    - Set migrated via HofExpand: `each`, `fold`, `any`, `all`,
      `filter`. New BIR scaffold `emit_set_hof_loop_scaffold` handles
      both `Set__` (ordered, `order[]` walk) and `HashSet__`
@@ -654,8 +657,8 @@ Each step is a single commit, each removes code, each demonstrates payoff:
      with `gorget_set_new_like(src)` mirroring the source's
      hash/eq/drop/clone/materialize config so one stub per op
      covers every element type.
-   - Set still in backends: `map` (no fixture exercises it —
-     the existing helper arm was a TODO stub).
+   - Set `map`: removed 2026-04-21 alongside Dict `map` — same
+     rationale (TODO stub, no callers).
 
    After this round of cleanup, backend helper generators
    (`emit_vector_helper` / `emit_dict_helper` / `emit_set_helper`
