@@ -95,25 +95,11 @@ pub(super) fn emit_call_extern(
             // These are pseudo-functions emitted by the GIR; they operate
             // on a pointer to an Option/Result struct.  The tag field is
             // always `int32_t` at offset 0; payload fields follow.
-            if (name == "__option_is_some" || name == "__option_is_none"
-                || name.ends_with("__is_some") || name.ends_with("__is_ok"))
-                && !args.is_empty()
-            {
-                if let Some(d) = dst {
-                    let op = if name.contains("is_some") || name.contains("is_ok") { "==" } else { "!=" };
-                    write!(out, "{} = (*(int32_t*){}) {op} 0;", v(*d), v(args[0])).unwrap();
-                }
-                return;
-            }
-            if (name == "__option_is_none"
-                || name.ends_with("__is_none") || name.ends_with("__is_err"))
-                && !args.is_empty()
-            {
-                if let Some(d) = dst {
-                    write!(out, "{} = (*(int32_t*){}) != 0;", v(*d), v(args[0])).unwrap();
-                }
-                return;
-            }
+            // (Previously: inline Option/Result tag-check dispatch for
+            // __option_is_some/is_none and `*__is_some/_ok/_none/_err`.
+            // LIR's emit_extern_call Tier 2b (src/lir/lower/insts.rs
+            // ~3423) intercepts these and emits `Load + Cmp` directly, so
+            // by BIR time the CallExtern is gone.)
             // ── Option/Result combinator inline expansion ──
             // map, filter, and_then, or_else are inlined at each call site
             // because the same GIR name (e.g., Option__int64_t__map) may be
