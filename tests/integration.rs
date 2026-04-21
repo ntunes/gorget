@@ -2121,6 +2121,22 @@ fn vector_each_userspace() {
 }
 
 #[test]
+fn vector_userspace_hofs() {
+    // Full set of user-space Vector HOF wrappers — any / all / find /
+    // find_index / for_each / fold / map / filter — each delegating
+    // to `self.iter().method().collect()` (or terminal). Per-call-site
+    // mono produces a dedicated specialised symbol per wrapper
+    // instance; the builtin HofExpand variants stay as fallbacks for
+    // now (deletion in a separate cleanup commit per stdlib-design.md
+    // Phase 2c row 2 + method-level-inference.md "Sequencing After
+    // This Lands" §1).
+    run_gg(
+        "vector_userspace_hofs.gg",
+        "true\nfalse\n2\n1\n1\n2\n3\n4\n10\n4\n2\n8\n4\ni1\ni4\n2\n2\n4",
+    );
+}
+
+#[test]
 fn method_generic_trait_dispatch() {
     run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }

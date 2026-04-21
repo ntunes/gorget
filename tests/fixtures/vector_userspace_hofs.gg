@@ -1,0 +1,82 @@
+# Vector convenience HOF wrappers — user-space delegation to
+# `self.iter().method().collect()` / `self.iter().method()`. Each
+# call site drops the explicit method-level generic args and lets
+# the typecheck inference pipeline bind them.
+#
+# Companion to `vector_each_userspace.gg`: same migration pattern,
+# extended to the full set (any / all / find / find_index / for_each
+# / fold / map / filter). Per-call-site mono produces a dedicated
+# specialised symbol per wrapper instance; the builtin HofExpand
+# variants stay as fallbacks for now (deletion in a separate
+# cleanup commit per the design doc).
+
+from std.collections import Vector
+from std.iter import VectorIter
+from std.conv import int_to_str
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool is_big(int x):
+    return x > 100
+
+int double(int x):
+    return x * 2
+
+String label(int x):
+    return "i" + int_to_str(x)
+
+void show(int x):
+    print(x)
+
+int sum(int acc, int x):
+    return acc + x
+
+int main():
+    Vector[int] v = [1, 2, 3, 4]
+
+    # any / all — F inferred
+    print(v.any(is_even))
+    print(v.all(is_big))
+
+    # find / find_index — F inferred
+    Option[int] hit = v.find(is_even)
+    match hit:
+        case Some(x):
+            print(x)
+        case None:
+            print(-1)
+
+    Option[int] idx = v.find_index(is_even)
+    match idx:
+        case Some(i):
+            print(i)
+        case None:
+            print(-1)
+
+    # for_each — F inferred
+    v.for_each(show)
+
+    # fold — A and F inferred (A from init, F from closure)
+    int total = v.fold(0, sum)
+    print(total)
+
+    # map — F inferred via shape-1, U inferred via shape-2
+    Vector[int] doubled = v.map(double)
+    print(doubled.len())
+    print(doubled.get(0).unwrap())
+    print(doubled.get(3).unwrap())
+
+    # cross-type map
+    Vector[String] labels = v.map(label)
+    print(labels.len())
+    print(labels.get(0).unwrap())
+    print(labels.get(3).unwrap())
+
+    # filter — F inferred
+    Vector[int] evens = v.filter(is_even)
+    print(evens.len())
+    print(evens.get(0).unwrap())
+    print(evens.get(1).unwrap())
+
+    return 0

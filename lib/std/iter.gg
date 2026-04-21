@@ -150,20 +150,57 @@ equip [T] Vector[T]:
     VectorIter[T] iter(self):
         return VectorIter[T](self, 0)
 
-    # `v.each(f)` is sugar for `v.iter().for_each(f)`. Lives here so the
-    # method-level inference pipeline (Phase 2c) handles the closure-arg
-    # binding the same way it does for any other user-space wrapper.
-    # The builtin `Vector.each` HOF expansion in the IR-lowerer is the
-    # fallback when the user-space sig isn't selected.
+    # ── User-space convenience wrappers ────────────────────────
     #
-    # Inner `for_each[F]` carries explicit type-args because, after the
-    # outer `each[F=concrete]` instance is registered and its body is
+    # Each wrapper below is `v.method(args)` ≡
+    # `v.iter().method[targs](args)` (or `.collect()` for adapters).
+    # The method-level inference pipeline (Phase 2c) binds the
+    # method-level generics from the call-site arg types, so callers
+    # don't need explicit `[U, F]` args at the wrapper call sites.
+    #
+    # The builtin `Vector.{map,filter,any,all,each,for_each,find,
+    # find_index,fold}` HOF expansions in the IR-lowerer remain as
+    # fallbacks for callers that don't register the user-space sig
+    # (e.g. when inference fails). Once every caller migrates and
+    # the BIR HofExpand variants are confirmed unreachable, the
+    # builtin entries can be deleted in a follow-up cleanup commit.
+    #
+    # Inner method-generic calls inside each wrapper body carry
+    # explicit `[F]` / `[U, F]` type-args. After the outer
+    # `wrapper[concrete]` instance is registered and its body is
     # substituted, the per-call-site mono engine needs an explicit
     # method-args list to drive transitive registration of
-    # `VectorIter[T]::for_each[F=concrete]`. Inference inside generic
-    # bodies (where `f`'s type is still the abstract `F`) doesn't fire.
+    # `VectorIter[T]::method[F=concrete]`. Inference inside generic
+    # bodies (where `f`'s type is still the abstract `F`) doesn't
+    # fire; the explicit args make the substituted body's nested
+    # call mangle the way the IR-lowering dispatch expects.
+
     void each[F](&self, F f):
         self.iter().for_each[F](f)
+
+    void for_each[F](&self, F f):
+        self.iter().for_each[F](f)
+
+    bool any[F](&self, F p):
+        return self.iter().any[F](p)
+
+    bool all[F](&self, F p):
+        return self.iter().all[F](p)
+
+    Option[T] find[F](&self, F p):
+        return self.iter().find[F](p)
+
+    Option[int] find_index[F](&self, F p):
+        return self.iter().find_index[F](p)
+
+    A fold[A, F](&self, A init, F f):
+        return self.iter().fold[A, F](init, f)
+
+    Vector[U] map[U, F](&self, F f):
+        return self.iter().map[U, F](f).collect()
+
+    Vector[T] filter[F](&self, F p):
+        return self.iter().filter[F](p).collect()
 
 # Method-style adapter sugar on VectorIter. Each method constructs the
 # corresponding concrete adapter struct and returns it by value.
