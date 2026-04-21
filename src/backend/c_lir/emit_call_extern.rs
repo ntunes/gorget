@@ -561,14 +561,22 @@ pub(super) fn emit_call_extern(
                             }
                         };
                         if is_int_parse {
-                            let cast_type = if name.contains("uint8") { "uint8_t" }
-                                else if name.contains("uint16") { "uint16_t" }
-                                else if name.contains("uint32") { "uint32_t" }
-                                else if name.contains("uint64") { "uint64_t" }
-                                else if name.contains("int8") { "int8_t" }
-                                else if name.contains("int16") { "int16_t" }
-                                else if name.contains("int32") { "int32_t" }
-                                else { "int64_t" };
+                            // The cast type is the Option's payload LIR type —
+                            // not the caller-provided name. This avoids a
+                            // name-substring dispatch (uint8/int32/…) and
+                            // derives the cast from the destination's
+                            // canonical type.
+                            let payload_lir_ty = sdef.fields.get(1).map(|(_, t)| t);
+                            let cast_type = match payload_lir_ty {
+                                Some(LirType::I8) => "int8_t",
+                                Some(LirType::I16) => "int16_t",
+                                Some(LirType::I32) => "int32_t",
+                                Some(LirType::U8) => "uint8_t",
+                                Some(LirType::U16) => "uint16_t",
+                                Some(LirType::U32) => "uint32_t",
+                                Some(LirType::U64) => "uint64_t",
+                                _ => "int64_t", // default + I64
+                            };
                             let range_check = match cast_type {
                                 "int8_t" => " && __pr.value >= -128 && __pr.value <= 127",
                                 "int16_t" => " && __pr.value >= -32768 && __pr.value <= 32767",
