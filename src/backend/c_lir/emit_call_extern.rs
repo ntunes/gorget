@@ -486,30 +486,13 @@ pub(super) fn emit_call_extern(
                 }
             }
 
-            // gorget_str_push / gorget_str_push_line — dispatch by arg type.
-            // The GIR emits a generic `gorget_str_push(ptr, i64)` but the
-            // actual runtime has type-specific variants (push_int, push_float, push_bool).
-            if (emit_name == "gorget_str_push" || emit_name == "gorget_str_push_line") && args.len() == 2 {
-                let arg2_ty = val_types.get(args[1].0 as usize).and_then(|t| t.as_ref());
-                let is_push_line = emit_name == "gorget_str_push_line";
-                let variant = match arg2_ty {
-                    Some(LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
-                         | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64) =>
-                        if is_push_line { Some("gorget_string_push_line_int") }
-                        else { Some("gorget_string_push_int") },
-                    Some(LirType::F32 | LirType::F64) =>
-                        if is_push_line { Some("gorget_string_push_line_float") }
-                        else { Some("gorget_string_push_float") },
-                    Some(LirType::Bool) =>
-                        if is_push_line { Some("gorget_string_push_line_bool") }
-                        else { Some("gorget_string_push_bool") },
-                    _ => None, // Str — use gorget_str_push/push_line as-is
-                };
-                if let Some(typed_fn) = variant {
-                    write!(out, "{typed_fn}({}, {});", v(args[0]), v(args[1])).unwrap();
-                    return;
-                }
-            }
+            // (Previously: gorget_str_push / gorget_str_push_line scalar
+            // dispatch lived here. LIR's `emit_extern_call` intercept at
+            // `src/lir/lower/insts.rs` ~3581 rewrites the generic name to
+            // `gorget_string_push_{int,float,bool}` before BIR lowering,
+            // so this backend branch is dead. Str arg keeps the original
+            // name; the `static inline gorget_str_push` shim in
+            // emit_types.rs handles it.)
 
             // time() in C requires a NULL argument.
             if name == "time" && args.is_empty() {
