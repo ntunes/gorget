@@ -526,30 +526,26 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 ek = 2
             elif tinfo.variants.len() > 0:
                 ek = 3
-            # Union layout: tag (4) + pad to 8 + max(variant payloads),
-            # aligned to 8. Flat layout: 4 (tag) + sum of all payload
-            # fields, aligned to 8.
+            # Both layouts pad to the struct's alignof (max of field
+            # alignments), matching C's rule. Union: tag(4) rounded to
+            # alignof + max variant payload, rounded to alignof. Flat:
+            # tag(4) + sum of payload fields, rounded to alignof.
+            int enum_align = struct_alignof_from_fields(&efields, &m)
             int computed_size = 0
             if is_union:
-                int padded_max = max_variant_size
-                int rem_u = padded_max % 8
-                if rem_u != 0:
-                    padded_max = padded_max + (8 - rem_u)
-                computed_size = 8 + padded_max
+                int padded_max = round_up_to(max_variant_size, enum_align)
+                int tag_and_pad = round_up_to(4, enum_align)
+                computed_size = tag_and_pad + padded_max
             else:
                 int flat_total = 4 + flat_payload_size
-                int rem_f = flat_total % 8
-                if rem_f != 0:
-                    flat_total = flat_total + (8 - rem_f)
-                computed_size = flat_total
+                computed_size = round_up_to(flat_total, enum_align)
             if computed_size == 0:
-                computed_size = 8
+                computed_size = 4
             LirStructDef new_sdef = LirStructDef(sdef.name, efields, ek, is_union, computed_size, -1)
             m.structs.set(sid, new_sdef)
         else:
             # Struct: map fields + pre-compute byte size (sum of field
-            # sizes, aligned to 8) so sizeof(T) queries don't have to
-            # recurse through the byte-size helper at every use.
+            # sizes, padded to struct's alignof).
             Vector[StructField] sfields = []
             int sfi = 0
             int s_total = 0
@@ -559,11 +555,10 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 sfields.push(StructField(finfo.name, fty))
                 s_total = s_total + lir_type_byte_size_in_mod(fty, &m, 0)
                 sfi += 1
-            int s_rem = s_total % 8
-            if s_rem != 0:
-                s_total = s_total + (8 - s_rem)
+            int s_align = struct_alignof_from_fields(&sfields, &m)
+            s_total = round_up_to(s_total, s_align)
             if s_total == 0:
-                s_total = 8
+                s_total = 1
             LirStructDef new_sdef = LirStructDef(sdef.name, sfields, 0, false, s_total, -1)
             m.structs.set(sid, new_sdef)
         tki += 1
@@ -665,8 +660,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 rsi += 1
                 continue
             int new_size = 0
+            int struct_align_rs = struct_alignof_from_fields(&rsdef.fields, &m)
             if rsdef.is_union_layout and rsdef.enum_kind > 0:
-                # Union-layout enum: tag (4, padded to 8) + max variant.
+                # Union-layout enum: tag + pad to alignof + max variant.
                 # Variant grouping by `VariantName_N` field-name prefix.
                 int max_v = 0
                 int cur_v = 0
@@ -691,22 +687,18 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                     rfi += 1
                 if cur_v > max_v:
                     max_v = cur_v
-                int max_rem = max_v % 8
-                if max_rem != 0:
-                    max_v = max_v + (8 - max_rem)
-                new_size = 8 + max_v
+                int padded_max = round_up_to(max_v, struct_align_rs)
+                int tag_pad = round_up_to(4, struct_align_rs)
+                new_size = tag_pad + padded_max
             else:
-                # Flat layout (struct or small enum): sum all fields, pad.
+                # Flat layout: sum all fields, pad to struct alignof.
                 int total = 0
                 int rfi2 = 0
                 while rfi2 < rsdef.fields.len():
                     int fty2 = rsdef.fields.get(rfi2).unwrap().ty
                     total = total + lir_type_byte_size_in_mod(fty2, &m, 0)
                     rfi2 += 1
-                int trem = total % 8
-                if trem != 0:
-                    total = total + (8 - trem)
-                new_size = total
+                new_size = round_up_to(total, struct_align_rs)
             if new_size == 0:
                 new_size = 8
             if new_size != rsdef.computed_c_size:
@@ -1203,6 +1195,58 @@ bool is_collection_constructor(String name):
 # union-layout Token enum gets allocated at 24 bytes instead of 60+
 # and pushes stomp adjacent memory. A small depth cap guards against
 # accidental self-reference in recursive types.
+# Alignment of a LIR type in bytes. Used when computing struct size so
+# we pad the total up to the struct's alignof, matching C's rule.
+# Hardcoded padding to 8 over-estimated size for structs whose largest
+# field is smaller than 8 bytes (e.g. `struct Keyword { int32_t tag }`,
+# C sizeof = 4 not 8). That caused `Option[Keyword]` to compute 16 bytes
+# while C laid it out as 8, and `return Some(KwXxx)` copied 16 bytes of
+# return value into an 8-byte slot — overwriting the caller's stack.
+int alignof_lir_type(int ty, LirModule &m, int depth):
+    if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
+        return 1
+    if ty == LT_I16 or ty == LT_U16:
+        return 2
+    if ty == LT_I32 or ty == LT_U32 or ty == LT_F32:
+        return 4
+    if ty == LT_I64 or ty == LT_U64 or ty == LT_F64 or ty == LT_PTR:
+        return 8
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return 8
+    if ty >= LT_STRUCT_BASE:
+        int sid = ty - LT_STRUCT_BASE
+        if sid < m.structs.len() and depth < 4:
+            LirStructDef sdef = m.structs.get(sid).unwrap()
+            int max_align = 1
+            int fi = 0
+            while fi < sdef.fields.len():
+                int fa = alignof_lir_type(sdef.fields.get(fi).unwrap().ty, &m, depth + 1)
+                if fa > max_align:
+                    max_align = fa
+                fi += 1
+            return max_align
+    return 8
+
+# Compute the struct's alignment from its flat field list (union or flat
+# layout doesn't matter for alignof: both are max field alignment).
+int struct_alignof_from_fields(Vector[StructField] &fields, LirModule &m):
+    int max_align = 1
+    int fi = 0
+    while fi < fields.len():
+        int fa = alignof_lir_type(fields.get(fi).unwrap().ty, &m, 0)
+        if fa > max_align:
+            max_align = fa
+        fi += 1
+    return max_align
+
+int round_up_to(int n, int align):
+    if align <= 1:
+        return n
+    int rem = n % align
+    if rem == 0:
+        return n
+    return n + (align - rem)
+
 int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
     if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
         return 1
@@ -1227,6 +1271,7 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
             # field sizes, aligned to 8. Previously always summed; that
             # overcounted union enums by ~Nx and routed 12376-byte
             # allocations to 568-byte Item elements.
+            int align_fb = struct_alignof_from_fields(&sdef.fields, &m)
             if sdef.is_union_layout and sdef.enum_kind > 0:
                 int max_v_bytes = 0
                 int cur_v_bytes = 0
@@ -1234,8 +1279,6 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
                 int fi_u = 1
                 while fi_u < sdef.fields.len():
                     StructField sf_u = sdef.fields.get(fi_u).unwrap()
-                    # Variant fields are named "VariantName_N"; sum across
-                    # the same prefix, reset on new variant.
                     int under_pos = sf_u.name.len() - 1
                     while under_pos > 0:
                         String ch_u = sf_u.name.slice(under_pos, under_pos + 1)
@@ -1252,10 +1295,9 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
                     fi_u += 1
                 if cur_v_bytes > max_v_bytes:
                     max_v_bytes = cur_v_bytes
-                int rem_u = max_v_bytes % 8
-                if rem_u != 0:
-                    max_v_bytes = max_v_bytes + (8 - rem_u)
-                int u_total = 8 + max_v_bytes
+                int padded_max_fb = round_up_to(max_v_bytes, align_fb)
+                int tag_pad_fb = round_up_to(4, align_fb)
+                int u_total = tag_pad_fb + padded_max_fb
                 if u_total == 0:
                     return 8
                 return u_total
@@ -1267,10 +1309,7 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
                 fi += 1
             if total == 0:
                 return 8
-            int rem = total % 8
-            if rem != 0:
-                total = total + (8 - rem)
-            return total
+            return round_up_to(total, align_fb)
     return 8
 
 # Back-compat wrapper kept for any call site that lacks module access.

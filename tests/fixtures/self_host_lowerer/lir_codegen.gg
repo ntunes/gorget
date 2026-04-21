@@ -1900,12 +1900,19 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, St
                     return "memcpy(&" + s(slot) + ", " + v(value) + ", sizeof(" + ty_name + "));"
                 # Type mismatch coercion for aggregate slots. When the value
                 # type differs from the slot type (either a scalar placeholder
-                # or an aggregate that doesn't match), emit a zero-init.
-                # This covers: tuple literal placeholders, None/unit stores,
-                # and cases where the self-host lost return type info (e.g.
-                # returning a String where the function returns Result[String]).
+                # or an aggregate that doesn't match), emit a zero-init —
+                # EXCEPT for Option slots: `return None` lowers to a UNIT
+                # placeholder value, lands here, and a plain `{0}` sets
+                # `tag = 0` (Some — wrong!). None's tag is 1; emit that
+                # explicitly so `keyword_from_str("main")`'s fallthrough
+                # returns None instead of `Some(KwInt)`.
                 if vty != slot_ty:
                     String ty_name = c_type_name(slot_ty, &sn)
+                    int slot_sid_ms = slot_ty - LT_STRUCT_BASE
+                    if slot_sid_ms >= 0 and slot_sid_ms < m.structs.len():
+                        LirStructDef slot_sdef_ms = m.structs.get(slot_sid_ms).unwrap()
+                        if slot_sdef_ms.enum_kind == EK_OPTION:
+                            return s(slot) + " = (" + ty_name + "){.tag = 1};"
                     return s(slot) + " = (" + ty_name + "){0};"
                 return s(slot) + " = " + v(value) + ";"
             # Pointer slot (void* / Ptr) receiving an aggregate value — self-host
