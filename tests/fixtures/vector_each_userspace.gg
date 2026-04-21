@@ -1,0 +1,19 @@
+# `Vector.each(f)` migrated to a user-space wrapper that delegates to
+# `self.iter().for_each(f)`. Method-level generic inference (shape 1)
+# binds F at the call site, so callers don't need explicit `[int(int)]`
+# args.
+#
+# This is the first builtin HOF replaced by the iter-trait pipeline.
+# The builtin Vector.each HofExpand path stays as a fallback for now;
+# deletion is a follow-up cleanup commit per the design doc.
+
+from std.collections import Vector
+from std.iter import VectorIter
+
+void show(int x):
+    print(x)
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    v.each(show)
+    return 0

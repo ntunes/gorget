@@ -150,6 +150,21 @@ equip [T] Vector[T]:
     VectorIter[T] iter(self):
         return VectorIter[T](self, 0)
 
+    # `v.each(f)` is sugar for `v.iter().for_each(f)`. Lives here so the
+    # method-level inference pipeline (Phase 2c) handles the closure-arg
+    # binding the same way it does for any other user-space wrapper.
+    # The builtin `Vector.each` HOF expansion in the IR-lowerer is the
+    # fallback when the user-space sig isn't selected.
+    #
+    # Inner `for_each[F]` carries explicit type-args because, after the
+    # outer `each[F=concrete]` instance is registered and its body is
+    # substituted, the per-call-site mono engine needs an explicit
+    # method-args list to drive transitive registration of
+    # `VectorIter[T]::for_each[F=concrete]`. Inference inside generic
+    # bodies (where `f`'s type is still the abstract `F`) doesn't fire.
+    void each[F](&self, F f):
+        self.iter().for_each[F](f)
+
 # Method-style adapter sugar on VectorIter. Each method constructs the
 # corresponding concrete adapter struct and returns it by value.
 # Callers chain with `v.iter().take(n)` / `v.iter().skip(2).chain(w.iter())` etc.

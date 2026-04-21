@@ -13,7 +13,7 @@ use rustc_hash::FxHashMap;
 use crate::ir::types::*;
 use crate::lexer::token::StringSegment;
 use crate::parser::ast::{self, Expr, GenericParam, Item, Stmt, Type};
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 use super::types::{mangle_generic_name, mangle_type_for_name, op_mangle_suffix, TypeMapper};
 
@@ -1096,6 +1096,32 @@ impl GenericCollector {
             let prev = self.current_generic_params.take();
             let substituted = substitute_function_body(&method_def_for_scan, &merged_subs);
             self.scan_function(&substituted);
+            // Also walk the substituted body for nested method-generic
+            // calls so transitive registration fires. Without this, a
+            // user-space wrapper like `void each[F](self, F f):
+            // self.iter().for_each[F](f)` registers `each[F=Closure]`
+            // but the inner `for_each[F=Closure]` call stays
+            // un-registered — the fn_sigs lookup falls back to the
+            // un-mangled `for_each` symbol which is a linker dead end.
+            // `method_instances_registered` early-exits on repeats, so
+            // recursion is bounded.
+            //
+            // `self` in the substituted body still has AST type
+            // `Type::SelfType` — `populate_env_from_params` can't infer
+            // through that. Pre-bind `self` to the concrete equipping
+            // type (e.g. `Vector[int]`) so the receiver chain resolves.
+            let mut env = LocalTypeEnv::default();
+            populate_env_from_params(&mut env, &substituted.params);
+            // Override self's binding (populate_env_from_params just set
+            // it to `Type::SelfType` from the AST param). Use the
+            // concrete equipping type so receiver chains like
+            // `self.iter().for_each(...)` resolve through equip_templates.
+            let dummy = Span { start: 0, end: 0 };
+            env.bind("self".to_string(), Type::Named {
+                name: Spanned { node: equip_base.clone(), span: dummy },
+                generic_args: equip_type_args.clone(),
+            });
+            self.walk_fn_body_for_method_calls(&substituted.body, &mut env);
             self.current_generic_params = prev;
         }
 
@@ -1163,6 +1189,7 @@ impl GenericCollector {
     fn infer_expr_ast_type(&self, expr: &Spanned<Expr>, env: &LocalTypeEnv) -> Option<Type> {
         match &expr.node {
             Expr::Identifier(name) => env.lookup(name).cloned(),
+            Expr::SelfExpr => env.lookup("self").cloned(),
             Expr::MethodCall { receiver, method, generic_args, .. } => {
                 let recv_ty = self.infer_expr_ast_type(receiver, env)?;
                 let (base, args) = extract_base_and_args(&recv_ty)?;

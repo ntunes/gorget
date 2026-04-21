@@ -2109,6 +2109,18 @@ fn iter_map_inference() {
 }
 
 #[test]
+fn vector_each_userspace() {
+    // `Vector.each(f)` migrated from a builtin HOF expansion to a
+    // user-space wrapper that delegates to `self.iter().for_each(f)`.
+    // Validates the full method-level inference pipeline end-to-end:
+    // typecheck infers F at the call site → AST rewriter syncs targs →
+    // generic collector registers `Vector__T__each__F` AND walks the
+    // substituted body to transitively register
+    // `VectorIter__T__for_each__F` (default-body trait method).
+    run_gg("vector_each_userspace.gg", "10\n20\n30");
+}
+
+#[test]
 fn method_generic_trait_dispatch() {
     run_gg("method_generic_trait_dispatch.gg", "330\n1291");
 }

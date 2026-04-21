@@ -1376,6 +1376,49 @@ impl<'a> TypeChecker<'a> {
                 let receiver_type = self.infer_expr(receiver);
                 let resolved_receiver = self.resolve_type(receiver_type);
 
+                // Method-level generic inference (Phase 2c — runs before
+                // the dispatch fork because user-space wrappers like
+                // `equip [T] Vector[T]: void each[F](...)` may live in a
+                // generic-template equip block whose registered self_type
+                // doesn't match the concrete receiver's TypeId. The
+                // TypeId-keyed `resolve_method` then misses the impl,
+                // dispatch falls through to `builtin_method_type`, and
+                // inference would never run if it were gated on the
+                // success of `resolve_method`. The shape lookup falls
+                // back to the receiver's BASE NAME so it catches both
+                // direct-TypeId and generic-template impls.
+                let needs_inference = generic_args.as_ref()
+                    .map(|gs| gs.is_empty())
+                    .unwrap_or(true);
+                if needs_inference {
+                    let shape_clone = self.traits
+                        .resolve_method_shape(resolved_receiver, &method.node)
+                        .or_else(|| {
+                            let base_name = match self.types.get(resolved_receiver) {
+                                ResolvedType::Generic(def_id, _)
+                                | ResolvedType::Defined(def_id) => {
+                                    Some(self.scopes.get_def(*def_id).name.clone())
+                                }
+                                _ => None,
+                            }?;
+                            self.traits.resolve_method_shape_by_name(&base_name, &method.node)
+                        })
+                        .cloned();
+                    if let Some(shape) = shape_clone {
+                        // Pre-infer arg types for inference. These are
+                        // re-used by the typed dispatch path below; the
+                        // untyped paths re-infer them, which is wasteful
+                        // but harmless (idempotent + cached via expr_types).
+                        let mut arg_types: Vec<TypeId> = Vec::with_capacity(args.len());
+                        for arg in args.iter() {
+                            arg_types.push(self.infer_expr(&arg.node.value));
+                        }
+                        if let Some(inferred) = self.try_infer_method_targs(&shape, &arg_types) {
+                            self.inferred_method_targs.insert(method.span.start, inferred);
+                        }
+                    }
+                }
+
                 // Try to resolve method via trait registry
                 if let Some((def_id, sig)) =
                     self.traits.resolve_method(resolved_receiver, &method.node)
@@ -1392,37 +1435,8 @@ impl<'a> TypeChecker<'a> {
                             expr.span,
                         );
                     }
-                    // Pre-infer arg types so we can both unify against the
-                    // sig (existing behaviour) AND attempt method-level
-                    // generic inference if the method has unresolved
-                    // generic params and the call site has no explicit
-                    // `[T1, T2]` args.
-                    let mut arg_types: Vec<TypeId> = Vec::with_capacity(args.len());
-                    for arg in args.iter() {
-                        arg_types.push(self.infer_expr(&arg.node.value));
-                    }
-                    // Method-level generic inference: when the trait sig has
-                    // generic params (held in MethodSigShape) and the call
-                    // omits explicit args, run the shape-1 (predicate)
-                    // inference rule. Successful inference lands in the
-                    // side-table; an AST-rewriter (Pass 4.5 in
-                    // `semantic::analyze`) copies it into
-                    // `MethodCall.generic_args` so the IR-lowering /
-                    // generic-collector path picks it up.
-                    let needs_inference = generic_args.as_ref()
-                        .map(|gs| gs.is_empty())
-                        .unwrap_or(true);
-                    if needs_inference {
-                        if let Some(shape) = self.traits
-                            .resolve_method_shape(resolved_receiver, &method.node)
-                        {
-                            let shape = shape.clone();
-                            if let Some(inferred) = self.try_infer_method_targs(&shape, &arg_types) {
-                                self.inferred_method_targs.insert(method.span.start, inferred);
-                            }
-                        }
-                    }
-                    for ((arg, &param_type), &arg_type) in args.iter().zip(sig.params.iter()).zip(arg_types.iter()) {
+                    for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
+                        let arg_type = self.infer_expr(&arg.node.value);
                         self.unify(param_type, arg_type, arg.span);
                     }
                     // Record the method call's own type so downstream consumers
@@ -2925,6 +2939,7 @@ impl<'a> TypeChecker<'a> {
         let dummy = Span { start: 0, end: 0 };
         match self.types.get(resolved) {
             ResolvedType::Primitive(prim) => Some(Type::Primitive(*prim)),
+            ResolvedType::Void => Some(Type::Primitive(PrimitiveType::Void)),
             ResolvedType::Defined(def_id) => {
                 let name = self.scopes.get_def(*def_id).name.clone();
                 Some(Type::Named {
