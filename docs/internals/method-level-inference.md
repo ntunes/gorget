@@ -351,7 +351,38 @@ is real, refactor in a third commit.
    chains 4-5 methods deep this is fine. Worst case: a hot fn body
    with many method-generic calls. Measure if a fixture trips.
 
-5. **F-string interpolation bypass.** Surfaced 2026-04-21 during
+   **MEASURED 2026-04-21 — non-issue.** Heaviest HOF-using
+   fixtures (`test_option_all.gg` 18 calls, `string_higher_order.gg`
+   14, `test_vector_all.gg` 12) compile in 0.10s end-to-end via
+   `gg run`. Inference contributes microseconds at most — O(n) per
+   call where n is param count (typically 1–2). Per-method
+   instance registration is the actual cost driver and that scales
+   with call sites regardless of inference. No fixture trips perf
+   concerns. Re-measure if a real codebase ever does.
+
+5. **Self-host typechecker parity.** The Gorget-in-Gorget
+   typechecker (`tests/fixtures/self_host_typechecker/`) doesn't
+   track method-level generic args at all — its `EMethodCall`
+   handling at `typecheck.gg:539,839` matches by method name and
+   has hardcoded arms for known iter HOFs (`filter`, `map`, `fold`,
+   `any`, `each`). The `targs` field on `EMethodCall` is
+   destructured but unused. No trait registry / EquipInfo /
+   MethodSigShape equivalent exists.
+
+   This stays green via name-based dispatch: self-host doesn't
+   need to mangle `Vector__T__filter__GorgetClosure`-style
+   symbols because it doesn't lower to per-call-site mono. The
+   `type_comparison` / `lowerer_comparison` integration tests are
+   diagnostic-only (always pass), so any output divergence
+   surfaces as a recorded mismatch, not a failure.
+
+   Real parity work waits until self-host gains a trait registry
+   AND per-call-site mono. That's a much bigger lift (touches
+   `scope.gg`, `resolve.gg`, `typecheck.gg`, plus a new
+   `traits.gg`). Out of scope for this design doc; tracked in
+   TODO Phase 2c (h).
+
+6. **F-string interpolation bypass.** Surfaced 2026-04-21 during
    the convenience-wrapper migration: `f"{v.iter().any(p)}"`
    link-fails because IR-lowering re-parses the interp segment
    text, bypassing typecheck, the AST rewriter, and every other
