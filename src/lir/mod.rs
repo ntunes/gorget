@@ -1250,6 +1250,10 @@ pub struct LirModule {
     /// Target environment: "native" (default), "freestanding".
     /// Affects which runtime is emitted by the C backend.
     pub target: String,
+    /// When true, emit the runtime clone-stats atexit handler that prints
+    /// a `[clone-stats] ...` line to stderr at program exit. Set by the
+    /// `--clone-stats` CLI flag on `gg build`/`gg run`.
+    pub clone_stats: bool,
 }
 
 /// Specification for a generated `Type__drop` function.
@@ -1291,6 +1295,7 @@ impl LirModule {
             drop_collision_types: HashSet::new(),
             type_drop_fns: HashMap::new(),
             target: "native".to_string(),
+            clone_stats: false,
         }
     }
 

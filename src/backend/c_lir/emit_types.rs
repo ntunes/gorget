@@ -1834,6 +1834,12 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         out.push_str(crate::backend::c::c_runtime::RUNTIME_ALLOC_REPORT);
     }
 
+    // ── Clone stats report (--clone-stats only) ──
+    // Safe to emit alongside the alloc-report: distinct atexit handler, distinct output line.
+    if module.clone_stats {
+        out.push_str(crate::backend::c::c_runtime::RUNTIME_CLONE_STATS);
+    }
+
     // ── Panic handler ──
     if !is_test_or_bench {
         out.push_str(crate::backend::c::c_runtime::PANIC_NORMAL);
@@ -2355,7 +2361,7 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
         }
     }
     for (name, param_ty) in &box_allocs {
-        writeln!(out, "static inline void* {name}({param_ty} val) {{ {param_ty}* p = ({param_ty}*)GORGET_ALLOC(sizeof({param_ty})); *p = val; return (void*)p; }}").unwrap();
+        writeln!(out, "static inline void* {name}({param_ty} val) {{ __gorget_box_alloc_count++; {param_ty}* p = ({param_ty}*)GORGET_ALLOC(sizeof({param_ty})); *p = val; return (void*)p; }}").unwrap();
     }
     if !box_allocs.is_empty() {
         writeln!(out).unwrap();

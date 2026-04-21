@@ -189,7 +189,7 @@ fn lower_for_string(
 
     // Body
     builder.switch_to(body_bb);
-    let saved_str = ctx.save_locals();
+    let saved_str = ctx.save_locals(builder);
     ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -223,7 +223,7 @@ fn lower_for_string(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_str);
+    ctx.restore_locals(builder, saved_str);
     builder.jump(header_bb);
 
     // Else block
@@ -286,7 +286,7 @@ fn lower_for_array(
 
     // Body
     builder.switch_to(body_bb);
-    let saved_arr = ctx.save_locals();
+    let saved_arr = ctx.save_locals(builder);
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -313,7 +313,7 @@ fn lower_for_array(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_arr);
+    ctx.restore_locals(builder, saved_arr);
 
     // Increment idx
     builder.jump(incr_bb);
@@ -388,7 +388,7 @@ fn lower_for_enumerate(
 
     // Body
     builder.switch_to(body_bb);
-    let saved_enum = ctx.save_locals();
+    let saved_enum = ctx.save_locals(builder);
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -417,7 +417,7 @@ fn lower_for_enumerate(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_enum);
+    ctx.restore_locals(builder, saved_enum);
 
     // Increment idx
     builder.jump(incr_bb);
@@ -497,7 +497,7 @@ fn lower_for_dict(
 
     // Body
     builder.switch_to(body_bb);
-    let saved_dict = ctx.save_locals();
+    let saved_dict = ctx.save_locals(builder);
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -558,7 +558,7 @@ fn lower_for_dict(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_dict);
+    ctx.restore_locals(builder, saved_dict);
 
     builder.jump(incr_bb);
     builder.switch_to(incr_bb);
@@ -641,7 +641,7 @@ fn lower_for_set(
     builder.branch(FunctionBuilder::copy(cond), body_bb, else_exit_bb);
 
     builder.switch_to(body_bb);
-    let saved_set = ctx.save_locals();
+    let saved_set = ctx.save_locals(builder);
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -702,7 +702,7 @@ fn lower_for_set(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_set);
+    ctx.restore_locals(builder, saved_set);
 
     builder.jump(incr_bb);
     builder.switch_to(incr_bb);
@@ -857,7 +857,7 @@ fn lower_for_iterable(
 
     // Body: extract value from Some variant
     builder.switch_to(body_bb);
-    let saved_iter = ctx.save_locals();
+    let saved_iter = ctx.save_locals(builder);
     ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
@@ -879,7 +879,7 @@ fn lower_for_iterable(
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_iter);
+    ctx.restore_locals(builder, saved_iter);
     builder.jump(header_bb);
 
     // Else block
@@ -962,7 +962,7 @@ fn lower_for_range(
     // Create loop variable — type inferred from the start expression.
     // For literal bounds (e.g. `0..n`) this gives I64_TYPE; for typed variables
     // (e.g. `start..end` where start: uint8) it preserves the narrower type.
-    let saved_range = ctx.save_locals();
+    let saved_range = ctx.save_locals(builder);
     let start_val = lower_expr(ctx, builder, start);
     let loop_type = infer_operand_type_full(ctx, &start_val, builder);
     let loop_var = builder.add_local(loop_type, Some(var_name));
@@ -1008,7 +1008,7 @@ fn lower_for_range(
     builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
     builder.jump(header_bb);
 
-    ctx.restore_locals(saved_range);
+    ctx.restore_locals(builder, saved_range);
 
     // Else block: executed when loop completes naturally (no break)
     if let Some(else_body) = else_arm {

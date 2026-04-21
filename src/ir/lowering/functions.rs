@@ -124,30 +124,78 @@ fn prescan_expr_moves(
 }
 
 /// Flow-sensitive CoW analysis: for each statement, compute the set of variable names
-/// that are reassigned or !-moved on any forward execution path.
+/// (and collection-path mutation markers) that render any CoW borrow sourced from
+/// them unsafe on a forward execution path.
+///
+/// The set contains two shapes of entries:
+///   - `"name"` — the variable `name` is reassigned or `!`-moved later. Any CoW
+///     borrow of `name` would dangle if we kept it through the reassignment.
+///   - `"@mut:path"` — the collection at `path` (a local name like `"x"` or a
+///     field path like `"self.data"`) is mutated later. A mutating method call
+///     (push/pop/set/insert/remove/clear/sort/reverse/swap/extend/append/truncate/
+///     retain/dedup/resize/reserve/replace/drain/fill) on the receiver, a direct
+///     field reassignment, or a call site that passes `&path` as a mut-borrow arg
+///     all contribute. A CoW borrow of an *element* from this collection must be
+///     eagerly materialized at its var_decl site if this marker is present.
 ///
 /// Algorithm: reverse walk of the AST (same shape as liveness analysis). At each
-/// statement, the "reassigned-after" set is the accumulation of all reassignments
-/// that appear textually after it. At branches (if/else), the sets are unioned
-/// (any-path: if a name is reassigned in any branch, it's unsafe for CoW).
-/// At loops, the loop body's reassignments are included (conservative but correct).
-fn compute_cow_reassigned_after(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>> {
+/// statement, the set is the accumulation of all mutations/reassignments that
+/// appear textually after it. At branches (if/else), the sets are unioned
+/// (any-path: if a name is mutated in any branch, it's unsafe for CoW).
+/// At loops, the loop body's mutations are included (conservative but correct).
+fn compute_cow_reassigned_after(
+    body: &[Spanned<Stmt>],
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>> {
     let mut result = rustc_hash::FxHashMap::default();
     let mut future = rustc_hash::FxHashSet::default();
-    cow_after_block(body, &mut future, &mut result);
+    cow_after_block(body, &mut future, &mut result, fn_param_ownerships);
     result
+}
+
+/// Method names that mutate a collection receiver in place. Any `receiver.method(...)`
+/// with method in this list contributes `@mut:{receiver_path}` to the prescan set.
+const MUTATING_METHODS: &[&str] = &[
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+    "retain", "dedup", "resize", "reserve", "replace", "drain", "fill",
+    "put", "remove_key", "sort_by", "sort_by_key",
+];
+
+/// Extract the dotted path from a field-access chain or identifier.
+/// Returns `"self.data"` for `self.data`, `"x"` for `x`, None for complex expressions.
+fn extract_path_for_mut(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Identifier(name) => Some(name.clone()),
+        Expr::SelfExpr => Some("self".to_string()),
+        Expr::FieldAccess { object, field } => {
+            let prefix = extract_path_for_mut(&object.node)?;
+            Some(format!("{}.{}", prefix, field.node))
+        }
+        _ => None,
+    }
+}
+
+/// Helper: given an `expr` that appears at a mutating-position (the receiver of a
+/// mutating method, or the inside of `&arg`), insert the right marker into the
+/// prescan set.
+fn record_path_mutation(expr: &Expr, future: &mut rustc_hash::FxHashSet<String>) {
+    if let Some(path) = extract_path_for_mut(expr) {
+        future.insert(format!("@mut:{}", path));
+    }
 }
 
 fn cow_after_block(
     stmts: &[Spanned<Stmt>],
     future: &mut rustc_hash::FxHashSet<String>,
     result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
 ) {
     for stmt in stmts.iter().rev() {
         // Record the "reassigned-after" set at this statement's position
         result.insert(stmt.span.start, future.clone());
         // Collect reassignments from this statement
-        cow_after_stmt(&stmt.node, future, result);
+        cow_after_stmt(&stmt.node, future, result, fn_param_ownerships);
     }
 }
 
@@ -155,51 +203,67 @@ fn cow_after_stmt(
     stmt: &Stmt,
     future: &mut rustc_hash::FxHashSet<String>,
     result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<String>>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
 ) {
     match stmt {
         Stmt::VarDecl { value, .. } => {
-            cow_after_expr_moves(&value.node, future);
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
         }
         Stmt::Assign { target, value, .. } => {
+            // Name reassignment: `x = rhs` marks `x` unsafe for CoW propagation.
             if let Expr::Identifier(name) = &target.node {
                 future.insert(name.clone());
             }
-            cow_after_expr_moves(&value.node, future);
+            // Field reassignment: `self.data = rhs` means any CoW borrow sourced
+            // from self.data later would dangle. Emit `@mut:self.data`.
+            if let Some(path) = extract_path_for_mut(&target.node) {
+                // Only meaningful for multi-component paths (at least one '.') —
+                // bare identifiers are covered by the Identifier case above.
+                if path.contains('.') {
+                    future.insert(format!("@mut:{}", path));
+                }
+            }
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
         }
         Stmt::CompoundAssign { target, value, .. } => {
             if let Expr::Identifier(name) = &target.node {
                 future.insert(name.clone());
             }
-            cow_after_expr_moves(&value.node, future);
+            if let Some(path) = extract_path_for_mut(&target.node) {
+                if path.contains('.') {
+                    future.insert(format!("@mut:{}", path));
+                }
+            }
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships);
         }
         Stmt::Expr(expr) => {
-            cow_after_expr_moves(&expr.node, future);
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships);
         }
         Stmt::Return(Some(expr)) => {
-            cow_after_expr_moves(&expr.node, future);
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships);
         }
         Stmt::While { body, else_body, .. } => {
             // Loop body reassignments are visible to statements before the loop
-            cow_after_block(&body.stmts, future, result);
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships);
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result);
+                cow_after_block(&eb.stmts, future, result, fn_param_ownerships);
             }
         }
         Stmt::For { body, .. } => {
-            cow_after_block(&body.stmts, future, result);
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships);
         }
         Stmt::If { then_body, elif_branches, else_body, .. } => {
             // Union all branches: if a name is reassigned in any branch, it's unsafe
             let saved = future.clone();
-            cow_after_block(&then_body.stmts, future, result);
+            cow_after_block(&then_body.stmts, future, result, fn_param_ownerships);
             let then_set = future.clone();
             *future = saved.clone();
             for (_, branch_body) in elif_branches {
-                cow_after_block(&branch_body.stmts, future, result);
+                cow_after_block(&branch_body.stmts, future, result, fn_param_ownerships);
                 // Accumulate into future (union)
             }
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result);
+                cow_after_block(&eb.stmts, future, result, fn_param_ownerships);
             }
             // Union: include then-branch reassignments too
             future.extend(then_set);
@@ -210,14 +274,14 @@ fn cow_after_stmt(
                 if let crate::parser::ast::MatchItem::Arm(arm) = item {
                     let mut branch = saved.clone();
                     if let Expr::Block(block) = &arm.body.node {
-                        cow_after_block(&block.stmts, &mut branch, result);
+                        cow_after_block(&block.stmts, &mut branch, result, fn_param_ownerships);
                     }
                     future.extend(branch);
                 }
             }
             if let Some(b) = else_arm {
                 let mut branch = saved;
-                cow_after_block(&b.stmts, &mut branch, result);
+                cow_after_block(&b.stmts, &mut branch, result, fn_param_ownerships);
                 future.extend(branch);
             }
         }
@@ -225,38 +289,63 @@ fn cow_after_stmt(
     }
 }
 
-/// Collect !-moved names from expressions (same as prescan_expr_moves but
-/// inserts into the forward-reassigned set).
+/// Collect !-moved names, mutating-method receivers, field reassignments, and
+/// indirect-mutation (&arg / mut-borrow sig) arg targets from expressions.
 fn cow_after_expr_moves(
     expr: &Expr,
     future: &mut rustc_hash::FxHashSet<String>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
 ) {
     match expr {
         Expr::Call { args, callee, .. } => {
-            cow_after_expr_moves(&callee.node, future);
-            for arg in args {
+            cow_after_expr_moves(&callee.node, future, fn_param_ownerships);
+            // Look up the callee's per-param ownership for implicit-mut-borrow
+            // detection. Only Expr::Identifier callees map cleanly to signatures.
+            let callee_sig = if let Expr::Identifier(name) = &callee.node {
+                fn_param_ownerships.get(name)
+            } else {
+                None
+            };
+            for (i, arg) in args.iter().enumerate() {
                 if matches!(arg.node.ownership, Ownership::Move) {
                     if let Expr::Identifier(name) = &arg.node.value.node {
                         future.insert(name.clone());
                     }
                 }
-                cow_after_expr_moves(&arg.node.value.node, future);
+                // Explicit `&arg` at call site → mutating.
+                if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+                    record_path_mutation(&arg.node.value.node, future);
+                }
+                // Implicit mut-borrow: callee's param is MutableBorrow per sig.
+                if let Some(ownerships) = callee_sig {
+                    if let Some(Ownership::MutableBorrow) = ownerships.get(i) {
+                        record_path_mutation(&arg.node.value.node, future);
+                    }
+                }
+                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships);
             }
         }
-        Expr::MethodCall { receiver, args, .. } => {
-            cow_after_expr_moves(&receiver.node, future);
+        Expr::MethodCall { receiver, args, method, .. } => {
+            cow_after_expr_moves(&receiver.node, future, fn_param_ownerships);
+            // Mutating method on a collection receiver → the receiver path is mutated.
+            if MUTATING_METHODS.contains(&method.node.as_str()) {
+                record_path_mutation(&receiver.node, future);
+            }
             for arg in args {
                 if matches!(arg.node.ownership, Ownership::Move) {
                     if let Expr::Identifier(name) = &arg.node.value.node {
                         future.insert(name.clone());
                     }
                 }
-                cow_after_expr_moves(&arg.node.value.node, future);
+                if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+                    record_path_mutation(&arg.node.value.node, future);
+                }
+                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships);
             }
         }
         Expr::BinaryOp { left, right, .. } => {
-            cow_after_expr_moves(&left.node, future);
-            cow_after_expr_moves(&right.node, future);
+            cow_after_expr_moves(&left.node, future, fn_param_ownerships);
+            cow_after_expr_moves(&right.node, future, fn_param_ownerships);
         }
         _ => {}
     }
@@ -476,7 +565,7 @@ pub fn lower_function(
     // Also count name uses and compute liveness for auto-move (Phase 1f).
     if let FunctionBody::Block(block) = &func.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }
@@ -778,7 +867,7 @@ pub fn lower_equip_method(
     // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
     if let FunctionBody::Block(block) = &method.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }

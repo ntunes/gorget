@@ -46,6 +46,12 @@ static _Atomic size_t __gorget_array_clone_count = 0;
 static _Atomic size_t __gorget_str_cat_count = 0;
 static _Atomic size_t __gorget_string_free_count = 0;
 static _Atomic size_t __gorget_string_new_count = 0;
+// --clone-stats counters — always compiled in (counter is ~1 ns per call).
+// Only the atexit report is gated, so zero-cost when --clone-stats isn't set.
+static _Atomic size_t __gorget_map_clone_count = 0;
+static _Atomic size_t __gorget_set_clone_count = 0;
+static _Atomic size_t __gorget_string_cow_count = 0;
+static _Atomic size_t __gorget_box_alloc_count = 0;
 // Forward declaration — definition is later in the file so that
 // __gorget_write_mem_stats (which it calls) can be defined alongside
 // the atexit handler.
@@ -1477,6 +1483,7 @@ static inline GorgetString gorget_string_clone_to_owned(const GorgetString* src)
 static inline GorgetString gorget_string_copy_cow(const GorgetString* src) {
     if (src->cap == 0) return *src;  // view: 32-byte struct copy, no alloc
     if (src->len == 0) return GORGET_EMPTY_STR;
+    __gorget_string_cow_count++;
     return str_alloc_copy((const char*)src->data, src->len, __gorget_current_alloc);
 }
 
@@ -2847,6 +2854,44 @@ static void __gorget_alloc_report(void) {
 }
 __attribute__((constructor)) static void __gorget_register_alloc_report(void) {
     atexit(__gorget_alloc_report);
+}
+"#;
+
+/// Clone-stats — atexit runtime clone/alloc counter report for `--clone-stats`.
+/// Single-line parseable format so scripts can diff values across runs. Includes
+/// peak RSS (on Linux via /proc/self/status VmHWM) so no external `time -v` is
+/// needed to capture the memory footprint.
+pub const RUNTIME_CLONE_STATS: &str = r#"
+static size_t __gorget_peak_rss_kb(void) {
+    #ifdef __linux__
+    FILE* f = fopen("/proc/self/status", "r");
+    if (!f) return 0;
+    char line[256];
+    size_t vm_hwm_kb = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "VmHWM:", 6) == 0) {
+            sscanf(line + 6, "%zu", &vm_hwm_kb);
+            break;
+        }
+    }
+    fclose(f);
+    return vm_hwm_kb;
+    #else
+    return 0;  // Darwin/BSD: would use getrusage RU_MAXRSS (bytes on Darwin, kb on Linux)
+    #endif
+}
+static void __gorget_clone_stats_report(void) {
+    size_t peak_rss_kb = __gorget_peak_rss_kb();
+    fprintf(stderr, "[clone-stats] array_clone=%zu map_clone=%zu set_clone=%zu string_cow=%zu string_cat=%zu box_alloc=%zu array_new=%zu string_new=%zu total_allocs=%zu total_frees=%zu live_bytes=%zu peak_rss_kb=%zu\n",
+        __gorget_array_clone_count, __gorget_map_clone_count, __gorget_set_clone_count,
+        __gorget_string_cow_count, __gorget_str_cat_count, __gorget_box_alloc_count,
+        __gorget_array_new_count, __gorget_string_new_count,
+        __gorget_alloc_count, __gorget_free_count,
+        __gorget_total_allocated - __gorget_total_freed,
+        peak_rss_kb);
+}
+__attribute__((constructor)) static void __gorget_register_clone_stats(void) {
+    atexit(__gorget_clone_stats_report);
 }
 "#;
 
@@ -5907,6 +5952,7 @@ static inline void gorget_map_free(GorgetMap* m) {
 static inline bool gorget_map_is_empty(const GorgetMap* m) { return m->count == 0; }
 
 static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
+    __gorget_map_clone_count++;
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetMap dst;
     memset(&dst, 0, sizeof(dst));
@@ -6128,6 +6174,7 @@ static inline void gorget_set_free(GorgetSet* s) {
 }
 
 static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
+    __gorget_set_clone_count++;
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetSet dst;
     memset(&dst, 0, sizeof(dst));

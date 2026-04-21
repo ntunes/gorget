@@ -370,6 +370,7 @@ fn try_build_ir(
     emit_lir: bool,
     emit_c_lir: bool,
     show_clones: bool,
+    clone_stats: bool,
     backend_name: &str,
     target: &str,
 ) -> Result<PathBuf, String> {
@@ -557,6 +558,7 @@ fn try_build_ir(
     // Lower GIR → LIR → SSA → value_types → BIR synthesis → optimize → backend
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
+        lir_module.clone_stats = clone_stats;
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
@@ -1562,7 +1564,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -1598,7 +1600,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, false, false, "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -2013,6 +2015,7 @@ fn main() {
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         println!("  --show-clones           Print report of all implicit clones during compilation");
+        println!("  --clone-stats           Emit `[clone-stats] ...` line at program exit (runtime counters)");
         println!();
         println!("Targets:");
         println!("  --target native                 Default — build for the host OS with full runtime");
@@ -2071,7 +2074,8 @@ fn main() {
             sanitize, scheduler_mode: parse_scheduler(&args),
             ..Default::default()
         };
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native")
+        let clone_stats = args.iter().any(|a| a == "--clone-stats");
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, clone_stats, "c-lir", "native")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -2206,6 +2210,7 @@ fn main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let show_clones = args.iter().any(|a| a == "--show-clones");
+    let clone_stats = args.iter().any(|a| a == "--clone-stats");
     let warn_const = args.iter().any(|a| a == "--warn-const");
     let target = args.iter()
         .position(|a| a == "--target")
@@ -2520,7 +2525,7 @@ fn main() {
                     sanitize, scheduler_mode,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clone_stats, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2550,7 +2555,7 @@ fn main() {
                     sanitize,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, show_clones, clone_stats, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2617,7 +2622,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native");
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, clone_stats, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
                     let status = Command::new(&exe_path)
@@ -2852,7 +2857,7 @@ fn main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, "c-lir", "native")
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, false, "c-lir", "native")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

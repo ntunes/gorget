@@ -1947,7 +1947,14 @@ pub(super) fn lower_method_call(
             }
             ctx.set_owned(result_id);
 
-            // Track collection provenance for Option__Ref_ results
+            // Track collection provenance for Option__Ref_ results.
+            // Case A: named-local receiver → `Local(recv)`.
+            // Case B: field-access receiver with NO recv temp → `FieldPath(...)`.
+            // Case C: anon recv temp + field_path — still dormant. save_locals
+            //   now covers local_ownership + has ancestor-aware prescan, but
+            //   self_host_bootstrap still SIGSEGVs with Case C enabled. One
+            //   remaining gap (closure capture mutation? alias provenance?)
+            //   not yet captured. Tracked in TODO.
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
                 if ret_name.starts_with("Option__Ref_") {
                     if let Some(recv_local) = recv_local_for_move_zero {
@@ -1955,7 +1962,9 @@ pub(super) fn lower_method_call(
                             ctx.set_cow_borrow_source(result_id, CollectionId::Local(recv_local));
                         }
                     } else if let Some(ref field_path) = field_path_for_cow {
-                        ctx.set_cow_borrow_source(result_id, CollectionId::FieldPath(field_path.clone()));
+                        if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
+                            ctx.set_cow_borrow_source(result_id, CollectionId::FieldPath(field_path.clone()));
+                        }
                     }
                 }
             }
@@ -1973,8 +1982,11 @@ pub(super) fn lower_method_call(
                     if ctx.is_named_local(recv_local) {
                         ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
                     }
+                    // Case C dormant (see Option__Ref_ branch above).
                 } else if let Some(ref field_path) = field_path_for_cow {
-                    ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                    if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
+                        ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                    }
                 }
             }
             // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
@@ -1984,8 +1996,11 @@ pub(super) fn lower_method_call(
                         if ctx.is_named_local(recv_local) {
                             ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
                         }
+                        // Case C dormant.
                     } else if let Some(ref field_path) = field_path_for_cow {
-                        ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                        if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
+                            ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                        }
                     }
                 }
             }

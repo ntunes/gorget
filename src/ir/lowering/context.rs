@@ -378,6 +378,28 @@ pub struct LoweringContext<'a> {
     pub call_resolved_names: FxHashMap<usize, String>,
 }
 
+/// Snapshot of lowering state taken at branch entry, restored at branch exit.
+/// Carries BOTH the name→local map and local_ownership so that CoW materialization
+/// that runs inside one branch (rebinding a name, removing an ownership flag)
+/// does not leak into sibling branches or post-join code.
+///
+/// `local_id_boundary`: any local whose ID is ≥ this was created after the snapshot
+/// — its ownership state is kept as-is on restore (branch-local locals survive).
+///
+/// `local_types_at_save`: map of LocalId → declared type at save time. On restore,
+/// if a local's `builder.locals[i].type_id` has been CHANGED during the scope
+/// (e.g. `assigns.rs`'s in-place CoW upgrade flipping Ptr(T)→T), that local is
+/// treated as permanently upgraded — its ownership state is *not* reverted.
+/// This prevents inconsistent (ownership=CollectionRef, type=T) states that
+/// break LIR codegen.
+#[derive(Clone)]
+pub struct SavedScope {
+    locals: FxHashMap<String, (LocalId, TypeId)>,
+    local_ownership: FxHashMap<LocalId, LocalOwnershipState>,
+    local_id_boundary: u32,
+    local_types_at_save: FxHashMap<LocalId, TypeId>,
+}
+
 
 impl<'a> LoweringContext<'a> {
     pub fn new(analysis: &'a AnalysisResult, type_mapper: TypeMapper, type_registry: TypeRegistry) -> Self {
@@ -856,6 +878,57 @@ impl<'a> LoweringContext<'a> {
             .map_or(false, |set| set.contains(name))
     }
 
+    /// Flow-sensitive source-mutation check: is the collection at `source_path`
+    /// (either a local name like `"x"` or a field path like `"self.data"`)
+    /// mutated on any forward path from `stmt_span_start`? Used to decide at
+    /// var_decl / CoW-borrow sites whether a borrow of an element from this
+    /// collection is safe to keep, or must be eagerly materialized.
+    ///
+    /// Treats ANY reassignment/`!`-move of an ancestor path as a mutation — e.g.
+    /// `self.data = new_vec` invalidates borrows of `self.data.get(i)`, and
+    /// `self = other` invalidates borrows of `self.data.get(i)` too. A bare
+    /// collection name is safe ONLY if neither the name itself nor any of its
+    /// prefixes (which don't exist for bare locals) is reassigned later.
+    pub fn is_source_mut_unsafe_at(&self, source_path: &str, stmt_span_start: usize) -> bool {
+        let set = match self.func_state.cow_reassigned_after.get(&stmt_span_start) {
+            Some(s) => s,
+            None => return false,
+        };
+        // Direct mutation marker for the exact path.
+        if set.contains(&format!("@mut:{}", source_path)) {
+            return true;
+        }
+        // Name reassignment for a bare local path or the root of a field path
+        // (e.g. `x = ...` invalidates borrows of `x.foo`; `self = ...` invalidates
+        //  borrows of `self.data`).
+        let root = source_path.split('.').next().unwrap_or(source_path);
+        if set.contains(root) {
+            return true;
+        }
+        // Ancestor mutations invalidate the borrow: `helper(&self)` (records
+        // `@mut:self`) must invalidate borrows of `self.data`; `self.data = new`
+        // (records `@mut:self.data`) must invalidate borrows of `self.data.items`.
+        // Walk every prefix of the path and check for @mut:{prefix}.
+        let parts: Vec<&str> = source_path.split('.').collect();
+        let mut prefix = String::new();
+        for (i, part) in parts.iter().enumerate() {
+            if i == 0 {
+                prefix.push_str(part);
+            } else {
+                prefix.push('.');
+                prefix.push_str(part);
+            }
+            // Skip the full path — already checked above.
+            if i == parts.len() - 1 {
+                break;
+            }
+            if set.contains(&format!("@mut:{}", prefix)) {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Create a local AND register it for drop if its type needs dropping.
     /// Use this instead of `builder.add_local()` for temps that might be resource types.
     /// The `needs_drop()` check inside `register_local` automatically skips primitives
@@ -1053,9 +1126,24 @@ impl<'a> LoweringContext<'a> {
         self.shared.locals.clear();
     }
 
-    /// Clone the locals map for save/restore around nested scopes (if, while, for, match, etc.).
-    pub fn save_locals(&self) -> FxHashMap<String, (LocalId, TypeId)> {
-        self.func_state.locals.clone()
+    /// Clone the name→local map AND local_ownership for save/restore around nested
+    /// scopes (if, while, for, match, etc.). See `SavedScope` for semantics.
+    pub fn save_locals(&self, builder: &crate::ir::builder::FunctionBuilder) -> SavedScope {
+        // Snapshot per-local declared types so restore can detect in-place type
+        // flips (e.g. assigns.rs's CoW upgrade Ptr(T)→T) and skip reverting
+        // ownership for those locals.
+        let local_types_at_save: FxHashMap<LocalId, TypeId> = self.func_state.local_ownership
+            .keys()
+            .chain(self.func_state.locals.values().map(|(l, _)| l))
+            .copied()
+            .map(|lid| (lid, builder.local_type(lid)))
+            .collect();
+        SavedScope {
+            locals: self.func_state.locals.clone(),
+            local_ownership: self.func_state.local_ownership.clone(),
+            local_id_boundary: builder.locals.len() as u32,
+            local_types_at_save,
+        }
     }
 
     /// Take the locals map, leaving it empty. Used for save/restore during async variant generation.
@@ -1063,9 +1151,38 @@ impl<'a> LoweringContext<'a> {
         std::mem::take(&mut self.func_state.locals)
     }
 
-    /// Restore a previously saved locals map.
-    pub fn restore_locals(&mut self, locals: FxHashMap<String, (LocalId, TypeId)>) {
-        self.func_state.locals = locals;
+    /// Restore a previously saved scope: name→local bindings come back fully;
+    /// ownership state is restored for pre-existing locals whose declared type
+    /// hasn't changed, and preserved for locals whose type was upgraded in the
+    /// branch (e.g. Ptr(T)→T CoW upgrade) or locals created after save.
+    pub fn restore_locals(&mut self, builder: &crate::ir::builder::FunctionBuilder, saved: SavedScope) {
+        self.func_state.locals = saved.locals;
+        // Rebuild local_ownership: start from saved state, then override for
+        // (a) locals created post-save (ID >= boundary) and (b) locals whose
+        // declared type was flipped during the scope (type upgrade is permanent).
+        let boundary = saved.local_id_boundary;
+        let saved_types = &saved.local_types_at_save;
+        let mut restored = saved.local_ownership.clone();
+        for (lid, state) in &self.func_state.local_ownership {
+            let post_save = lid.0 >= boundary;
+            let type_flipped = saved_types.get(lid)
+                .map_or(false, |orig| *orig != builder.local_type(*lid));
+            if post_save || type_flipped {
+                restored.insert(*lid, state.clone());
+            }
+        }
+        // Also: for locals whose type flipped but which don't appear in current
+        // ownership (removed during branch), drop them from restored too — the
+        // type upgrade means the pre-save ownership (e.g. CollectionRef) is stale.
+        let flipped: Vec<LocalId> = saved_types.iter()
+            .filter(|(lid, orig)| lid.0 < boundary && **orig != builder.local_type(**lid))
+            .filter(|(lid, _)| !self.func_state.local_ownership.contains_key(lid))
+            .map(|(lid, _)| *lid)
+            .collect();
+        for lid in flipped {
+            restored.remove(&lid);
+        }
+        self.func_state.local_ownership = restored;
     }
 
     /// Iterate over all locals (for type inference).

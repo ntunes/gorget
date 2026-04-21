@@ -103,9 +103,9 @@ pub fn lower_block_scoped(
     builder: &mut FunctionBuilder,
     block: &Block,
 ) {
-    let saved = ctx.save_locals();
+    let saved = ctx.save_locals(builder);
     lower_block(ctx, builder, block);
-    ctx.restore_locals(saved);
+    ctx.restore_locals(builder, saved);
 }
 
 /// Lower a single statement.
@@ -1255,7 +1255,7 @@ fn lower_if(
 
     // Then branch
     builder.switch_to(then_bb);
-    let saved_then = ctx.save_locals();
+    let saved_then = ctx.save_locals(builder);
     ctx.drops.push_scope(DropScopeKind::Block);
     emit_is_bindings(ctx, builder, condition);
     lower_block(ctx, builder, then_body);
@@ -1267,7 +1267,7 @@ fn lower_if(
         ctx.drops.pop_scope(builder, &ctx.type_registry);
         builder.jump(merge_bb);
     }
-    ctx.restore_locals(saved_then);
+    ctx.restore_locals(builder, saved_then);
 
     // Elif branches
     let mut current_else_bb = first_else_bb;
@@ -1285,7 +1285,7 @@ fn lower_if(
         builder.branch(elif_cond_op, elif_then_bb, next_else_bb);
 
         builder.switch_to(elif_then_bb);
-        let saved_elif = ctx.save_locals();
+        let saved_elif = ctx.save_locals(builder);
         ctx.drops.push_scope(DropScopeKind::Block);
         emit_is_bindings(ctx, builder, elif_cond);
         lower_block(ctx, builder, elif_body);
@@ -1295,7 +1295,7 @@ fn lower_if(
             ctx.drops.pop_scope(builder, &ctx.type_registry);
             builder.jump(merge_bb);
         }
-        ctx.restore_locals(saved_elif);
+        ctx.restore_locals(builder, saved_elif);
 
         current_else_bb = next_else_bb;
     }
@@ -1303,7 +1303,7 @@ fn lower_if(
     // Else branch
     if let Some(else_body) = else_body {
         builder.switch_to(current_else_bb);
-        let saved_else = ctx.save_locals();
+        let saved_else = ctx.save_locals(builder);
         ctx.drops.push_scope(DropScopeKind::Block);
         lower_block(ctx, builder, else_body);
         if builder.is_terminated() {
@@ -1312,7 +1312,7 @@ fn lower_if(
             ctx.drops.pop_scope(builder, &ctx.type_registry);
             builder.jump(merge_bb);
         }
-        ctx.restore_locals(saved_else);
+        ctx.restore_locals(builder, saved_else);
     }
 
     builder.switch_to(merge_bb);
@@ -1347,14 +1347,14 @@ fn lower_while(
 
     // Body: execute, jump back to header (wrapped in Loop scope for drop cleanup)
     builder.switch_to(body_bb);
-    let saved_while = ctx.save_locals();
+    let saved_while = ctx.save_locals(builder);
     emit_is_bindings(ctx, builder, condition);
     ctx.push_loop(header_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_while);
+    ctx.restore_locals(builder, saved_while);
     builder.jump(header_bb);
 
     // Else block: executed when loop completes naturally (no break)
@@ -1385,13 +1385,13 @@ fn lower_loop(
 
     // Body: execute, jump back to body (infinite loop)
     builder.switch_to(body_bb);
-    let saved_loop = ctx.save_locals();
+    let saved_loop = ctx.save_locals(builder);
     ctx.push_loop(body_bb, exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
     lower_block(ctx, builder, body);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
-    ctx.restore_locals(saved_loop);
+    ctx.restore_locals(builder, saved_loop);
     builder.jump(body_bb);
 
     // Exit (reached via break)
@@ -1875,7 +1875,7 @@ fn lower_named_scope(
     builder: &mut FunctionBuilder,
     body: &Block,
 ) {
-    let saved = ctx.save_locals();
+    let saved = ctx.save_locals(builder);
     ctx.drops.push_scope(DropScopeKind::Block);
     lower_block(ctx, builder, body);
     if builder.is_terminated() {
@@ -1883,7 +1883,7 @@ fn lower_named_scope(
     } else {
         ctx.drops.pop_scope(builder, &ctx.type_registry);
     }
-    ctx.restore_locals(saved);
+    ctx.restore_locals(builder, saved);
 }
 
 /// Lower a `with bindings: body` statement.
@@ -1893,7 +1893,7 @@ fn lower_with(
     bindings: &[ast::WithBinding],
     body: &Block,
 ) {
-    let saved_with = ctx.save_locals();
+    let saved_with = ctx.save_locals(builder);
     ctx.drops.push_scope(DropScopeKind::Block);
 
     let mut allocator_locals = Vec::new();
@@ -1990,7 +1990,7 @@ fn lower_with(
             builder.call_void(fn_name, vec![FunctionBuilder::copy(local_id)]);
         }
     }
-    ctx.restore_locals(saved_with);
+    ctx.restore_locals(builder, saved_with);
 }
 
 /// If the condition is an `Expr::Is { expr, pattern, .. }`, emit pattern bindings
@@ -2149,11 +2149,11 @@ fn lower_select(
 
                 // Body block: bind variable, lower body, jump to exit
                 builder.switch_to(body_blocks[i]);
-                let saved_select = ctx.save_locals();
+                let saved_select = ctx.save_locals(builder);
                 let var_name = &name.node;
                 ctx.register_local(var_name, out_local, elem_type);
                 lower_block(ctx, builder, &arm.body);
-                ctx.restore_locals(saved_select);
+                ctx.restore_locals(builder, saved_select);
                 builder.jump(exit_bb);
             }
             SelectOp::Send { .. } => {
