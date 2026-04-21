@@ -18,33 +18,25 @@ use super::*;
 pub(super) const HIGHER_ORDER_METHODS: &[&str] = &[];
 
 /// Dict/Set methods needing inline codegen (no corresponding runtime function).
-pub(super) const DICT_INLINE_METHODS: &[&str] = &[
-    "map",
-    // `fold` / `each` / `any` / `all` / `filter` are migrated to
-    // `Inst::HofExpand`. `filter` pre-constructs its result via the
-    // `gorget_map_new_like` runtime helper so one BIR expansion
-    // covers every K/V.
-    // `get_or` / `get_or_put` are intercepted at LIR emit time
-    // (src/lir/lower/insts.rs::try_emit_dict_get_or) — they block-
-    // split into `gorget_map_get` + null-check + conditional
-    // clone/insert without a per-type inline helper.
-    // `update` routes to generic runtime stub `gorget_map_update`
-    // dispatched via `map_monomorphized_to_runtime`.
-];
-pub(super) const SET_INLINE_METHODS: &[&str] = &[
-    "map",
-    // `fold` / `each` / `any` / `all` / `filter` are migrated to
-    // `Inst::HofExpand`. `filter` pre-constructs its result via the
-    // `gorget_set_new_like` runtime helper so one BIR expansion
-    // covers every element type.
-    // `is_subset` / `is_superset` / `is_disjoint` route to generic
-    // runtime stubs (`gorget_set_is_{subset,superset,disjoint}`)
-    // dispatched via `map_monomorphized_to_runtime` — no per-type
-    // inline helper needed.
-    // `union` / `intersection` / `difference` / `symmetric_difference`
-    // also route to generic runtime stubs (`gorget_set_union` etc.),
-    // using `gorget_set_new_like` to mirror src's config.
-];
+///
+/// **Empty** after Step 8 HOF migration finished out Dict/Set:
+/// - `filter` / `fold` / `each` / `any` / `all` on both types route
+///   through `Inst::HofExpand`; `filter` pre-constructs its result
+///   via `gorget_{map,set}_new_like`.
+/// - Dict `get_or` / `get_or_put` are intercepted at LIR emit time
+///   (`try_emit_dict_get_or` in `src/lir/lower/insts.rs`).
+/// - Dict `update` routes to the generic runtime stub `gorget_map_update`.
+/// - Set algebra (`union` / `intersection` / `difference` /
+///   `symmetric_difference` / `is_subset` / `is_superset` /
+///   `is_disjoint`) routes to generic runtime stubs via
+///   `map_monomorphized_to_runtime` — `gorget_set_new_like` mirrors
+///   src's config so one stub covers every element type.
+///
+/// `map` on Dict/Set was never implemented (backend stub read
+/// "TODO not yet implemented"); the corresponding builtin method
+/// decls were removed rather than carrying dead code forward.
+pub(super) const DICT_INLINE_METHODS: &[&str] = &[];
+pub(super) const SET_INLINE_METHODS: &[&str] = &[];
 
 /// Parse a monomorphized name like `Dict__Str__int64_t__filter` into
 /// (key_c_type, val_c_type, method_name). Returns None if not a dict inline op.
@@ -93,96 +85,16 @@ pub(super) fn parse_vector_higher_order(name: &str) -> Option<(&str, &str)> {
     let elem = &rest[..sep_pos];
     Some((elem, method))
 }
-/// Collection helper descriptor — Dict or Set.
-///
-/// Vector entries are no longer emitted: all Vector higher-order
-/// methods have migrated to BIR SynthPool / HofExpand / runtime stubs.
-pub(super) enum CollHelper {
-    /// (full_name, key_c, val_c, method, closure_ty, call_fn)
-    Dict(String, String, String, String, String, String),
-    /// (full_name, elem_c, method, closure_ty, call_fn)
-    Set(String, String, String, String, String),
-}
 /// Generate static inline C helper functions for higher-order collection operations.
-/// Scans all CallExtern instructions for `Vector__T__method`, `Dict__K__V__method`,
-/// and `Set__T__method` patterns and generates type-specific inline implementations.
-pub(super) fn emit_higher_order_collection_helpers(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
-    let mut helpers: Vec<CollHelper> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    // Build orig name → C name map for resolving element types like Option__int64_t → __lir_s11
-    let orig_to_c: HashMap<String, String> = module.structs.iter().enumerate()
-        .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
-        .collect();
-
-    for func in &module.functions {
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if let Inst::CallExtern { name, .. } = inst {
-                    if !seen.insert(name.clone()) { continue; }
-                    let ext = module.externs.iter().find(|e| e.name == *name);
-                    let closure_c_type = ext.and_then(|e| e.params.last())
-                        .map(|t| c_type_named(t, sn)).unwrap_or_else(|| "void*".into());
-                    let call_fn_name = find_closure_call_fn(module, &closure_c_type, sn);
-
-                    if let Some((key_ty, val_ty, method)) = parse_dict_higher_order(name) {
-                        helpers.push(CollHelper::Dict(
-                            name.clone(), elem_type_to_c_with_sn(key_ty, &orig_to_c), elem_type_to_c_with_sn(val_ty, &orig_to_c),
-                            method.to_string(), closure_c_type, call_fn_name,
-                        ));
-                    } else if let Some((elem_ty, method)) = parse_set_higher_order(name) {
-                        helpers.push(CollHelper::Set(
-                            name.clone(), elem_type_to_c_with_sn(elem_ty, &orig_to_c), method.to_string(),
-                            closure_c_type, call_fn_name,
-                        ));
-                    } else {
-                        // Not a collection higher-order op — undo insertion
-                        seen.remove(name.as_str());
-                    }
-                }
-            }
-        }
-    }
-
-    if helpers.is_empty() {
-        return;
-    }
-
-    writeln!(out, "/* ── Higher-order collection helpers ── */").unwrap();
-    for helper in &helpers {
-        match helper {
-            CollHelper::Dict(full_name, key_c, val_c, method, closure_ty, call_fn) => {
-                emit_dict_helper(out, full_name, key_c, val_c, method, closure_ty, call_fn, module);
-            }
-            CollHelper::Set(full_name, elem_c, method, closure_ty, call_fn) => {
-                emit_set_helper(out, full_name, elem_c, method, closure_ty, call_fn, module);
-            }
-        }
-        writeln!(out).unwrap();
-    }
-}
-
-/// Emit inline C helpers for Dict higher-order and inline methods.
 ///
-/// All previously-inlined Dict methods (`filter` / `fold` / `each` /
-/// `any` / `all`) are migrated to `Inst::HofExpand`; `update` routes
-/// to a generic runtime stub; `get_or` / `get_or_put` are intercepted
-/// at LIR emit time via `try_emit_dict_get_or`. `map` (with a
-/// different V type) has no fixture exercising it.
-pub(super) fn emit_dict_helper(out: &mut String, full_name: &str, _key_c: &str, _val_c: &str, _method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
-    writeln!(out, "// TODO: dict {full_name} not yet implemented in c_lir").unwrap();
-}
-
-/// Emit inline C helpers for Set higher-order and inline methods.
-pub(super) fn emit_set_helper(out: &mut String, full_name: &str, _elem_c: &str, _method: &str, _closure_ty: &str, _call_fn: &str, _module: &LirModule) {
-    // All Set HOFs are migrated: `filter` / `fold` / `each` / `any` /
-    // `all` go through `Inst::HofExpand`, and `union` / `intersection` /
-    // `difference` / `symmetric_difference` / `is_subset` / `is_superset` /
-    // `is_disjoint` route to generic runtime stubs via
-    // `map_monomorphized_to_runtime`. `Set.map` has no backend
-    // implementation (and no fixture exercises it).
-    writeln!(out, "// TODO: set {full_name} not yet implemented in c_lir").unwrap();
-}
+/// Previously emitted per-(K,V)/per-T inline helpers for Dict/Set
+/// higher-order methods (`filter`/`fold`/`each`/`any`/`all`). All of
+/// those have migrated to `Inst::HofExpand` (BIR expansion builds the
+/// loop inline at the call site). `map` was never implemented on
+/// Dict/Set — the method decls were removed rather than carried
+/// forward as dead stubs. This function is now a no-op retained as
+/// a hook for future collection-level codegen, if any.
+pub(super) fn emit_higher_order_collection_helpers(_out: &mut String, _module: &LirModule, _sn: &HashMap<u32, String>) {}
 /// Find the __call function name for a closure struct type.
 pub(super) fn find_closure_call_fn(module: &LirModule, struct_c_name: &str, sn: &HashMap<u32, String>) -> String {
     // Map c_name back to struct def to get the original name (e.g., "__Closure_0").

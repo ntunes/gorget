@@ -325,12 +325,14 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_map_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
         // Higher-order (inline codegen)
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_val_params, return_type: ret_self },
-        BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_val_params, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: |a| vec![I64_TYPE, a.key, a.val], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_val_params, return_type: ret_void },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_val_params, return_type: ret_int },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: key_val_params, return_type: ret_int },
         BuiltinMethodDecl { name: "update", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: key_val_params, return_type: ret_void },
+        // Note: Dict.map was never implemented in any backend (stub read
+        // "TODO not yet implemented"); no fixture or stdlib caller
+        // exercised it. Removed rather than carrying a dead method decl.
     ],
 };
 
@@ -380,11 +382,12 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "is_disjoint", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_bool },
         // Higher-order
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
-        BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
+        // Note: Set.map was never implemented (TODO stub); see comment
+        // on Dict.map above for rationale.
     ],
 };
 
