@@ -262,7 +262,9 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "reduce", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
-        BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_void },
+        // `each` migrated to user-space `equip [T] Vector[T]: void each[F]
+        // (&self, F f): self.iter().for_each[F](f)` — see lib/std/iter.gg.
+        // The BIR HofOp::Each variant stays for Dict.each / Set.each.
         BuiltinMethodDecl { name: "for_each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "find", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_option_elem },
         BuiltinMethodDecl { name: "find_index", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_int },
