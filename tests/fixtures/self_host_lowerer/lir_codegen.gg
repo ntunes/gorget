@@ -781,7 +781,11 @@ String emit_string_lits(Vector[StringLitEntry] &entries):
     while i < entries.len():
         StringLitEntry e = entries.get(i).unwrap()
         String escaped = escape_c_string(e.value)
-        String slen = int_to_str(e.value.len())
+        # Str.len in the runtime is byte length, not char count — use
+        # byte_len() so Unicode literals (e.g. "── …" with 3-byte `─`)
+        # don't get their Str struct's .len truncated to the char count
+        # and downstream `gorget_str_cat` lose the trailing UTF-8 tail.
+        String slen = int_to_str(e.value.byte_len())
         String line = "static const Str __slit_" + int_to_str(e.index)
         line = line + " = { .data = (char*)\"" + escaped + "\", .cap = 0, .len = " + slen + ", .alloc = NULL };\n"
         out = out + line
