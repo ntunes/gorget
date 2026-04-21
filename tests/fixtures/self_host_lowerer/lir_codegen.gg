@@ -1590,24 +1590,37 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 # Closure construction: __make_closure_N → GorgetClosure struct type
                 if name.starts_with("__make_closure_"):
                     return find_struct_type("GorgetClosure", &m)
-                # Field reads: __field_read_TYPE_FIELD → look up field type from struct def.
+                # Field reads: __field_read_TYPE_FIELD → look up field type
+                # from struct def. Uses the longest-prefix split (same as
+                # the emission sites above) to handle generic-mono'd enum
+                # names like `Option__SpannedExpr_Some_0` whose plain
+                # first-`_` split would pick "Option" (not registered) and
+                # stamp the whole call's return type as I64 fallback.
                 if name.starts_with("__field_read_"):
                     String rest = name.slice(13, name.len())
-                    int sep = find_substr(rest, "_")
-                    if sep > 0:
-                        String struct_name = rest.slice(0, sep)
-                        String field = rest.slice(sep + 1, rest.len())
-                        int sti = 0
-                        while sti < m.structs.len():
-                            LirStructDef sdef = m.structs.get(sti).unwrap()
-                            if sdef.name == struct_name:
-                                int fi = 0
-                                while fi < sdef.fields.len():
-                                    StructField sf = sdef.fields.get(fi).unwrap()
-                                    if sf.name == field:
-                                        return sf.ty
-                                    fi += 1
-                            sti += 1
+                    String struct_name = ""
+                    String field = ""
+                    int sid_inf = -1
+                    int sep_inf = 0
+                    while sep_inf < rest.byte_len():
+                        if rest.byte_at(sep_inf) == 0x5F:
+                            String try_struct_inf = rest.slice(0, sep_inf)
+                            if sep_inf + 1 < rest.byte_len():
+                                int try_sid_inf = find_struct_type(try_struct_inf, &m) - LT_STRUCT_BASE
+                                if try_sid_inf >= 0 and try_sid_inf < m.structs.len():
+                                    struct_name = try_struct_inf
+                                    field = rest.slice(sep_inf + 1, rest.byte_len())
+                                    sid_inf = try_sid_inf
+                                    break
+                        sep_inf += 1
+                    if sid_inf >= 0:
+                        LirStructDef sdef = m.structs.get(sid_inf).unwrap()
+                        int fi = 0
+                        while fi < sdef.fields.len():
+                            StructField sf = sdef.fields.get(fi).unwrap()
+                            if sf.name == field:
+                                return sf.ty
+                            fi += 1
                     return LT_I64
                 # Builtin type casts.
                 if name == "float":
@@ -2710,10 +2723,33 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             int base_val = args.get(0).unwrap()
             int val_arg = args.get(1).unwrap()
             String rest_w = name.slice(14, name.len())
-            int sep_w = find_substr(rest_w, "_")
-            if sep_w > 0:
-                String struct_name_w = rest_w.slice(0, sep_w)
-                String field_w = rest_w.slice(sep_w + 1, rest_w.len())
+            # Find the longest-prefix split that matches a registered
+            # struct (same fix as __field_read_ above — plain first-`_`
+            # split miscompiles `__field_write_Option__Keyword_tag` into
+            # `((Option*)base)->_Keyword_tag` which breaks type lookup).
+            String struct_name_w = ""
+            String field_w = ""
+            int sid_w = -1
+            int sep_iw = 0
+            while sep_iw < rest_w.byte_len():
+                if rest_w.byte_at(sep_iw) == 0x5F:
+                    String try_struct_w = rest_w.slice(0, sep_iw)
+                    if sep_iw + 1 < rest_w.byte_len():
+                        int try_sid_w = find_struct_type(try_struct_w, &m) - LT_STRUCT_BASE
+                        if try_sid_w >= 0 and try_sid_w < m.structs.len():
+                            struct_name_w = try_struct_w
+                            field_w = rest_w.slice(sep_iw + 1, rest_w.byte_len())
+                            sid_w = try_sid_w
+                            break
+                sep_iw += 1
+            if struct_name_w == "":
+                # Fallback: first-underscore split.
+                int sep_w = find_substr(rest_w, "_")
+                if sep_w > 0:
+                    struct_name_w = rest_w.slice(0, sep_w)
+                    field_w = rest_w.slice(sep_w + 1, rest_w.len())
+                    sid_w = find_struct_type(struct_name_w, &m) - LT_STRUCT_BASE
+            if struct_name_w != "":
                 String c_struct_w = find_c_struct_name(struct_name_w, &m, &sn)
                 String c_field_w = c_field_name(field_w)
                 String lval_w = "((" + c_struct_w + "*)" + v(base_val) + ")->" + c_field_w
@@ -2721,7 +2757,6 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 if val_types.contains(val_arg):
                     val_ty_w = val_types.get(val_arg).unwrap()
                 # Look up field type to pick the right store shape.
-                int sid_w = find_struct_type(struct_name_w, &m) - LT_STRUCT_BASE
                 int field_ty_w = LT_I64
                 if sid_w >= 0 and sid_w < m.structs.len():
                     LirStructDef sdef_w = m.structs.get(sid_w).unwrap()
@@ -2758,26 +2793,55 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if dst >= 0 and args.len() >= 2:
             int base_val = args.get(0).unwrap()
             String rest = name.slice(13, name.len())
-            int sep = find_substr(rest, "_")
-            if sep > 0:
-                String struct_name = rest.slice(0, sep)
-                String field = rest.slice(sep + 1, rest.len())
-                int sid = find_struct_type(struct_name, &m) - LT_STRUCT_BASE
-                if sid >= 0 and sid < m.structs.len():
-                    LirStructDef sdef = m.structs.get(sid).unwrap()
-                    int fi = 0
-                    int found = -1
-                    while fi < sdef.fields.len():
-                        StructField sf = sdef.fields.get(fi).unwrap()
-                        if c_field_name(sf.name) == c_field_name(field):
-                            found = fi
-                        fi += 1
-                    if found >= 0:
-                        String lval = field_access_lvalue(v(base_val), sid, found, &m, &sn)
-                        return v(dst) + " = " + lval + ";"
-                # Fallback if the struct isn't registered — use raw arrow.
+            # Scan every `_` position from left to right. The first one
+            # where the prefix resolves to a registered struct wins.
+            # Plain-first-`_` split failed for generic-mono'd enums like
+            # `Option__Keyword` because the `__` gap gave struct="Option"
+            # (not registered) and field="_Keyword_tag" (garbage),
+            # silently falling through to the raw-arrow fallback that
+            # emitted `((Option*)base)->_Keyword_tag` — the C compiler
+            # couldn't find `struct Option`, stage-1's tag read returned
+            # zero, and every Option match dispatched to Some.
+            String struct_name = ""
+            String field = ""
+            int split_sid = -1
+            int sep_i = 0
+            while sep_i < rest.byte_len():
+                if rest.byte_at(sep_i) == 0x5F:
+                    String try_struct = rest.slice(0, sep_i)
+                    if sep_i + 1 < rest.byte_len():
+                        int try_sid = find_struct_type(try_struct, &m) - LT_STRUCT_BASE
+                        if try_sid >= 0 and try_sid < m.structs.len():
+                            struct_name = try_struct
+                            field = rest.slice(sep_i + 1, rest.byte_len())
+                            split_sid = try_sid
+                            break
+                sep_i += 1
+            if split_sid >= 0:
+                LirStructDef sdef = m.structs.get(split_sid).unwrap()
+                int fi = 0
+                int found = -1
+                while fi < sdef.fields.len():
+                    StructField sf = sdef.fields.get(fi).unwrap()
+                    if c_field_name(sf.name) == c_field_name(field):
+                        found = fi
+                    fi += 1
+                if found >= 0:
+                    String lval = field_access_lvalue(v(base_val), split_sid, found, &m, &sn)
+                    return v(dst) + " = " + lval + ";"
+                # Struct found but field name doesn't match — raw arrow.
                 String c_struct = find_c_struct_name(struct_name, &m, &sn)
                 String c_field = c_field_name(field)
+                return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
+            # No matching struct — best-effort first-underscore split
+            # for the raw-arrow fallback (not ideal but matches the
+            # legacy behaviour for non-generic structs).
+            int sep = find_substr(rest, "_")
+            if sep > 0:
+                String fallback_struct = rest.slice(0, sep)
+                String fallback_field = rest.slice(sep + 1, rest.len())
+                String c_struct = find_c_struct_name(fallback_struct, &m, &sn)
+                String c_field = c_field_name(fallback_field)
                 return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
         return "/* bad field read */;"
 

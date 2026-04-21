@@ -1985,11 +1985,35 @@ String match_enum_type(String type_name, GirModule &gmod):
         GirTypeInfo ti = gmod.type_infos.get(type_name).unwrap()
         if ti.is_enum:
             return type_name
+    # Prelude mono'd enums (Option__X / Result__X__Y) aren't in
+    # type_infos — they're synthesized in lir_lower's Pass 3. But
+    # `match opt: case Some(x): ...` needs a real enum name here or
+    # lower_ctor_pattern falls through to an always-match `GTJump`, so
+    # every arm body runs unconditionally (which is why stage-1 tokenized
+    # "main" as TkKeyword — the `else:` branch of the Option match was
+    # never reached). Return the type_name itself for these; paired with
+    # match_variant_index's hardcoded Some/None/Ok/Error indices below.
+    if type_name.starts_with("Option__") or type_name.starts_with("Result__"):
+        return type_name
     return ""
 
 # Find the variant's index in its enum's variant list. Returns -1 if
 # the enum or variant isn't registered.
 int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
+    # Prelude enums: hardcode variant indices that match lir_lower's
+    # VariantInfo table (prelude_variant_info) and Pass 3's field layout.
+    if enum_name.starts_with("Option__"):
+        if variant_name == "Some":
+            return 0
+        if variant_name == "None":
+            return 1
+        return -1
+    if enum_name.starts_with("Result__"):
+        if variant_name == "Ok":
+            return 0
+        if variant_name == "Error":
+            return 1
+        return -1
     if not gmod.type_infos.contains(enum_name):
         return -1
     GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
@@ -2127,6 +2151,20 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     set_terminator(&ctx, GTJump(match_bb))
 
 int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx, GirModule &gmod):
+    # Prelude mono'd enum payload type: extract T from the mangled name.
+    # Option__T.Some(T) → T.  Result__T__E.Ok(T) / Error(E) → T or E.
+    if enum_name.starts_with("Option__"):
+        if variant_name == "Some" and field_idx == 0:
+            String inner = enum_name.slice(8, enum_name.len())
+            return resolve_field_gir_type(inner, &gmod)
+        return I64_TYPE
+    if enum_name.starts_with("Result__"):
+        # Skip this fix for Result — naive leftmost-`__` split fails on
+        # nested generics like `Result__Vector__byte__IoError` where Ok
+        # would incorrectly become `Vector` and Err `byte__IoError`.
+        # Use the pre-existing I64 fallback until we can mirror Pass 3's
+        # try-each-split approach here.
+        return I64_TYPE
     if not gmod.type_infos.contains(enum_name):
         return I64_TYPE
     GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
