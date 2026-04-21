@@ -316,16 +316,29 @@ Min-heap by default. Elements must implement `Comparable`.
 Concrete state-machine iterators composable over `Vector[T]` and `Set[T]`:
 
 ```gorget
-from std.iter import VectorIter, TakeIter, SkipIter, ChainIter, set_iter, collect_vec
+from std.iter import VectorIter, TakeIter, set_iter
 
 Vector[int] v = [10, 20, 30, 40, 50]
-VectorIter[int] vit = v.iter()
-TakeIter[int] first3 = vit.take(3)
-Vector[int] out = collect_vec[int, TakeIter[int]](first3)  # [10, 20, 30]
 
-# Adapter chain — take/skip/chain are equip methods on VectorIter,
-# return the concrete adapter by value. No boxing, no trait object
-# dispatch. Each step fuses at the monomorphized layer.
+# Terminal: .count(), .collect(), .last(), .nth(n), .any(p), .all(p),
+# .find(p), .find_index(p), .for_each(f), .fold(init, f) — all live
+# as Iterator[T] default-method bodies. Any adapter that `equip`s
+# the trait inherits them.
+Vector[int] first3 = v.iter().take(3).collect()   # [10, 20, 30]
+int evens = v.iter().filter(is_even).count()      # method-level
+                                                  # generics inferred
+                                                  # from arg types
+bool has_big = v.iter().any(is_big)
+Option[int] first_match = v.iter().find(is_match)
+
+# Vector also carries convenience wrappers that delegate to
+# self.iter().method() — same shape, less typing at call sites.
+int doubled_sum = v.map(double).fold(0, sum)
+
+# Adapter chain — take/skip/chain/map/filter are equip methods on
+# VectorIter, return the concrete adapter struct by value. No
+# boxing, no trait-object dispatch. Each step fuses at the
+# monomorphised layer.
 for x in v.iter().take(2):
     print(x)
 
@@ -337,17 +350,23 @@ for x in set_iter[int](s).take(2):
     print(x)
 ```
 
-Adapters: `TakeIter[T]`, `SkipIter[T]`, `ChainIter[T]`, `MapIter[T, U, F]`,
-`FilterIter[T, F]`.
-Terminals: `collect_vec[T, Iter]` materializes to a Vector,
-`count_iter[Iter]` counts, `sum_iter[Iter]` sums, `fold_iter[A, T, Iter, F]`
-folds, `any_iter[T, Iter, F]` / `all_iter[T, Iter, F]` short-circuit.
-All generic over the concrete iterator type (no trait-object dispatch).
+Adapters: `TakeIter[Iter, T]`, `SkipIter[Iter, T]`,
+`ChainIter[IterA, IterB, T]`, `MapIter[Iter, T, U, F]`,
+`FilterIter[Iter, T, F]`, plus `TakeWhileIter`, `DropWhileIter`,
+`FilterMapIter`, `InspectIter`, `EnumerateIter`, `ZipIter`,
+`WindowsIter`, `ChunksIter`. Each generic over the source
+iterator type so chains compose at monomorphisation without
+virtual dispatch.
 
-Dict key/value iteration goes through `d.keys()` / `d.values()` / `d.items()`
-+ `.iter()` on the resulting Vector for now — a direct `DictKeyIter` /
-`DictValueIter` wrapper trips a pre-existing Ptr-ABI codegen issue
-that's tracked for Phase 2c.
+Bound-needing terminals stay as free functions until per-method
+trait bounds land: `sum_iter[Iter]`, `product_iter[Iter]`,
+`min_iter[Iter]`, `max_iter[Iter]` (all int), `join_iter[Iter,
+Displayable T]`. Called as `sum_iter[VectorIter[int]](v.iter())`.
+
+Dict key/value iteration goes through `d.keys()` / `d.values()` /
+`d.items()` + `.iter()` on the resulting Vector for now — a direct
+`DictKeyIter` / `DictValueIter` wrapper trips a pre-existing
+Ptr-ABI codegen issue that's tracked for Phase 2c.
 
 ### Byte-shaped I/O (`std.io`)
 
