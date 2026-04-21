@@ -385,6 +385,15 @@ struct TypeChecker<'a> {
     /// into `MethodCall.generic_args` so the IR-lowering / generic-collector
     /// path picks them up via the same code path as explicit `[T1, T2]` args.
     inferred_method_targs: FxHashMap<usize, Vec<Type>>,
+    /// Side-table of inference *failures*, keyed on `method.span.start`.
+    /// Records (unresolved_param_name, reason) for each call-site where
+    /// inference was attempted (method-level generic + no explicit args)
+    /// but couldn't resolve all generic params. Read at the NoMethodFound
+    /// emission site to swap the generic error for a typed
+    /// `MethodGenericInferenceFailed` that points at the specific
+    /// unresolved param. See `docs/internals/method-level-inference.md`
+    /// risk #3 for the design.
+    inference_failures: FxHashMap<usize, (String, String)>,
 }
 
 impl<'a> TypeChecker<'a> {
@@ -424,6 +433,7 @@ impl<'a> TypeChecker<'a> {
             loop_depth: 0,
             struct_generic_bounds,
             inferred_method_targs: FxHashMap::default(),
+            inference_failures: FxHashMap::default(),
         }
     }
 
@@ -1413,7 +1423,7 @@ impl<'a> TypeChecker<'a> {
                         for arg in args.iter() {
                             arg_types.push(self.infer_expr(&arg.node.value));
                         }
-                        if let Some(inferred) = self.try_infer_method_targs(&shape, &arg_types) {
+                        if let Some(inferred) = self.try_infer_method_targs(&shape, &arg_types, method.span.start) {
                             self.inferred_method_targs.insert(method.span.start, inferred);
                         }
                     }
@@ -1489,13 +1499,36 @@ impl<'a> TypeChecker<'a> {
                                     );
                                     let has_inherent_only = self.traits.has_inherent_only_impls(name);
                                     if has_inherent_only && !is_auto_derivable {
-                                        self.error(
-                                            SemanticErrorKind::NoMethodFound {
-                                                method: method.node.clone(),
-                                                type_: self.describe_resolved_type(resolved_receiver),
-                                            },
-                                            expr.span,
-                                        );
+                                        // If inference was attempted at this
+                                        // call site and failed, emit the
+                                        // typed MethodGenericInferenceFailed
+                                        // instead of the generic
+                                        // NoMethodFound — points the user at
+                                        // the specific unresolved generic +
+                                        // suggests the explicit-args fix.
+                                        // See `docs/internals/method-level-
+                                        // inference.md` risk #3.
+                                        if let Some((unresolved, reason)) =
+                                            self.inference_failures.get(&method.span.start).cloned()
+                                        {
+                                            self.error(
+                                                SemanticErrorKind::MethodGenericInferenceFailed {
+                                                    method: method.node.clone(),
+                                                    type_: self.describe_resolved_type(resolved_receiver),
+                                                    unresolved,
+                                                    reason,
+                                                },
+                                                expr.span,
+                                            );
+                                        } else {
+                                            self.error(
+                                                SemanticErrorKind::NoMethodFound {
+                                                    method: method.node.clone(),
+                                                    type_: self.describe_resolved_type(resolved_receiver),
+                                                },
+                                                expr.span,
+                                            );
+                                        }
                                     }
                                     self.types.error_id
                                 }
@@ -3041,8 +3074,12 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         shape: &super::traits::MethodSigShape,
         arg_types: &[TypeId],
+        method_span_start: usize,
     ) -> Option<Vec<Type>> {
         if shape.param_types.len() != arg_types.len() {
+            // Arg-count mismatch is a separate error (`WrongArgCount`)
+            // that the dispatch fork already emits — don't double-report
+            // here. Let the existing path own it.
             return None;
         }
         let mut bindings: FxHashMap<String, TypeId> = FxHashMap::default();
@@ -3057,6 +3094,8 @@ impl<'a> TypeChecker<'a> {
                     let resolved = self.resolve_type(arg_ty);
                     if resolved == self.types.error_id {
                         // Argument failed to type — skip inference cleanly.
+                        // Don't record a typed-inference-failure either; the
+                        // arg-typing failure produces its own error.
                         return None;
                     }
                     bindings.entry(name.node.clone()).or_insert(resolved);
@@ -3104,11 +3143,30 @@ impl<'a> TypeChecker<'a> {
         }
 
         // Materialise bindings in declaration order. If any param is
-        // unbound at this point, inference failed — caller falls back.
+        // unbound at this point, inference failed — record the
+        // unresolved param + reason so the dispatch fork can swap a
+        // generic NoMethodFound for a typed
+        // MethodGenericInferenceFailed if no fallback handles the call.
         let mut out = Vec::with_capacity(shape.generic_params.len());
         for name in &shape.generic_params {
-            let tid = *bindings.get(name)?;
-            let ast = self.typeid_to_ast_type(tid)?;
+            let Some(tid) = bindings.get(name).copied() else {
+                let reason = if type_mentions_name(&shape.return_type, name) {
+                    "no callable arg's return type matches its slot in the sig (shape-2 ambiguous or absent)".to_string()
+                } else {
+                    "no arg's type matches its named-slot position in the sig (shape-1 absent)".to_string()
+                };
+                self.inference_failures.insert(method_span_start, (name.clone(), reason));
+                return None;
+            };
+            let Some(ast) = self.typeid_to_ast_type(tid) else {
+                self.inference_failures.insert(
+                    method_span_start,
+                    (name.clone(), format!(
+                        "bound type for `{name}` couldn't be projected back to AST (likely a trait object or unbound type variable)"
+                    )),
+                );
+                return None;
+            };
             out.push(ast);
         }
         Some(out)

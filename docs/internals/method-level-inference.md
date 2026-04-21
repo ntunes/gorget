@@ -323,6 +323,30 @@ is real, refactor in a third commit.
    param. Today's `WrongArgCount` / `NoMethodFound` errors won't
    suffice. Add a `SemanticErrorKind::MethodGenericInferenceFailed`
    with the param name and the reason (no candidate, ambiguous, …).
+
+   **PARTIAL — variant added 2026-04-21.**
+   `SemanticErrorKind::MethodGenericInferenceFailed { method,
+   type_, unresolved, reason }` ships in `src/semantic/errors.rs`
+   with a typed Display: "could not infer method-level generic
+   `F` for `Vector[int].my_filter` (no callable arg's return type
+   matches its slot in the sig); pass it explicitly via
+   `my_filter[<types>](...)`". `try_infer_method_targs` populates
+   `TypeChecker.inference_failures` (side-table keyed on
+   `method.span.start`) with the unresolved param + a short reason
+   when inference returns None. The MethodCall dispatch fork's
+   NoMethodFound emission site swaps to the typed variant when
+   the side-table has an entry.
+
+   Coverage today is intentionally narrow: the swap fires only
+   when (a) the method is registered with a method-generic shape,
+   (b) inference fails, AND (c) every fallback dispatch path also
+   fails (the call hits NoMethodFound). In practice that's rare
+   because name-based fallback (`resolve_method_by_name`) often
+   succeeds with `error_id` in the sig — silently typing the call
+   even though the generic stayed unbound. Broadening the trigger
+   (eager warning on every inference failure, OR detecting
+   error_id-only return as a signal) is follow-up work; the
+   variant + machinery are in place for it.
 4. **Performance.** Inference walks sig structure per call. For
    chains 4-5 methods deep this is fine. Worst case: a hot fn body
    with many method-generic calls. Measure if a fixture trips.

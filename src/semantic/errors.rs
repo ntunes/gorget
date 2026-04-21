@@ -186,6 +186,21 @@ pub enum SemanticErrorKind {
     /// Method doesn't exist on type.
     NoMethodFound { method: String, type_: String },
 
+    /// A method-level generic param couldn't be inferred from the
+    /// call's arg types. Emitted by Phase 2c inference (see
+    /// `docs/internals/method-level-inference.md`) instead of the
+    /// historical silent fallback to `NoMethodFound` /
+    /// `WrongArgCount` / a link error. `unresolved` is the generic
+    /// param name from the method's `[T1, T2, ...]` clause; `reason`
+    /// is a short descriptor of why inference failed (no candidate,
+    /// ambiguous, arg-typed-as-error, return-type-not-projectable).
+    MethodGenericInferenceFailed {
+        method: String,
+        type_: String,
+        unresolved: String,
+        reason: String,
+    },
+
     /// Insufficient info for `auto` type inference.
     CannotInferType,
 
@@ -469,6 +484,13 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NoMethodFound { method, type_ } => {
                 write!(f, "no method `{method}` found on type `{type_}`")
+            }
+            SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {
+                write!(
+                    f,
+                    "could not infer method-level generic `{unresolved}` for `{type_}.{method}` ({reason}); \
+                     pass it explicitly via `{method}[<types>](...)`"
+                )
             }
             SemanticErrorKind::CannotInferType => {
                 write!(f, "cannot infer type")
