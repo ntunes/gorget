@@ -1805,4 +1805,149 @@ mod tests {
         // only shows up inside the flat_map closures.
         let _ = std::marker::PhantomData::<BlockId>;
     }
+
+    /// End-to-end test of trait-helper synthesis:
+    ///
+    /// 1. Build a module with TraitObj + VTable structs and a caller
+    ///    function carrying one `Inst::TraitCall` for `Greeter::greet`.
+    /// 2. Run it through `BirModule::from_lir`.
+    /// 3. Assert:
+    ///    - No TraitCall survives in any function.
+    ///    - The caller now contains a `Call` to `__gg_synth_trait_Greeter_greet`.
+    ///    - The synth fn body has the expected primitive shape: ParamRef
+    ///      self + three (FieldPtr, Load) pairs on TraitObj.vtable /
+    ///      VTable.greet / TraitObj.data + CallPtr + Ret.
+    ///    - Dedup: a second TraitCall for the same (trait, method, sig)
+    ///      reuses the same FuncId.
+    #[test]
+    fn trait_call_synthesis_end_to_end() {
+        use crate::bir::BirModule;
+        use crate::ir::abi::AbiKind;
+        use crate::lir::{Inst, LirModule, StructDef, Term};
+
+        let mut module = LirModule::new();
+
+        // Greeter_TraitObj { data: Ptr, vtable: Ptr } — field 0=data, field 1=vtable.
+        let trait_obj_sid = module.add_struct(StructDef {
+            name: "Greeter_TraitObj".into(),
+            fields: vec![
+                ("data".into(), LirType::Ptr),
+                ("vtable".into(), LirType::Ptr),
+            ],
+            enum_kind: crate::lir::EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: Some(16),
+            computed_c_align: Some(8),
+        });
+        let _ = trait_obj_sid;
+        // Greeter_VTable { greet: Ptr } — single method slot at index 0.
+        let vtable_sid = module.add_struct(StructDef {
+            name: "Greeter_VTable".into(),
+            fields: vec![("greet".into(), LirType::Ptr)],
+            enum_kind: crate::lir::EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: Some(8),
+            computed_c_align: Some(8),
+        });
+        let _ = vtable_sid;
+
+        // caller(obj: Ptr) { TraitCall dst, obj, "Greeter"::"greet"(), I64; Ret dst }
+        let mut caller =
+            LirFunction::new("caller".into(), vec![LirType::Ptr], LirType::I64);
+        let obj = caller.next_value();
+        let result = caller.next_value();
+        let bb0 = caller.add_block();
+        caller.block_mut(bb0).insts.push(Inst::ParamRef {
+            dst: obj,
+            index: 0,
+            ty: LirType::Ptr,
+        });
+        caller.block_mut(bb0).insts.push(Inst::TraitCall {
+            dst: Some(result),
+            object: obj,
+            trait_name: "Greeter".into(),
+            method: "greet".into(),
+            args: vec![],
+            arg_abis: vec![AbiKind::Ptr],
+            param_tys: vec![],
+            ret_ty: LirType::I64,
+        });
+        // Second TraitCall (identical shape) for dedup check.
+        let result2 = caller.next_value();
+        caller.block_mut(bb0).insts.push(Inst::TraitCall {
+            dst: Some(result2),
+            object: obj,
+            trait_name: "Greeter".into(),
+            method: "greet".into(),
+            args: vec![],
+            arg_abis: vec![AbiKind::Ptr],
+            param_tys: vec![],
+            ret_ty: LirType::I64,
+        });
+        caller.block_mut(bb0).terminator = Term::Ret(result);
+        module.add_function(caller);
+
+        crate::lir::types::compute_module_value_types(&mut module);
+        let bir = BirModule::from_lir(module).expect("BIR lowering should succeed");
+        let module = bir.as_lir();
+
+        // No TraitCall anywhere.
+        for f in &module.functions {
+            for b in &f.blocks {
+                for inst in &b.insts {
+                    assert!(
+                        !matches!(inst, Inst::TraitCall { .. }),
+                        "unlowered TraitCall in fn `{}` bb{}",
+                        f.name,
+                        b.id.0,
+                    );
+                }
+            }
+        }
+
+        // Caller has two Calls to the same synth fn.
+        let caller = module
+            .functions
+            .iter()
+            .find(|f| f.name == "caller")
+            .expect("caller present");
+        let synth_fids: Vec<FuncId> = caller
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .filter_map(|i| match i {
+                Inst::Call { func, .. } => Some(*func),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(synth_fids.len(), 2, "caller should have two synth Calls");
+        assert_eq!(
+            synth_fids[0], synth_fids[1],
+            "two TraitCalls with identical (trait, method, sig) must dedup to the same helper",
+        );
+        let synth_fn = &module.functions[synth_fids[0].0 as usize];
+        assert_eq!(synth_fn.name, "__gg_synth_trait_Greeter_greet");
+        assert_eq!(synth_fn.params, vec![LirType::Ptr]);
+        assert_eq!(synth_fn.return_type, LirType::I64);
+
+        // Body shape: ParamRef self (index 0) + 3×(FieldPtr, Load) +
+        // CallPtr + Term::Ret.
+        let insts: Vec<&Inst> = synth_fn.blocks[0].insts.iter().collect();
+        assert!(
+            matches!(insts[0], Inst::ParamRef { index: 0, .. }),
+            "first inst must be ParamRef self at index 0, got {:?}",
+            insts[0],
+        );
+        // Count each primitive kind.
+        let n_fieldptr = insts.iter().filter(|i| matches!(i, Inst::FieldPtr { .. })).count();
+        let n_load = insts.iter().filter(|i| matches!(i, Inst::Load { .. })).count();
+        let n_callptr = insts.iter().filter(|i| matches!(i, Inst::CallPtr { .. })).count();
+        assert_eq!(n_fieldptr, 3, "body should have 3 FieldPtrs (vtable, method, data)");
+        assert_eq!(n_load, 3, "body should have 3 Loads (vtable, fnp, data)");
+        assert_eq!(n_callptr, 1, "body should have exactly one CallPtr");
+        assert!(
+            matches!(synth_fn.blocks[0].terminator, Term::Ret(_)),
+            "body terminator must be Ret (I64 return)",
+        );
+    }
 }
