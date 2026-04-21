@@ -290,6 +290,29 @@ is real, refactor in a third commit.
    break passes that read the AST after typecheck. Audit:
    `grep -rn "generic_args" src/ | grep -v "test\|//"`. If anyone
    pattern-matches on `None`, side-table approach is safer.
+
+   **AUDITED 2026-04-21 — clean.** Six post-typecheck consumers of
+   `MethodCall.generic_args` exist, all in `src/ir/lowering/`:
+   `generics/substitute.rs:246`, `generics/mod.rs:613` (scan_expr),
+   `generics/mod.rs:938` (walk for method instance discovery),
+   `generics/mod.rs:1193` (chain receiver type inference),
+   `exprs/mod.rs:177` (lower-method-call entry), and the
+   downstream `exprs/methods.rs:1234` mangled-symbol dispatch.
+   Each either ignores `None` (no-op) or treats `Some(targs)` as
+   "user-supplied type args" — exactly the right behavior whether
+   the args came from the user or from Pass 4.5 inference. The
+   borrow checker (`semantic/safety/*`) and resolver
+   (`semantic/resolve.rs`) discard the field via `..` so they're
+   invisible to the mutation. Sim, LIR, BIR, and backend never
+   touch it. Pre-typecheck consumers (`semantic/meta.rs`,
+   `semantic/derive.rs`, `semantic/rewrite.rs`,
+   `semantic/traits.rs`, parser, loader, formatter) run before
+   the mutation can happen, so they see the original user-set
+   value regardless. **No consumer distinguishes "user wrote no
+   args" from "inference filled them in."** A future pass that
+   needed that distinction would require a typed marker
+   (`enum GenericArgs { Explicit(Vec<...>), Inferred(Vec<...>),
+   None }`) — punt until a real consumer demands it.
 2. **Inference stability across compilation order.** Generic
    functions are typechecked in module order today. If method-
    level inference depends on the receiver type being inferred,
