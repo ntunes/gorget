@@ -143,9 +143,16 @@ trait Iterator[T]:
     # NOTE: Lazy adapter constructors (take / skip / map / filter / chain
     # / take_while / drop_while / filter_map / inspect) currently live on
     # each producer's inherent equip block (VectorIter today). Lifting
-    # them to defaults that construct `TakeIter[Self, T]` etc. requires
-    # the typecheck to instantiate generic trait return types per impl
-    # — Self/T in the trait-stored sig stay as placeholders today.
+    # them to defaults that construct `TakeIter[Self, T]` etc. is partially
+    # unblocked: typecheck now substitutes Self/T when resolving trait
+    # default sigs, and IR lowering mirrors the binding through
+    # `register_equip_sigs_with_defaults` + `register_method_instance_sigs`
+    # + `discover_transitive` + `lower_method_instance`. What remains:
+    # LIR codegen drops the struct-typed return value at call sites for
+    # default methods that return a fresh adapter struct (the call is
+    # emitted but its result isn't stored into the caller's slot). Once
+    # that lands the adapters here should move to `trait Iterator[T]:`
+    # defaults and enable `v.iter().take(3).filter(p).map(f)` chains.
     # Tracked as Phase 2c follow-up.
 
 struct VectorIter[T]:

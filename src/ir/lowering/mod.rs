@@ -337,7 +337,7 @@ pub fn lower_module(
     let mut generic_collector = GenericCollector::new();
     generic_collector.collect_templates(ast_module);
     generic_collector.discover_usages(ast_module);
-    generic_collector.discover_transitive();
+    generic_collector.discover_transitive(Some(ast_module));
     // P2.3b: Per-call-site specialization for method-level-generic equip methods
     // (e.g. `v.iter().map[U, F](f)`). Requires typecheck output (`expr_types`)
     // to resolve the receiver's concrete type at each call site.

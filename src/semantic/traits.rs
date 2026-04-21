@@ -40,6 +40,27 @@ pub struct MethodSigShape {
     pub return_type: Type,
 }
 
+/// AST-level sig info for a trait default method. Populated when the
+/// method has a default body (Block/Expression) so call-site resolution
+/// can substitute `Self` and trait generic params against the concrete
+/// receiver — `FunctionSig` stores already-resolved TypeIds that erase
+/// the Self slot to `error_id` and the trait's `T` to the trait's
+/// generic-param placeholder, neither of which round-trips.
+#[derive(Debug, Clone)]
+pub struct DefaultMethodSig {
+    /// Method-level generic param names (e.g., `[U, F]`); empty for
+    /// non-generic defaults.
+    pub method_generic_params: Vec<String>,
+    /// AST param types in declaration order, excluding `self`.
+    pub param_types: Vec<Type>,
+    /// AST return type.
+    pub return_type: Type,
+    /// Per-non-self-param ownership sigils.
+    pub param_ownerships: Vec<Ownership>,
+    pub has_self: bool,
+    pub self_ownership: Option<Ownership>,
+}
+
 /// Information about a trait definition.
 #[derive(Debug, Clone)]
 pub struct TraitInfo {
@@ -52,6 +73,15 @@ pub struct TraitInfo {
     /// the call-site method-generic inference in typecheck. Populated only
     /// for methods whose `generic_params` is non-empty.
     pub method_shapes: FxHashMap<String, MethodSigShape>,
+    /// Trait's own generic parameter names (e.g., `["T"]` for
+    /// `trait Iterator[T]`). Used when substituting trait Ts into a
+    /// default sig at call time.
+    pub trait_generic_params: Vec<String>,
+    /// AST sigs for default-bodied methods. Used by call-site
+    /// `Self`/trait-T substitution when resolve_method falls through to
+    /// the trait default. Populated only for methods with a Block or
+    /// Expression body.
+    pub default_method_sigs: FxHashMap<String, DefaultMethodSig>,
 }
 
 /// Information about an equip block.
@@ -72,6 +102,14 @@ pub struct EquipInfo {
     /// inference in typecheck. Populated only for methods whose
     /// `generic_params` is non-empty.
     pub method_shapes: FxHashMap<String, MethodSigShape>,
+    /// AST-level self type (e.g., `VectorIter[T]` for
+    /// `equip [T] VectorIter[T] with Iterator[T]`). Used together with
+    /// `impl_generic_params` to bind the impl's local generics to the
+    /// receiver's concrete type args at a call site.
+    pub self_type_ast: Type,
+    /// Names of the impl's local generic params (e.g., `["T"]` for the
+    /// example above). Empty for non-generic impls.
+    pub impl_generic_params: Vec<String>,
 }
 
 /// Registry of all traits and implementations.
@@ -763,6 +801,8 @@ fn register_builtin_traits(
                 has_default_body,
                 extends: Vec::new(),
                 method_shapes: FxHashMap::default(),
+                trait_generic_params: Vec::new(),
+                default_method_sigs: FxHashMap::default(),
             });
         }
     }
@@ -793,6 +833,7 @@ fn collect_trait(
     let mut methods = FxHashMap::default();
     let mut has_default_body = FxHashMap::default();
     let mut method_shapes = FxHashMap::default();
+    let mut default_method_sigs = FxHashMap::default();
 
     for item in &trait_def.items {
         if let TraitItem::Method(method) = &item.node {
@@ -804,8 +845,24 @@ fn collect_trait(
             if let Some(shape) = build_method_sig_shape(method) {
                 method_shapes.insert(method.name.node.clone(), shape);
             }
+            if has_body {
+                default_method_sigs.insert(
+                    method.name.node.clone(),
+                    build_default_method_sig(method),
+                );
+            }
         }
     }
+
+    // Extract the trait's own generic param names (e.g., `["T"]` for
+    // `trait Iterator[T]:`). Used by call-site substitution to pair
+    // trait generic positions with an impl's `trait_generic_args`.
+    let trait_generic_params: Vec<String> = trait_def.generic_params.as_ref().map(|gp| {
+        gp.node.params.iter().filter_map(|p| match &p.node {
+            GenericParam::Type { name, .. } => Some(name.node.clone()),
+            GenericParam::Const { .. } => None,
+        }).collect()
+    }).unwrap_or_default();
 
     // Resolve extends
     let mut extends = Vec::new();
@@ -824,8 +881,46 @@ fn collect_trait(
             has_default_body,
             extends,
             method_shapes,
+            trait_generic_params,
+            default_method_sigs,
         },
     );
+}
+
+/// Build the AST-level default-method sig for call-site Self/T substitution.
+/// Captures exactly what `FunctionSig` erases (Self → error_id, trait T →
+/// error_id or a placeholder generic-param def).
+pub fn build_default_method_sig(func: &FunctionDef) -> DefaultMethodSig {
+    let method_generic_params: Vec<String> = func.generic_params.as_ref().map(|gp| {
+        gp.node.params.iter().filter_map(|p| match &p.node {
+            GenericParam::Type { name, .. } => Some(name.node.clone()),
+            GenericParam::Const { .. } => None,
+        }).collect()
+    }).unwrap_or_default();
+
+    let mut param_types = Vec::new();
+    let mut param_ownerships = Vec::new();
+    let mut has_self = false;
+    let mut self_ownership = None;
+
+    for param in &func.params {
+        if param.node.name.node == "self" {
+            has_self = true;
+            self_ownership = Some(param.node.ownership);
+            continue;
+        }
+        param_types.push(param.node.type_.node.clone());
+        param_ownerships.push(param.node.ownership);
+    }
+
+    DefaultMethodSig {
+        method_generic_params,
+        param_types,
+        return_type: func.return_type.node.clone(),
+        param_ownerships,
+        has_self,
+        self_ownership,
+    }
 }
 
 fn process_impl(
@@ -956,6 +1051,16 @@ fn process_impl(
         })
         .unwrap_or_default();
 
+    // Impl's own generic params (e.g., `["T"]` for
+    // `equip [T] VectorIter[T]:`). Used to bind impl locals from the
+    // receiver's concrete type args at call time.
+    let impl_generic_params: Vec<String> = impl_block.generic_params.as_ref().map(|gp| {
+        gp.node.params.iter().filter_map(|p| match &p.node {
+            GenericParam::Type { name, .. } => Some(name.node.clone()),
+            GenericParam::Const { .. } => None,
+        }).collect()
+    }).unwrap_or_default();
+
     let impl_idx = registry.impls.len();
     registry.impls.push(EquipInfo {
         self_type: self_type_id,
@@ -967,6 +1072,8 @@ fn process_impl(
         trait_generic_args,
         via_field,
         method_shapes,
+        self_type_ast: impl_block.type_.node.clone(),
+        impl_generic_params,
     });
 
     if let Some(trait_id) = trait_def_id {
@@ -1457,7 +1564,20 @@ pub fn substitute_ast_type(ty: &Type, bindings: &FxHashMap<String, Type>) -> Typ
             node: substitute_ast_type(&inner.node, bindings),
             span: inner.span,
         })),
-        Type::Primitive(_) | Type::SelfType | Type::Inferred => ty.clone(),
+        Type::SelfType => {
+            // Treat `Self` as a bindable placeholder so call-site
+            // substitution in `Iterator[T]` default sigs (e.g.,
+            // `TakeIter[Self, T] take(self, int n)`) can bind
+            // `Self → VectorIter[int]` against a concrete receiver.
+            // Other callers that don't include a "Self" entry in
+            // `bindings` (method-generic inference) still get
+            // SelfType through unchanged.
+            if let Some(replacement) = bindings.get("Self") {
+                return replacement.clone();
+            }
+            ty.clone()
+        }
+        Type::Primitive(_) | Type::Inferred => ty.clone(),
     }
 }
 

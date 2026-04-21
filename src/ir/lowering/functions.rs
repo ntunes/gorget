@@ -1478,6 +1478,18 @@ pub fn lower_method_instance(
 
     let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
 
+    // `Self` → substituted equipped type, so trait-default method bodies
+    // lifted to `Iterator[T]` (like
+    // `MapIter[Self, T, U, F] map[U, F](self, F f)`) pre-substitute to
+    // `MapIter[VectorIter[int], T, U, F]` before mangling. The bulk
+    // emission path in `lower_generic_equip_methods_with_defaults` adds
+    // the same binding; method-level-generic defaults reach this path
+    // via `find_default_trait_method` in the per-call-site dispatch and
+    // without the Self entry the body's `MapIter[Self, T, U, F](self, f)`
+    // mangles to `MapIter__unknown__...` and the constructor undefined-
+    // references at link time.
+    subs.push(("Self".to_string(), substituted_equipped_type.clone()));
+
     // Shared context setup: type-name subs + generic type param TypeId map.
     // Both drive method-body lowering decisions (struct init, method dispatch).
     build_type_name_subs(ctx, &subs);

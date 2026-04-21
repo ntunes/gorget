@@ -718,7 +718,7 @@ impl GenericCollector {
     /// registered as `VectorIter[int]`. Without this, generic equip methods that construct
     /// other generic types silently skip the dependent type's monomorphization and the
     /// GIR validator later panics on "reference to undefined type".
-    pub fn discover_transitive(&mut self) {
+    pub fn discover_transitive(&mut self, ast_module: Option<&ast::Module>) {
         let mut i = 0;
         while i < self.instances.len() {
             let (base_name, type_args, _, kind) = self.instances[i].clone();
@@ -763,6 +763,50 @@ impl GenericCollector {
                             let substituted = substitute_function_body(&method.node, &subs);
                             self.scan_function(&substituted);
                             self.current_generic_params = prev;
+                        }
+                        // Trait default-method bodies aren't in the equip's
+                        // items. Scan them too, so struct constructors inside
+                        // defaults like `TakeIter[Self, T] take(self, int n):
+                        // return TakeIter[Self, T](self, n)` register their
+                        // monomorphised instantiation (`TakeIter[VectorIter
+                        // [int], int]` here). Without this the constructor
+                        // is only declared (via fn_sigs) and undefined at
+                        // link time.
+                        if let (Some(ast_mod), Some(trait_ref)) = (ast_module, &equip.trait_) {
+                            let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+                            if !trait_name.is_empty() {
+                                let implemented: Vec<String> = equip.items.iter()
+                                    .map(|m| m.node.name.node.clone())
+                                    .collect();
+                                let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
+                                let mut default_subs = subs.clone();
+                                default_subs.push(("Self".to_string(), substituted_equipped));
+                                for item in &ast_mod.items {
+                                    if let ast::Item::Trait(trait_def) = &item.node {
+                                        if trait_def.name.node == trait_name {
+                                            for trait_item in &trait_def.items {
+                                                if let ast::TraitItem::Method(dm) = &trait_item.node {
+                                                    if implemented.contains(&dm.name.node) { continue; }
+                                                    if !matches!(&dm.body, ast::FunctionBody::Block(_) | ast::FunctionBody::Expression(_)) {
+                                                        continue;
+                                                    }
+                                                    // Skip method-generic defaults —
+                                                    // those go through per-call-site mono
+                                                    // (discover_method_instances handles
+                                                    // them with merged equip+method subs).
+                                                    if dm.generic_params.is_some() {
+                                                        continue;
+                                                    }
+                                                    let prev = self.current_generic_params.take();
+                                                    let substituted = substitute_function_body(dm, &default_subs);
+                                                    self.scan_function(&substituted);
+                                                    self.current_generic_params = prev;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1567,6 +1611,17 @@ impl GenericCollector {
                     if let (Some(ast_mod), Some(trait_ref)) = (ast_module, &equip.trait_) {
                         let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
                         if !trait_name.is_empty() {
+                            // Default method bodies reference `Self` as the
+                            // equipping iterator (e.g.
+                            // `TakeIter[Self, T] take(self, int n)`). Extend
+                            // the equip-level subs with `Self → <mono'd
+                            // equipped type>` so sig registration mirrors the
+                            // body emission path and fn_sigs holds concrete
+                            // adapter return types (not `TakeIter__unknown__
+                            // int64_t`).
+                            let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
+                            let mut default_subs = subs.clone();
+                            default_subs.push(("Self".to_string(), substituted_equipped));
                             for item in &ast_mod.items {
                                 if let Item::Trait(trait_def) = &item.node {
                                     if trait_def.name.node == trait_name {
@@ -1577,15 +1632,31 @@ impl GenericCollector {
                                                     FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
                                                     _ => {}
                                                 }
+                                                // Method-level generics (`map[U, F]`) go
+                                                // through register_method_instance_sigs instead.
+                                                if dm.generic_params.is_some() {
+                                                    continue;
+                                                }
                                                 let m_mangled = format!("{mangled_type_name}__{}", dm.name.node);
-                                                let ret_type = substitute_and_map_mut(mapper, registry, &dm.return_type.node, &subs);
+                                                let ret_type = substitute_and_map_mut(mapper, registry, &dm.return_type.node, &default_subs);
                                                 let self_type_id = mapper.lookup_named(mangled_type_name).unwrap_or(UNIT_TYPE);
-                                                let self_ptr_type = registry.insert(GirType::Ptr(self_type_id));
+                                                let self_needs_mut_ptr = dm.params.first()
+                                                    .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow | Ownership::Move))
+                                                    .unwrap_or(false);
+                                                let self_ptr_type = if self_needs_mut_ptr {
+                                                    registry.insert(GirType::MutPtr(self_type_id))
+                                                } else {
+                                                    registry.insert(GirType::Ptr(self_type_id))
+                                                };
                                                 let mut param_types = vec![self_ptr_type];
-                                                let mut abis = vec![super::context::ParamABI::ByPtr]; // default methods: self by const ptr
+                                                let mut abis = vec![if self_needs_mut_ptr {
+                                                    super::context::ParamABI::ByMutPtr
+                                                } else {
+                                                    super::context::ParamABI::ByPtr
+                                                }];
                                                 for p in &dm.params {
                                                     if p.node.name.node == "self" { continue; }
-                                                    let base = substitute_and_map_mut(mapper, registry, &p.node.type_.node, &subs);
+                                                    let base = substitute_and_map_mut(mapper, registry, &p.node.type_.node, &default_subs);
                                                     param_types.push(base);
                                                     let is_move = registry.is_resource_type(base);
                                                     abis.push(match p.node.ownership {
@@ -1679,6 +1750,16 @@ impl GenericCollector {
                     subs.push((name, arg.node.clone()));
                 }
             }
+            // Bind `Self` so trait-default sigs like
+            // `MapIter[Self, T, U, F] map[U, F](self, F f)` resolve to
+            // the equipping iterator's concrete type in the registered
+            // fn_sig. Without this, Self stays literal and mangles to
+            // `MapIter__unknown__...` while the body lowering (which
+            // also binds Self, see lower_method_instance) emits
+            // `MapIter__VectorIter__int64_t__...`, producing a sig/body
+            // type mismatch at the call site.
+            let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
+            subs.push(("Self".to_string(), substituted_equipped));
 
             let ret_type = substitute_and_map_mut(mapper, registry, &method.return_type.node, &subs);
             let has_self = method.params.first()

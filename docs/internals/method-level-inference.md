@@ -270,6 +270,68 @@ declaring done.
   Self → equipping_type substitution that's orthogonal to method-
   level generic inference. Adjacent work (might share the
   substitution kernel — see "Substitution Kernel" below).
+
+  **PARTIAL — typecheck + IR substitution landed 2026-04-21.**
+  Plumbing in place across three layers:
+
+  1. **Typecheck** (`src/semantic/typecheck.rs`,
+     `src/semantic/traits.rs`). `TraitInfo` now carries
+     `trait_generic_params: Vec<String>` +
+     `default_method_sigs: FxHashMap<String, DefaultMethodSig>`
+     (AST-level return/param types for default-bodied methods).
+     `EquipInfo` carries the impl's AST-level `self_type_ast` +
+     `impl_generic_params`. On a trait-default hit in
+     `resolve_method` / `resolve_method_by_name`, typecheck walks
+     the impl's self_type AST against the receiver's concrete type
+     to bind impl locals, substitutes trait generic args, binds
+     `Self → receiver`, and rebuilds an owned `FunctionSig` with
+     the substituted AST resolved back to TypeIds. Name-based trait
+     default resolution runs before `try_iterator_adapter_type` so
+     real defaults win over the hardcoded Vector-adapter shortcut
+     when the receiver actually implements `Iterator[T]`.
+
+  2. **IR sig registration**
+     (`generics/mod.rs::register_equip_sigs_with_defaults`,
+     `register_method_instance_sigs`). Added
+     `("Self", substituted_equipped)` to the subs driving
+     `substitute_and_map_mut` for default-method sig registration,
+     so fn_sigs holds concrete adapter return types (e.g.
+     `TakeIter__VectorIter__int64_t__int64_t`) rather than the
+     `TakeIter__unknown__...` shape that Self-unsubstituted
+     mangling used to produce.
+
+  3. **IR body lowering**
+     (`functions.rs::lower_method_instance`,
+     `generics/mod.rs::discover_transitive`). Method-level-generic
+     default bodies reach `lower_method_instance` via
+     `find_default_trait_method`; Self is now bound in the subs so
+     body pre-substitution hits concrete types before mangling.
+     `discover_transitive` also walks trait default bodies (not
+     just equip items) with `Self` bound per impl instance, so
+     struct constructors used inside defaults
+     (`TakeIter[Self, T](self, n)`) register their
+     monomorphisation and get emitted.
+
+  **Remaining blocker for actually moving adapter constructors
+  from VectorIter's inherent equip block to `Iterator[T]`
+  defaults:** LIR codegen drops the struct-typed return value at
+  call sites for non-method-generic default methods. Symptom with
+  the adapters lifted: `v.iter().take(3)` emits
+  `VectorIter__int64_t__take(__v31, __v33);` (call discarded)
+  followed by `__s23 = 0` + `memcpy(&__s27, &__s23, ...)` —
+  constructing a zeroed `TakeIter` instead of storing the call's
+  actual return. The function itself is emitted correctly
+  (`TakeIter(self, n)` runs inside `VectorIter__int64_t__take`);
+  the failure is specifically in how the caller plumbs the
+  return value into its destination slot when the return type
+  comes from a substituted default sig.
+
+  Once that lands: uncomment the `Iterator[T]` adapter defaults
+  in `lib/std/iter.gg` (see the deferred NOTE comment at
+  line ~143), delete the now-duplicate inherent entries in
+  `equip [T] VectorIter[T]:` for `take` / `skip` / `map` /
+  `filter` / etc., and add the chain-past-one-step fixture
+  (`v.iter().take(3).filter(p).map(f).collect()`).
 - **collect-target inference** (`Vector[int] xs = it.collect()`
   picking Vector from the LHS). Different problem — that's
   expected-type plumbing, not arg-type inference. Separate plan.

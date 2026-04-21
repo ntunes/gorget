@@ -15,6 +15,51 @@ use super::types::{self, ResolvedType, TypeTable};
 /// nested anywhere inside has the given name. Used by shape-2 inference
 /// to detect when a method-level generic appears only in the return type
 /// (e.g. the `U` in `Vector[U] map[U, F](self, F f)`).
+/// Structurally match `template` against `concrete` and record bindings
+/// for each bare `Named { name, [] }` in `template` whose name is listed
+/// in `generic_params`. Handles the typical shape used in equip blocks:
+/// template `VectorIter[T]` paired with concrete `VectorIter[int]` binds
+/// `T → int`. Also handles nested shapes like `TakeIter[VectorIter[T], T]`
+/// vs `TakeIter[VectorIter[int], int]`.
+fn bind_template_generics(
+    template: &Type,
+    concrete: &Type,
+    generic_params: &[String],
+    bindings: &mut FxHashMap<String, Type>,
+) {
+    // Bare generic-param name at this position: bind directly.
+    if let Type::Named { name, generic_args } = template {
+        if generic_args.is_empty()
+            && generic_params.iter().any(|p| p == &name.node)
+        {
+            bindings.entry(name.node.clone()).or_insert_with(|| concrete.clone());
+            return;
+        }
+    }
+    // Otherwise recurse through matching shapes.
+    match (template, concrete) {
+        (
+            Type::Named { name: t_name, generic_args: t_args },
+            Type::Named { name: c_name, generic_args: c_args },
+        ) if t_name.node == c_name.node && t_args.len() == c_args.len() => {
+            for (t, c) in t_args.iter().zip(c_args.iter()) {
+                bind_template_generics(&t.node, &c.node, generic_params, bindings);
+            }
+        }
+        (Type::Tuple(t_elems), Type::Tuple(c_elems)) if t_elems.len() == c_elems.len() => {
+            for (t, c) in t_elems.iter().zip(c_elems.iter()) {
+                bind_template_generics(&t.node, &c.node, generic_params, bindings);
+            }
+        }
+        (Type::Ref(t), Type::Ref(c))
+        | (Type::Owned(t), Type::Owned(c))
+        | (Type::Pointer(t), Type::Pointer(c)) => {
+            bind_template_generics(&t.node, &c.node, generic_params, bindings);
+        }
+        _ => {}
+    }
+}
+
 fn type_mentions_name(ty: &Type, target: &str) -> bool {
     match ty {
         Type::Named { name, generic_args } => {
@@ -1434,7 +1479,24 @@ impl<'a> TypeChecker<'a> {
                     self.traits.resolve_method(resolved_receiver, &method.node)
                 {
                     self.method_resolutions.insert(method.span.start, *def_id);
-                    let sig = sig.clone();
+                    let stored_def_id = *def_id;
+                    let mut sig = sig.clone();
+                    // Trait-default substitution: when resolve_method falls
+                    // through to the trait default-body fallback, the
+                    // returned sig references `Self` and the trait's own
+                    // generic `T` as placeholders (both erased to error_id
+                    // at registry-build time since Self/trait-T are out of
+                    // scope). Rebuild the sig against the concrete receiver
+                    // so adapter constructors returning `TakeIter[Self, T]`
+                    // (etc.) resolve to the concrete iterator type and
+                    // subsequent chained calls dispatch correctly.
+                    if self.traits.traits.contains_key(&stored_def_id) {
+                        if let Some(substituted) = self.substitute_default_method_sig(
+                            stored_def_id, &method.node, resolved_receiver,
+                        ) {
+                            sig = substituted;
+                        }
+                    }
                     // Check argument count
                     if args.len() != sig.params.len() {
                         self.error(
@@ -1455,6 +1517,51 @@ impl<'a> TypeChecker<'a> {
                     self.expr_types.insert(expr.span, sig.return_type);
                     sig.return_type
                 } else {
+                    // Name-based trait-default fallback FIRST — for generic-
+                    // template impls (`equip [T] VectorIter[T]:`) whose
+                    // impl TypeId doesn't match the concrete receiver, the
+                    // trait default for `take`/`filter`/`map`/etc. is only
+                    // reachable by name. Run it before
+                    // `infer_closure_method_type` so the trait's default
+                    // wins over the hardcoded `try_iterator_adapter_type`
+                    // shortcut that would otherwise erase the concrete
+                    // adapter return shape to `Vector[error]`.
+                    let base_name = match self.types.get(resolved_receiver) {
+                        ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
+                            Some(self.scopes.get_def(*def_id).name.clone())
+                        }
+                        _ => None,
+                    };
+                    let default_hit = base_name.as_ref().and_then(|name| {
+                        let (def_id, sig) = self.traits
+                            .resolve_method_by_name(name, &method.node)?;
+                        // Only the trait-default case needs early
+                        // routing — inherent-impl hits by name carry
+                        // their own concrete sig and should continue to
+                        // flow through the existing fallback chain (so
+                        // any downstream handling stays intact).
+                        if self.traits.traits.contains_key(def_id) {
+                            Some((*def_id, sig.clone()))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some((def_id, mut sig)) = default_hit {
+                        self.method_resolutions.insert(method.span.start, def_id);
+                        if let Some(substituted) = self.substitute_default_method_sig(
+                            def_id, &method.node, resolved_receiver,
+                        ) {
+                            sig = substituted;
+                        }
+                        for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
+                            let arg_type = self.infer_expr(&arg.node.value);
+                            self.unify(param_type, arg_type, arg.span);
+                        }
+                        let ret = sig.return_type;
+                        self.expr_types.insert(expr.span, ret);
+                        return ret;
+                    }
+
                     // Check for closure-returning Option/Result methods (map, and_then, or_else)
                     if let Some(ret_type) = self.infer_closure_method_type(resolved_receiver, &method.node, args) {
                         self.expr_types.insert(expr.span, ret_type);
@@ -1470,12 +1577,6 @@ impl<'a> TypeChecker<'a> {
                         } else {
                             // Name-based fallback for cross-module equip methods
                             // where TypeId doesn't match.
-                            let base_name = match self.types.get(resolved_receiver) {
-                                ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
-                                    Some(self.scopes.get_def(*def_id).name.clone())
-                                }
-                                _ => None,
-                            };
                             if let Some(ref name) = base_name {
                                 if let Some((_def_id, sig)) = self.traits.resolve_method_by_name(name, &method.node) {
                                     let ret = sig.return_type;
@@ -2930,6 +3031,108 @@ impl<'a> TypeChecker<'a> {
         }
 
         false
+    }
+
+    /// When `resolve_method`/`resolve_method_by_name` returns a sig owned by
+    /// a trait default body, the stored sig has `Self` and the trait's own
+    /// generic `T` erased to `error_id` (they were out of scope at
+    /// registry-build time). Rebuild the sig by substituting both against
+    /// the concrete receiver so adapter constructors like `TakeIter[Self,
+    /// T] take(self, int n)` resolve to the concrete iterator type.
+    ///
+    /// Returns `None` if any prerequisite is missing (no AST default sig,
+    /// no matching impl, receiver can't be projected back to AST). Callers
+    /// fall through to the unsubstituted sig in that case.
+    fn substitute_default_method_sig(
+        &mut self,
+        trait_def_id: DefId,
+        method: &str,
+        receiver_type_id: TypeId,
+    ) -> Option<super::traits::FunctionSig> {
+        let default_sig = self.traits.traits.get(&trait_def_id)
+            .and_then(|t| t.default_method_sigs.get(method))
+            .cloned()?;
+        let trait_generic_params = self.traits.traits.get(&trait_def_id)
+            .map(|t| t.trait_generic_params.clone())
+            .unwrap_or_default();
+
+        // Receiver's base name — used to find the matching impl when
+        // TypeId doesn't match (generic template impls are registered
+        // with a template TypeId that differs from the concrete receiver).
+        let resolved_receiver = self.resolve_type(receiver_type_id);
+        let receiver_name = match self.types.get(resolved_receiver) {
+            ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
+                Some(self.scopes.get_def(*def_id).name.clone())
+            }
+            _ => None,
+        };
+
+        // Prefer an exact-TypeId impl (for fully-concrete impls); fall
+        // back to name-based matching (generic template impls).
+        let impl_info = self.traits.impls.iter().find(|i| {
+            i.trait_ == Some(trait_def_id) && i.self_type == resolved_receiver
+        }).or_else(|| {
+            let name = receiver_name.as_deref()?;
+            self.traits.impls.iter().find(|i| {
+                i.trait_ == Some(trait_def_id) && i.self_type_name == name
+            })
+        })?;
+        let impl_self_type_ast = impl_info.self_type_ast.clone();
+        let impl_generic_params = impl_info.impl_generic_params.clone();
+        let trait_generic_args_ast: Vec<Type> = impl_info.trait_generic_args.clone();
+
+        // Step 1: project the receiver's concrete TypeId back to AST so we
+        // can use it as the value of `Self` and pair it positionally
+        // against the impl's self_type template to bind impl locals.
+        let receiver_ast = self.typeid_to_ast_type(resolved_receiver)?;
+
+        // Step 2: bind impl-local generic params (`[T]` etc.) from the
+        // receiver by structurally matching impl.self_type_ast vs
+        // receiver_ast.
+        let mut impl_bindings: FxHashMap<String, Type> = FxHashMap::default();
+        bind_template_generics(
+            &impl_self_type_ast,
+            &receiver_ast,
+            &impl_generic_params,
+            &mut impl_bindings,
+        );
+
+        // Step 3: compute trait generic bindings. `trait_generic_args_ast[i]`
+        // describes how the impl supplies the i-th trait generic; substitute
+        // impl-local bindings into it, then pair with
+        // `trait_generic_params[i]` by position.
+        let mut full_bindings: FxHashMap<String, Type> = FxHashMap::default();
+        full_bindings.insert("Self".to_string(), receiver_ast);
+        for (tparam, targ) in trait_generic_params.iter().zip(trait_generic_args_ast.iter()) {
+            let substituted = super::traits::substitute_ast_type(targ, &impl_bindings);
+            full_bindings.insert(tparam.clone(), substituted);
+        }
+
+        // Step 4: substitute default sig's return + params, then resolve
+        // the AST back to TypeIds. Method-level generic placeholders stay
+        // unsubstituted — they'll bind at the call's inference step.
+        let substituted_return = super::traits::substitute_ast_type(
+            &default_sig.return_type, &full_bindings,
+        );
+        let return_type_id = types::ast_type_to_resolved(
+            &substituted_return, Span { start: 0, end: 0 }, self.scopes, self.types,
+        ).unwrap_or(self.types.error_id);
+
+        let mut param_type_ids = Vec::with_capacity(default_sig.param_types.len());
+        for p in &default_sig.param_types {
+            let substituted = super::traits::substitute_ast_type(p, &full_bindings);
+            let id = types::ast_type_to_resolved(
+                &substituted, Span { start: 0, end: 0 }, self.scopes, self.types,
+            ).unwrap_or(self.types.error_id);
+            param_type_ids.push(id);
+        }
+
+        Some(super::traits::FunctionSig {
+            params: param_type_ids,
+            return_type: return_type_id,
+            has_self: default_sig.has_self,
+            self_ownership: default_sig.self_ownership,
+        })
     }
 
     /// Check if a throws/Result-returning call can be captured as a Result value.
