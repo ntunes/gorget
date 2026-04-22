@@ -500,9 +500,19 @@ pub fn lower_trait_equip_methods(
                     }
                 }
             } else if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                // Extract concrete trait generic args from the equip's
+                // trait annotation (`with Iterator[int]` → `[int]`).
+                // Passed down so default-method bodies can substitute
+                // the trait's own generic params (`T`) against
+                // concrete types.
+                let trait_args: Vec<ast::Type> = equip.trait_.as_ref()
+                    .and_then(|t| if let ast::Type::Named { generic_args, .. } = &t.trait_name.node {
+                        Some(generic_args.iter().map(|a| a.node.clone()).collect())
+                    } else { None })
+                    .unwrap_or_default();
                 emit_default_methods_from_trait(
                     ctx, module, trait_def, &type_name, &equip.type_.node,
-                    &implemented_methods, vtable_info,
+                    &trait_args, &implemented_methods, vtable_info,
                     concrete_ptr_type, concrete_mut_ptr_type,
                 );
                 // Also scan parent traits for default methods
@@ -511,7 +521,7 @@ pub fn lower_trait_equip_methods(
                     if let Some(parent_def) = find_trait_def(ast_module, &parent_name) {
                         emit_default_methods_from_trait(
                             ctx, module, parent_def, &type_name, &equip.type_.node,
-                            &implemented_methods, vtable_info,
+                            &trait_args, &implemented_methods, vtable_info,
                             concrete_ptr_type, concrete_mut_ptr_type,
                         );
                     }
@@ -530,34 +540,80 @@ fn emit_default_methods_from_trait(
     trait_def: &ast::TraitDef,
     type_name: &str,
     equipped_type: &ast::Type,
+    trait_args: &[ast::Type],
     implemented_methods: &[String],
     vtable_info: &TraitVTableInfo,
     concrete_ptr_type: TypeId,
     concrete_mut_ptr_type: TypeId,
 ) {
     use crate::parser::ast::TraitItem;
+    use super::generics;
+
+    // Pre-bind Self → equipped_type + each trait generic param →
+    // corresponding concrete trait arg for every default method we
+    // emit here. Default bodies lifted onto generic traits (like the
+    // `Iterator[T]` adapter constructors `TakeIter[Self, T] take(self,
+    // int n)`) reference `Self` and the trait's own `T`; the
+    // non-generic-impl emission paths below (`lower_equip_method` /
+    // `lower_trait_method_body`) don't bind either themselves, so an
+    // auto-loaded `std.iter` against a user-defined iterator like
+    // `equip CounterIter with Iterator[int]` would emit
+    // `TakeIter__unknown__T` without this.
+    let mut self_subs: Vec<(String, ast::Type)> = vec![
+        ("Self".to_string(), equipped_type.clone()),
+    ];
+    // Trait generic param → concrete trait arg. For `equip CounterIter
+    // with Iterator[int]`, trait_def.generic_params = [T] and
+    // `trait_args` (extracted from the `Iterator[int]` annotation on
+    // the equip's trait line) supplies [int]. Pair by position.
+    if let Some(ref gp) = trait_def.generic_params {
+        for (param, concrete) in gp.node.params.iter().zip(trait_args.iter()) {
+            let name = match &param.node {
+                ast::GenericParam::Type { name: n, .. } => n.node.clone(),
+                ast::GenericParam::Const { name: n, .. } => n.node.clone(),
+            };
+            self_subs.push((name, concrete.clone()));
+        }
+    }
+    // Demand-gate: skip emission if the substituted return type
+    // mentions a nominal that hasn't been registered as an instance
+    // (mirrors the generic-template path in
+    // `lower_generic_equip_methods_with_defaults`). Prevents dead-code
+    // cascades of adapter methods for every `Iterator[T]` implementor.
     for trait_item in &trait_def.items {
         if let TraitItem::Method(default_method) = &trait_item.node {
             let method_name = &default_method.name.node;
             if implemented_methods.contains(method_name) {
                 continue; // Already overridden
             }
-            // Only emit if the method has a body (default implementation)
             match &default_method.body {
                 FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
                 FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
             }
+            // Skip defaults whose substituted return type mentions an
+            // unregistered nominal (same check as the generic bulk path).
+            let substituted_ret = generics::substitute_type_pub(
+                &default_method.return_type.node, &self_subs,
+            );
+            if !super::functions::all_return_nominals_registered_pub(ctx, &substituted_ret) {
+                continue;
+            }
+            // Pre-substitute the method body so `Self` references
+            // resolve to the equipped type before lowering.
+            let substituted_method = generics::substitute_function_body_pub(
+                default_method, &self_subs,
+            );
             if let Some(vtable_method) = vtable_info.methods.iter().find(|m| m.name == *method_name) {
                 let trait_name = &trait_def.name.node;
                 let mangled = format!("{trait_name}_for_{type_name}__{method_name}");
                 lower_trait_method_body(
-                    ctx, module, &mangled, default_method, vtable_method,
+                    ctx, module, &mangled, &substituted_method, vtable_method,
                     concrete_ptr_type, concrete_mut_ptr_type,
                 );
             } else {
                 // Not in vtable (inherited from parent) — emit as Type__method
                 super::functions::lower_equip_method(
-                    ctx, module, default_method, type_name, equipped_type,
+                    ctx, module, &substituted_method, type_name, equipped_type,
                 );
             }
         }
@@ -1096,7 +1152,29 @@ pub fn lower_unregistered_trait_equip_methods(
 
             // Emit default methods from the trait definition that are not overridden.
             if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
-                let self_subs = vec![("Self".to_string(), equip.type_.node.clone())];
+                // Build Self + trait-T subs. For `equip CounterIter
+                // with Iterator[int]`, self_subs = [Self → CounterIter,
+                // T → int]. Trait-T binding is needed once auto-loaded
+                // `std.iter` starts emitting `Iterator[T]` default
+                // adapter methods (`TakeIter[Self, T] take(...)` etc.)
+                // for every user-defined iterator.
+                let mut self_subs: Vec<(String, ast::Type)> = vec![
+                    ("Self".to_string(), equip.type_.node.clone()),
+                ];
+                let trait_args: Vec<ast::Type> = if let ast::Type::Named { generic_args, .. } = trait_type {
+                    generic_args.iter().map(|a| a.node.clone()).collect()
+                } else {
+                    Vec::new()
+                };
+                if let Some(ref gp) = trait_def.generic_params {
+                    for (param, concrete) in gp.node.params.iter().zip(trait_args.iter()) {
+                        let name = match &param.node {
+                            ast::GenericParam::Type { name: n, .. } => n.node.clone(),
+                            ast::GenericParam::Const { name: n, .. } => n.node.clone(),
+                        };
+                        self_subs.push((name, concrete.clone()));
+                    }
+                }
                 for trait_item in &trait_def.items {
                     if let TraitItem::Method(default_method) = &trait_item.node {
                         let method_name = &default_method.name.node;
@@ -1107,20 +1185,59 @@ pub fn lower_unregistered_trait_equip_methods(
                             FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
                             FunctionBody::Block(_) | FunctionBody::Expression(_) => {}
                         }
-                        let has_self = default_method.params.first()
+                        // Demand-gate: skip emitting a default whose
+                        // substituted return type mentions an unregistered
+                        // generic nominal. Prevents every Iterator
+                        // implementor from speculatively emitting every
+                        // adapter (`TakeIter[CounterIter, int]` etc. when
+                        // no call site uses them).
+                        let substituted_ret = super::generics::substitute_type_pub(
+                            &default_method.return_type.node, &self_subs,
+                        );
+                        if !super::functions::all_return_nominals_registered_pub(ctx, &substituted_ret) {
+                            continue;
+                        }
+                        // Pre-substitute Self + trait-T in the body so
+                        // the struct-constructor type-arg lists resolve
+                        // to concrete types before mangling.
+                        let mut substituted_method = super::generics::substitute_function_body_pub(
+                            default_method, &self_subs,
+                        );
+                        // Also evaluate delayed meta (e.g.
+                        // `meta if Self is Enum:` /
+                        // `meta for vname in variant_names(Self):`)
+                        // against the bound Self. Without this,
+                        // `trait_default_meta.gg`-style traits that
+                        // unroll per-variant logic via meta loops
+                        // emit empty bodies.
+                        if let ast::FunctionBody::Block(ref mut block) = substituted_method.body {
+                            let empty_env = rustc_hash::FxHashMap::default();
+                            let delayed_ctx = DelayedMetaContext {
+                                type_subs:      &self_subs,
+                                features:       &[],
+                                meta_env:       &empty_env,
+                                items:          &[],
+                                trait_registry: &ctx.analysis.traits,
+                                type_registry:  &ctx.type_registry,
+                            };
+                            let mut meta_errors = Vec::new();
+                            meta::evaluate_delayed_meta_block(block, &delayed_ctx, &mut meta_errors);
+                            for e in &meta_errors {
+                                eprintln!("[delayed-meta static-trait] {e:?}");
+                            }
+                        }
+                        let has_self = substituted_method.params.first()
                             .map(|p| p.node.name.node == "self")
                             .unwrap_or(false);
                         if has_self {
                             super::functions::lower_equip_method(
-                                ctx, module, default_method, &type_name, &equip.type_.node,
+                                ctx, module, &substituted_method, &type_name, &equip.type_.node,
                             );
                         } else {
-                            // Substitute Self in return type, param types, and body before lowering.
-                            let substituted = substitute_method_self(default_method, &self_subs, ctx);
                             let mangled = mangle_trait_equip_name(
                                 trait_type, &type_name, method_name, ctx,
                             );
-                            lower_static_trait_method(ctx, module, &substituted, &mangled);
+                            lower_static_trait_method(ctx, module, &substituted_method, &mangled);
                         }
                     }
                 }
@@ -1240,6 +1357,11 @@ fn extract_type_name(ty: &Type) -> Option<String> {
 /// - body block (via delayed meta evaluation)
 ///
 /// Used to instantiate default trait methods with a concrete equipped type.
+/// Previously called from `lower_unregistered_trait_equip_methods`; the
+/// new callers use `generics::substitute_function_body_pub` which also
+/// walks expression types in the body. Kept here for the delayed-meta
+/// evaluation it runs, in case a future caller needs it.
+#[allow(dead_code)]
 fn substitute_method_self(
     method: &ast::FunctionDef,
     self_subs: &[(String, Type)],

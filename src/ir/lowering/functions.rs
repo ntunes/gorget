@@ -11,6 +11,13 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// Public wrapper around `all_return_nominals_registered` for
+/// cross-module callers (non-generic trait default emission in
+/// `traits.rs` reuses the same demand-gate heuristic).
+pub fn all_return_nominals_registered_pub(ctx: &LoweringContext, ty: &Type) -> bool {
+    all_return_nominals_registered(ctx, ty)
+}
+
 /// Walk an AST type and return true only if every nominal (named struct /
 /// enum) reachable through it has already been registered in the type
 /// mapper. Used to demand-gate bulk default-method emission: if a

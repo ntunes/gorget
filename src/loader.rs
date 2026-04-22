@@ -112,6 +112,269 @@ fn module_uses_hashable_derive(module: &Module) -> bool {
     false
 }
 
+/// Check whether the module should auto-load `std.iter`.
+///
+/// Auto-load when:
+/// - The module doesn't already import `std.iter` explicitly (harmless
+///   but a useful early-exit — redundant loads are deduped elsewhere).
+/// - The module doesn't define a struct / enum / type-alias / trait
+///   named `VectorIter` (user shadowing — see
+///   `vector_iter_userdef.gg`).
+/// - AND the module AST references anything that's only satisfied by
+///   `std.iter`: an adapter struct name (`TakeIter` / `MapIter` / …),
+///   one of `std.iter`'s free functions (`sum_iter` / `join_iter` / …),
+///   or a `.iter()` method call.
+///
+/// This makes `v.iter().take(3).filter(p).map(f).collect()` work in
+/// a scratch file without `from std.iter import ...` boilerplate,
+/// while leaving user-shadowing fixtures alone.
+#[allow(dead_code)]
+fn module_should_auto_load_std_iter(module: &Module) -> bool {
+    if module_shadows_vector_iter(module) {
+        return false;
+    }
+    if module_imports_std_iter(module) {
+        return false;
+    }
+    ast_mentions_std_iter_need(&module.items)
+}
+
+fn module_shadows_vector_iter(module: &Module) -> bool {
+    for item in &module.items {
+        let name = match &item.node {
+            Item::Struct(s) => &s.name.node,
+            Item::Enum(e) => &e.name.node,
+            Item::TypeAlias(a) => &a.name.node,
+            Item::Newtype(n) => &n.name.node,
+            Item::Trait(t) => &t.name.node,
+            _ => continue,
+        };
+        if name == "VectorIter" {
+            return true;
+        }
+    }
+    false
+}
+
+fn module_imports_std_iter(module: &Module) -> bool {
+    for item in &module.items {
+        if let Item::Import(import) = &item.node {
+            let segments: Vec<&str> = match import {
+                ImportStmt::Simple { path, .. }
+                | ImportStmt::Grouped { path, .. }
+                | ImportStmt::From { path, .. } => {
+                    path.iter().map(|s| s.node.as_str()).collect()
+                }
+            };
+            if segments == ["std", "iter"] {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Names that only `std.iter` provides — finding any of them in the
+/// AST is a strong signal the module needs the module loaded.
+const STD_ITER_NAMES: &[&str] = &[
+    "VectorIter", "TakeIter", "SkipIter", "ChainIter",
+    "MapIter", "FilterIter", "TakeWhileIter", "DropWhileIter",
+    "FilterMapIter", "InspectIter", "EnumerateIter", "ZipIter",
+    "WindowsIter", "ChunksIter",
+    "sum_iter", "product_iter", "min_iter", "max_iter",
+    "join_iter", "set_iter",
+];
+
+fn ast_mentions_std_iter_need(items: &[Spanned<Item>]) -> bool {
+    use crate::parser::ast::TraitItem;
+    for item in items {
+        match &item.node {
+            Item::Function(f) => {
+                if function_mentions_iter(f) { return true; }
+            }
+            Item::Equip(equip) => {
+                for method in &equip.items {
+                    if function_mentions_iter(&method.node) { return true; }
+                }
+            }
+            Item::Trait(t) => {
+                for trait_item in &t.items {
+                    if let TraitItem::Method(m) = &trait_item.node {
+                        if function_mentions_iter(m) { return true; }
+                    }
+                }
+            }
+            Item::ConstDecl(c) => {
+                if expr_mentions_iter(&c.value) { return true; }
+            }
+            Item::StaticDecl(s) => {
+                if expr_mentions_iter(&s.value) { return true; }
+            }
+            Item::Test(t) => {
+                if block_mentions_iter(&t.body) { return true; }
+            }
+            Item::Bench(b) => {
+                if block_mentions_iter(&b.body) { return true; }
+            }
+            Item::SuiteSetup(s) => {
+                if block_mentions_iter(&s.body) { return true; }
+            }
+            Item::SuiteTeardown(s) => {
+                if block_mentions_iter(&s.body) { return true; }
+            }
+            Item::Module { items: inner, .. } => {
+                if ast_mentions_std_iter_need(inner) { return true; }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn function_mentions_iter(f: &crate::parser::ast::FunctionDef) -> bool {
+    use crate::parser::ast::FunctionBody;
+    for p in &f.params {
+        if type_mentions_iter(&p.node.type_.node) { return true; }
+    }
+    if type_mentions_iter(&f.return_type.node) { return true; }
+    match &f.body {
+        FunctionBody::Block(b) => block_mentions_iter(b),
+        FunctionBody::Expression(e) => expr_mentions_iter(e),
+        _ => false,
+    }
+}
+
+fn block_mentions_iter(block: &crate::parser::ast::Block) -> bool {
+    for stmt in &block.stmts {
+        if stmt_mentions_iter(stmt) { return true; }
+    }
+    false
+}
+
+fn stmt_mentions_iter(stmt: &Spanned<crate::parser::ast::Stmt>) -> bool {
+    use crate::parser::ast::Stmt;
+    match &stmt.node {
+        Stmt::VarDecl { type_, value, .. } => {
+            type_mentions_iter(&type_.node) || expr_mentions_iter(value)
+        }
+        Stmt::Assign { target, value }
+        | Stmt::CompoundAssign { target, value, .. } => {
+            expr_mentions_iter(target) || expr_mentions_iter(value)
+        }
+        Stmt::Return(Some(e)) | Stmt::Expr(e) | Stmt::Throw(e) => {
+            expr_mentions_iter(e)
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            expr_mentions_iter(condition)
+                || block_mentions_iter(then_body)
+                || elif_branches.iter().any(|(c, b)| {
+                    expr_mentions_iter(c) || block_mentions_iter(b)
+                })
+                || else_body.as_ref().map_or(false, |b| block_mentions_iter(b))
+        }
+        Stmt::While { condition, body, .. } => {
+            expr_mentions_iter(condition) || block_mentions_iter(body)
+        }
+        Stmt::For { iterable, body, .. } => {
+            expr_mentions_iter(iterable) || block_mentions_iter(body)
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            if expr_mentions_iter(scrutinee) { return true; }
+            for item in arms {
+                if let Some(arm) = item.arm() {
+                    if expr_mentions_iter(&arm.body) { return true; }
+                    if let Some(g) = &arm.guard {
+                        if expr_mentions_iter(g) { return true; }
+                    }
+                }
+            }
+            else_arm.as_ref().map_or(false, |b| block_mentions_iter(b))
+        }
+        Stmt::Loop { body }
+        | Stmt::Unsafe { body }
+        | Stmt::NamedScope { body, .. } => block_mentions_iter(body),
+        Stmt::With { bindings, body } => {
+            bindings.iter().any(|b| expr_mentions_iter(&b.expr))
+                || block_mentions_iter(body)
+        }
+        _ => false,
+    }
+}
+
+fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
+    use crate::parser::ast::Expr;
+    match &expr.node {
+        Expr::Identifier(n) => STD_ITER_NAMES.contains(&n.as_str()),
+        Expr::MethodCall { receiver, method, args, .. } => {
+            if method.node == "iter" { return true; }
+            if expr_mentions_iter(receiver) { return true; }
+            args.iter().any(|a| expr_mentions_iter(&a.node.value))
+        }
+        Expr::Call { callee, args, .. } => {
+            if expr_mentions_iter(callee) { return true; }
+            args.iter().any(|a| expr_mentions_iter(&a.node.value))
+        }
+        Expr::StructLiteral { name, args, .. } => {
+            if STD_ITER_NAMES.contains(&name.node.as_str()) { return true; }
+            args.iter().any(|a| expr_mentions_iter(a))
+        }
+        Expr::BinaryOp { left, right, .. } => {
+            expr_mentions_iter(left) || expr_mentions_iter(right)
+        }
+        Expr::UnaryOp { operand, .. } => expr_mentions_iter(operand),
+        Expr::FieldAccess { object, .. }
+        | Expr::TupleFieldAccess { object, .. } => expr_mentions_iter(object),
+        Expr::Index { object, index } => {
+            expr_mentions_iter(object) || expr_mentions_iter(index)
+        }
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            expr_mentions_iter(condition)
+                || expr_mentions_iter(then_branch)
+                || else_branch.as_ref().map_or(false, |e| expr_mentions_iter(e))
+        }
+        Expr::Range { start, end, .. } => {
+            start.as_ref().map_or(false, |s| expr_mentions_iter(s))
+                || end.as_ref().map_or(false, |e| expr_mentions_iter(e))
+        }
+        Expr::Move { expr: inner }
+        | Expr::MutableBorrow { expr: inner }
+        | Expr::OptionalChain { object: inner, .. } => expr_mentions_iter(inner),
+        Expr::DefaultOp { lhs, rhs } => {
+            expr_mentions_iter(lhs) || expr_mentions_iter(rhs)
+        }
+        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
+            expr_mentions_iter(body)
+        }
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            elems.iter().any(|e| expr_mentions_iter(e))
+        }
+        Expr::Block(block) => block_mentions_iter(block),
+        _ => false,
+    }
+}
+
+fn type_mentions_iter(ty: &crate::parser::ast::Type) -> bool {
+    use crate::parser::ast::Type;
+    match ty {
+        Type::Named { name, generic_args } => {
+            if STD_ITER_NAMES.contains(&name.node.as_str()) { return true; }
+            generic_args.iter().any(|a| type_mentions_iter(&a.node))
+        }
+        Type::Tuple(elems) => elems.iter().any(|e| type_mentions_iter(&e.node)),
+        Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
+            type_mentions_iter(&inner.node)
+        }
+        Type::Function { return_type, params, .. } => {
+            type_mentions_iter(&return_type.node)
+                || params.iter().any(|p| type_mentions_iter(&p.node))
+        }
+        Type::Array { element, .. } | Type::Slice { element } => {
+            type_mentions_iter(&element.node)
+        }
+        _ => false,
+    }
+}
+
 /// Recursively extract imports from items, including inside `meta if` blocks.
 /// For `meta if platform()` conditions, we evaluate at load time to only load
 /// modules for the current platform. For other meta if conditions, we conservatively
@@ -311,12 +574,21 @@ impl ModuleLoader {
             self.load_recursive(&base_dir, &hash_segments, &mut results)?;
         }
 
-        // NOTE: auto-loading std.iter unconditionally was attempted but
-        // broke fixtures that define their own `VectorIter[T]` struct
-        // (vector_iter_userdef.gg) — duplicate impl. A finer-grained
-        // heuristic (auto-load only when the module calls `.iter()` or
-        // imports an Iterator-related name) needs more thought; for now
-        // callers continue to import `from std.iter import …` explicitly.
+        // NOTE: auto-loading `std.iter` was attempted but requires a
+        // sweep of existing fixtures that rely on the eager
+        // `.map()` / `.filter()` / `.fold()` behavior on arbitrary
+        // `Iterator[T]` impls (e.g. `iterator_adapters.gg`,
+        // `example_iterator_demo.gg`). With auto-load, every
+        // `Iterator[T]` implementor inherits the lazy adapter
+        // constructors and `Vector[int] evens = it.filter(p)` fails
+        // (returns a FilterIter, not a Vector). The auto-load heuristic
+        // + trait-default path are kept in `module_should_auto_load_std_iter`
+        // and `ast_mentions_std_iter_need` (dead-code-allowed) for a
+        // follow-up commit that migrates fixtures to `.collect()`
+        // semantics.
+        //
+        // (See `docs/internals/stdlib-design.md` §10 Phase 2c
+        // "Auto-import std.iter via the loader" row.)
 
         // Recursively load each import
         for (segments, _span) in imports {
