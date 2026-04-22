@@ -1216,11 +1216,32 @@ pub(super) fn lower_interp_segment(
                 local: local_id,
                 projections: vec![Projection::Deref],
             };
-            let tmp = builder.add_local(value_type, None);
-            builder.assign(Place::local(tmp), Operand::Copy(deref_place));
-            // Register the deref copy for drops — the C backend clones
-            // string Ptrs into independent owned copies that need freeing.
-            ctx.drops.register_local(tmp, value_type, &ctx.type_registry);
+            // For resource-containing struct types (e.g. `struct { String name }`),
+            // a plain deref+memcpy aliases the borrowed struct's interior resources
+            // (String buffers, nested collections). Registering the resulting temp
+            // for drop would double-free them. Use the type's clone function when
+            // available so the temp owns independent resources.
+            //
+            // For primitives / Str / GorgetString — the existing Assign path is
+            // already correct (C backend emits a deep clone for Ptr→String loads
+            // and a by-value load for primitives).
+            let needs_deep_clone = !ctx.type_mapper.is_string_type(value_type)
+                && ctx.type_registry.is_resource_type(value_type);
+            let tmp = if needs_deep_clone {
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(value_type) {
+                    ctx.call_tracked(builder, &clone_fn, vec![FunctionBuilder::copy(local_id)], value_type)
+                } else {
+                    let t = builder.add_local(value_type, None);
+                    builder.assign(Place::local(t), Operand::Copy(deref_place));
+                    ctx.drops.register_local(t, value_type, &ctx.type_registry);
+                    t
+                }
+            } else {
+                let t = builder.add_local(value_type, None);
+                builder.assign(Place::local(t), Operand::Copy(deref_place));
+                ctx.drops.register_local(t, value_type, &ctx.type_registry);
+                t
+            };
             let (spec, args) = format_for_printf(ctx, builder, value_type, FunctionBuilder::copy(tmp), fmt_spec);
             format_str.push_str(&spec);
             printf_args.extend(args);
