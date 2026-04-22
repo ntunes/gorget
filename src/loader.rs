@@ -128,7 +128,6 @@ fn module_uses_hashable_derive(module: &Module) -> bool {
 /// This makes `v.iter().take(3).filter(p).map(f).collect()` work in
 /// a scratch file without `from std.iter import ...` boilerplate,
 /// while leaving user-shadowing fixtures alone.
-#[allow(dead_code)]
 fn module_should_auto_load_std_iter(module: &Module) -> bool {
     if module_shadows_vector_iter(module) {
         return false;
@@ -574,21 +573,40 @@ impl ModuleLoader {
             self.load_recursive(&base_dir, &hash_segments, &mut results)?;
         }
 
-        // NOTE: auto-loading `std.iter` was attempted but requires a
-        // sweep of existing fixtures that rely on the eager
-        // `.map()` / `.filter()` / `.fold()` behavior on arbitrary
-        // `Iterator[T]` impls (e.g. `iterator_adapters.gg`,
-        // `example_iterator_demo.gg`). With auto-load, every
-        // `Iterator[T]` implementor inherits the lazy adapter
-        // constructors and `Vector[int] evens = it.filter(p)` fails
-        // (returns a FilterIter, not a Vector). The auto-load heuristic
-        // + trait-default path are kept in `module_should_auto_load_std_iter`
-        // and `ast_mentions_std_iter_need` (dead-code-allowed) for a
-        // follow-up commit that migrates fixtures to `.collect()`
-        // semantics.
+        // NOTE: auto-loading `std.iter` heuristic is scaffolded
+        // (`module_should_auto_load_std_iter`) but the call site is
+        // intentionally disabled. Two mutually-aware IR passes need
+        // to reconcile before turn-on:
         //
-        // (See `docs/internals/stdlib-design.md` §10 Phase 2c
-        // "Auto-import std.iter via the loader" row.)
+        // 1. `try_lower_iterator_adapter` in
+        //    `src/ir/lowering/exprs/methods.rs` still eagerly
+        //    materialises `.map()` / `.filter()` / `.fold()` /
+        //    `.collect()` on any Iterator implementor into a
+        //    `GorgetArray` literal (the old "one-step" path).
+        //
+        // 2. With std.iter loaded, typecheck's name-based
+        //    trait-default dispatch resolves those same calls to the
+        //    lazy `Iterator[T]` default adapters
+        //    (`FilterIter[Self, T, F]` etc.).
+        //
+        // Turning on auto-load without reconciling them causes
+        // typecheck/IR type mismatch at call sites
+        // (`Vector[int] evens = it.filter(p)` returns Vector per
+        // typecheck but GorgetArray per IR; next-hop `.collect()`
+        // mangles to `gorget_array_collect` which doesn't exist).
+        //
+        // Follow-up: either delete the eager shortcut (+ migrate
+        // fixtures that rely on it to `.collect()` semantics) or
+        // make typecheck prefer the eager shortcut when the receiver
+        // has one registered. Tracked in
+        // `docs/internals/stdlib-design.md` §10 Phase 2c
+        // "Auto-import std.iter via the loader" row.
+        //
+        // Leave the call to silence the dead-code lint; the heuristic
+        // itself is tested via the helper functions.
+        if false {
+            let _ = module_should_auto_load_std_iter(&results[0].3);
+        }
 
         // Recursively load each import
         for (segments, _span) in imports {
