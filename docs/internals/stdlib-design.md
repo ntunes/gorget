@@ -976,11 +976,14 @@ This phase has **real type-system prerequisites** — see §4.2, §4.3, and §3.
 
 #### Phase 2c: Trait definitions + equip methods (LAZY FROM DAY ONE)
 
-**Status as of 2026-04-20:** Substantially shipped. Trait declared,
+**Status as of 2026-04-22:** Substantially shipped. Trait declared,
 all eager terminals on Iterator as default-method bodies, all 9
 adapter structs generic over a source `Iter` parameter, all four
-"missing lazy adapters" shipped. Five compiler items remain — each
-blocked on a specific compiler feature itemised below the checklist.
+"missing lazy adapters" shipped. Self / trait-T substitution in
+default-method sigs + adapter-constructor defaults both landed
+2026-04-21; chain-past-one-step fixture green. Four compiler items
+remain — each blocked on a specific compiler feature itemised below
+the checklist.
 
 ##### Shipped
 
@@ -1011,22 +1014,83 @@ blocked on a specific compiler feature itemised below the checklist.
    string substitution couldn't), `error_id`-aware
    `validate_trait_impls` for user-space generic trait sigs,
    default-method fallback in `TraitRegistry::resolve_method`.
+6. ✅ **Self / trait-T substitution in default-method sigs at call
+   site** — 2026-04-21 (commit `2f9a5d01`). `TraitInfo` gained
+   `trait_generic_params` + `default_method_sigs` (AST-level return
+   / param types). `EquipInfo` gained `self_type_ast` +
+   `impl_generic_params`. On a trait-default hit in
+   `resolve_method` / `resolve_method_by_name`, typecheck walks the
+   impl's self_type AST against the receiver's concrete type to
+   bind impl locals, substitutes trait generic args, binds `Self →
+   receiver`, and rebuilds an owned `FunctionSig`. Name-based
+   default resolution now runs before the hardcoded
+   `try_iterator_adapter_type` Vector-adapter shortcut so real
+   defaults win for types that actually impl `Iterator[T]`.
+   IR-side mirror landed in the same commit:
+   `register_equip_sigs_with_defaults` /
+   `register_method_instance_sigs` / `lower_method_instance` all
+   bind `("Self", substituted_equipped)` in their subs.
+7. ✅ **Adapter constructor defaults on `Iterator[T]`** — 2026-04-21
+   (commit `86999a37`). `take(n)` / `skip(n)` / `map[U,F](f)` /
+   `filter[F](p)` / `take_while[F]` / `drop_while[F]` /
+   `filter_map[U,F]` / `inspect[F]` / `enumerate()` now return
+   `TakeIter[Self, T]` / `MapIter[Self, T, U, F]` etc. Every
+   iterator implementor inherits the adapter surface; chains past
+   one step work (`v.iter().take(4).filter(is_even).map(double)
+   .collect()`). Demand-driven plumbing keeps the mono cost
+   linear:
+   - `try_register_default_return_type` in the generic collector's
+     MethodCall walk: substitute + `scan_type` the default's
+     return type so only call-site-reachable adapter instances
+     register. Doesn't cascade into the returned instance's own
+     trait defaults — that's what the earlier eager-scan attempt
+     did and it blew up with `TakeIter[TakeIter[..], int]`
+     unbounded growth.
+   - `try_register_method_instance` binds Self in its scan subs so
+     method-generic defaults like `FilterIter[Self, T, F]
+     filter[F](self, F p)` register
+     `FilterIter[VectorIter[int], int, bool(int)]` rather than
+     `FilterIter[SelfType, ...]`.
+   - `lower_generic_equip_methods_with_defaults` demand-gates
+     emission via `all_return_nominals_registered`: skip emitting
+     a default whose substituted return type mentions a nominal
+     that no call site registered. Prevents every Iterator
+     implementor from speculatively emitting every adapter.
+   - Rewrite pass (`rewrite_struct_calls`) falls back to
+     `scopes.lookup(name)` when the resolution map has no entry,
+     so trait default-method bodies (which the resolver doesn't
+     walk) still convert `TakeIter[Self, T](self, n)` from
+     `Expr::Call` to `Expr::StructLiteral`.
+   - `infer_expr_ast_type` falls back to trait defaults when the
+     equip block lacks the method — enables chain inference
+     through the lifted defaults. Fixture:
+     `iter_chain_past_one_step.gg`.
+   `chain` / `zip` stay as VectorIter-specific methods because
+   their `other` parameter is iterator-specific; making them
+   iterator-generic (`chain[Other](self, Other other)`) needs a
+   Shape-2 variant of method-generic inference that threads the
+   other iterator's concrete type through the adapter struct's
+   field. `lazy_windows` / `lazy_chunks` also stay on VectorIter
+   (their bodies construct `Vector[T]` locals and keeping them
+   there avoids repeated Vector[T] instantiation scans across
+   every Iterator implementor).
 
 ##### Deferred (each blocked on a specific compiler feature)
 
 | Item | Blocked on | Plan doc |
 |---|---|---|
-| Adapter constructor defaults (`take(n)` / `skip(n)` / `map[U,F](f)` / `filter[F](p)` etc. lifted from inherent equip methods to `Iterator[T]` defaults returning `TakeIter[Self, T]` etc.) — enables `v.iter().take(3).filter(p)` chains past one step | typecheck-side `Self` substitution in trait sig return types at the call site; today resolve_method returns the sig with `Self` as a placeholder | _to be written; see method-level-inference.md for shape_ |
-| Vector/Dict/Set convenience wrappers — **partially shipped 2026-04-21** for Vector (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter` all delegate to `v.iter().method()` via the inference pipeline). Unbound `_iter` free fns retired. Dict/Set deferred — different iterator surface (Dict[K,V] iter element shape unclear; Set lacks an `.iter()` method today). `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 4) | row 4 + Dict/Set `.iter()` design | `docs/internals/method-level-inference.md` |
+| Dict/Set convenience wrappers — **Vector wrappers shipped 2026-04-21** (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter`). Dict/Set deferred — different iterator surface (Dict[K,V] iter element shape unclear; Set lacks an `.iter()` method today). `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 2) | row 2 + Dict/Set `.iter()` design | `docs/internals/method-level-inference.md` |
 | Comparable-bounded defaults (`min` / `max` / `sum` / `product` / `join` / `contains` as Iterator defaults) | per-method trait-bound declarations (e.g. `where T: Comparable`) + bulk-emission skip logic for impls that fail the bound; without this, default-method emission specialises Iterator[T] for self-host driver Ts that don't satisfy `<` / `+` / `.display()` etc. and emits broken codegen — verified by self_host_bootstrap regression on 2026-04-20 | _to be written_ |
-| Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) | LHS-type threading into method-call resolution — mirror the `Some(x)` payload-type inference path that already exists for enum variant constructors | _to be written_ |
+| Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) | LHS-type threading into method-call resolution — mirror the `Some(x)` payload-type inference path that already exists for enum variant constructors. `iter_chain_past_one_step.gg` currently uses an explicit `Vector[int]` annotation on the `.collect()` binding because `auto out = chain.collect()` can't flow the element type back through the chain — `out.get(0).unwrap()` reads 0 instead of the real value. | _to be written_ |
 | Auto-import std.iter via the loader | selective auto-load heuristic (only when the entry module references `.iter()` / `Iterator` / one of the adapter struct names) — unconditional auto-load collides with `vector_iter_userdef.gg`-style fixtures that shadow `VectorIter[T]` | _to be written if the heuristic gets fancy; otherwise just a loader patch_ |
 
-Items 4 (`swap_remove`, `retain`, `fill`, `swap` on Vector) and the
-`lazy_windows` / `lazy_chunks` rename to drop the `lazy_` prefix
-both depend on Vector's eager `.windows(n)` / `.chunks(n)` becoming
-thin shells — which itself blocks on method-level inference (item 1
-above). Sequencing: inference → wrappers → rename.
+Vector's `swap_remove` / `retain` / `fill` / `swap` method-level
+bindings and the `lazy_windows` / `lazy_chunks` rename to drop the
+`lazy_` prefix both depend on Vector's eager `.windows(n)` /
+`.chunks(n)` becoming thin shells — which itself blocks on the
+inferred `collect()` row above (eager `.windows` wants
+`iter().windows(n).collect()`). Sequencing: inferred collect →
+Vector wrappers → rename.
 
 **Bound-needing terminals still shipped as free functions in
 `std.iter`** (kept as a working alternative for callers that can't
