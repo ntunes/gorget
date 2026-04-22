@@ -126,6 +126,24 @@ impl GenericCollector {
 
     /// Phase 1: Collect all generic templates from the AST module.
     pub fn collect_templates(&mut self, ast_module: &ast::Module) {
+        // First pass: collect trait definitions so equip blocks below can
+        // consult them (e.g. to check if the trait has method-generic
+        // defaults). Iteration order in the module is source-dependent; the
+        // fixture might define the equip BEFORE the auto-loaded std.iter
+        // appends its traits.
+        fn collect_traits_first(items: &[Spanned<Item>], out: &mut FxHashMap<String, ast::TraitDef>) {
+            for item in items {
+                match &item.node {
+                    Item::Trait(td) => {
+                        out.insert(td.name.node.clone(), td.clone());
+                    }
+                    Item::Module { items: inner, .. } => collect_traits_first(inner, out),
+                    _ => {}
+                }
+            }
+        }
+        collect_traits_first(&ast_module.items, &mut self.trait_defs);
+
         for item in &ast_module.items {
             match &item.node {
                 Item::Struct(s) if s.generic_params.is_some() => {
@@ -142,20 +160,42 @@ impl GenericCollector {
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.fn_templates.insert(f.name.node.clone(), f.clone());
                 }
-                Item::Trait(trait_def) => {
-                    self.trait_defs.insert(trait_def.name.node.clone(), trait_def.clone());
+                Item::Trait(_) => {
+                    // Already collected in the first pass above.
                 }
                 Item::Equip(equip) => {
                     if let Type::Named { name, generic_args } = &equip.type_.node {
                         let has_generic_equip = !generic_args.is_empty() || equip.generic_params.is_some();
                         let has_method_level_generic = equip.items.iter()
                             .any(|m| m.node.generic_params.is_some());
+                        // Also register non-generic equips whose trait
+                        // inherits method-level-generic defaults (e.g.
+                        // `equip CounterIter with Iterator[int]:`
+                        // inherits `fold[A, F]` from `Iterator[T]`).
+                        // Without this, per-call-site mono for
+                        // `counter_iter.fold(0, sum)` has no equip
+                        // template to look up, so `lower_method_instance`
+                        // never fires and the method ends up bulk-
+                        // emitted with A/F unsubstituted (`void` in the
+                        // C signature).
+                        let trait_has_method_generic_default = equip.trait_.as_ref()
+                            .and_then(|t| {
+                                let tn = match &t.trait_name.node {
+                                    Type::Named { name, .. } => Some(name.node.as_str()),
+                                    _ => None,
+                                }?;
+                                self.trait_defs.get(tn).map(|td| {
+                                    td.items.iter().any(|it| {
+                                        matches!(&it.node, ast::TraitItem::Method(m) if m.generic_params.is_some())
+                                    })
+                                })
+                            })
+                            .unwrap_or(false);
                         // Register the equip block whenever it carries anything
                         // monomorphisable: equip-level generics (T → concrete)
-                        // OR method-level generics (U → concrete per call site).
-                        // The per-call-site mono path (discover_method_instances
-                        // → lower_method_instance) needs the AST for both.
-                        if has_generic_equip || has_method_level_generic {
+                        // OR method-level generics (U → concrete per call site)
+                        // OR a trait impl that inherits method-generic defaults.
+                        if has_generic_equip || has_method_level_generic || trait_has_method_generic_default {
                             self.equip_templates
                                 .entry(name.node.clone())
                                 .or_default()
@@ -1729,15 +1769,53 @@ impl GenericCollector {
                         if !trait_name.is_empty() {
                             // Default method bodies reference `Self` as the
                             // equipping iterator (e.g.
-                            // `TakeIter[Self, T] take(self, int n)`). Extend
-                            // the equip-level subs with `Self → <mono'd
-                            // equipped type>` so sig registration mirrors the
-                            // body emission path and fn_sigs holds concrete
-                            // adapter return types (not `TakeIter__unknown__
-                            // int64_t`).
+                            // `TakeIter[Self, T] take(self, int n)`) and
+                            // the TRAIT's own generic params (e.g. `T` in
+                            // `Vector[T] collect(&self)` on `Iterator[T]`).
+                            // Substitute Self → mono'd equipped type and
+                            // each trait generic param → corresponding
+                            // substituted trait arg. When impl generics
+                            // and trait generics share a name (e.g.
+                            // `equip [Iter, T, U, F] MapIter[...] with
+                            // Iterator[U]` has a local T AND the trait
+                            // has its own T that maps to U), the trait-
+                            // scope binding wins for trait-body refs —
+                            // push trait bindings BEFORE impl subs in the
+                            // lookup order (first-match wins).
                             let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
-                            let mut default_subs = subs.clone();
+                            // Extract trait generic args from the trait
+                            // annotation and substitute impl subs through
+                            // them so they reduce to concrete types.
+                            let trait_args: Vec<crate::parser::ast::Type> = if let crate::parser::ast::Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+                                generic_args.iter()
+                                    .map(|a| substitute::substitute_type_pub(&a.node, &subs))
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            // Look up the trait to get its own generic param
+                            // names (e.g. `[T]` for `trait Iterator[T]`).
+                            let trait_generic_names: Vec<String> = ast_mod.items.iter()
+                                .find_map(|it| {
+                                    if let Item::Trait(td) = &it.node {
+                                        if td.name.node == trait_name {
+                                            return td.generic_params.as_ref().map(|gp| {
+                                                gp.node.params.iter().filter_map(|p| match &p.node {
+                                                    GenericParam::Type { name, .. } => Some(name.node.clone()),
+                                                    GenericParam::Const { .. } => None,
+                                                }).collect()
+                                            });
+                                        }
+                                    }
+                                    None
+                                })
+                                .unwrap_or_default();
+                            let mut default_subs: Vec<(String, crate::parser::ast::Type)> = Vec::new();
                             default_subs.push(("Self".to_string(), substituted_equipped));
+                            for (name, concrete) in trait_generic_names.iter().zip(trait_args.iter()) {
+                                default_subs.push((name.clone(), concrete.clone()));
+                            }
+                            default_subs.extend(subs.iter().cloned());
                             for item in &ast_mod.items {
                                 if let Item::Trait(trait_def) = &item.node {
                                     if trait_def.name.node == trait_name {

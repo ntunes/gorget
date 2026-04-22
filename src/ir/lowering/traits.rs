@@ -361,6 +361,95 @@ pub fn register_trait_equip_sigs(
                 ctx.fn_param_abis.insert(mangled, vtable_abis(vtable_method));
             }
 
+            // Register sigs for the trait's OWN (non-vtable) default methods
+            // that reference `Self` and trait generic params. Mirrors the
+            // unregistered-trait-equip path in
+            // `register_unregistered_trait_equip_sigs` — needed here for
+            // vtable-holding traits like `Iterator[T]` whose adapter
+            // defaults (`Vector[T] collect(&self)` etc.) aren't in the
+            // vtable. Without this, `CounterIter__collect` is absent from
+            // fn_sigs at call-site lowering time and the call emits as
+            // `void CounterIter__collect(...)` — return value dropped.
+            if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
+                // Build Self + trait-T subs against the impl.
+                let mut self_subs: Vec<(String, ast::Type)> = vec![
+                    ("Self".to_string(), equip.type_.node.clone()),
+                ];
+                let trait_args_for_sig: Vec<ast::Type> = equip.trait_.as_ref()
+                    .and_then(|t| if let ast::Type::Named { generic_args, .. } = &t.trait_name.node {
+                        Some(generic_args.iter().map(|a| a.node.clone()).collect())
+                    } else { None })
+                    .unwrap_or_default();
+                if let Some(ref gp) = trait_def.generic_params {
+                    for (param, concrete) in gp.node.params.iter().zip(trait_args_for_sig.iter()) {
+                        let name = match &param.node {
+                            ast::GenericParam::Type { name: n, .. } => n.node.clone(),
+                            ast::GenericParam::Const { name: n, .. } => n.node.clone(),
+                        };
+                        self_subs.push((name, concrete.clone()));
+                    }
+                }
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(dm) = &trait_item.node {
+                        let method_name = &dm.name.node;
+                        if implemented_methods.contains(method_name) {
+                            continue;
+                        }
+                        // Skip methods already in the vtable (handled
+                        // by the loop above).
+                        if vtable_info.methods.iter().any(|m| m.name == *method_name) {
+                            continue;
+                        }
+                        match &dm.body {
+                            FunctionBody::Declaration | FunctionBody::Extern(_) => continue,
+                            _ => {}
+                        }
+                        // Skip method-level-generic defaults — they go
+                        // through per-call-site mono via
+                        // register_method_instance_sigs.
+                        if dm.generic_params.is_some() {
+                            continue;
+                        }
+                        let substituted_ret = super::generics::substitute_type_pub(
+                            &dm.return_type.node, &self_subs,
+                        );
+                        let ret_type = ctx.type_mapper.map_ast_type_mut(&substituted_ret, &mut ctx.type_registry);
+                        let has_self = dm.params.first()
+                            .map(|p| p.node.name.node == "self")
+                            .unwrap_or(false);
+                        let mut param_types = Vec::new();
+                        let mut abis = Vec::new();
+                        if has_self {
+                            let self_type_id = ctx.type_mapper.map_ast_type(&equip.type_.node);
+                            let self_is_mutable = dm.params.first()
+                                .map(|p| matches!(p.node.ownership, Ownership::MutableBorrow))
+                                .unwrap_or(false);
+                            let self_ptr_type = if self_is_mutable {
+                                ctx.register_mut_ptr_type(self_type_id)
+                            } else {
+                                ctx.register_ptr_type(self_type_id)
+                            };
+                            param_types.push(self_ptr_type);
+                            abis.push(if self_is_mutable {
+                                super::context::ParamABI::ByMutPtr
+                            } else {
+                                super::context::ParamABI::ByPtr
+                            });
+                        }
+                        for p in &dm.params {
+                            if p.node.name.node == "self" { continue; }
+                            let subst_p = super::generics::substitute_type_pub(&p.node.type_.node, &self_subs);
+                            let base = ctx.type_mapper.map_ast_type_mut(&subst_p, &mut ctx.type_registry);
+                            param_types.push(base);
+                            abis.push(ctx.compute_param_abi(base, p.node.ownership));
+                        }
+                        let direct_name = format!("{type_name}__{method_name}");
+                        ctx.fn_sigs.insert(direct_name.clone(), (param_types, ret_type));
+                        ctx.fn_param_abis.insert(direct_name, abis);
+                    }
+                }
+            }
+
             // Register sigs for parent trait default methods as Type__method
             if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
                 for parent in &trait_def.extends {
@@ -1020,8 +1109,33 @@ pub fn register_unregistered_trait_equip_sigs(
             }
 
             // Also register signatures for default methods from the trait definition.
-            // Substitute Self → equipped type so return types like Option[Self] resolve correctly.
-            let self_subs_sig = vec![("Self".to_string(), equip.type_.node.clone())];
+            // Substitute Self → equipped type AND each trait generic param
+            // → the impl's corresponding concrete trait arg. Required for
+            // defaults like `Vector[T] collect(&self)` on `Iterator[T]`
+            // where a user impl `equip CounterIter with Iterator[int]`
+            // needs the trait's `T` resolved to `int` before sig
+            // registration; without the trait-T binding the return type
+            // mangles to `Vector[unknown]` and the call site drops the
+            // return value at IR lowering.
+            let mut self_subs_sig: Vec<(String, ast::Type)> = vec![
+                ("Self".to_string(), equip.type_.node.clone()),
+            ];
+            let trait_args_for_sig: Vec<ast::Type> = if let ast::Type::Named { generic_args, .. } = trait_type {
+                generic_args.iter().map(|a| a.node.clone()).collect()
+            } else {
+                Vec::new()
+            };
+            if let Some(td) = find_trait_def(ast_module, &trait_name) {
+                if let Some(ref gp) = td.generic_params {
+                    for (param, concrete) in gp.node.params.iter().zip(trait_args_for_sig.iter()) {
+                        let name = match &param.node {
+                            ast::GenericParam::Type { name: n, .. } => n.node.clone(),
+                            ast::GenericParam::Const { name: n, .. } => n.node.clone(),
+                        };
+                        self_subs_sig.push((name, concrete.clone()));
+                    }
+                }
+            }
             if let Some(trait_def) = find_trait_def(ast_module, &trait_name) {
                 for trait_item in &trait_def.items {
                     if let TraitItem::Method(default_method) = &trait_item.node {

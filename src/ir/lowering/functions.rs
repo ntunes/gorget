@@ -1378,9 +1378,35 @@ pub fn lower_generic_equip_methods_with_defaults(
                                 // void return. Defaults additionally bind
                                 // `Self` so adapter constructors like
                                 // `TakeIter[Self, T] take(self, int n)`
-                                // resolve to the equipping type.
-                                let mut default_subs = subs.clone();
+                                // resolve to the equipping type. The
+                                // trait's OWN generic params (e.g. `T`
+                                // in `Vector[T] collect(&self)` on
+                                // `Iterator[T]`) bind to the substituted
+                                // trait arg, pushed BEFORE the impl subs
+                                // so name collisions (impl-local `T` vs
+                                // trait's `T` mapped to `U`) resolve to
+                                // the trait binding for trait-body refs.
+                                // Matches `register_equip_sigs_with_defaults`
+                                // in generics/mod.rs.
+                                let trait_args_ast: Vec<ast::Type> = if let ast::Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+                                    generic_args.iter()
+                                        .map(|a| generics::substitute_type_pub(&a.node, &subs))
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                let trait_generic_names: Vec<String> = trait_def.generic_params.as_ref()
+                                    .map(|gp| gp.node.params.iter().filter_map(|p| match &p.node {
+                                        ast::GenericParam::Type { name, .. } => Some(name.node.clone()),
+                                        ast::GenericParam::Const { .. } => None,
+                                    }).collect())
+                                    .unwrap_or_default();
+                                let mut default_subs: Vec<(String, ast::Type)> = Vec::new();
                                 default_subs.push(("Self".to_string(), substituted_type.clone()));
+                                for (name, concrete) in trait_generic_names.iter().zip(trait_args_ast.iter()) {
+                                    default_subs.push((name.clone(), concrete.clone()));
+                                }
+                                default_subs.extend(subs.iter().cloned());
                                 // Demand-gate adapter-returning defaults:
                                 // if the substituted return type references
                                 // a generic struct (e.g. `TakeIter[...]`)

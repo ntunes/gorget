@@ -175,7 +175,12 @@ fn module_imports_std_iter(module: &Module) -> bool {
 
 /// Names that only `std.iter` provides — finding any of them in the
 /// AST is a strong signal the module needs the module loaded.
+/// Includes `Iterator` / `Iterable`: both are trait placeholder names
+/// in the prelude, but their actual definitions (with default methods
+/// like `count`/`collect`/`take`/…) live in `std.iter`. Modules that
+/// `equip X with Iterator[T]:` or call `.iter()` need those defaults.
 const STD_ITER_NAMES: &[&str] = &[
+    "Iterator", "Iterable", "IntoIterable",
     "VectorIter", "TakeIter", "SkipIter", "ChainIter",
     "MapIter", "FilterIter", "TakeWhileIter", "DropWhileIter",
     "FilterMapIter", "InspectIter", "EnumerateIter", "ZipIter",
