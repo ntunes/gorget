@@ -1884,6 +1884,26 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
     if lir_is_aggregate(field_ty) and (vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE)):
         String ft_name = c_type_name(field_ty, &sn)
         return "memcpy(&" + lval + ", " + v(value) + ", sizeof(" + ft_name + "));"
+    # Struct-typed field receiving a non-ptr-non-aggregate value — the value
+    # is either a scalar placeholder (usually `(int32_t)0` for None / Unit)
+    # or came through a `void*` slot whose type was lost. Neither case has a
+    # real aggregate in memory to memcpy from: `memcpy(&field, 0/void*, …)`
+    # crashes with NULL-deref. Emit inline zero / None-tag init instead.
+    #
+    # Option fields: emit `{.tag = 1}` (None tag); other aggregate
+    # fields: zero-init. Catches stage-1's parse_if_stmt crash at
+    # `ElseBranch(None, body)` where the None value flows through a
+    # void* slot and arrives at emit_field_store as either LT_VOID (type
+    # lost) or a scalar literal.
+    bool vty_is_ptr = vty == LT_PTR or (vty >= LT_PTR_TO_BASE and vty < LT_STRUCT_BASE)
+    if lir_is_aggregate(field_ty) and not lir_is_aggregate(vty) and not vty_is_ptr:
+        String ft_name = c_type_name(field_ty, &sn)
+        int field_sid_ms = field_ty - LT_STRUCT_BASE
+        if field_sid_ms >= 0 and field_sid_ms < m.structs.len():
+            LirStructDef field_sdef_ms = m.structs.get(field_sid_ms).unwrap()
+            if field_sdef_ms.enum_kind == EK_OPTION:
+                return lval + " = (" + ft_name + "){.tag = 1};"
+        return lval + " = (" + ft_name + "){0};"
     # Struct-typed field with unknown value type — treat value as pointer
     # since by-pointer is the ABI convention for aggregate args; falls
     # back to memcpy-from-pointee. Matches rust's output.
