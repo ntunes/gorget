@@ -2769,8 +2769,16 @@ fn lower_iter_collect(
     option_ret_type: TypeId,
     elem_type: TypeId,
 ) -> Option<Operand> {
-    // Create result array
-    let array_type = ctx.lookup_type_by_name("GorgetArray")
+    // Create result array typed as Vector[ElemType] (not the raw
+    // GorgetArray) so downstream `.get()/.set()/.push()` dispatches
+    // on the monomorphized Vector__ElemC symbol with the right stride.
+    // `auto out = iter.collect()` without this lands `out` at LIR type
+    // GorgetArray, and subsequent `.get(0)` dispatches through the
+    // generic GorgetArray path that discards the return and stores 0.
+    let elem_c = ctx.c_type_name_for_id(elem_type);
+    let vector_mangled = format!("Vector__{elem_c}");
+    let array_type = ctx.type_mapper.lookup_named(&vector_mangled)
+        .or_else(|| ctx.lookup_type_by_name("GorgetArray"))
         .or_else(|| ctx.lookup_type_by_name("Vector__int64_t"))
         .unwrap_or(I64_TYPE);
     let result = builder.call_extern(

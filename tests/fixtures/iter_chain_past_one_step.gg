@@ -26,13 +26,11 @@ int main():
 
     print("--")
 
-    # --- Terminal .collect() composed with the chain ---
-    # Explicit `Vector[int]` annotation — typecheck's `.collect()`
-    # return inference through a chain of lifted-default adapters still
-    # doesn't flow the element type to the binding (separate gap from
-    # Self-substitution; tracked in TODO as the "inferred collect
-    # target" item).
-    Vector[int] out = v.iter().take(4).filter(is_even).map(double).collect()
+    # --- Terminal .collect() composed with the chain, auto-bound ---
+    # `lower_iter_collect` types its result as `Vector[ElemType]` so
+    # downstream `.get()` / `.set()` / `.push()` dispatch with the
+    # correct stride.
+    auto out = v.iter().take(4).filter(is_even).map(double).collect()
     print(out.len())
     print(out.get(0).unwrap())
     print(out.get(1).unwrap())
