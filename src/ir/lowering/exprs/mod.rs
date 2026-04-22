@@ -394,12 +394,60 @@ fn lower_expr_inner(
                 // the dst slot is sized for `Box__T` (8 bytes, the heap pointer)
                 // and a downstream assign-into-T-typed-local would memcpy
                 // sizeof(T) > 8 bytes, reading past the slot.
+                // Detect whether we are deref'ing through a Box wrapper.
+                // Two shapes reach here:
+                //   (a) local_type = `*Box__T` (bare-param wrapping) — first
+                //       peel gives `Box__T`, then we add a second Deref to
+                //       peel the Box so dst is sized for T.
+                //   (b) local_type = `Box__T` (pattern extract, local var) —
+                //       first peel already gives T (via the Box name-based
+                //       fallback in `deref_inner_type`); dst is sized for T.
+                // In BOTH cases the resulting value is a shallow memcpy of
+                // the boxed data and its heap buffers are shared with the
+                // box's own drop chain — double-free if we drop-register dst.
+                let source_is_box = {
+                    let src_ty = if local_idx < builder.locals.len() {
+                        builder.locals[local_idx].type_id
+                    } else { I64_TYPE };
+                    let direct_box = matches!(
+                        ctx.type_registry.get(src_ty),
+                        Some(crate::ir::types::GirType::Named(n)) if n.starts_with("Box__"));
+                    let ptr_to_box = ctx.pointee_type(src_ty).map_or(false, |inner| {
+                        matches!(
+                            ctx.type_registry.get(inner),
+                            Some(crate::ir::types::GirType::Named(n)) if n.starts_with("Box__"))
+                    });
+                    direct_box || ptr_to_box
+                };
                 if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(deref_type).cloned() {
                     if n.starts_with("Box__") {
                         if let Some(inner_ty) = ctx.deref_inner_type(deref_type) {
                             deref_place.projections.push(Projection::Deref);
                             deref_type = inner_ty;
                         }
+                    }
+                }
+                // For resource-containing non-String types, emit a deep clone
+                // via the type's `_clone` runtime helper so dst owns independent
+                // resources. The shallow memcpy aliases the Box's heap buffers;
+                // dropping the shallow copy would double-free.
+                if source_is_box
+                    && !ctx.type_mapper.is_string_type(deref_type)
+                    && ctx.type_registry.is_resource_type(deref_type)
+                {
+                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(deref_type) {
+                        let shallow = builder.add_local(deref_type, None);
+                        builder.assign(Place::local(shallow), Operand::Copy(deref_place));
+                        // NOTE: deliberately NO drops.register_local(shallow, ...)
+                        let ptr_ty = ctx.register_ptr_type(deref_type);
+                        let ptr_local = builder.add_local(ptr_ty, None);
+                        builder.emit_borrow(ptr_local, Place::local(shallow));
+                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], deref_type);
+                        let dst = builder.add_local(deref_type, None);
+                        builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                        ctx.drops.register_local(dst, deref_type, &ctx.type_registry);
+                        ctx.set_owned(dst);
+                        return FunctionBuilder::copy(dst);
                     }
                 }
                 let dst = builder.add_local(deref_type, None);

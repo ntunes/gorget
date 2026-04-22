@@ -1,0 +1,25 @@
+{
+  "timestamp": "2026-04-22T07:46:34Z",
+  "git_rev": "a97291ce480b3cf56cf9367955aa0384740cc778",
+  "git_dirty": true,
+  "workload": "self_host_lowerer/driver.gg (stage-0 on its own source, --lir-c)",
+  "peak_rss_kb": 270552,
+  "user_time_s": 0,
+  "sys_time_s": 0,
+  "wall_time": "unknown",
+  "page_faults_major": 0,
+  "page_faults_minor": 0,
+  "clone_stats": {
+    "array_clone": 7388593,
+    "map_clone":   18,
+    "set_clone":   0,
+    "string_cow":  825102,
+    "string_cat":  2537696,
+    "box_alloc":   747742,
+    "array_new":   7779112,
+    "string_new":  0,
+    "total_allocs": 21331969,
+    "total_frees":  22622839,
+    "live_bytes":   186859368
+  }
+}

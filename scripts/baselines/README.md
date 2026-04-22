@@ -35,3 +35,16 @@ scripts/self_host_mem_baseline.sh --compare scripts/baselines/phase1_pre_cow_fix
   post-scope UAF patterns (e.g. first-loop borrow re-materialised by
   second-loop field mutation on the same struct). Prereq for a safe
   Case C activation.
+
+- **phase3d_case_c_active.json** (2026-04-22) — **THE WIN**. Case C
+  (anon recv temp + field-path CoW borrow) activated, paired with the
+  Box-deref double-deep-clone fix and the f-string deep-clone fix.
+  Dramatic reductions vs phase1:
+    - peak_rss_kb: 4,024,136 → 270,552 kB (**-93.3%**, 4 GB → 264 MB)
+    - array_clone: 1,328,485,271 → 7,388,593 (**-99.4%**)
+    - box_alloc:   1,308,692     → 747,742   (**-42.9%**)
+    - total_allocs: 804,008,779  → 21,331,969 (**-97.3%**)
+    - live_bytes:  1,240,195,751 → 186,859,368 (**-84.9%**)
+  string_cow +1.0% (+8,207 clones) — absorbs the CoW materialization
+  that replaces the billions of eager clones. Net: ~99% fewer runtime
+  clones, ~93% less RSS. 984 unit + 1020 integration tests pass.
