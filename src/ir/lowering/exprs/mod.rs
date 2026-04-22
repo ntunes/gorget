@@ -379,12 +379,29 @@ fn lower_expr_inner(
                 // Box[T] types are GirType::Named("Box__X"), not GirType::Ptr,
                 // so use deref_inner_type() which handles both.
                 let local_idx = place.local.0 as usize;
-                let deref_type = if local_idx < builder.locals.len() {
+                let mut deref_type = if local_idx < builder.locals.len() {
                     let ptr_type = builder.locals[local_idx].type_id;
                     ctx.deref_inner_type(ptr_type).unwrap_or(I64_TYPE)
                 } else {
                     I64_TYPE
                 };
+                // Bare-param wrapping: a `Box[T]` param is represented internally
+                // as `*Box__T`. The user-level `*box` is a single source-level
+                // deref, but at GIR level we need TWO peels — first the implicit
+                // Ptr from the param wrapping, then the Box itself. After the
+                // first peel above, if the result is still a `Box__T`, peel again
+                // so the dst local matches the boxed value's type. Without this
+                // the dst slot is sized for `Box__T` (8 bytes, the heap pointer)
+                // and a downstream assign-into-T-typed-local would memcpy
+                // sizeof(T) > 8 bytes, reading past the slot.
+                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(deref_type).cloned() {
+                    if n.starts_with("Box__") {
+                        if let Some(inner_ty) = ctx.deref_inner_type(deref_type) {
+                            deref_place.projections.push(Projection::Deref);
+                            deref_type = inner_ty;
+                        }
+                    }
+                }
                 let dst = builder.add_local(deref_type, None);
                 builder.assign(Place::local(dst), Operand::Copy(deref_place));
                 return FunctionBuilder::copy(dst);
