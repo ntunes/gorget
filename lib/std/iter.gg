@@ -18,9 +18,8 @@
 # Bound-needing terminals stay as free functions until per-method
 # trait bounds land: `sum_iter[Iter]` / `product_iter[Iter]` (int),
 # `min_iter[Iter]` / `max_iter[Iter]` (int), `join_iter[Iter,
-# Displayable T]`. `set_iter[T]` wraps a Set as a VectorIter for
-# now (will become `s.iter()` once the Set side gets the same
-# treatment as Vector).
+# Displayable T]`. Set iteration is spelled `s.iter()` via the
+# `equip [T] Set[T]:` block below.
 #
 # Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` /
 # `.map(f)` / `.filter(p)` etc. on `VectorIter[T]` each return the
@@ -655,34 +654,52 @@ Option[int] max_iter[Iter](Iter iter):
                     out = Some(x)
     return !out
 
-# ── Set / Dict iteration ─────────────────────────────────────
+# ── Set iteration ────────────────────────────────────────────
 #
-# `set_iter` returns a plain `VectorIter[T]` wrapping the materialized
-# elements — Set callers get the full VectorIter adapter chain
-# (`take` / `skip` / `chain` + anything we add later) for free.
+# `Set[T].iter()` wraps the materialised `.items()` as a
+# `VectorIter[T]` — Set callers get the full VectorIter adapter chain
+# (`take` / `skip` / `map` / `filter` / terminals …) for free. Eager
+# up-front but the state machine stays trivial; a fully lazy
+# implementation (walking the underlying GorgetMap bucket array)
+# remains the Phase 2c goal. Terminal convenience wrappers
+# (`.each`, `.any`, `.find`, `.fold`, …) delegate to
+# `self.iter().method[F](args)` — mirroring Vector's user-space
+# surface in the `equip [T] Vector[T]:` block above.
 #
-# Eager up-front but keeps the state machine trivial — the only runtime
-# cost is the materialization call (`s.items()`) at
-# iterator-construction time. A fully lazy implementation (walking the
-# underlying GorgetMap bucket array) remains the Phase 2c goal.
+# `.map` and `.filter` deliberately left off: `.map` returning
+# `Set[U]` has cardinality-surprise semantics (if `f` collapses
+# distinct inputs to the same output, the output is smaller than
+# the input), and `.map` returning `Vector[U]` breaks symmetry with
+# `Vector.map`. Users who want either spell it explicitly via the
+# collect-target rewrite: `Set[U] out = s.iter().map(f).collect()`
+# or `Vector[U] out = s.iter().map(f).collect()` — the LHS picks.
 #
-# Free function rather than an equip method because adding an `.iter()`
-# method on `Set[T]` shadows the builtin collection protocol's
-# `items()` / `map()` / `filter()` surface at method resolution. Once
-# method-protocol merging lands this converts to `s.iter()` trivially.
-#
-# Dict key / value iteration is deferred — a naive
-# `VectorIter[K](d.keys(), 0)` via a generic `dict_iter_keys[K, V]`
-# wrapper trips the "Ptr ABI received scalar value" codegen panic in
-# `c_lir/emit_types.rs` when K is a resource type (e.g. String). The
-# issue is specific to how `d.keys()`'s return flows through the
-# monomorphized `VectorIter[String]` constructor; `Dict[int, int]`
-# works fine with the same shape. Tracked in TODO.md ("User DictIter").
-# Callers iterate `d.keys()` / `d.values()` / `d.items()` directly for
-# now — those return Vectors that accept all the usual adapters.
+# Dict key / value iteration uses the same pattern — see below.
 
-VectorIter[T] set_iter[T](Set[T] s):
-    return VectorIter[T](s.items(), 0)
+equip [T] Set[T]:
+    VectorIter[T] iter(&self):
+        return VectorIter[T](self.items(), 0)
+
+    void each[F](&self, F f):
+        self.iter().for_each[F](f)
+
+    void for_each[F](&self, F f):
+        self.iter().for_each[F](f)
+
+    bool any[F](&self, F p):
+        return self.iter().any[F](p)
+
+    bool all[F](&self, F p):
+        return self.iter().all[F](p)
+
+    Option[T] find[F](&self, F p):
+        return self.iter().find[F](p)
+
+    Option[int] find_index[F](&self, F p):
+        return self.iter().find_index[F](p)
+
+    A fold[A, F](&self, A init, F f):
+        return self.iter().fold[A, F](init, f)
 
 # Textual join — render each element through `Displayable.display()`
 # and concatenate with `sep` between. Routing through the trait

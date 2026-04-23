@@ -1,15 +1,12 @@
-# Iterator sugar over Set — `set_iter[T](s)` returns a `VectorIter[T]`
-# wrapping the materialized elements. Callers get the full VectorIter
-# adapter chain (`take` / `skip` / `chain`) for free.
+# Iterator sugar over Set — `s.iter()` returns a `VectorIter[T]`
+# wrapping the materialised `.items()`. Callers get the full
+# VectorIter adapter chain (`take` / `skip` / `chain` / terminals) and
+# the convenience wrappers (`any` / `all` / `find` / `fold` / etc.)
+# via the `equip [T] Set[T]:` block in `lib/std/iter.gg`.
 #
 # Eager up-front; a lazy bucket-walk variant waits on Phase 2c.
-#
-# Dict key/value iteration via `VectorIter[K](d.keys(), 0)` is the same
-# shape, but currently trips a codegen panic for resource-type keys
-# (String). Use `d.keys()` / `d.values()` / `d.items()` + Vector
-# iteration directly until that lands.
 
-from std.iter import set_iter, TakeIter, SkipIter, ChainIter, VectorIter
+from std.iter import TakeIter, SkipIter, ChainIter, VectorIter
 
 int main():
     Set[int] s = Set[int]()
@@ -18,21 +15,21 @@ int main():
     s.add(30)
     s.add(40)
 
-    # Inline for-loop through `set_iter`.
-    for x in set_iter[int](s):
+    # Inline for-loop through `.iter()`.
+    for x in s.iter():
         print(x)
 
     print("--")
 
-    # take on VectorIter (returned by set_iter) yields TakeIter[VectorIter[T], T].
-    TakeIter[VectorIter[int], int] t = set_iter[int](s).take(2)
+    # take on VectorIter (returned by .iter()) yields TakeIter[VectorIter[T], T].
+    TakeIter[VectorIter[int], int] t = s.iter().take(2)
     for x in t:
         print(x)
 
     print("--")
 
     # skip on VectorIter yields SkipIter[VectorIter[T], T].
-    SkipIter[VectorIter[int], int] k = set_iter[int](s).skip(2)
+    SkipIter[VectorIter[int], int] k = s.iter().skip(2)
     for x in k:
         print(x)
 
@@ -42,7 +39,7 @@ int main():
     Set[int] s2 = Set[int]()
     s2.add(100)
     s2.add(200)
-    ChainIter[VectorIter[int], VectorIter[int], int] c = set_iter[int](s).chain(set_iter[int](s2))
+    ChainIter[VectorIter[int], VectorIter[int], int] c = s.iter().chain(s2.iter())
     for x in c:
         print(x)
 
