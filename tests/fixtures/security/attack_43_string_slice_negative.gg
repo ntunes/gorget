@@ -1,0 +1,11 @@
+# Probe: negative indices / lengths on String slicing. If unchecked,
+# negative converts to huge unsigned via pointer arithmetic and reads
+# arbitrary bytes past the string buffer.
+
+void main():
+    String s = "hello world"
+    print(s.byte_slice(0, 5))
+    print(s.byte_slice(6, 11))
+    # Now try edge cases.
+    print(s.byte_slice(0, 100))
+    print(s.byte_slice(-1, 5))

@@ -1,0 +1,10 @@
+# Probe: Dict.put of a resource-typed value overwrites the old value.
+# The old value must be dropped, not leaked or double-freed.
+
+void main():
+    Dict[String, Vector[int]] d = {}
+    d.put("k", [1, 2, 3])
+    d.put("k", [4, 5, 6, 7])
+    d.put("k", [8])
+    # Under ASan + LSan: no leak, no double-free.
+    print(d.get("k").unwrap().len())

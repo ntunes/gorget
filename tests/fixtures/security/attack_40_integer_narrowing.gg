@@ -1,0 +1,11 @@
+# Probe: casting a large int64 down to int8/int16/int32 via `as`. Silent
+# truncation (wrap) is expected C-like behavior; a panic on loss would be
+# safer. Either way, the result must be deterministic — document it.
+
+void main():
+    int big = 300
+    int8 narrow = big as int8
+    print(narrow)
+    int also_big = 9999999999
+    int32 narrow32 = also_big as int32
+    print(narrow32)

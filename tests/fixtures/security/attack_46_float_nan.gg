@@ -1,0 +1,12 @@
+# Probe: NaN propagation and NaN comparisons. NaN is a special IEEE-754
+# value that compares non-equal to itself. Gorget should preserve that
+# semantics, not collapse to true/false arbitrarily.
+
+void main():
+    float zero = 0.0
+    float nan = zero / zero
+    print(nan == nan)
+    print(nan != nan)
+    # NaN ordering
+    print(nan < 1.0)
+    print(nan > 1.0)

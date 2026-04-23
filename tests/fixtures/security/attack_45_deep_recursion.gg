@@ -1,0 +1,13 @@
+# Probe: stack overflow handling. Compiler must either detect non-
+# tail-recursive unbounded recursion or at runtime crash cleanly
+# (segfault is C-level; the expected Gorget behavior is probably no
+# guard — documenting the trap is what matters).
+
+int recurse(int n):
+    if n <= 0:
+        return 0
+    return 1 + recurse(n - 1)
+
+void main():
+    print(recurse(10))
+    print(recurse(500000))

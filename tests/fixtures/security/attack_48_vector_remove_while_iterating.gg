@@ -1,0 +1,16 @@
+# Probe: mutating a vector during iteration. Borrow checker should reject,
+# or CoW materializes. Either way — no UAF.
+
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+    int i = 0
+    while i < v.len():
+        if v.get(i).unwrap() == 3:
+            v.remove(i)
+        else:
+            i += 1
+    print(v.len())
+    int j = 0
+    while j < v.len():
+        print(v.get(j).unwrap())
+        j += 1

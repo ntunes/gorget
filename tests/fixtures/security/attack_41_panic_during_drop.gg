@@ -1,0 +1,22 @@
+# Probe: a panic (division by zero) during the drop of a heap-allocated
+# resource. If the runtime doesn't cleanly unwind, this can leak memory
+# or (worse) leave a collection half-freed.
+
+Vector[int] build():
+    Vector[int] v = []
+    int i = 0
+    while i < 5:
+        v.push(i)
+        i += 1
+    return v
+
+int trigger(int x):
+    return 10 / x
+
+void main():
+    Vector[int] v = build()
+    # Stack the panic after v is constructed — if Drop fires after exit(1),
+    # we care about the runtime's cleanup order, not ASan output here.
+    print(v.len())
+    int z = 0
+    print(trigger(z))

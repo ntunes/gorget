@@ -224,6 +224,13 @@ impl ClosureLowering {
         // Emit the creation-site StructInit.
         // CoW Ptr(T) captures are cloned to produce an independent owned T,
         // preventing stale pointers if the source is mutated after capture.
+        //
+        // For owned by-value resource-typed locals captured at last-use, MOVE
+        // the source into the struct (unregister its drop, MoveZero its slot
+        // AFTER the StructInit reads it). Otherwise the source's scope-exit
+        // drop fires on a buffer the closure env still aliases → heap-UAF on
+        // closure invocation.
+        let mut pending_move_zero: Vec<crate::ir::LocalId> = Vec::new();
         let field_operands: Vec<Operand> = captures.iter()
             .map(|cap| {
                 match cap.mode {
@@ -243,14 +250,24 @@ impl ClosureLowering {
                                 return FunctionBuilder::copy(deref_local);
                             }
                         }
+                        // Owned by-value resource captured at last-use: defer
+                        // MoveZero to after StructInit so the field init can
+                        // still read the source.
+                        if ctx.pointee_type(cap.type_id).is_none()
+                            && ctx.type_registry.is_resource_type(cap.type_id)
+                            && ctx.drops.is_registered(cap.local_id)
+                            && ctx.is_last_use_at(&cap.name, closure_span)
+                        {
+                            ctx.drops.unregister(cap.local_id);
+                            pending_move_zero.push(cap.local_id);
+                            return FunctionBuilder::copy(cap.local_id);
+                        }
                         // Unified boundary clone: the closure struct needs an
                         // independently owned value. `ensure_owned_at_boundary`
                         // clones Ptr(T) borrows and by-value resource borrows.
-                        // Owned local captures pass through (no over-clone) —
-                        // the source keeps ownership, the closure field aliases
-                        // its 8-byte value. The source's scope-exit drop and
-                        // the closure struct's drop must not both fire; this is
-                        // currently handled at individual call sites.
+                        // Owned local captures that are NOT last-use fall through
+                        // — `ensure_owned_at_boundary` will clone to guarantee
+                        // independence (caller still wants the value afterward).
                         ctx.ensure_owned_at_boundary(
                             builder,
                             FunctionBuilder::copy(cap.local_id),
@@ -270,6 +287,12 @@ impl ClosureLowering {
             .collect();
 
         let dst = builder.struct_init(&struct_name, struct_type_id, field_operands);
+        // After StructInit has read the moved sources, MoveZero their slots
+        // so the scope-exit drop tracker doesn't free buffers the closure
+        // env now owns.
+        for local in pending_move_zero {
+            ctx.move_zero_and_mark(builder, local);
+        }
         FunctionBuilder::copy(dst)
     }
 }

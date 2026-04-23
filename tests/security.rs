@@ -569,6 +569,110 @@ fn sec_37_upgrade_still_alive() {
     security_safe("attack_37_upgrade_still_alive", "alive");
 }
 
+// ── Round 3 attacks: broader soundness probes ────────────────────────────
+
+#[test]
+fn sec_38_fstring_no_format_injection() {
+    // User-controlled %s etc. in interpolated values must be treated as
+    // opaque data, not format directives. f-string lowers to
+    // gorget_string_format(template, %.*s, user_data).
+    security_safe(
+        "attack_38_fstring_format_injection",
+        "hello: %s %s %s %s %s %n",
+    );
+}
+
+#[test]
+fn sec_39_closure_captures_resource() {
+    // Regression — closures that capture an owned resource-typed local at
+    // last-use must MOVE the source into the env (MoveZero after struct init),
+    // not leave a shallow alias that the source's scope-exit drop frees.
+    // Fix in src/ir/lowering/closures.rs.
+    security_safe("attack_39_closure_captures_resource", "3\n10");
+}
+
+#[test]
+fn sec_40_integer_narrowing() {
+    // `x as int8` truncates silently (300 → 44, 9999999999 → 1410065407).
+    // Document the current behavior; a `checked_as` would be an upgrade.
+    security_safe("attack_40_integer_narrowing", "44\n1410065407");
+}
+
+#[test]
+fn sec_41_panic_during_init() {
+    // Division-by-zero mid-execution traps cleanly; the partially-built
+    // Vector is handled by process exit(1). No UAF under ASan.
+    security_traps("attack_41_panic_during_drop", "division by zero");
+}
+
+#[test]
+fn sec_42_vector_subscript_oob() {
+    security_traps("attack_42_vector_subscript_oob", "index out of bounds");
+}
+
+#[test]
+fn sec_43_string_slice_oob() {
+    security_traps("attack_43_string_slice_negative", "byte_slice out of bounds");
+}
+
+#[test]
+fn sec_45_deep_recursion_stack_overflow() {
+    // C-level stack overflow when recursing 500000 deep. Gorget doesn't
+    // bound recursion depth; this is classified as known_unsafe so that any
+    // future stack-guard work flips it to `security_traps`.
+    security_known_unsafe(
+        "attack_45_deep_recursion",
+        KnownBug::SanitizerTrips,
+        "Unbounded recursion → C stack overflow (SIGSEGV under ASan, \
+         silent segfault otherwise). Gorget has no per-function stack-depth \
+         check. Low priority — the blast radius is crash, not corruption.",
+    );
+}
+
+#[test]
+fn sec_46_nan_equality_ieee754() {
+    // Regression — simplify_cmp used to fold `x == x` as `true` even on
+    // floats, which breaks IEEE-754 (NaN != NaN). Fix in
+    // src/ir/transforms/optimize.rs:simplify_cmp — skip the reflexive
+    // identity when type is F32/F64.
+    security_safe("attack_46_float_nan", "false\ntrue\nfalse\nfalse");
+}
+
+#[test]
+fn sec_47_dict_overwrite_drops_old() {
+    // Dict.put on an existing key must drop the old value before storing
+    // the new one. Exercises elem_drop on the overwritten cell.
+    security_safe("attack_47_dict_overwrite", "1");
+}
+
+#[test]
+fn sec_48_vector_remove_while_iterating() {
+    // v.remove(i) inside a `while i < v.len()` loop — the classic
+    // iterator-invalidation shape. Gorget's CoW system must either clone
+    // the view or reflow through the mutated collection. No UAF expected.
+    security_safe(
+        "attack_48_vector_remove_while_iterating",
+        "4\n1\n2\n4\n5",
+    );
+}
+
+#[test]
+fn sec_44_match_partial_option_null_deref() {
+    // Inline `None()` passed as argument compiles to `unpack(*NULL)` —
+    // null-pointer dereference. TODO already flags "inline None() without
+    // typed variable produces garbage"; this attack promotes it to SIGSEGV.
+    // Bind to `Option[T] o = None()` first as workaround.
+    security_known_unsafe(
+        "attack_44_match_partial_option",
+        KnownBug::SanitizerTrips,
+        "`f(None())` emits `__v0 = NULL; f(*(Option[T]*)__v0)` — null-ptr \
+         deref. Inline None() as a call argument isn't lowered as an \
+         Option struct literal; it's emitted as a NULL constant, then \
+         dereferenced at the call site. Workaround: bind to a typed local \
+         first.",
+    );
+}
+
 #[test]
 fn sec_28_cow_option_extraction_minimal() {
     // Was SanitizerTrips. Fixed 2026-04-23 together with sec_17 — the

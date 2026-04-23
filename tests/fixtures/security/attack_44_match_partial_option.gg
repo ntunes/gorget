@@ -1,0 +1,12 @@
+# Probe: match expression returning a value. What happens if no arm
+# matches the scrutinee? Trap, default, or garbage?
+
+int unpack(Option[int] o):
+    # Match expression form — returns a value
+    return match o:
+        case Some(v): v
+        else: -1
+
+void main():
+    print(unpack(Some(42)))
+    print(unpack(None()))

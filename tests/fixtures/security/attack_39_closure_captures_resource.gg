@@ -1,0 +1,20 @@
+# Probe: closure captures a resource-typed local (Vector[int]) by value,
+# then returns the closure from a function. Invoking the closure after the
+# local's original frame is dead must NOT use-after-free the heap data.
+
+Vector[int]() make():
+    Vector[int] v = [10, 20, 30]
+    return (): v
+
+void pad(int depth):
+    # Scribble the stack before the closure call to expose UAF.
+    Vector[String] junk = ["a", "b", "c", "d", "e"]
+    if depth > 0:
+        pad(depth - 1)
+
+void main():
+    Vector[int]() f = make()
+    pad(20)
+    Vector[int] got = f()
+    print(got.len())
+    print(got.get(0).unwrap())

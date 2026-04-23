@@ -1034,22 +1034,39 @@ fn simplify_cmp(func: &mut Function) {
         for inst in &mut bb.instructions {
             let simplified = match inst {
                 Instruction::Cmp { dst, op, type_id, lhs, rhs } => {
-                    // Same-local identity
-                    if let (Operand::Copy(lp), Operand::Copy(rp)) = (&*lhs, &*rhs) {
-                        if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
-                            let result = match op {
-                                CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
-                                CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => false,
-                            };
-                            Some(Instruction::Assign { mode: crate::ir::instructions::AssignMode::Copy, dst: Place::local(*dst),
-                                value: Operand::Constant(Constant::Bool(result)),
-                            })
+                    // Same-local identity.
+                    // NOT safe on floats: IEEE-754 says NaN ≠ NaN, and
+                    // NaN-involved <,<=,>,>= are unordered (false). `nan == nan`
+                    // should yield false, not true. Skip reflexive simplification
+                    // for F32/F64 so the runtime computes the correct IEEE
+                    // semantics — constant-folding here would silently miscompile
+                    // any correctness test that filters NaN via `x == x`.
+                    let is_float = matches!(*type_id,
+                        crate::ir::types::F32_TYPE | crate::ir::types::F64_TYPE);
+                    if !is_float {
+                        if let (Operand::Copy(lp), Operand::Copy(rp)) = (&*lhs, &*rhs) {
+                            if lp.local == rp.local && lp.projections.is_empty() && rp.projections.is_empty() {
+                                let result = match op {
+                                    CmpOp::Eq | CmpOp::Le | CmpOp::Ge => true,
+                                    CmpOp::Ne | CmpOp::Lt | CmpOp::Gt => false,
+                                };
+                                Some(Instruction::Assign {
+                                    mode: crate::ir::instructions::AssignMode::Copy,
+                                    dst: Place::local(*dst),
+                                    value: Operand::Constant(Constant::Bool(result)),
+                                })
+                            } else {
+                                None
+                            }
+                        } else if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                            simplify_bool_cmp(*dst, *op, *type_id, lhs, rhs)
                         } else {
                             None
                         }
-                    }
-                    // Boolean comparison simplification (Eq/Ne with true/false)
-                    else if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                    } else if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                        // For floats, still allow the bool-compare identity
+                        // (x == true etc.) since that doesn't involve NaN semantics
+                        // on the float operand — it's a bool operand.
                         simplify_bool_cmp(*dst, *op, *type_id, lhs, rhs)
                     } else {
                         None

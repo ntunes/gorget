@@ -1,0 +1,9 @@
+# Probe: if f-string interpolation uses the interpolated string as a format
+# string rather than a printf argument, user-controlled `%s`/`%n` in the
+# value would crash or escalate. Gorget should treat interpolated values as
+# opaque arguments, never as format directives.
+
+void main():
+    String user_input = "%s %s %s %s %s %n"
+    String greeting = f"hello: {user_input}"
+    print(greeting)
