@@ -1,0 +1,43 @@
+# Iterator sugar over Dict — `d.iter()` returns a
+# `VectorIter[(K, V)]` wrapping the materialised `.items()`. Callers
+# get the full VectorIter adapter chain (`take` / `skip` / `chain` /
+# `map` / `filter` / terminals) via the `equip [K, V] Dict[K, V]:`
+# block in `lib/std/iter.gg`.
+#
+# `.items()` stays as an eager alias for now; users migrate to
+# `.iter()` at their own pace.
+#
+# Eager up-front; a lazy bucket-walk variant waits on Phase 2c.
+
+from std.iter import TakeIter, SkipIter, VectorIter
+
+int sum_pair(int acc, (int, int) p):
+    return acc + p.0 + p.1
+
+int main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 10)
+    d.put(2, 20)
+    d.put(3, 30)
+    d.put(4, 40)
+
+    # Inline for-loop through `.iter()` — yields `(K, V)` pairs.
+    for p in d.iter():
+        print(p.0)
+        print(p.1)
+
+    print("--")
+
+    # take on VectorIter[(K, V)] yields TakeIter[VectorIter[(K, V)], (K, V)].
+    TakeIter[VectorIter[(int, int)], (int, int)] t = d.iter().take(2)
+    for p in t:
+        print(p.0)
+        print(p.1)
+
+    print("--")
+
+    # fold terminal over (K, V) pairs — sum keys + values.
+    int total = d.iter().fold(0, sum_pair)
+    print(total)
+
+    return 0

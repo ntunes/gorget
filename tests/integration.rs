@@ -2190,6 +2190,14 @@ fn stdlib_iter_set() {
 }
 
 #[test]
+fn stdlib_iter_dict() {
+    run_gg(
+        "stdlib_iter_dict.gg",
+        "1\n10\n2\n20\n3\n30\n4\n40\n--\n1\n10\n2\n20\n--\n110",
+    );
+}
+
+#[test]
 fn stdlib_iter_terminals() {
     run_gg(
         "stdlib_iter_terminals.gg",

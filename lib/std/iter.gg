@@ -701,6 +701,31 @@ equip [T] Set[T]:
     A fold[A, F](&self, A init, F f):
         return self.iter().fold[A, F](init, f)
 
+# ── Dict iteration ───────────────────────────────────────────
+#
+# `Dict[K, V].iter()` wraps the materialised `.items()` as a
+# `VectorIter[(K, V)]` — same eager-up-front pattern as `Set.iter()`.
+# Dict callers get the full VectorIter adapter chain
+# (`take` / `skip` / `map` / `filter` / terminals …) and chain past
+# one step. A fully lazy bucket-walk variant remains a Phase 2c
+# goal.
+#
+# Terminal convenience wrappers (`any`/`all`/`find`/`fold`) are
+# deliberately skipped here: the existing builtin `Dict.any(K, V)`
+# / `.all(K, V)` / `.each(K, V)` / `.fold(A, K, V)` methods take
+# key and value as two separate closure args, whereas iterator
+# wrappers would take a single `(K, V)` tuple arg. That's a
+# breaking change for every existing Dict caller, so it waits on
+# a separate migration pass. Users who want tuple-based semantics
+# write it explicitly: `d.iter().any(p)` / `d.iter().fold(0, f)`.
+#
+# `.items()` stays as an eager alias for now — callers can
+# migrate at their own pace before it gets retired.
+
+equip [K, V] Dict[K, V]:
+    VectorIter[(K, V)] iter(&self):
+        return VectorIter[(K, V)](self.items(), 0)
+
 # Textual join — render each element through `Displayable.display()`
 # and concatenate with `sep` between. Routing through the trait
 # instead of `int_to_str` sidesteps the cross-crate monomorphization
