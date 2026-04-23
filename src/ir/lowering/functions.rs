@@ -1657,6 +1657,34 @@ pub fn lower_method_instance(
 
     let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
 
+    // Bind trait's own generic params first so trait-scope references
+    // in the default body (e.g. `Vector[T]` / `Option[T]` where `T` is
+    // the trait's `T`) resolve to the concrete trait arg supplied by
+    // the impl. Pushed BEFORE Self + impl subs so trait bindings win
+    // when names collide with impl-scope names (e.g. `equip [Iter, T,
+    // U, F] MapIter[...] with Iterator[U]` has a local `T` distinct
+    // from trait's `T` which maps to `U`).
+    let mut trait_subs: Vec<(String, Type)> = Vec::new();
+    if let Some(ref trait_ref) = equip.trait_ {
+        if let Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+            // Trait generic param names are discovered by walking the
+            // ast module for the matching trait def. The lowering
+            // context doesn't carry them directly; look them up via
+            // the analysis traits registry.
+            let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+            if let Some(trait_info) = ctx.analysis.traits.traits.values()
+                .find(|t| t.name == trait_name)
+            {
+                let trait_args: Vec<Type> = generic_args.iter()
+                    .map(|a| generics::substitute_type_pub(&a.node, &subs))
+                    .collect();
+                for (name, concrete) in trait_info.trait_generic_params.iter().zip(trait_args.iter()) {
+                    trait_subs.push((name.clone(), concrete.clone()));
+                }
+            }
+        }
+    }
+
     // `Self` → substituted equipped type, so trait-default method bodies
     // lifted to `Iterator[T]` (like
     // `MapIter[Self, T, U, F] map[U, F](self, F f)`) pre-substitute to
@@ -1667,7 +1695,11 @@ pub fn lower_method_instance(
     // without the Self entry the body's `MapIter[Self, T, U, F](self, f)`
     // mangles to `MapIter__unknown__...` and the constructor undefined-
     // references at link time.
-    subs.push(("Self".to_string(), substituted_equipped_type.clone()));
+    let mut merged: Vec<(String, Type)> = Vec::new();
+    merged.extend(trait_subs);
+    merged.push(("Self".to_string(), substituted_equipped_type.clone()));
+    merged.extend(subs);
+    let subs = merged;
 
     // Shared context setup: type-name subs + generic type param TypeId map.
     // Both drive method-body lowering decisions (struct init, method dispatch).

@@ -47,8 +47,8 @@ void main():
     for x in r:
         print(f"  {x}")
 
-    # Collect evens from a range
-    Vector[int] evens = Range(1, 20, 1).iter().filter((int x): x % 2 == 0)
+    # Collect evens from a range (lazy; `.collect()` materialises)
+    Vector[int] evens = Range(1, 20, 1).iter().filter((int x): x % 2 == 0).collect()
     print("Even numbers 1..20:")
     for e in evens:
         print(f"  {e}")
@@ -65,8 +65,8 @@ void main():
     int total = fibs2.fold(0, (int acc, int x): acc + x)
     print(f"Sum of first 20 Fibonacci numbers: {total}")
 
-    # Map: square each element
-    Vector[int] squares = Range(1, 6, 1).iter().map((int x): x * x)
+    # Map: square each element (lazy; `.collect()` materialises)
+    Vector[int] squares = Range(1, 6, 1).iter().map((int x): x * x).collect()
     print("Squares of 1..5:")
     for s in squares:
         print(f"  {s}")

@@ -607,10 +607,17 @@ impl ModuleLoader {
         // `docs/internals/stdlib-design.md` §10 Phase 2c
         // "Auto-import std.iter via the loader" row.
         //
-        // Leave the call to silence the dead-code lint; the heuristic
-        // itself is tested via the helper functions.
-        if false {
-            let _ = module_should_auto_load_std_iter(&results[0].3);
+        // Auto-load std.iter when the entry module references
+        // iterator names or calls `.iter()` — see
+        // `module_should_auto_load_std_iter`. Shadowing + existing-
+        // import checks avoid collisions with fixtures that define
+        // their own iterator types.
+        let auto_load_iter = results.last()
+            .map(|(_, _, _, m)| module_should_auto_load_std_iter(m))
+            .unwrap_or(false);
+        if auto_load_iter {
+            let iter_segments = vec!["std".to_string(), "iter".to_string()];
+            self.load_recursive(&base_dir, &iter_segments, &mut results)?;
         }
 
         // Recursively load each import

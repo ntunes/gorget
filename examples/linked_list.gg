@@ -81,8 +81,10 @@ void main():
     int total = list.iter().fold(0, (int acc, int x): acc + x)
     print(total)
 
-    # Double each element using map
-    Vector[int] doubled = list.iter().map((int x): x * 2)
+    # Double each element using map. `.map()` returns a lazy
+    # `MapIter[LinkedListIter, int, int, int(int)]`; `.collect()`
+    # materialises into a `Vector[int]`.
+    Vector[int] doubled = list.iter().map((int x): x * 2).collect()
     print(doubled.get(0).unwrap())
     print(doubled.get(1).unwrap())
     print(doubled.get(2).unwrap())

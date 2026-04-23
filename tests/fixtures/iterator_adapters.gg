@@ -25,8 +25,8 @@ void main():
     Vector[int] collected = Counter(0, 5).iter().collect()
     print(f"{collected.len()}")
 
-    # filter: keep only even numbers
-    Vector[int] evens = Counter(0, 5).iter().filter((int x): x % 2 == 0)
+    # filter: keep only even numbers (lazy; `.collect()` materialises)
+    Vector[int] evens = Counter(0, 5).iter().filter((int x): x % 2 == 0).collect()
     print(f"{evens.len()}")
 
     # filter: verify values
@@ -36,8 +36,8 @@ void main():
     print(f"{collected.get(0).unwrap()}")
     print(f"{collected.get(4).unwrap()}")
 
-    # map: double each element
-    Vector[int] doubled = Counter(0, 5).iter().map((int x): x * 2)
+    # map: double each element (lazy; `.collect()` materialises)
+    Vector[int] doubled = Counter(0, 5).iter().map((int x): x * 2).collect()
     print(f"{doubled.get(0).unwrap()}")
     print(f"{doubled.get(2).unwrap()}")
 

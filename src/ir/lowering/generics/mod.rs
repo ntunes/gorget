@@ -169,33 +169,39 @@ impl GenericCollector {
                         let has_method_level_generic = equip.items.iter()
                             .any(|m| m.node.generic_params.is_some());
                         // Also register non-generic equips whose trait
-                        // inherits method-level-generic defaults (e.g.
-                        // `equip CounterIter with Iterator[int]:`
-                        // inherits `fold[A, F]` from `Iterator[T]`).
-                        // Without this, per-call-site mono for
-                        // `counter_iter.fold(0, sum)` has no equip
-                        // template to look up, so `lower_method_instance`
-                        // never fires and the method ends up bulk-
-                        // emitted with A/F unsubstituted (`void` in the
-                        // C signature).
-                        let trait_has_method_generic_default = equip.trait_.as_ref()
-                            .and_then(|t| {
-                                let tn = match &t.trait_name.node {
-                                    Type::Named { name, .. } => Some(name.node.as_str()),
-                                    _ => None,
-                                }?;
+                        // has defaults OR is one of the iterator-
+                        // protocol traits (`Iterable`/`Iterator`/
+                        // `IntoIterable`). Chain inference via
+                        // `infer_expr_ast_type` walks receivers through
+                        // `equip_templates`; `equip Counter with
+                        // Iterable[int]` needs to be reachable so
+                        // `Counter(0, 5).iter()` resolves to CounterIter,
+                        // even when Iterable's trait_def isn't in the
+                        // module (prelude placeholder). Restricting to
+                        // iterator-protocol names avoids dragging in
+                        // unrelated trait equips (RWLock / Channel /
+                        // etc.) that were working through their own
+                        // dispatch paths and regress on universal
+                        // registration.
+                        let trait_name = equip.trait_.as_ref().and_then(|t| match &t.trait_name.node {
+                            Type::Named { name, .. } => Some(name.node.as_str()),
+                            _ => None,
+                        });
+                        let trait_has_default = trait_name
+                            .and_then(|tn| {
                                 self.trait_defs.get(tn).map(|td| {
                                     td.items.iter().any(|it| {
-                                        matches!(&it.node, ast::TraitItem::Method(m) if m.generic_params.is_some())
+                                        matches!(&it.node, ast::TraitItem::Method(m)
+                                            if matches!(m.body,
+                                                ast::FunctionBody::Block(_)
+                                                | ast::FunctionBody::Expression(_)))
                                     })
                                 })
                             })
                             .unwrap_or(false);
-                        // Register the equip block whenever it carries anything
-                        // monomorphisable: equip-level generics (T → concrete)
-                        // OR method-level generics (U → concrete per call site)
-                        // OR a trait impl that inherits method-generic defaults.
-                        if has_generic_equip || has_method_level_generic || trait_has_method_generic_default {
+                        let is_iter_protocol = matches!(trait_name,
+                            Some("Iterator" | "Iterable" | "IntoIterable"));
+                        if has_generic_equip || has_method_level_generic || trait_has_default || is_iter_protocol {
                             self.equip_templates
                                 .entry(name.node.clone())
                                 .or_default()
@@ -1147,12 +1153,22 @@ impl GenericCollector {
         let equip_blocks = self.equip_templates.get(&equip_base).cloned().unwrap_or_default();
         let mut merged_subs: Vec<(String, Type)> = Vec::new();
         let mut substituted_equipped: Option<Type> = None;
+        let mut chosen_equip: Option<&ast::EquipBlock> = None;
         for equip in &equip_blocks {
             let eq_subs = build_equip_type_substitutions(equip, &equip_type_args);
             if !eq_subs.is_empty() {
                 substituted_equipped = Some(substitute::substitute_type_pub(&equip.type_.node, &eq_subs));
                 merged_subs = eq_subs;
+                chosen_equip = Some(equip);
                 break;
+            }
+        }
+        // Non-generic equip: equip_subs is empty but we still want
+        // Self + trait-T bound against the concrete receiver.
+        if chosen_equip.is_none() {
+            if let Some(equip) = equip_blocks.first() {
+                substituted_equipped = Some(substitute::substitute_type_pub(&equip.type_.node, &merged_subs));
+                chosen_equip = Some(equip);
             }
         }
         if let Some(ref gp) = method_def_for_scan.generic_params {
@@ -1164,6 +1180,30 @@ impl GenericCollector {
                 merged_subs.push((name, arg.node.clone()));
             }
         }
+        // Bind the trait's own generic params (trait-scope T etc.) first
+        // so trait-body refs win over any collision with impl-scope names.
+        let mut trait_subs: Vec<(String, Type)> = Vec::new();
+        if let Some(equip) = chosen_equip {
+            if let Some(ref trait_ref) = equip.trait_ {
+                let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+                if let Some(td) = self.trait_defs.get(&trait_name) {
+                    let trait_args: Vec<Type> = if let Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+                        generic_args.iter().map(|a| substitute::substitute_type_pub(&a.node, &merged_subs)).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    if let Some(ref gp) = td.generic_params {
+                        for (param, concrete) in gp.node.params.iter().zip(trait_args.iter()) {
+                            let name = match &param.node {
+                                GenericParam::Type { name: s, .. } => s.node.clone(),
+                                GenericParam::Const { name: s, .. } => s.node.clone(),
+                            };
+                            trait_subs.push((name, concrete.clone()));
+                        }
+                    }
+                }
+            }
+        }
         // Bind `Self` for trait-default bodies whose return type or
         // struct literals mention `Self` (lifted adapter constructors
         // like `FilterIter[Self, T, F] filter[F](self, F p): return
@@ -1172,9 +1212,17 @@ impl GenericCollector {
         // SelfType trips `type_has_generic_param` (for each equip T) OR
         // falls through as a literal `Self` name that never mangles to
         // a real registered type.
-        if let Some(eq_ty) = substituted_equipped {
-            merged_subs.push(("Self".to_string(), eq_ty));
-        }
+        let final_subs_prefix: Vec<(String, Type)> = {
+            let mut v = trait_subs;
+            if let Some(ref eq_ty) = substituted_equipped {
+                v.push(("Self".to_string(), eq_ty.clone()));
+            }
+            v
+        };
+        let mut reordered: Vec<(String, Type)> = Vec::new();
+        reordered.extend(final_subs_prefix);
+        reordered.extend(merged_subs);
+        let merged_subs = reordered;
         if !merged_subs.is_empty() {
             let prev = self.current_generic_params.take();
             let substituted = substitute_function_body(&method_def_for_scan, &merged_subs);
@@ -1953,7 +2001,36 @@ impl GenericCollector {
             // `MapIter__VectorIter__int64_t__...`, producing a sig/body
             // type mismatch at the call site.
             let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
-            subs.push(("Self".to_string(), substituted_equipped));
+            // Also bind the trait's own generic params to their
+            // substituted concrete values (e.g. impl's `Iterator[int]`
+            // binds trait's `T → int`). Pushed BEFORE Self + impl subs
+            // so trait-scope refs win when names collide with impl-
+            // scope names. Required for method-generic defaults on
+            // non-generic impls (`equip CounterIter with Iterator[int]:`
+            // → `fold[A, F]` body references trait's `T`).
+            let mut merged: Vec<(String, crate::parser::ast::Type)> = Vec::new();
+            if let Some(ref trait_ref) = equip.trait_ {
+                let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+                if let Some(td) = self.trait_defs.get(&trait_name) {
+                    let trait_args: Vec<Type> = if let Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+                        generic_args.iter().map(|a| substitute::substitute_type_pub(&a.node, &subs)).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    if let Some(ref gp) = td.generic_params {
+                        for (param, concrete) in gp.node.params.iter().zip(trait_args.iter()) {
+                            let name = match &param.node {
+                                GenericParam::Type { name: s, .. } => s.node.clone(),
+                                GenericParam::Const { name: s, .. } => s.node.clone(),
+                            };
+                            merged.push((name, concrete.clone()));
+                        }
+                    }
+                }
+            }
+            merged.push(("Self".to_string(), substituted_equipped));
+            merged.extend(subs.into_iter());
+            let subs = merged;
 
             let ret_type = substitute_and_map_mut(mapper, registry, &method.return_type.node, &subs);
             let has_self = method.params.first()

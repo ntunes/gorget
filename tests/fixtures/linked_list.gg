@@ -52,7 +52,7 @@ void main():
         print(x)
     int total = list.iter().fold(0, (int acc, int x): acc + x)
     print(total)
-    Vector[int] doubled = list.iter().map((int x): x * 2)
+    Vector[int] doubled = list.iter().map((int x): x * 2).collect()
     print(doubled.get(0).unwrap())
     print(doubled.get(1).unwrap())
     print(doubled.get(2).unwrap())
