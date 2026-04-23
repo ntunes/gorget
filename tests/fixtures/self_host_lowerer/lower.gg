@@ -2102,10 +2102,36 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
             # `.VariantName(pats)` — same semantics as PConstructor with
             # enum name inferred from the scrutinee's type.
             lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+        case PLiteral(lit_expr):
+            # `case N:` / `case "x":` / `case true:` — emit an equality
+            # check against the literal value. Without this every literal
+            # pattern fell through to the unconditional `GTJump(match_bb)`
+            # below, making `match tid: case 0: ...; case 4: ...` always
+            # take the first arm (every call to `type_id_to_name` returned
+            # "bool" regardless of tid).
+            #
+            # `case None:` is parsed as `PLiteral(ENoneLiteral)` by the
+            # parser (not PConstructor), so route None patterns through the
+            # ctor-pattern path — None is a variant constructor, not a
+            # comparable value, and Option types don't support `==` at the
+            # GIR level.
+            match lit_expr.expr:
+                case ENoneLiteral():
+                    Vector[SpannedPattern] no_sub_pats = []
+                    lower_ctor_pattern(&ctx, scrutinee, "None", no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
+                else:
+                    int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+                    int lit_val = lower_expr(&ctx, lit_expr, &gmod)
+                    int cmp_tid = I64_TYPE
+                    if scr_tid == BOOL_TYPE:
+                        cmp_tid = BOOL_TYPE
+                    int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                    emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, OpCopy(scrutinee), OpCopy(lit_val)))
+                    set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
         else:
-            # Unsupported pattern shape (PLiteral, PTuple, POr, PRest) —
-            # fall through with a permissive match rather than silently
-            # dropping the arm body. Future fixes: add proper patterns.
+            # Unsupported pattern shape (PTuple, POr, PRest) — fall through
+            # with a permissive match rather than silently dropping the arm
+            # body. Future fixes: add proper patterns.
             lower_fail("unsupported pattern variant in match arm")
             set_terminator(&ctx, GTJump(match_bb))
 
