@@ -876,6 +876,21 @@ static int counter = 0              # private to this module
 public static int shared_counter = 0  # accessible to importers
 ```
 
+#### `const` keyword — positional meanings
+
+Gorget uses `const` in multiple syntactic positions. The meaning is always "immutable" but what it attaches to depends on position — the same convention C uses:
+
+| Position | Example | Meaning | C analogue |
+|---|---|---|---|
+| Module-level declaration | `const int MAX = 1024` | Compile-time constant, inlined at use sites | `#define MAX 1024` / `const int MAX = 1024;` |
+| Local-binding declaration | `const int x = compute()` | Runtime immutable binding — `x` can't be reassigned | `const int x = compute();` |
+| Function qualifier | `const int add(int a, int b):` | Function can be evaluated at compile time when args are `meta` | (no direct analogue) |
+| Type modifier on reference (planned) | `const T &name` | Access immutability — callee can't mutate through the ref | `const T* name` |
+
+The compile-time constant form (`meta int FOO = 1024`, see §19) is a separate keyword — `meta`, not `const`. They do not overlap.
+
+**Type-modifier form (`const T &name`)** is the planned idiom for explicit immutable borrows at param and field positions. Today's bare `T name` at params already means immutable borrow (the compiler emits `const T*` at the C boundary — see §4). The explicit `const T &name` form will read as a parallel to the existing mutable `T &name` sigil, and will be required for immutable borrow *fields* once the language supports stored borrows. See `TODO.md` (lazy iteration for hash-based collections) for the tracking entry.
+
 ### 5.10 Extern Blocks
 
 ```ebnf
