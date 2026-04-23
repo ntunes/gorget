@@ -5132,20 +5132,28 @@ fn emit_inst(
             }
             // Build arg list: env first, then user args.
             //
-            // Step 6 of the BIR lift plan: the GIR→LIR lowering tags each
-            // small-aggregate-by-value user arg with `AbiKind::ByValue` (see
-            // `CallClosure` emission in `src/lir/lower/insts.rs`). When we
-            // see that tag, load the struct from the slot-addr pointer before
-            // the call. This replaces the older SlotAddr-scanning heuristic
-            // that inferred the same decision structurally.
+            // Closure ABI per-arg must match `__Closure_N__call` (see
+            // `ir/lowering/closures.rs::resolve_param_type`) and the
+            // `__adapt_*` shim (above in this file), which use by-pointer
+            // (`ptr`) for resource-containing aggregates (String / Vector /
+            // Dict / Set / HashMap, or any user struct transitively holding
+            // one of those) and by-value for plain non-resource aggregates
+            // like `Option[int]`. ByValue promotion (LIR `arg_abis`) is
+            // honoured only when the pointee is non-resource; resource
+            // aggregates always travel by pointer to match the callee.
+            // Mismatching these is silent on AAPCS64 and SIGSEGVs on
+            // x86-64 SysV — see `backend/c_lir/mod.rs` CallClosure.
             let mut call_arg_strs = vec![format!("ptr %{pfx}.env")];
             for (ai, a) in args.iter().enumerate() {
                 let vt = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let abi = arg_abis.get(ai).copied().unwrap_or_default();
                 let by_value_sid = if abi == crate::ir::abi::AbiKind::ByValue {
-                    // Arg should be a ptr (from SlotAddr); load the aggregate.
                     match vt {
-                        Some(LirType::PtrTo(sid)) => Some(*sid),
+                        Some(LirType::PtrTo(sid))
+                            if !crate::backend::c_lir::helpers::struct_contains_resource(*sid, module) =>
+                        {
+                            Some(*sid)
+                        }
                         _ => None,
                     }
                 } else {

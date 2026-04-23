@@ -1050,6 +1050,49 @@ pub(super) fn box_alloc_inner_c_type(suffix: &str, lir_ty: &LirType, struct_name
     // For primitives, the LIR type is accurate
     c_type_named(lir_ty, struct_names)
 }
+/// Return true if `sid` names a struct that owns heap buffers (String / Vector /
+/// Dict / Set / HashMap / any struct transitively containing one of those).
+///
+/// Used to decide closure call-site ABI: resource-containing aggregates must
+/// stay by-pointer across the `GorgetClosure` boundary to match the callee
+/// signature (both `__Closure_N__call` — see
+/// `ir/lowering/closures.rs::resolve_param_type` — and `__adapt_*` declare
+/// resource aggregate params as `void*`). Non-resource aggregates are small,
+/// pod-like, and may flow by value.
+///
+/// Walks the field graph; memoization happens implicitly via the `visited`
+/// set — cyclic structs hit the "already visiting" branch and short-circuit
+/// to `false` (a cyclic type with no resource descendants is non-resource;
+/// anything truly resource-containing will have a non-cycle field that
+/// returns `true` on its own walk).
+pub fn struct_contains_resource(sid: crate::lir::StructId, module: &LirModule) -> bool {
+    fn walk(sid: crate::lir::StructId, module: &LirModule, visited: &mut std::collections::HashSet<u32>) -> bool {
+        if !visited.insert(sid.0) { return false; }
+        let sdef = match module.structs.get(sid.0 as usize) {
+            Some(s) => s,
+            None => return false,
+        };
+        // Runtime-owned aggregates are resources by construction.
+        if matches!(sdef.name.as_str(),
+            "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure") {
+            return true;
+        }
+        for (_, fty) in &sdef.fields {
+            match fty {
+                LirType::Struct(inner_sid) => {
+                    if walk(*inner_sid, module, visited) { return true; }
+                }
+                // Ptr fields are bare pointers — they don't "contain" anything;
+                // ownership responsibility lives with whoever holds the Ptr value.
+                _ => {}
+            }
+        }
+        false
+    }
+    let mut visited = std::collections::HashSet::new();
+    walk(sid, module, &mut visited)
+}
+
 pub(super) fn c_type_named(ty: &LirType, struct_names: &HashMap<u32, String>) -> String {
     match ty {
         LirType::I8 => "int8_t".into(),

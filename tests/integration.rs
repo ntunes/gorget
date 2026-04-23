@@ -138,19 +138,22 @@ fn run_gg(fixture: &str, expected: &str) {
     let run = run_with_timeout(&mut Command::new(&exe_path), fixture);
 
     let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
 
-    // 3. Assert stdout
+    // 3. Status check first — a crash with empty stdout is a much more useful
+    //    diagnostic than an "Output mismatch: left='', right='...'" assertion,
+    //    which hides the real panic/signal/stderr message.
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {fixture}: status={:?}\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        run.status.code(),
+    );
+
+    // 4. Assert stdout
     assert_eq!(
         stdout.trim(),
         expected.trim(),
-        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}",
-    );
-
-    assert!(
-        run.status.success(),
-        "Binary exited with error for {fixture}: {:?}\nstderr: {}",
-        run.status.code(),
-        String::from_utf8_lossy(&run.stderr),
+        "Output mismatch for {fixture}:\nExpected:\n{expected}\nGot:\n{stdout}\nstderr:\n{stderr}",
     );
 
     // 4. Clean up generated files

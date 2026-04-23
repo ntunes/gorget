@@ -10,7 +10,7 @@ use std::fmt::Write;
 
 mod emit_call_extern;
 mod emit_types;
-mod helpers;
+pub mod helpers;
 use self::helpers::*;
 use self::emit_types::*;
 
@@ -2376,7 +2376,6 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         }
 
         Inst::CallClosure { dst, kind, closure, args, arg_abis, ret_ty } => {
-            use crate::ir::abi::AbiKind;
             // Indirect call through a closure: fn_ptr(env, args...).
             let cv = v(*closure);
             let (fp, ep) = match kind {
@@ -2395,28 +2394,48 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     }
                 }
             };
+            use crate::ir::abi::AbiKind;
             let ret_type = c_type_named(ret_ty, sn);
             // Build parameter types: env (void*) first, then user args.
+            //
+            // Closure ABI per-arg must match `__Closure_N__call` (see
+            // `ir/lowering/closures.rs::resolve_param_type`) and the
+            // `__adapt_*` shim (defined above in this file), which both use:
+            //   - by-pointer (`void*`) for **resource-containing** aggregates
+            //     (structs that hold heap buffers — String, Vector, Dict, or
+            //     any user struct transitively containing one of those)
+            //   - by-value for non-resource aggregates (e.g. `Option[int]`)
+            //
+            // Getting this wrong is an ABI mismatch that's silent on AAPCS64
+            // (macOS arm64 passes large structs via a hidden-pointer slot,
+            // which the adapter happens to read as a valid `void*`) but
+            // SIGSEGVs on x86-64 SysV. That's what hid the httpserver_before/
+            // middleware/router{,_extended} regressions from local runs.
+            //
+            // The original check only named five runtime structs as
+            // "resource"; user structs that contained resources (e.g.
+            // HttpServerResponse with a `Dict[String, String] headers` field)
+            // slipped through as "non-resource", got dereffed, and reached
+            // the adapter as a by-value struct where a pointer was expected.
+            // `struct_contains_resource` walks the field graph transitively.
             let mut param_types = vec!["void*".to_string()];
             let mut deref_args: Vec<Option<String>> = Vec::new();
             for (i, a) in args.iter().enumerate() {
                 let abi = arg_abis.get(i).copied().unwrap_or(AbiKind::Auto);
                 let pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref());
-                // Use ABI tags for dereference decisions when available.
+                let pointee_is_resource = |pt: &LirType| {
+                    if let LirType::Struct(sid) = pt {
+                        struct_contains_resource(*sid, module)
+                    } else { false }
+                };
                 let needs_deref = match abi {
-                    AbiKind::ByValue => pointee.map_or(false, |pt| pt.is_aggregate()),
-                    AbiKind::Auto => {
-                        // Legacy fallback: deref non-resource aggregate pointers.
-                        if let Some(pt) = pointee {
-                            if pt.is_aggregate() {
-                                let is_resource = if let LirType::Struct(sid) = pt {
-                                    module.structs.get(sid.0 as usize).map_or(false, |sd| matches!(sd.name.as_str(),
-                                        "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure"))
-                                } else { false };
-                                !is_resource
-                            } else { false }
-                        } else { false }
-                    }
+                    // ByValue was promoted for small non-union aggregates.
+                    // Only honour it when the pointee is a non-resource
+                    // aggregate — resource aggregates must stay by-pointer
+                    // to match the callee signature (adapters always take
+                    // resource args as `void*`).
+                    AbiKind::ByValue => pointee.map_or(false, |pt| pt.is_aggregate() && !pointee_is_resource(pt)),
+                    AbiKind::Auto => pointee.map_or(false, |pt| pt.is_aggregate() && !pointee_is_resource(pt)),
                     _ => false,
                 };
                 if needs_deref {
