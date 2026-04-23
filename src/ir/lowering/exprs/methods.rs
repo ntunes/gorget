@@ -745,11 +745,24 @@ pub(super) fn lower_method_call(
                         return FunctionBuilder::copy(dst);
                     }
                     "upgrade" => {
-                        // Returns Option[Shared[T]] — need to build the Option type
+                        // Returns Option[Shared[T]] — need to build the Option type.
+                        // Register the Option's enum TypeDef too, not just the Named
+                        // TypeId: without the TypeDef, `resolve_variant_tag` returns
+                        // None for "Some"/"None" at `match w.upgrade():` sites, which
+                        // makes `lower_pattern_condition` fall through to
+                        // `const_bool(true)` — every arm matches and only the first
+                        // arm body fires. Symptom: `w.upgrade()` cases appeared to
+                        // keep the Shared alive (print "alive" / 1) even when strong
+                        // count had reached zero.
                         let shared_name = format!("Shared__{elem_suffix}");
                         let inner_type = ctx.type_mapper.lookup_named(elem_suffix).unwrap_or(I64_TYPE);
-                        let _shared_type = get_or_register_type(ctx, &shared_name, Some(&|c| ensure_shared_type_def(c, &shared_name, inner_type)));
+                        let shared_type = get_or_register_type(ctx, &shared_name, Some(&|c| ensure_shared_type_def(c, &shared_name, inner_type)));
                         let option_name = format!("Option__{shared_name}");
+                        // Register the enum TypeDef FIRST — `ensure_option_type_registered`
+                        // short-circuits if `option_name` is already in `named_types`, so
+                        // calling it before the first `get_or_register_type` ensures the
+                        // TypeDef is actually inserted.
+                        ctx.ensure_option_type_registered(&option_name, shared_type);
                         let option_type = get_or_register_type(ctx, &option_name, None);
                         let upgrade_fn = format!("{stn}__upgrade");
                         let dst = builder.call(&upgrade_fn, vec![recv], option_type);

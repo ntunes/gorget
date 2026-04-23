@@ -1,12 +1,13 @@
-# Attack: `Shared[T] !s` where T is a trivial-only struct (no resource fields
-# in T itself) — same shape as attack_22 but with Cell(int) instead of
-# Big(Vector[int]). attack_22 prints "-1" (None, strong count was properly
-# decremented). This one prints "1" (Some — the control block stayed alive).
-# Separate pre-existing bug in the refcount metadata for Shared-over-trivial
-# structs. No UAF — the program exits cleanly under ASan — but the drop
-# isn't complete, and `w.upgrade()` finds the strong count still > 0.
-# Tracks the bug so when it's fixed, this fixture flips to printing "0" and
-# the harness prompts reclassification.
+# Regression: `Shared[T] !s` where T is a trivial-only struct — a `!` consuming
+# call (`take_and_drop(!s)`) must decrement the strong count, and a matched
+# `w.upgrade()` must see the control block freed and return None. The original
+# bug symptom was "upgrade returns Some instead of None", but the real cause
+# turned out to be unrelated to the drop chain — `Option[Shared[T]]` had only
+# a Named TypeId, no enum TypeDef, so `resolve_variant_tag` returned None for
+# Some/None and `lower_pattern_condition` fell through to const_bool(true).
+# Every arm matched, only the first arm body fired. Fix: `Weak.upgrade()`
+# lowering now registers the Option's enum TypeDef via
+# `ensure_option_type_registered` before the Named registration short-circuits.
 
 struct Cell:
     int val

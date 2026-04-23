@@ -549,19 +549,24 @@ fn sec_34_div_zero_in_expression() {
 
 #[test]
 fn sec_35_shared_move_chain_trivial_payload() {
-    // Shared[T] where T is trivial-only struct — `!s` at consuming call
-    // doesn't fully drop the control block. No UAF (program exits clean
-    // under ASan), but upgrade() wrongly finds Some. Separate bug from
-    // sec_22 (which prints -1 correctly for Shared[struct-with-Vector]);
-    // tracked to catch regressions in both directions.
-    security_known_unsafe(
-        "attack_35_shared_move_chain",
-        KnownBug::SilentlyProduces("1"),
-        "Shared[T] over trivial-only T doesn't fully decrement strong count \
-         after `!` consuming call — upgrade() returns Some instead of None. \
-         No UAF. Likely needs_param_drop metadata is wrong for the \
-         monomorphized Shared[Cell] when Cell has no resource fields.",
-    );
+    // Fixed 2026-04-23. Previously thought to be a refcount-metadata bug; the
+    // real cause was that `Weak.upgrade()` registered `Option[Shared[T]]`
+    // as a Named TypeId without its enum TypeDef, so match dispatch on
+    // `w.upgrade()` fell through to const_bool(true) and always fired the
+    // first arm. Fix at src/ir/lowering/exprs/methods.rs upgrade handler.
+    security_safe("attack_35_shared_move_chain", "0");
+}
+
+#[test]
+fn sec_36_match_weak_upgrade_rvalue() {
+    // Regression — rvalue match on w.upgrade() must dispatch correctly.
+    security_safe("attack_36_match_weak_upgrade_rvalue", "dead");
+}
+
+#[test]
+fn sec_37_upgrade_still_alive() {
+    // Complementary to sec_36 — Some arm must fire when Shared is alive.
+    security_safe("attack_37_upgrade_still_alive", "alive");
 }
 
 #[test]

@@ -1,0 +1,21 @@
+# Regression: `match w.upgrade():` with the method-call result matched
+# directly (no intermediate binding). This was the path that silently
+# collapsed both arms into the first — TypeDef wasn't registered for
+# Option[Shared[T]], so resolve_variant_tag returned None and
+# lower_pattern_condition fell through to const_bool(true). Any upgrade
+# fixture that works `Option[Shared[T]] r = w.upgrade(); match r:` also
+# needs the direct-match form to work.
+
+struct Payload:
+    int val
+
+void consume(Shared[Payload] !s):
+    pass
+
+void main():
+    Shared[Payload] s = Shared[Payload](Payload(99))
+    Weak[Payload] w = s.downgrade()
+    consume(!s)
+    match w.upgrade():
+        case Some(alive): print("alive")
+        case None(): print("dead")

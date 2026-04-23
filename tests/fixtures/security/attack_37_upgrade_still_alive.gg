@@ -1,0 +1,14 @@
+# Complementary regression: `match w.upgrade():` when the Shared IS still
+# alive must take the Some arm (not the None arm). Catches a fix that
+# inverts the tag dispatch.
+
+struct Payload:
+    int val
+
+void main():
+    Shared[Payload] s = Shared[Payload](Payload(99))
+    Weak[Payload] w = s.downgrade()
+    # s is still alive — upgrade must succeed.
+    match w.upgrade():
+        case Some(alive): print("alive")
+        case None(): print("dead")
