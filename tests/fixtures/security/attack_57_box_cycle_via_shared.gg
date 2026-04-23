@@ -1,0 +1,16 @@
+# Probe: reference cycle — a node holds a Shared[Node]. Shared is
+# refcounted, so a cycle keeps both nodes alive forever (leak). Weak
+# would break the cycle; Shared won't. LSan should flag the leak.
+
+struct Node:
+    int val
+    Option[Shared[Node]] next
+
+void main():
+    Shared[Node] a = Shared[Node](Node(1, None()))
+    Shared[Node] b = Shared[Node](Node(2, Some(a.clone())))
+    # ... no cycle yet (a → None, b → a). Now make a point back to b:
+    # but Node is by-value, we can't mutate a's next field after Shared::new.
+    # So this is actually a chain, not a cycle. Still tests Shared + Option
+    # composition.
+    print("done")

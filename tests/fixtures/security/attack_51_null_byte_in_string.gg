@@ -1,0 +1,12 @@
+# Probe: string equality with embedded null bytes. `"a\0b" == "a\0c"`
+# must return false (strings differ at index 2). A C-level strcmp would
+# stop at \0 and call them equal — security disaster for path / name
+# validation.
+
+void main():
+    String a = "x\0foo"
+    String b = "x\0bar"
+    print(a == b)
+    # Also verify len is preserved
+    print(a.len())
+    print(b.len())

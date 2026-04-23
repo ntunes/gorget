@@ -1916,7 +1916,28 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             }
         }
         Inst::Div { dst, ty, lhs, rhs } => {
+            // Signed integer division has TWO C-UB cases:
+            //   1. `b == 0` (already guarded)
+            //   2. `a == TYPE_MIN && b == -1` — mathematical result is TYPE_MAX+1
+            //      which doesn't fit in a signed integer. On ARM64 this wraps
+            //      silently to TYPE_MIN (what we observed pre-fix); on x86 it
+            //      raises SIGFPE. Both are non-portable. Guard explicitly and
+            //      trap with the same `integer overflow` message as `+`/`*`.
             if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
+                let ct = c_type_named(ty, sn);
+                let tmin = match ty {
+                    LirType::I64 => "INT64_MIN",
+                    LirType::I32 => "INT32_MIN",
+                    LirType::I16 => "INT16_MIN",
+                    LirType::I8  => "INT8_MIN",
+                    _ => unreachable!(),
+                };
+                write!(out,
+                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }} \
+                     {d} = ({ct}){l} / ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+            } else if matches!(ty, LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8) {
                 let ct = c_type_named(ty, sn);
                 write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} / ({ct}){r};",
                     d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -1927,6 +1948,22 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::Rem { dst, ty, lhs, rhs, .. } => {
             if matches!(ty, LirType::F32 | LirType::F64) {
                 write!(out, "{} = fmod({}, {});", v(*dst), v(*lhs), v(*rhs)).unwrap();
+            } else if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
+                // Signed `%` is also UB on `TYPE_MIN % -1` (C standard says so;
+                // many compilers return 0). Match the Div guard.
+                let ct = c_type_named(ty, sn);
+                let tmin = match ty {
+                    LirType::I64 => "INT64_MIN",
+                    LirType::I32 => "INT32_MIN",
+                    LirType::I16 => "INT16_MIN",
+                    LirType::I8  => "INT8_MIN",
+                    _ => unreachable!(),
+                };
+                write!(out,
+                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
+                     {{ {d} = ({ct}){l} % ({ct}){r}; }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} % ({ct}){r};",
@@ -1942,8 +1979,27 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     "{{ double __t = fmod({l}, {r}); {d} = __t + (__t != 0.0 && ((__t < 0) != ({r} < 0)) ? {r} : 0.0); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs)
                 ).unwrap();
+            } else if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
+                // Python-style integer modulo. Guard `/0` AND `TYPE_MIN % -1`
+                // (C UB). For the overflow case, the Python-style result is 0
+                // (since TYPE_MIN mod -1 mathematically = 0 anyway).
+                let ct = c_type_named(ty, sn);
+                let tmin = match ty {
+                    LirType::I64 => "INT64_MIN",
+                    LirType::I32 => "INT32_MIN",
+                    LirType::I16 => "INT16_MIN",
+                    LirType::I8  => "INT8_MIN",
+                    _ => unreachable!(),
+                };
+                write!(
+                    out,
+                    "if ({r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
+                     {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)
+                ).unwrap();
             } else {
-                // Python-style integer modulo. The underlying `%` is UB for b==0, so guard first.
+                // Unsigned path — no TYPE_MIN issue.
                 write!(
                     out,
                     "if ({r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",

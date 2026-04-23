@@ -1,0 +1,18 @@
+# Probe: Dict[float, _] with a NaN key. NaN != NaN means the key can't
+# be retrieved. The compiler should either reject float keys, or define
+# the semantics (probably: NaN-keyed entries are unreachable).
+
+void main():
+    Dict[float, String] d = {}
+    float zero = 0.0
+    float nan = zero / zero
+    d.put(1.5, "real")
+    d.put(nan, "unreachable")
+    Option[String] hit = d.get(1.5)
+    match hit:
+        case Some(s): print(s)
+        case None(): print("no-1.5")
+    Option[String] miss = d.get(nan)
+    match miss:
+        case Some(s): print(s)
+        case None(): print("no-nan")

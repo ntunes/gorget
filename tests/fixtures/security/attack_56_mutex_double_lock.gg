@@ -1,0 +1,13 @@
+# Probe: same thread tries to acquire a Mutex Guard while an existing
+# Guard is still live. Non-reentrant mutex + active Guard should at
+# minimum deadlock cleanly, ideally be rejected at compile time.
+
+async void main():
+    Mutex[int] m = Mutex[int](42)
+    Guard[int] g1 = m.lock()
+    # Second .lock() before g1's scope ends. Non-reentrant mutex should
+    # deadlock here — we rely on the test harness's timeout to catch it.
+    # Borrow checker ideally rejects this; if it doesn't, the runtime
+    # deadlock is the safety net.
+    Guard[int] g2 = m.lock()
+    print(g1.get() + g2.get())

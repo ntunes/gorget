@@ -1,0 +1,11 @@
+# Probe: closure capturing int params from an enclosing function.
+# Returning a closure literal that captures local scalars should be safe
+# (ints are copy-semantics, trivially moved into the env).
+
+Callable[int()] outer(int x):
+    int y = 100
+    return (): x + y
+
+void main():
+    Callable[int()] f = outer(5)
+    print(f())

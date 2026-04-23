@@ -1,0 +1,12 @@
+# Probe: generic function monomorphized over distinct resource types —
+# the compiler must synthesize a separate drop for each instance, not
+# share one. Picking the wrong drop would cause UAF or leaks.
+
+T first[T](Vector[T] v):
+    return v.get(0).unwrap().clone()
+
+void main():
+    Vector[int] ints = [10, 20, 30]
+    Vector[String] strs = ["hello", "world"]
+    print(first[int](ints))
+    print(first[String](strs))

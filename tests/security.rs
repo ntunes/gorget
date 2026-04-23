@@ -680,3 +680,69 @@ fn sec_28_cow_option_extraction_minimal() {
     // runs cleanly, printing the actual element.
     security_safe("attack_28_cow_option_extraction", "alpha");
 }
+
+// ── Round 4 attacks: arithmetic edges, collections, generics ─────────────
+
+#[test]
+fn sec_49_nested_closure() {
+    // Closure capturing an enclosing function's scalar locals. Safe.
+    security_safe("attack_49_nested_closure", "105");
+}
+
+#[test]
+fn sec_50_int_min_div_neg_one() {
+    // Regression — INT64_MIN / -1 is C UB (the result isn't representable).
+    // Pre-fix: wrapping_div silently folded to INT_MIN, bypassing the runtime
+    // guard. Post-fix: constant folder uses checked_div (returns None on
+    // overflow so the runtime guard handles it), and the C backend's Div
+    // instruction adds an explicit INT_MIN/-1 trap.
+    security_traps("attack_50_int_min_div_neg_one", "integer overflow");
+}
+
+#[test]
+fn sec_51_null_byte_string_equality() {
+    // Strings are length-prefixed; embedded \0 doesn't terminate. Equality
+    // returns correct result, len reports full byte count.
+    security_safe("attack_51_null_byte_in_string", "false\n5\n5");
+}
+
+#[test]
+fn sec_52_channel_send_after_close() {
+    security_traps("attack_52_channel_send_after_close", "closed channel");
+}
+
+#[test]
+fn sec_53_empty_collection_ops() {
+    security_safe(
+        "attack_53_empty_collection_ops",
+        "empty-get\nempty-pop\nmissing-key",
+    );
+}
+
+#[test]
+fn sec_54_parse_int_overflow() {
+    security_safe("attack_54_parse_int_overflow", "42\nerr-2\nerr-3");
+}
+
+#[test]
+fn sec_55_dict_float_nan_key() {
+    // Gorget's Dict uses bitwise equality for float keys — NaN stored with
+    // `zero / zero` can be retrieved by recomputing `zero / zero` because
+    // both have the same bit pattern. Semantic choice, not a memory bug.
+    security_safe("attack_55_dict_float_nan_key", "real\nunreachable");
+}
+
+#[test]
+fn sec_57_box_cycle_via_shared() {
+    security_safe("attack_57_box_cycle_via_shared", "done");
+}
+
+#[test]
+fn sec_58_string_concat_loop() {
+    security_safe("attack_58_string_concat_loop", "100000");
+}
+
+#[test]
+fn sec_59_generic_resource_monomorphization() {
+    security_safe("attack_59_generic_resource_collision", "10\nhello");
+}

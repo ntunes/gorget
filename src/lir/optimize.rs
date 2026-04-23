@@ -671,9 +671,14 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
             None
         }
         Inst::Div { dst, lhs, rhs, .. } => {
+            // Use `checked_div` — returns None on both `b == 0` and
+            // `INT_MIN / -1` overflow. Don't fold either case; the runtime
+            // guard in the C backend will trap with the appropriate message.
+            // Pre-fix, `wrapping_div` silently folded INT_MIN/-1 to INT_MIN,
+            // bypassing the runtime overflow guard entirely.
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
-                if b != 0 {
-                    return Some(Inst::IConst { dst: *dst, value: a.wrapping_div(b), ty });
+                if let Some(q) = a.checked_div(b) {
+                    return Some(Inst::IConst { dst: *dst, value: q, ty });
                 }
             }
             if let (Some((a, ty)), Some((b, _))) = (get_float(*lhs), get_float(*rhs)) {
@@ -683,16 +688,18 @@ fn try_fold(inst: &Inst, known: &[Option<KnownConst>]) -> Option<Inst> {
         }
         Inst::Rem { dst, lhs, rhs, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
-                if b != 0 {
-                    return Some(Inst::IConst { dst: *dst, value: a.wrapping_rem(b), ty });
+                // `checked_rem` also handles INT_MIN % -1 (C UB, Rust returns 0
+                // via wrapping_rem but checked_rem returns None — good, we trap
+                // in the runtime C guard or emit 0 per our Rem lowering).
+                if let Some(r) = a.checked_rem(b) {
+                    return Some(Inst::IConst { dst: *dst, value: r, ty });
                 }
             }
             None
         }
         Inst::Mod { dst, lhs, rhs, .. } => {
             if let (Some((a, ty)), Some((b, _))) = (get_int(*lhs), get_int(*rhs)) {
-                if b != 0 {
-                    let r = a.wrapping_rem(b);
+                if let Some(r) = a.checked_rem(b) {
                     let result = if r != 0 && (r ^ b) < 0 { r + b } else { r };
                     return Some(Inst::IConst { dst: *dst, value: result, ty });
                 }

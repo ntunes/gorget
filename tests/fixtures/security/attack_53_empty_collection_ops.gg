@@ -1,0 +1,22 @@
+# Probe: operations on empty collections. `v.get(0)` returns None (safe).
+# What about `v.pop()` on empty? `v.remove(0)` on empty? `d.get("missing")`?
+
+void main():
+    Vector[int] v = []
+    Option[int] got = v.get(0)
+    match got:
+        case Some(x): print(x)
+        case None(): print("empty-get")
+
+    # Pop from empty
+    Option[int] popped = v.pop()
+    match popped:
+        case Some(x): print(x)
+        case None(): print("empty-pop")
+
+    # Dict miss
+    Dict[String, int] d = {}
+    Option[int] missing = d.get("nope")
+    match missing:
+        case Some(x): print(x)
+        case None(): print("missing-key")

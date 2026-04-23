@@ -1,0 +1,22 @@
+# Probe: parse_int on strings that overflow int64. Must return Result::Error,
+# not silently truncate to a wrong value.
+
+from std.conv import parse_int
+
+void main():
+    Result[int, ParseError] r1 = parse_int("42")
+    match r1:
+        case Ok(v): print(v)
+        case Error(_): print("err-1")
+
+    # Overflow
+    Result[int, ParseError] r2 = parse_int("99999999999999999999")
+    match r2:
+        case Ok(v): print(v)
+        case Error(_): print("err-2")
+
+    # Negative overflow
+    Result[int, ParseError] r3 = parse_int("-99999999999999999999")
+    match r3:
+        case Ok(v): print(v)
+        case Error(_): print("err-3")

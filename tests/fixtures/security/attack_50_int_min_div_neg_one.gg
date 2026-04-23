@@ -1,0 +1,9 @@
+# Probe: `INT_MIN / -1` is UB in C (the result is not representable in
+# signed int64). Gorget should either trap cleanly, wrap, or at minimum
+# not emit raw C UB. Same for `INT_MIN % -1`.
+
+void main():
+    int min_val = -9223372036854775807 - 1   # INT64_MIN
+    int neg_one = -1
+    int r = min_val / neg_one
+    print(r)

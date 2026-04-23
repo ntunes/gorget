@@ -1,0 +1,13 @@
+# Probe: sending to a closed channel. Python's queue panics, Go panics,
+# Rust returns Err. Gorget should either trap or return a typed error —
+# not silently succeed and leak the item.
+
+from std.channel import Channel
+
+async void main():
+    Channel[int] ch = Channel[int](4)
+    ch.send(1)
+    ch.send(2)
+    ch.close()
+    ch.send(3)
+    print("done")
