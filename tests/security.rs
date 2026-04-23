@@ -453,13 +453,11 @@ fn sec_02_box_new_consuming_position() {
 
 #[test]
 fn sec_17_vector_borrow_invalidate() {
-    security_known_unsafe(
-        "attack_17_vector_borrow_invalidate",
-        KnownBug::SanitizerTrips,
-        "Option[Ref[T]] → Option[T] silent coercion: memcpy of sizeof(Option[T]) from \
-         sizeof(Option[Ref[T]]) source. Stack-buffer-overflow READ of 24 trailing bytes. \
-         Without ASan this is an information-leak primitive.",
-    );
+    // Was SanitizerTrips. Fixed 2026-04-23 in src/ir/lowering/stmts/mod.rs —
+    // VarDecl now lifts Option[Ref[T]] → Option[T] via tag-branch + clone
+    // instead of emitting a wrong-sized memcpy. `v.push(...)` materializes
+    // the snapshot via CoW, so `s` keeps v[0]'s value as it was at get-time.
+    security_safe("attack_17_vector_borrow_invalidate", "aaa");
 }
 
 #[test]
@@ -508,10 +506,8 @@ fn sec_12_vector_iter_resource_panic() {
 
 #[test]
 fn sec_28_cow_option_extraction_minimal() {
-    security_known_unsafe(
-        "attack_28_cow_option_extraction",
-        KnownBug::SanitizerTrips,
-        "Minimal 4-line repro of the Option[Ref[T]] → Option[T] info-leak bug. No \
-         mutation required; the coercion alone is unsafe. See sec_17 for details.",
-    );
+    // Was SanitizerTrips. Fixed 2026-04-23 together with sec_17 — the
+    // minimal 4-line repro of Option[Ref[T]] → Option[T] now builds and
+    // runs cleanly, printing the actual element.
+    security_safe("attack_28_cow_option_extraction", "alpha");
 }

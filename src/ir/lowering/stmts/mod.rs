@@ -378,10 +378,30 @@ fn lower_var_decl(
             // (from cow_ptr_params or ref_locals), not from owned function returns.
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
+                // Option[Ref[T]] → Option[T] conversion. `v.get(i)` returns
+                // Option[Ref[T]] (16 bytes: {tag, void*}); the LHS Option[T]
+                // is 40 bytes (tag + Str). Without conversion, the C backend
+                // emits `memcpy(dst_40, src_16, sizeof(dst))` — an OOB read
+                // that leaks 24 bytes of adjacent stack into the Str header.
+                // With ASan this traps; without it, the stack-junk `len` makes
+                // `print(s)` an arbitrary-memory info-leak primitive.
+                //
+                // Fix: emit a tag branch. On Some, load the Ref as a Ptr(T),
+                // clone to an owned T, wrap in Option[T]. On None, construct
+                // Option[T]::None. Merge and reassign operand so downstream
+                // VarDecl stores the converted value into local_id.
+                //
+                // Mirrors the return-statement conversion ~line 1010.
+                if let Some(converted) = try_lift_option_ref(
+                    ctx, builder, &operand, inferred, gir_type, value.span,
+                ) {
+                    operand = converted;
+                }
                 // Type mismatch: declared type (e.g. int) vs RHS resource type (e.g. String).
                 // This happens for `int ch = text.char_at(0)` where char_at returns String.
                 // Reinfer to the RHS type so the variable's slot matches the value, preventing
                 // the Move assign from storing a pointer-as-int into a mismatched slot.
+                let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 if inferred != gir_type
                     && !matches!(ctx.type_registry.get(inferred), Some(GirType::Ptr(_)))
                     && ctx.type_registry.is_resource_type(inferred)
@@ -2022,6 +2042,100 @@ pub fn emit_is_bindings(
         emit_is_bindings(ctx, builder, left);
         emit_is_bindings(ctx, builder, right);
     }
+}
+
+/// Convert `Option[Ref[T]] → Option[T]` by tag branching and cloning the Some
+/// payload. The input operand must be a bare `Copy`/`Move` of a local with
+/// `Option__Ref_T` type; the target must be `Option__T` (non-Ref). Returns the
+/// converted operand — a `Copy` of a freshly-filled merge local.
+///
+/// Returns `None` if the shapes don't match or the inner type has no clone
+/// function (callers pass the operand through untouched).
+///
+/// This is the soundness fix for the `Option[Ref[T]] → Option[T]` info leak:
+/// without it, the C backend emits a `memcpy(dst, src, sizeof(dst))` where
+/// `sizeof(dst)` is larger than `src`, reading adjacent stack into the dst's
+/// header fields and leaking them via subsequent use of the value.
+fn try_lift_option_ref(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: &Operand,
+    src_type: TypeId,
+    dst_type: TypeId,
+    span: crate::span::Span,
+) -> Option<Operand> {
+    // Must be a bare Copy/Move of a whole local (no projections).
+    let src_place = match operand {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p,
+        _ => return None,
+    };
+
+    // Names must be `Option__Ref_T` (src) and `Option__T` (dst, non-Ref).
+    let src_name = ctx.type_registry.type_name(src_type).unwrap_or_default();
+    let dst_name = ctx.type_registry.type_name(dst_type).unwrap_or_default();
+    if !src_name.starts_with("Option__Ref_") {
+        return None;
+    }
+    if !dst_name.starts_with("Option__") || dst_name.starts_with("Option__Ref_") {
+        return None;
+    }
+
+    // Extract inner type: `Option__Ref_GorgetString` → `GorgetString`.
+    let inner_name = src_name.strip_prefix("Option__Ref_")?;
+    let inner_type = ctx.type_mapper.lookup_named(inner_name)?;
+    let clone_fn = ctx.clone_fn_for_ptr(inner_type)?;
+
+    ctx.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
+
+    // Build: branch on tag; Some → deref+clone+wrap; None → construct None.
+    let tag_place = Place {
+        local: src_place.local,
+        projections: vec![Projection::Field(0)],
+    };
+    let tag = builder.add_local(I64_TYPE, None);
+    builder.assign(Place::local(tag), Operand::Copy(tag_place));
+    let is_some = builder.cmp(
+        CmpOp::Eq, I64_TYPE,
+        FunctionBuilder::copy(tag),
+        Operand::Constant(Constant::I64(0)),
+    );
+    let some_bb = builder.new_block();
+    let none_bb = builder.new_block();
+    let merge_bb = builder.new_block();
+    builder.branch(FunctionBuilder::copy(is_some), some_bb, none_bb);
+
+    // Merge local: holds the resulting Option[T].
+    let merge = builder.add_local(dst_type, None);
+    ctx.drops.register_local(merge, dst_type, &ctx.type_registry);
+
+    // Some branch: extract the Ref payload (void*), clone the pointee, wrap
+    // as Option[T]::Some. Assigning the whole Option[Ref[T]] source to a
+    // Ptr(T) local triggers the LIR's `try_enum_payload_extract`, which
+    // emits a FieldPtr+Load with the correct LIR::Ptr type tag — avoiding
+    // the scalar/Ptr ABI tag mismatch that a raw field projection hits.
+    builder.switch_to(some_bb);
+    let ptr_type = ctx.register_ptr_type(inner_type);
+    let ptr_local = builder.add_local(ptr_type, None);
+    builder.assign(
+        Place::local(ptr_local),
+        Operand::Copy(Place::local(src_place.local)),
+    );
+    let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], inner_type);
+    let some_result = builder.enum_init(
+        &dst_name, "Some", dst_type,
+        vec![FunctionBuilder::copy(cloned)],
+    );
+    builder.assign(Place::local(merge), FunctionBuilder::copy(some_result));
+    builder.jump(merge_bb);
+
+    // None branch: construct Option[T]::None directly.
+    builder.switch_to(none_bb);
+    let none_result = builder.enum_init(&dst_name, "None", dst_type, vec![]);
+    builder.assign(Place::local(merge), FunctionBuilder::copy(none_result));
+    builder.jump(merge_bb);
+
+    builder.switch_to(merge_bb);
+    Some(FunctionBuilder::copy(merge))
 }
 
 /// Infer operand type using both ctx locals and builder locals (for intermediates like tuples).
