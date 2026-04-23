@@ -82,6 +82,67 @@ Vector[Vector[int]] compute_predecessors(LirFunction &f):
 
     return preds
 
+# Compute reverse post-order block visit sequence via DFS from entry.
+# SSA construction must process each block AFTER all of its non-loop
+# predecessors, otherwise read_variable's single-pred recursion chases
+# back through the CFG into un-processed blocks and can't find the store
+# that should flow the slot's value — it falls back to a zero-init
+# constant and silently corrupts the result. This particularly breaks
+# `case Ctor(bind): ...; if bind == K1: ... elif bind == K2: ...`
+# shapes where `bind_bb` (where the destructure ISlotStore lives) gets
+# a higher block id than `match_bb` (the arm body where `if bind == ...`
+# reads), because lower_match_stmt creates arm_body_bb before calling
+# lower_ctor_pattern which in turn creates bind_bb.
+Vector[int] compute_rpo(LirFunction &f):
+    Vector[int] rpo = []
+    if f.blocks.len() == 0:
+        return rpo
+    Dict[int, bool] visited = {}
+    # Iterative post-order DFS. Stack holds (block, child_idx) pairs
+    # encoded as two parallel vectors so we can update the child_idx
+    # in place without struct rebuilds.
+    Vector[int] stack_bb = []
+    Vector[int] stack_ci = []
+    stack_bb.push(0)
+    stack_ci.push(0)
+    visited.put(0, true)
+    while stack_bb.len() > 0:
+        int top = stack_bb.len() - 1
+        int bb = stack_bb.get(top).unwrap()
+        int ci = stack_ci.get(top).unwrap()
+        LirBlock blk = f.blocks.get(bb).unwrap()
+        Vector[int] succs = term_successors(blk.term)
+        bool advanced = false
+        while ci < succs.len():
+            int s = succs.get(ci).unwrap()
+            ci += 1
+            if not visited.contains(s):
+                visited.put(s, true)
+                stack_ci.set(top, ci)
+                stack_bb.push(s)
+                stack_ci.push(0)
+                advanced = true
+                break
+        if not advanced:
+            rpo.push(bb)
+            stack_bb.pop()
+            stack_ci.pop()
+    # Reverse to get RPO (DFS produces post-order; reversed is RPO).
+    Vector[int] result = []
+    int ri = rpo.len() - 1
+    while ri >= 0:
+        result.push(rpo.get(ri).unwrap())
+        ri -= 1
+    # If any blocks are unreachable from entry, append them at the end
+    # in their natural id order so they still get processed (unreachable
+    # blocks can be safely zero-init'd).
+    int bi2 = 0
+    while bi2 < f.blocks.len():
+        if not visited.contains(bi2):
+            result.push(bi2)
+        bi2 += 1
+    return result
+
 Vector[int] term_successors(LirTerm term):
     Vector[int] result = []
     match term:
@@ -530,11 +591,23 @@ void construct_ssa(LirFunction &f):
     Vector[int] pending_phi_bbs = []
     Vector[int] pending_phi_tys = []
 
-    # Phase 1: Process blocks, replacing SlotLoad with reaching definitions
-    int bi = 0
-    while bi < f.blocks.len():
-        process_block(bi, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
-        bi += 1
+    # Phase 1: Process blocks in RPO (reverse post-order) so predecessors
+    # are visited before successors — this is critical for the
+    # single-predecessor chain in read_variable to find reaching defs. In
+    # the natural block-id order, `arm_body_bb` of a match arm gets a
+    # lower id than the `bind_bb` where the destructure ISlotStore lives
+    # (lower_match_stmt allocates arm_body_bb before calling
+    # lower_ctor_pattern which allocates bind_bb), so processing in id
+    # order chases back through the CFG past an unprocessed bind_bb and
+    # zero-inits the destructured binding. Under RPO, bind_bb runs first,
+    # records the store in current_def, and arm_body_bb's subsequent read
+    # finds it correctly.
+    Vector[int] rpo = compute_rpo(&f)
+    int rpi = 0
+    while rpi < rpo.len():
+        int bi_rpo = rpo.get(rpi).unwrap()
+        process_block(bi_rpo, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+        rpi += 1
 
     # Phase 2: Apply value substitutions
     apply_value_substitutions(&f, &value_subst)

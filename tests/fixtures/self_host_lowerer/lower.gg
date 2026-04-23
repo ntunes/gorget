@@ -656,6 +656,20 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
                         pass
         # Parse element type from collection name: Vector__int64_t → int64_t
         String elem = collection_element_type(recv_name)
+        # Dict/HashMap with simple primitive keys: extract V (value type —
+        # what .get() / .values() yield). Without this, `dict.get(k)`
+        # fell through to the I64 fallback; downstream `.unwrap()` on
+        # the binding typed as int64 and stage-1 crashed in
+        # `gorget_map_get(NULL, k)` when the value was used as a struct.
+        if elem == "":
+            if recv_name.starts_with("Dict__GorgetString__"):
+                elem = recv_name.slice(20, recv_name.len())
+            elif recv_name.starts_with("Dict__int64_t__"):
+                elem = recv_name.slice(15, recv_name.len())
+            elif recv_name.starts_with("HashMap__GorgetString__"):
+                elem = recv_name.slice(23, recv_name.len())
+            elif recv_name.starts_with("HashMap__int64_t__"):
+                elem = recv_name.slice(18, recv_name.len())
         if elem == "int64_t":
             return I64_TYPE
         elif elem == "double":
@@ -793,6 +807,31 @@ int map_binop(String op):
             return OP_REM
         else:
             return OP_ADD
+
+# Map the compound-assignment operator spelling (`+=`, `-=`, `*=`, `/=`,
+# `%=`) to the matching GIR binop. Stage-1 was compiling every `last_us
+# -= 1` as `last_us += 1` because the parser stored the full compound-op
+# spelling ("-=") in SCompoundAssign's op field, but `map_binop` only
+# recognised the arithmetic spelling ("-") and fell through to the
+# OP_ADD default for any compound form — producing infinite loops in
+# lower_type_defs's field-name scanner.
+int map_compound_binop(String op):
+    match op:
+        case "+=":
+            return OP_ADD
+        case "-=":
+            return OP_SUB
+        case "*=":
+            return OP_MUL
+        case "/=":
+            return OP_DIV
+        case "%=":
+            return OP_REM
+        else:
+            # Fall back to the bare-operator mapping (for legacy callers
+            # and defensive handling — the parser should always emit the
+            # compound spelling, but the plain binop form is harmless).
+            return map_binop(op)
 
 bool is_comparison(String op):
     match op:
@@ -1831,7 +1870,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         emit(&ctx, GIAssign(lhs_val, OpCopy(lid)))
                         int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                         int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                        emit(&ctx, GIBinOp(op_dst, map_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
+                        emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
                         emit(&ctx, GIAssign(lid, OpCopy(op_dst)))
                 case EFieldAccess(base_box, field_name):
                     # self.field <op>= value
@@ -1842,7 +1881,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                     int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                    emit(&ctx, GIBinOp(op_dst, map_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
+                    emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
