@@ -634,6 +634,19 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         String recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():
             int recv_tid = ctx.locals.get(recv).unwrap().type_id
+            # Unwrap Ptr/MutPtr layers — collection params are passed as
+            # *Vector[T] / *Mut Vector[T] (bare-param ABI), and the
+            # method-name dispatch below needs the underlying collection
+            # name to derive the element type.
+            if recv_tid >= 0 and recv_tid < gmod.type_table.len():
+                GirType gt0 = gmod.type_table.get(recv_tid).unwrap()
+                match gt0:
+                    case GtPtr(inner):
+                        recv_tid = inner
+                    case GtMutPtr(inner):
+                        recv_tid = inner
+                    else:
+                        pass
             if recv_tid >= 0 and recv_tid < gmod.type_table.len():
                 GirType gt = gmod.type_table.get(recv_tid).unwrap()
                 match gt:
