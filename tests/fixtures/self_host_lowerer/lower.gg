@@ -2128,8 +2128,31 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                     int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
                     emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, OpCopy(scrutinee), OpCopy(lit_val)))
                     set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
+        case POr(alts):
+            # `case A | B | C:` — match if any alternative matches. Each
+            # alternative tries to match, branches to match_bb on success
+            # or to the next alternative's attempt block on failure. The
+            # last alternative's no-match goes to no_match_bb.
+            #
+            # Previously fell through to the unconditional `GTJump(match_bb)`
+            # below — every POr arm unconditionally matched regardless of
+            # the scrutinee, which broke the 32 uses of `a | b` patterns
+            # in the self-host sources.
+            if alts.len() == 0:
+                set_terminator(&ctx, GTJump(no_match_bb))
+            else:
+                int ai = 0
+                while ai < alts.len():
+                    SpannedPattern alt = alts.get(ai).unwrap()
+                    int next_alt_bb = no_match_bb
+                    if ai + 1 < alts.len():
+                        next_alt_bb = new_block(&ctx)
+                    lower_pattern_match(&ctx, scrutinee, alt, enum_name, match_bb, next_alt_bb, &gmod)
+                    if ai + 1 < alts.len():
+                        switch_to(&ctx, next_alt_bb)
+                    ai += 1
         else:
-            # Unsupported pattern shape (PTuple, POr, PRest) — fall through
+            # Unsupported pattern shape (PTuple, PRest) — fall through
             # with a permissive match rather than silently dropping the arm
             # body. Future fixes: add proper patterns.
             lower_fail("unsupported pattern variant in match arm")
