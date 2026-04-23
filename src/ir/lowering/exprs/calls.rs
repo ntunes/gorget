@@ -228,6 +228,26 @@ pub(super) fn lower_call_arg(
             }
             val
         }
+        Ownership::Move => {
+            // Refcounted types (Shared / Weak / Channel — Trivial copy semantics
+            // but needing a drop at scope exit). `!x` at the call site means the
+            // callee takes ownership of the refcount; the caller's slot must be
+            // zeroed so its scope-exit drop doesn't fire a second time.
+            // Without this, `drop_all(!s)` compiles to a plain by-value pass,
+            // callee drops s, then caller ALSO drops s — heap-use-after-free
+            // inside gorget_shared_drop the second time around.
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                if place.projections.is_empty() {
+                    let local_type = builder.local_type(place.local);
+                    if ctx.type_registry.needs_param_drop(local_type) {
+                        ctx.drops.mark_moved(place.local);
+                        ctx.func_state.pending_move_zeros.push(place.local);
+                        return val;
+                    }
+                }
+            }
+            ctx.auto_clone_if_ptr(builder, val, arg.span)
+        }
         _ => ctx.auto_clone_if_ptr(builder, val, arg.span), // Auto-clone Ptr(T) → T at boundary
     }
 }

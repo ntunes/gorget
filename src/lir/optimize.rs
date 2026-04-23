@@ -512,27 +512,39 @@ pub fn eliminate_dead_code(func: &mut LirFunction) -> usize {
 }
 
 fn has_side_effects(inst: &Inst) -> bool {
-    matches!(
-        inst,
-        Inst::SlotStore { .. }
-            | Inst::ClosurePack { .. }
-            | Inst::Store { .. }
-            | Inst::Memset { .. }
-            | Inst::Memcpy { .. }
-            | Inst::Call { .. }
-            | Inst::CallExtern { .. }
-            | Inst::CallPtr { .. }
-            | Inst::CallClosure { .. }
-            | Inst::DropGuardOpen { .. }
-            | Inst::DropGuardClose
-            | Inst::BoundsCheck { .. }
-            | Inst::DivCheck { .. }
-            | Inst::Trap { .. }
-            | Inst::Printf { .. }
-            | Inst::Fprintf { .. }
-            | Inst::MoveSlot { .. }
-            | Inst::Nop
-    )
+    // Integer Div/Rem/Mod and all shift ops can trap at runtime (divide-by-zero
+    // and shift-out-of-range guards emitted by the C backend), so DCE must not
+    // eliminate them even when the result is unused — otherwise `int boom = 10
+    // / z` silently runs to completion when boom is dead. Float Div/Rem/Mod
+    // are defined under IEEE-754 (NaN/Inf for /0) and have no trap, so they
+    // remain eliminable.
+    match inst {
+        Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Mod { ty, .. } => {
+            !matches!(ty, LirType::F32 | LirType::F64)
+        }
+        Inst::Shl { .. } | Inst::Shr { .. } => true,
+        _ => matches!(
+            inst,
+            Inst::SlotStore { .. }
+                | Inst::ClosurePack { .. }
+                | Inst::Store { .. }
+                | Inst::Memset { .. }
+                | Inst::Memcpy { .. }
+                | Inst::Call { .. }
+                | Inst::CallExtern { .. }
+                | Inst::CallPtr { .. }
+                | Inst::CallClosure { .. }
+                | Inst::DropGuardOpen { .. }
+                | Inst::DropGuardClose
+                | Inst::BoundsCheck { .. }
+                | Inst::DivCheck { .. }
+                | Inst::Trap { .. }
+                | Inst::Printf { .. }
+                | Inst::Fprintf { .. }
+                | Inst::MoveSlot { .. }
+                | Inst::Nop
+        ),
+    }
 }
 
 // ── Constant Folding ──────────────────────────────────────────────────────

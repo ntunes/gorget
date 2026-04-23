@@ -469,23 +469,24 @@ fn sec_20_shift_out_of_range() {
 }
 
 #[test]
-fn sec_22_option_shared_drop_mistype() {
-    security_known_unsafe(
-        "attack_22_weak_after_shared_dropped",
-        KnownBug::BuildFails,
-        "Monomorphized Option[Shared[T]]::drop has a void**/GorgetShared** pointer-type \
-         mismatch plus a dangling `int64_t__new` reference. C won't link.",
-    );
+fn sec_22_weak_after_shared_dropped() {
+    // Fixed 2026-04-23. Two things: (1) the original `Shared.new(v)` surface
+    // syntax isn't supported in Gorget — rewrote the fixture to the idiomatic
+    // `Shared[T](v)` constructor. That alone turned the link error into a
+    // heap-use-after-free. (2) Root fix in src/ir/lowering/exprs/calls.rs —
+    // `!x` on a refcounted type (Shared/Weak/Channel) now MoveZeros the
+    // caller's slot after the call, matching the push/enum-init consuming-
+    // position rule. Without (2), `drop_all(!s)` left `s` live in the caller
+    // and its scope-exit drop double-freed the control block.
+    security_safe("attack_22_weak_after_shared_dropped", "-1");
 }
 
 #[test]
-fn sec_23_dead_div_zero_dce() {
-    security_known_unsafe(
-        "attack_23_panic_during_init",
-        KnownBug::SilentlyProduces("10"),
-        "`int boom = 10 / z` (z==0) gets DCE'd when boom is unused; runtime never traps. \
-         Hides real bugs from users.",
-    );
+fn sec_23_dead_div_zero_now_traps() {
+    // Was SilentlyProduces("10"). Fixed 2026-04-23 in src/lir/optimize.rs —
+    // integer Div/Rem/Mod and all shifts are now treated as side-effecting
+    // by the LIR DCE pass, so the trap fires even when the result is dead.
+    security_traps("attack_23_panic_during_init", "division by zero");
 }
 
 #[test]
@@ -498,9 +499,15 @@ fn sec_12_vector_iter_resource_panic() {
     security_known_unsafe(
         "attack_12_vector_iter_resource",
         KnownBug::BuildFails,
-        "`for s in v.iter():` over Vector[String] (resource-typed T) crashes the C backend \
-         at emit_types.rs:965 with `Ptr ABI received scalar value`. Compiler DoS on valid \
-         source code. (TODO Low: VectorIter[T] Ptr-ABI codegen panic in for-loops)",
+        "`for s in v.iter():` over Vector[String] (resource-typed T) trips a \
+         `debug_assert!` in the C backend at emit_types.rs:965 — the Option[Ref[T]] \
+         Some_0 load is tagged LIR::I64 instead of LIR::Ptr, which a debug-profile \
+         compiler rejects before emit. **The release-profile compiler builds it and \
+         the binary runs correctly** (the cast is cosmetic — void* and int64_t are \
+         the same size on all supported targets). Same bug family as the Option[Ref[T]] \
+         info leak, but in the for-loop payload-extraction path rather than VarDecl. \
+         The deeper fix is to make the Option[Ref[T]] Some field type resolve as \
+         LIR::Ptr everywhere, not I64.",
     );
 }
 
