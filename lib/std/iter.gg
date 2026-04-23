@@ -75,6 +75,19 @@ trait Iterator[T]:
             out.push(x)
         return !out
 
+    # Set-target collect. Typecheck rewrites `.collect()` → `.to_set()`
+    # when the binding's declared type is `Set[T]`, so callers write
+    # `Set[int] s = v.iter().filter(p).collect()` and get the right
+    # constructor for free. `Set[T]`'s type-level bound on `T` already
+    # requires `T: Hashable + Equatable`, so this default only
+    # mono'ises for Iterator[T]s whose `T` satisfies those constraints
+    # — the demand-gate skips emission for T's that don't.
+    Set[T] to_set(&self):
+        Set[T] out = Set[T]()
+        for x in self:
+            out.add(x)
+        return !out
+
     Option[T] last(&self):
         Option[T] out = None
         for x in self:

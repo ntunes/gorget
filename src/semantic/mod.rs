@@ -220,6 +220,17 @@ pub fn analyze_with_source_dir(
         errors.push(SemanticError { kind, span });
     }
 
+    // Pass 2.6: LHS-type-driven `.collect()` target selection. Walks
+    // VarDecls whose declared type is `Set[T]` and rewrites an inner
+    // `.collect()` call to `.to_set()` so typecheck + IR lowering
+    // dispatch the Set-targeted `Iterator[T]::to_set(&self)` trait
+    // default instead of the Vector-targeted `.collect()`. Lets callers
+    // write `Set[int] s = v.iter().filter(p).collect()` without a
+    // turbofish or explicit `.to_set()` spelling. Purely AST-level —
+    // no type inference needed since the declared type is at the
+    // syntactic position.
+    typecheck::apply_collect_target_rewrites(module);
+
     // Pass 3: Build trait/impl registry
     let trait_registry =
         traits::build_registry(module, &scopes, &mut types, &resolution_map, &mut errors);

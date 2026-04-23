@@ -1,0 +1,43 @@
+# LHS-type-driven `.collect()` target selection.
+#
+# Writing `Set[T] x = iter.collect()` routes to the Set-targeted
+# `Iterator[T]::to_set(&self)` default instead of the Vector-targeted
+# `collect(&self)`. The AST rewrite (`apply_collect_target_rewrites`,
+# semantic Pass 2.6) spots the `Set[_]` declared-type shape and swaps
+# the method name before typecheck runs — so users don't need a
+# turbofish or an explicit `.to_set()` spelling.
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int double(int x):
+    return x * 2
+
+int main():
+    Vector[int] v = [1, 2, 3, 2, 1, 4, 3]
+
+    # Direct `.collect()` into Set deduplicates.
+    Set[int] uniq = v.iter().collect()
+    print(uniq.len())
+
+    # Membership checks.
+    print(uniq.contains(1))
+    print(uniq.contains(5))
+
+    # Chained filter → collect into Set.
+    Vector[int] nums = [1, 2, 3, 4, 5, 6, 2, 4]
+    Set[int] uniq_evens = nums.iter().filter(is_even).collect()
+    print(uniq_evens.len())
+    print(uniq_evens.contains(2))
+    print(uniq_evens.contains(3))
+
+    # Chained map → collect into Set.
+    Vector[int] xs = [1, 2, 3, 1, 2]
+    Set[int] doubled_uniq = xs.iter().map(double).collect()
+    print(doubled_uniq.len())
+    print(doubled_uniq.contains(2))
+    print(doubled_uniq.contains(4))
+    print(doubled_uniq.contains(6))
+    print(doubled_uniq.contains(1))
+
+    return 0

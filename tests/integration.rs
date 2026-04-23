@@ -2076,6 +2076,14 @@ fn iter_chain_past_one_step() {
 }
 
 #[test]
+fn iter_collect_set() {
+    run_gg(
+        "iter_collect_set.gg",
+        "4\ntrue\nfalse\n3\ntrue\nfalse\n3\ntrue\ntrue\ntrue\nfalse",
+    );
+}
+
+#[test]
 fn iter_terminal_method_sugar() {
     run_gg(
         "iter_terminal_method_sugar.gg",

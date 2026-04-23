@@ -4683,6 +4683,172 @@ pub fn apply_inferred_method_targs(
     walk_items(&mut module.items, inferred);
 }
 
+/// AST post-pass: rewrite `Set[T] x = expr.collect()` → `Set[T] x =
+/// expr.to_set()` so that IR lowering dispatches the Set-targeted
+/// trait default (see `Iterator[T]::to_set(&self)`) instead of the
+/// Vector-targeted `.collect()`. Mirrors `apply_inferred_method_targs`
+/// — run after typecheck, before IR lowering. Applies recursively to
+/// all VarDecls (including inside function bodies, nested blocks,
+/// and trait/equip method items).
+///
+/// Only rewrites when the RHS of the VarDecl is a MethodCall whose
+/// method name is `collect`. Other call shapes (free-fn calls, inline
+/// struct literals, etc.) stay untouched — the user explicitly picked
+/// a different constructor.
+///
+/// Dict is a follow-up: `Dict[K, V] d = pairs.collect()` needs tuple
+/// destructuring (trait's `T = (K, V)`) that the current signature
+/// shape doesn't accommodate.
+pub fn apply_collect_target_rewrites(module: &mut Module) {
+    fn walk_items(items: &mut [Spanned<Item>]) {
+        for item in items {
+            match &mut item.node {
+                Item::Module { items: inner, .. } => walk_items(inner),
+                Item::Function(f) => walk_function(f),
+                Item::Equip(eq) => {
+                    for m in &mut eq.items {
+                        walk_function(&mut m.node);
+                    }
+                }
+                Item::Trait(td) => {
+                    for ti in &mut td.items {
+                        if let TraitItem::Method(m) = &mut ti.node {
+                            walk_function(m);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn walk_function(f: &mut FunctionDef) {
+        match &mut f.body {
+            FunctionBody::Block(b) => walk_block(b),
+            FunctionBody::Expression(e) => walk_expr(e),
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+    }
+    fn walk_block(b: &mut Block) {
+        for stmt in &mut b.stmts {
+            walk_stmt(&mut stmt.node);
+        }
+    }
+    fn walk_stmt(s: &mut Stmt) {
+        match s {
+            Stmt::VarDecl { type_, value, .. } => {
+                // If the declared type is `Set[T]`, rewrite an inner
+                // `.collect()` call to `.to_set()`. Check AST directly
+                // — no typecheck-resolved TypeId needed.
+                if is_set_type(&type_.node) {
+                    if let Expr::MethodCall { method, .. } = &mut value.node {
+                        if method.node == "collect" {
+                            method.node = "to_set".to_string();
+                        }
+                    }
+                }
+                walk_expr(value);
+            }
+            Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e),
+            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e),
+            Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
+                walk_expr(target);
+                walk_expr(value);
+            }
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                walk_expr(condition);
+                walk_block(then_body);
+                for (cond, body) in elif_branches.iter_mut() {
+                    walk_expr(cond);
+                    walk_block(body);
+                }
+                if let Some(eb) = else_body { walk_block(eb); }
+            }
+            Stmt::While { condition, body, else_body } => {
+                walk_expr(condition);
+                walk_block(body);
+                if let Some(eb) = else_body { walk_block(eb); }
+            }
+            Stmt::For { iterable, body, else_body, .. } => {
+                walk_expr(iterable);
+                walk_block(body);
+                if let Some(eb) = else_body { walk_block(eb); }
+            }
+            Stmt::Match { scrutinee, arms, else_arm } => {
+                walk_expr(scrutinee);
+                for item in arms {
+                    if let crate::parser::ast::MatchItem::Arm(arm) = item {
+                        walk_expr(&mut arm.body);
+                        if let Some(g) = &mut arm.guard { walk_expr(g); }
+                    }
+                }
+                if let Some(b) = else_arm { walk_block(b); }
+            }
+            Stmt::With { bindings, body } => {
+                for binding in bindings { walk_expr(&mut binding.expr); }
+                walk_block(body);
+            }
+            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+                walk_block(body);
+            }
+            _ => {}
+        }
+    }
+    fn walk_expr(e: &mut Spanned<Expr>) {
+        match &mut e.node {
+            Expr::MethodCall { receiver, args, .. } => {
+                walk_expr(receiver);
+                for a in args { walk_expr(&mut a.node.value); }
+            }
+            Expr::Call { callee, args, .. } => {
+                walk_expr(callee);
+                for a in args { walk_expr(&mut a.node.value); }
+            }
+            Expr::StructLiteral { args, .. } => {
+                for a in args { walk_expr(a); }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                walk_expr(left);
+                walk_expr(right);
+            }
+            Expr::UnaryOp { operand, .. } => walk_expr(operand),
+            Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+                walk_expr(object);
+            }
+            Expr::Index { object, index } => {
+                walk_expr(object);
+                walk_expr(index);
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                walk_expr(condition);
+                walk_expr(then_branch);
+                if let Some(eb) = else_branch { walk_expr(eb); }
+            }
+            Expr::Range { start, end, .. } => {
+                if let Some(s) = start { walk_expr(s); }
+                if let Some(e) = end { walk_expr(e); }
+            }
+            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            | Expr::OptionalChain { object: inner, .. } => walk_expr(inner),
+            Expr::DefaultOp { lhs, rhs } => {
+                walk_expr(lhs);
+                walk_expr(rhs);
+            }
+            Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => walk_expr(body),
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+                for e in elems { walk_expr(e); }
+            }
+            Expr::Block(b) => walk_block(b),
+            _ => {}
+        }
+    }
+    fn is_set_type(ty: &Type) -> bool {
+        matches!(ty, Type::Named { name, generic_args }
+            if (name.node == "Set" || name.node == "HashSet")
+                && generic_args.len() == 1)
+    }
+    walk_items(&mut module.items);
+}
+
 /// Recursively register function signatures, descending into `Item::Module` wrappers
 /// so that imported module code has type information available.
 fn register_signatures_recursive(checker: &mut TypeChecker, items: &[Spanned<Item>]) {
