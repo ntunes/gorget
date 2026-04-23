@@ -1,0 +1,15 @@
+# Attack: match-binding origin tracking — borrow a value out of a match arm, let the
+# match scrutinee die, keep using the borrow.
+
+struct Holder:
+    Vector[int] data
+
+Vector[int]& extract():
+    Holder h = Holder([1, 2, 3])
+    match h.data.get(0):
+        case Some(v): return h.data
+        case None(): return h.data
+
+void main():
+    Vector[int]& v = extract()
+    print(v.len())

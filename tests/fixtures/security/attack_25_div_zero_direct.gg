@@ -1,0 +1,10 @@
+# Direct probe: does integer /0 panic, return garbage, or silently "succeed"?
+
+int divz(int a, int b):
+    return a / b
+
+void main():
+    print("before")
+    int x = divz(42, 0)
+    print("after")
+    print(x)

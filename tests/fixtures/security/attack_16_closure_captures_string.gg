@@ -1,0 +1,20 @@
+# Stronger version of attack_08: closure captures a RESOURCE-typed local (String),
+# then the local's stack frame dies. Invoke the closure afterwards. If the capture
+# is by reference (not by value/copy), the String's heap-backing or stack-data
+# is freed, and we read freed memory.
+
+String() make():
+    String greeting = "hello from a dead frame"
+    return (): greeting
+
+String scribble(int depth):
+    String big = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    if depth > 0:
+        return scribble(depth - 1)
+    return big
+
+void main():
+    String() f = make()
+    # Scribble the stack before invoking the closure to maximize UAF signal under ASan.
+    String _ = scribble(50)
+    print(f())

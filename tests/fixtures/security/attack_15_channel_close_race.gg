@@ -1,0 +1,24 @@
+# Attack: Channel close while another task is sending or receiving.
+
+from std.channel import Channel
+
+async void sender(Channel[int] ch):
+    int i = 0
+    while i < 100:
+        ch.send(i)
+        i += 1
+
+async void receiver(Channel[int] ch, int n):
+    int i = 0
+    while i < n:
+        int v = ch.recv()
+        i += 1
+
+async void main():
+    Channel[int] ch = Channel[int](4)
+    Task[void] t1 = spawn sender(ch)
+    Task[void] t2 = spawn receiver(ch, 100)
+    t1.await()
+    t2.await()
+    ch.close()
+    print(0)

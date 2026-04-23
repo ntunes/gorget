@@ -1,0 +1,21 @@
+# Attack: TODO Low — "Inline None() without typed variable produces garbage."
+# If a well-typed program produces garbage, that's at minimum a correctness bug
+# and plausibly a UB source. ASan may catch a read of uninitialized memory.
+
+Option[int] maybe(bool yes):
+    if yes:
+        return Some(42)
+    return None()
+
+void main():
+    Option[int] a = maybe(true)
+    Option[int] b = maybe(false)
+    match a:
+        case Some(v): print(v)
+        case None(): print(-1)
+    match b:
+        case Some(v): print(v)
+        case None(): print(-2)
+    # Now the "inline None()" variant that TODO flags:
+    print(maybe(false).is_some())
+    print(maybe(true).unwrap())

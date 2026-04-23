@@ -1,0 +1,17 @@
+# UBSan probe for signed division by zero, signed overflow, shift out-of-range.
+
+int divide(int a, int b):
+    return a / b
+
+int mul_overflow(int a, int b):
+    return a * b
+
+int shift_too_far(int v, int n):
+    return v << n
+
+void main():
+    print(divide(10, 2))
+    print(mul_overflow(1000000000, 3))
+    print(shift_too_far(1, 63))
+    print(shift_too_far(1, 100))
+    print(divide(5, 0))

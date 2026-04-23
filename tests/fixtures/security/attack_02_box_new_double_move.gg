@@ -1,0 +1,17 @@
+# Attack: TODO High — "Box.new should enforce `!` at borrow checker level.
+# Currently Box.new implicitly MoveZeros the source." Audit repro showed:
+#   - `gg check`: OK (borrow checker blind to Box.new's consumption)
+#   - `gg build`: GIR validator panic `local _1 read after MoveZero`
+# Fix: Box.new now follows the push/set consuming-position rule — if the
+# source is multi-use, clone it; only MoveZero when the source is genuinely
+# last-use. This fixture compiles clean and `p` remains readable after
+# `Box.new(p)`.
+
+struct Payload:
+    Vector[int] data
+
+void main():
+    Payload p = Payload([1, 2, 3, 4, 5])
+    Box[Payload] b = Box.new(p)
+    # `p` must still be live after Box.new — Box was cloned, not moved.
+    print(p.data.len())

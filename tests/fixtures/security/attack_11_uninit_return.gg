@@ -1,0 +1,26 @@
+# Attack: TODO Low — "C backend: uninitialized return variable — `_0` used uninitialized
+# in some functions." UBSan should catch reads of uninitialized.
+
+int early_return(int x):
+    if x > 0:
+        return x * 2
+    if x < 0:
+        return -x
+    return 0
+
+int no_trailing(int x):
+    if x > 100:
+        return 1
+    else:
+        if x < -100:
+            return -1
+        else:
+            return 0
+
+void main():
+    print(early_return(5))
+    print(early_return(-7))
+    print(early_return(0))
+    print(no_trailing(200))
+    print(no_trailing(-200))
+    print(no_trailing(42))

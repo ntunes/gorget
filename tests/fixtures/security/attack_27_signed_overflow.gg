@@ -1,0 +1,16 @@
+# Signed integer overflow. In C this is UB; UBSan will trip it.
+
+int add(int a, int b):
+    return a + b
+
+int mul(int a, int b):
+    return a * b
+
+int neg_min():
+    int m = -9223372036854775807 - 1
+    return -m
+
+void main():
+    print(add(9223372036854775000, 1000))
+    print(mul(1000000000, 1000000000))
+    print(neg_min())

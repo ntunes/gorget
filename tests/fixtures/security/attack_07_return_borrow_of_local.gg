@@ -1,0 +1,10 @@
+# Attack: dangling-return classic — return a borrow into a function-local.
+# `return_borrows.rs` is supposed to reject escapes of `Local(_)` origins.
+
+int& leak():
+    int x = 42
+    return x
+
+void main():
+    int& escaped = leak()
+    print(escaped)

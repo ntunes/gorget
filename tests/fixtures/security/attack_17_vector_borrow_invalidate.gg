@@ -1,0 +1,14 @@
+# Sharper version of attack_04 using Vector[String] and Option[Ref] from .get().
+# If `.get(0)` returns a reference into v's heap buffer and we then grow v,
+# the stashed option holds a pointer into freed storage.
+
+void main():
+    Vector[String] v = ["aaa", "bbb", "ccc"]
+    Option[String] maybe = v.get(0)  # does this clone or borrow?
+    int i = 0
+    while i < 8192:
+        v.push("pad-pad-pad-pad-pad-pad-pad-pad-pad-pad-pad-pad-pad")
+        i += 1
+    match maybe:
+        case Some(s): print(s)
+        case None(): print("none")

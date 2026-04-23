@@ -9,6 +9,10 @@
 !self_host_*/**
 !modules_pkg*/
 !modules_pkg*/**
+!security/
+!security/*.gg
+!security/*.expected
+!security/*.md
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

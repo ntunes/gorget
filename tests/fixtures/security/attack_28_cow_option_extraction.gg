@@ -1,0 +1,9 @@
+# Isolate the attack_17 bug: Option[String] from v.get(i) without clone.
+# Don't mutate v after. Just prove the type-punning happens on extraction.
+
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma"]
+    Option[String] maybe = v.get(0)
+    match maybe:
+        case Some(s): print(s)
+        case None(): print("none")

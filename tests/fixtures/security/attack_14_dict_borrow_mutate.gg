@@ -1,0 +1,10 @@
+# Attack: Dict version of 04 — borrow a value from a Dict, mutate the Dict, use borrow.
+
+void main():
+    Dict[String, String] d = {"k1": "v1", "k2": "v2"}
+    String v = d.get("k1").unwrap().clone()
+    int i = 0
+    while i < 5000:
+        d.put("x", "padpadpadpadpadpadpadpadpadpadpadpadpad")
+        i += 1
+    print(v)

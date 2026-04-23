@@ -1,0 +1,14 @@
+# Iterate a Vector[String] by index and move each out with `!`. Memory:
+# "MoveInLoop" error should catch this when the var is defined outside the loop.
+# If it doesn't fire on per-iteration moves of different elements, we may get UAF.
+
+void eat(String !s):
+    print(s)
+
+void main():
+    Vector[String] v = ["one", "two", "three"]
+    int i = 0
+    while i < v.len():
+        String elem = v.get(i).unwrap().clone()
+        eat(!elem)
+        i += 1

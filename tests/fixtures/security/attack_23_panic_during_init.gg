@@ -1,0 +1,18 @@
+# Panic while constructing a Vector[String]. Does the partially-built collection
+# leak or double-free?
+
+Vector[String] build(int n):
+    Vector[String] v = []
+    int i = 0
+    while i < n:
+        v.push("item-plus-some-padding-to-defeat-SSO")
+        if i == 3:
+            # Force a panic mid-construction.
+            int z = 0
+            int boom = 10 / z
+        i += 1
+    return v
+
+void main():
+    Vector[String] v = build(10)
+    print(v.len())

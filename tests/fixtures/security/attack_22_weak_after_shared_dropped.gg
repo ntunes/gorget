@@ -1,0 +1,17 @@
+# Classic UAF on weak reference. Does Weak.upgrade() return None after the
+# last Shared is dropped, or does it read freed memory?
+
+struct Big:
+    Vector[int] data
+
+void drop_all(Shared[Big] !s):
+    pass
+
+void main():
+    Shared[Big] s = Shared.new(Big([1, 2, 3]))
+    Weak[Big] w = s.downgrade()
+    drop_all(!s)
+    Option[Shared[Big]] upgraded = w.upgrade()
+    match upgraded:
+        case Some(alive): print(alive.data.get(0).unwrap())
+        case None(): print(-1)

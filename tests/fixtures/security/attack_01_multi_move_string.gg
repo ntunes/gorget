@@ -1,0 +1,13 @@
+# Attack: `calls.rs:197` admits "borrow checker should reject multi-use ! on strings"
+# Target: double-move of a String via `!` should reject, but compiler treats it as no-op.
+# Expected-unsafe: if the compiler accepts this, either (a) one call sees a zeroed string
+# (runtime wrong result) or (b) both see the same bytes but ownership is still claimed twice
+# (double-free on drop).
+
+void eat(String !s):
+    print(s)
+
+void main():
+    String x = "hello"
+    eat(!x)
+    eat(!x)

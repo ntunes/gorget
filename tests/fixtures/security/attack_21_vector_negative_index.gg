@@ -1,0 +1,16 @@
+# Index a vector with negative / out-of-range. get() is Option-returning, so should
+# be safe — but probe subscript [] and the internal array_get for bounds.
+
+void main():
+    Vector[int] v = [10, 20, 30]
+    int n = 100
+    Option[int] got = v.get(n)
+    match got:
+        case Some(x): print(x)
+        case None(): print(-1)
+    int neg = -5
+    Option[int] neg_got = v.get(neg)
+    match neg_got:
+        case Some(x): print(x)
+        case None(): print(-2)
+    print(v[2])

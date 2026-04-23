@@ -1,0 +1,10 @@
+# Modulo by zero.
+
+int modz(int a, int b):
+    return a % b
+
+void main():
+    print("before")
+    int x = modz(42, 0)
+    print("after")
+    print(x)

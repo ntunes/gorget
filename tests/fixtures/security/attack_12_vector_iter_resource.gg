@@ -1,0 +1,7 @@
+# Attack: TODO Low — "VectorIter[T] for resource-type T trips Ptr-ABI codegen panic
+# in for-loops." If it panics, that's a compiler DoS on valid source.
+
+void main():
+    Vector[String] v = ["a", "b", "c"]
+    for s in v.iter():
+        print(s)

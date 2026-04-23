@@ -1,0 +1,19 @@
+# Attack: classic iterator/pointer invalidation. Grab an element, force realloc,
+# keep using the element.
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    int x = v.get(0).unwrap().clone()
+    int i = 0
+    while i < 10000:
+        v.push(i)
+        i += 1
+    # `x` is a scalar clone so this attack shouldn't hit; try with String:
+    Vector[String] sv = ["alpha", "beta"]
+    String s = sv.get(0).unwrap().clone()
+    int j = 0
+    while j < 10000:
+        sv.push("padpadpadpadpadpadpadpadpadpadpadpadpadpad")
+        j += 1
+    print(s)
+    print(sv.get(0).unwrap().clone())

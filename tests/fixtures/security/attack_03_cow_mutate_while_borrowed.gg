@@ -1,0 +1,14 @@
+# Attack: `check_expr.rs:317` emits a WARNING, not an error, for implicit CoW borrows
+# from `.get().unwrap()` / `vec[i]`. Comment claims: "CoW system handles correctness
+# by materializing before mutation." Test that claim under ASan.
+
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma"]
+    String s = v.get(0).unwrap().clone()
+    # At this point `s` is allegedly a CoW borrow into v[0].
+    # Now mutate v while `s` is live — forces materialization.
+    v.push("delta")
+    # `s` must still be valid after the mutation. If CoW didn't materialize,
+    # `s` now points into freed/reallocated backing storage.
+    print(s)
+    print(v.get(3).unwrap().clone())

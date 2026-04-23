@@ -1,0 +1,9 @@
+# TOCTOU: read from the same vector we're writing into, in a single expression.
+# If args are evaluated left-to-right and the read is a borrow (not a clone),
+# the write invalidates the borrow.
+
+void main():
+    Vector[String] v = ["first", "second", "third"]
+    v.set(0, v.get(2).unwrap().clone())
+    print(v.get(0).unwrap().clone())
+    print(v.get(2).unwrap().clone())

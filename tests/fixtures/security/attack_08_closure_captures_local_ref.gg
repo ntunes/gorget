@@ -1,0 +1,9 @@
+# Attack: closure that captures a borrow of a local, and escapes the scope of that local.
+
+int() make_closure():
+    int x = 123
+    return (): x
+
+void main():
+    int() f = make_closure()
+    print(f())

@@ -1,0 +1,13 @@
+# Variant of attack_17 with explicit .clone() on the extract — does the CoW
+# system still mis-size if we annotate with clone?
+
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma"]
+    Option[String] maybe = Some(v.get(0).unwrap().clone())
+    int i = 0
+    while i < 8192:
+        v.push("pad-pad-pad-pad-pad-pad-pad-pad-pad-pad")
+        i += 1
+    match maybe:
+        case Some(s): print(s)
+        case None(): print("none")

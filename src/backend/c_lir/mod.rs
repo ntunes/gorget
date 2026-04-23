@@ -1929,22 +1929,24 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 write!(out, "{} = fmod({}, {});", v(*dst), v(*lhs), v(*rhs)).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
-                write!(out, "{d} = ({ct}){l} % ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
+                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} % ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
             }
         }
         Inst::Mod { dst, ty, lhs, rhs, .. } => {
             if matches!(ty, LirType::F32 | LirType::F64) {
                 // Python-style float modulo: fmod(a,b) + (result has different sign from b ? b : 0)
+                // fmod(x, 0.0) is defined as NaN in C, so no guard needed (IEEE-754).
                 write!(
                     out,
                     "{{ double __t = fmod({l}, {r}); {d} = __t + (__t != 0.0 && ((__t < 0) != ({r} < 0)) ? {r} : 0.0); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs)
                 ).unwrap();
             } else {
-                // Python-style integer modulo
+                // Python-style integer modulo. The underlying `%` is UB for b==0, so guard first.
                 write!(
                     out,
-                    "{{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                    "if ({r} == 0) {{ fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); }} {{ typeof({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
                     d = v(*dst), l = v(*lhs), r = v(*rhs)
                 ).unwrap();
             }
@@ -1966,11 +1968,30 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::BitNot { dst, operand, .. } => {
             write!(out, "{} = ~{};", v(*dst), v(*operand)).unwrap();
         }
-        Inst::Shl { dst, lhs, rhs, .. } => {
-            write!(out, "{} = {} << {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
+        Inst::Shl { dst, ty, lhs, rhs } => {
+            // Two classes of C UB to defeat:
+            //   1. shift-count >= bit-width (and negative counts, via the unsigned cast).
+            //   2. shift-into-the-sign-bit of a signed integer (`1 << 63` on int64_t).
+            // (1) is guarded explicitly. (2) is avoided by widening through the unsigned
+            // companion type before shifting, which is well-defined for every count in
+            // [0, width), then casting back. Bit pattern is preserved.
+            let ct = c_type_named(ty, sn);
+            let uct = match ty {
+                LirType::I64 | LirType::U64 => "uint64_t",
+                LirType::I32 | LirType::U32 => "uint32_t",
+                LirType::I16 | LirType::U16 => "uint16_t",
+                LirType::I8  | LirType::U8  => "uint8_t",
+                _ => ct.as_str(),
+            };
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"gorget: shift out of range\\n\"); exit(1); }} {d} = ({ct})(({uct}){l} << {r});",
+                d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
         }
-        Inst::Shr { dst, lhs, rhs, .. } => {
-            write!(out, "{} = {} >> {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
+        Inst::Shr { dst, ty, lhs, rhs } => {
+            // C `>>` on signed negatives is implementation-defined (arithmetic shift on
+            // every real target), so only the shift-count needs guarding.
+            let ct = c_type_named(ty, sn);
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"gorget: shift out of range\\n\"); exit(1); }} {d} = ({ct}){l} >> {r};",
+                d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
         }
 
         // Comparison & logic (purely scalar — string comparisons are lowered

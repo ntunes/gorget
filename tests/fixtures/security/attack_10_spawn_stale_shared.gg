@@ -1,0 +1,17 @@
+# Attack: TODO Medium — "Spawn captures don't check stale shared-derived.
+# Spawned closures can capture stale pre-await data."
+# Race: two tasks hammer the same atomic counter from spawned closures.
+
+async void writer(AtomicInt s, int n):
+    int i = 0
+    while i < n:
+        s.add(1)
+        i += 1
+
+async void main():
+    shared(atomic) int s = 0
+    Task[void] w1 = spawn writer(s, 10000)
+    Task[void] w2 = spawn writer(s, 10000)
+    w1.await()
+    w2.await()
+    print(s)

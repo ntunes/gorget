@@ -1,0 +1,11 @@
+# Attack: memory note — "nested Vector[Vector[T]] get-push-set silently drops
+# mutations; rebuild inner Vector instead". If the drop is silent, do we leak,
+# double-free, or just lose the push? ASan will tell us.
+
+void main():
+    Vector[Vector[int]] grid = [[1, 2], [3, 4]]
+    Vector[int] row = grid.get(0).unwrap().clone()
+    row.push(99)
+    grid.set(0, row)
+    print(grid.get(0).unwrap().len())
+    print(grid.get(0).unwrap().get(2).unwrap())
