@@ -160,6 +160,20 @@ impl GenericCollector {
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.fn_templates.insert(f.name.node.clone(), f.clone());
                 }
+                Item::ExternBlock(ext) => {
+                    // Generic extern fns declared inside `extern "C":` / `extern "Gorget":`
+                    // blocks must be registered as templates so callers with type args
+                    // (`f[int, int](...)`) trigger monomorphization and the post-pass in
+                    // `ir/lowering/mod.rs` can propagate the C symbol binding. Inline
+                    // extern decls (`extern int f[K, V](...) = "sym"`) already flow
+                    // through the Item::Function branch above.
+                    for func_spanned in &ext.items {
+                        let f = &func_spanned.node;
+                        if f.generic_params.is_some() {
+                            self.fn_templates.insert(f.name.node.clone(), f.clone());
+                        }
+                    }
+                }
                 Item::Trait(_) => {
                     // Already collected in the first pass above.
                 }

@@ -783,6 +783,33 @@ pub fn lower_module(
     // Register monomorphized function signatures
     generic_collector.register_fn_sigs(&ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_ownerships, &mut ctx.fn_param_abis);
 
+    // Propagate extern bindings to monomorphized instances of generic extern fns.
+    // A generic `extern "Gorget" int f[K, V](Dict[K, V] &m) = "c_symbol"` has one
+    // C symbol (`c_symbol`), but callers with type args get mangled names
+    // (`f__int64_t__int64_t`). Without this pass, the mangled call site misses the
+    // extern binding and codegen emits the mangled name as the callee — linker
+    // fails because only the base name maps to `c_symbol`. Propagate the mapping +
+    // ABI metadata from the base to every monomorphized instance.
+    for (base_name, _type_args, mangled_name, kind) in generic_collector.instances_raw() {
+        if !matches!(kind, generics::TemplateKind::Function) { continue; }
+        if base_name == mangled_name { continue; }
+        let Some(template) = generic_collector.get_fn_template(base_name) else { continue; };
+        let FunctionBody::Extern(c_symbol) = &template.body else { continue; };
+        // extern_bindings: mangled → C symbol (same C symbol for every mono instance).
+        ctx.extern_bindings.insert(mangled_name.clone(), c_symbol.clone());
+        ctx.extern_body_fns.insert(mangled_name.clone());
+        // Propagate per-function ABI metadata keyed by the base name.
+        if let Some(abis) = ctx.fn_extern_abi_kinds.get(base_name).cloned() {
+            ctx.fn_extern_abi_kinds.insert(mangled_name.clone(), abis);
+        }
+        if let Some(abi) = ctx.fn_return_abis.get(base_name).copied() {
+            ctx.fn_return_abis.insert(mangled_name.clone(), abi);
+        }
+        if template.qualifiers.is_async || template.qualifiers.is_blocking {
+            ctx.yield_point_fns.insert(mangled_name.clone());
+        }
+    }
+
     // Register ABI tags for compiler-emitted runtime calls (not declared in .gg files).
     // Under 32-byte Str, functions that take const char* for Str params need CStr
     // marshalling so the caller extracts .data from the Str struct.
