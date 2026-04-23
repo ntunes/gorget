@@ -883,13 +883,51 @@ extern_block = "extern" [ STRING_LITERAL ] ":" NEWLINE INDENT { function_decl } 
 function_decl = type IDENTIFIER "(" [ param_list ] ")" NEWLINE ;
 ```
 
-Declares foreign functions (FFI). The optional string specifies the ABI (default: `"C"`).
+Declares foreign functions (FFI). The string specifies the ABI tag. Two
+tags are recognized:
+
+- **`extern "C"`** — for calling C library functions. `String` params
+  are marshalled to `const char*` via `gorget_str_to_cstr`; `cstr`
+  return types are wrapped to owned `String`. The `cstr` contextual
+  type is only valid inside `extern "C"`.
+- **`extern "Gorget"`** — for Gorget-aware runtime wrappers that take
+  Gorget types directly (`Str` by value, `GorgetArray*`, `GorgetMap*`,
+  etc.). `String` params stay as `Str` struct by value; resource types
+  (`Vector[T]`, `Dict[K, V]`, `Set[T]`) pass by pointer. Omitting the
+  tag (`extern = "symbol"`) is equivalent to `extern "Gorget"`.
 
 ```gorget
 extern "C":
     int printf(String format, ...)
-    void free(RawPtr[void] ptr)
+    cstr getenv(cstr name) = "gorget_getenv"
+
+extern "Gorget":
+    extern int _vec_len(Vector[int] &v) = "gorget_array_len"
+    extern Vector[K] _dict_keys[K, V](Dict[K, V] &m) = "gorget_map_keys"
 ```
+
+Extern functions may be generic. Every monomorphized instance
+preserves the declared C symbol — the base `Dict[K, V]` function
+`_dict_keys` in the second example maps to `gorget_map_keys` for
+every concrete `K, V` pair at call sites. This is how user-space
+stdlib modules layer typed wrappers over lower-level C accessors.
+
+Inline single-function form:
+
+```gorget
+extern "C" int exec(String cmd) = "gorget_exec"
+extern "Gorget" int _map_iter_cap[K, V](Dict[K, V] &m) = "gorget_map_iter_cap"
+```
+
+Equip methods may carry `extern` bodies too:
+
+```gorget
+equip Socket:
+    extern "C" blocking int write_str(String s) = "gorget_socket_write_str"
+```
+
+See `docs/internals/extern-modules.md` for the full ABI pipeline
+(marshalling, ownership, `cstr`, `blocking` / `async` qualifiers).
 
 ### 5.11 Attributes
 
