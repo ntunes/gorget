@@ -2084,6 +2084,14 @@ fn iter_collect_set() {
 }
 
 #[test]
+fn iter_collect_dict() {
+    run_gg(
+        "iter_collect_dict.gg",
+        "3\n10\n20\n30\n4\n2\n8",
+    );
+}
+
+#[test]
 fn iter_terminal_method_sugar() {
     run_gg(
         "iter_terminal_method_sugar.gg",

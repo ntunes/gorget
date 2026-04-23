@@ -4737,12 +4737,17 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
         match s {
             Stmt::VarDecl { type_, value, .. } => {
                 // If the declared type is `Set[T]`, rewrite an inner
-                // `.collect()` call to `.to_set()`. Check AST directly
-                // — no typecheck-resolved TypeId needed.
-                if is_set_type(&type_.node) {
-                    if let Expr::MethodCall { method, .. } = &mut value.node {
-                        if method.node == "collect" {
+                // `.collect()` call to `.to_set()`. If it's
+                // `Dict[K, V]`, rewrite to `.to_dict[K, V]()` (type
+                // args lifted from the LHS). Check AST directly — no
+                // typecheck-resolved TypeId needed.
+                if let Expr::MethodCall { method, generic_args, .. } = &mut value.node {
+                    if method.node == "collect" {
+                        if is_set_type(&type_.node) {
                             method.node = "to_set".to_string();
+                        } else if let Some(kv) = dict_kv_args(&type_.node) {
+                            method.node = "to_dict".to_string();
+                            *generic_args = Some(kv);
                         }
                     }
                 }
@@ -4845,6 +4850,20 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
         matches!(ty, Type::Named { name, generic_args }
             if (name.node == "Set" || name.node == "HashSet")
                 && generic_args.len() == 1)
+    }
+    /// If `ty` is `Dict[K, V]` / `HashMap[K, V]`, return its generic
+    /// args as a `Vec<Spanned<Type>>` ready to splice into a
+    /// `MethodCall::generic_args` slot (lifting K and V from the
+    /// LHS declared type onto the `.to_dict[K, V]()` call).
+    fn dict_kv_args(ty: &Type) -> Option<Vec<Spanned<Type>>> {
+        if let Type::Named { name, generic_args } = ty {
+            if (name.node == "Dict" || name.node == "HashMap")
+                && generic_args.len() == 2
+            {
+                return Some(generic_args.clone());
+            }
+        }
+        None
     }
     walk_items(&mut module.items);
 }

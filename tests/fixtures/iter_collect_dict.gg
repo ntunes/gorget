@@ -1,0 +1,30 @@
+# LHS-type-driven `.collect()` target selection — Dict case.
+#
+# `Dict[K, V] d = pairs.iter().collect()` routes through
+# `Iterator[T]::to_dict[K, V](&self)` (new trait default) via the
+# Pass 2.6 AST rewrite. The method-level type args `[K, V]` are
+# lifted straight from the LHS declared type — callers don't supply
+# a turbofish. The trait's `T` must unify with `(K, V)` at the call
+# site's iterator (non-tuple `T`s fail at mono emission since the
+# body reaches for `x.0` / `x.1`).
+
+(int, int) double_pair(int x):
+    return (x, x * 2)
+
+int main():
+    # Direct collect from an iterator-of-pairs.
+    Vector[(int, int)] pairs = [(1, 10), (2, 20), (3, 30)]
+    Dict[int, int] d = pairs.iter().collect()
+    print(d.len())
+    print(d.get(1).unwrap())
+    print(d.get(2).unwrap())
+    print(d.get(3).unwrap())
+
+    # Chain: map an int iterator to (K, V) pairs, then collect.
+    Vector[int] nums = [1, 2, 3, 4]
+    Dict[int, int] doubled = nums.iter().map(double_pair).collect()
+    print(doubled.len())
+    print(doubled.get(1).unwrap())
+    print(doubled.get(4).unwrap())
+
+    return 0

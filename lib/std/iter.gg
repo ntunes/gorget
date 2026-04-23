@@ -88,6 +88,22 @@ trait Iterator[T]:
             out.add(x)
         return !out
 
+    # Dict-target collect. Typecheck rewrites `.collect()` →
+    # `.to_dict[K, V]()` when the binding's declared type is
+    # `Dict[K, V]`; the method-level type args are lifted straight
+    # from the LHS so users write `Dict[int, String] d =
+    # pairs.iter().collect()` without a turbofish. The trait's `T`
+    # must be `(K, V)` at the call site's iterator; non-tuple `T`
+    # instances fail at mono emission (the body reaches for tuple
+    # field access `x.0` / `x.1`). The demand-gate ensures only
+    # iterator impls where `T = (K, V)` for the LHS-provided K/V
+    # reach emission.
+    Dict[K, V] to_dict[K, V](&self):
+        Dict[K, V] out = Dict[K, V]()
+        for x in self:
+            out.put(x.0, x.1)
+        return !out
+
     Option[T] last(&self):
         Option[T] out = None
         for x in self:
