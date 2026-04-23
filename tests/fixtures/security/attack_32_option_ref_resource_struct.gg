@@ -1,0 +1,13 @@
+# Regression: Option[Ref[T]] where T is a user struct containing a resource
+# field. Exercises the same field-type resolution but with a non-builtin
+# resource type (was the class of bug that led to the audit — Option[Ref[S]]
+# coercion to Option[S] silently memcpy'd the wrong number of bytes).
+
+struct Bag:
+    Vector[int] contents
+
+void main():
+    Vector[Bag] bags = [Bag([1, 2, 3]), Bag([4, 5, 6, 7])]
+    match bags.get(1):
+        case Some(b): print(b.contents.len())
+        case None(): print(-1)

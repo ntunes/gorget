@@ -1,0 +1,10 @@
+# Regression: Option[Ref[T]] pattern-match destructuring. A second extraction
+# path parallel to attack_28's VarDecl coercion — this one binds `s` via a
+# `case Some(s):` arm. Catches regressions in the LIR field-type resolution
+# for enum payloads during pattern matching.
+
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma"]
+    match v.get(1):
+        case Some(s): print(s)
+        case None(): print("missing")

@@ -1,0 +1,15 @@
+# Regression: integer `/` and `%` are side-effecting for DCE purposes.
+# Complementary to attack_23 (dead local); here the unused dead division
+# happens as part of a larger expression whose *outer* result IS used.
+# Ensures DCE doesn't also remove the trap in this less obvious shape.
+
+int compute(int x, int z):
+    # The `(x / z) * 0` subexpression has a dead result (multiplied by zero),
+    # so a naive DCE might eliminate the whole `x / z`. It must still trap.
+    return (x / z) * 0 + x
+
+void main():
+    print("before")
+    int n = compute(10, 0)
+    print("after")
+    print(n)

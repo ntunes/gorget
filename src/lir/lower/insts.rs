@@ -1176,10 +1176,28 @@ impl<'a> FuncLowering<'a> {
                 let field_offset = self.resolve_variant_field_offset(&type_name, variant);
                 let payload_field_idx = (field_offset + *field as usize) as u32;
 
-                // If destination is Ptr(T), return the field address (not value).
-                // This happens when the scrutinee is a borrowed enum (Ptr param).
+                // If destination is Ptr(T), return the field address (not value)
+                // — but only when the enum's variant field holds T by value.
+                // For Option[Ref[T]] / Option[Ref_T], the Some_0 field is already
+                // a Ptr, so taking &Some_0 produces a void** (wrong indirection
+                // level). In that case, EnumExtract loads the pointer value
+                // directly and stores it into dst's slot.
                 let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
-                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                let variant_field_is_ptr = self.gir_types
+                    .get_type_def(&type_name)
+                    .and_then(|def| match &def.kind {
+                        ir::types::TypeDefKind::Enum(e) => Some(e),
+                        _ => None,
+                    })
+                    .and_then(|e| e.variants.iter().find(|v| v.name == *variant))
+                    .and_then(|v| v.fields.get(*field as usize))
+                    .map_or(false, |f| matches!(
+                        self.gir_types.get(f.type_id),
+                        Some(GirType::Ptr(_) | GirType::MutPtr(_))
+                    ));
+                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_)))
+                    && !variant_field_is_ptr
+                {
                     let fptr = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                         dst: fptr,

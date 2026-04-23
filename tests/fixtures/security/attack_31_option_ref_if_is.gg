@@ -1,0 +1,10 @@
+# Regression: Option[Ref[T]] via `if ... is Some(s):` sugar — yet another
+# extraction path. Exercises Pattern::IsExpr (if-is) binding of a String
+# payload out of an Option[Ref[String]].
+
+void main():
+    Vector[String] v = ["alpha", "beta"]
+    if v.get(0) is Some(first):
+        print(first)
+    else:
+        print("empty")

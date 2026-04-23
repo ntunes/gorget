@@ -1,0 +1,21 @@
+# Regression: all legal shift counts produce defined values, and illegal
+# counts trap with the Gorget message rather than C UB. Exercises the
+# shift guards and the unsigned-intermediate trick for `1 << 63`.
+
+void main():
+    # `1 << 63` is INT64_MIN under the unsigned-intermediate lowering.
+    int a = 1
+    int b = 63
+    print(a << b)
+
+    # Unsigned right-shift of a negative is arithmetic on every real
+    # target; we accept that. Just verify it runs.
+    int c = -8
+    int d = 2
+    print(c >> d)
+
+    # Shift count equal to width is UB in C but our guard should trap.
+    # Using a variable to defeat constant folding.
+    int count = 64
+    int val = 1
+    print(val << count)

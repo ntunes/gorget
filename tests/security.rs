@@ -495,19 +495,72 @@ fn sec_26_mod_zero_traps() {
 }
 
 #[test]
-fn sec_12_vector_iter_resource_panic() {
+fn sec_12_vector_iter_resource() {
+    // Was BuildFails. Fixed 2026-04-23 in src/lir/lower/operands.rs —
+    // `resolve_field_type` and `resolve_place_type` now consult the LIR
+    // struct registry for enums (flat-layout Option/Result), so Field(1)
+    // on Option__Ref_T resolves as LIR::Ptr instead of falling back to I64.
+    // Eliminates the Ptr-ABI debug_assert trip and the cosmetic `*(int64_t*)`
+    // cast in generated C.
+    security_safe("attack_12_vector_iter_resource", "a\nb\nc");
+}
+
+// ── Regression fixtures for closed findings — keep these passing. ──
+
+#[test]
+fn sec_30_option_ref_match_arm() {
+    // Parallel to sec_28 (VarDecl) — this one exercises `case Some(s):` arm
+    // destructuring of Option[Ref[T]]. Pre-fix: memcpy of 40 bytes from a
+    // 16-byte source via &Some_0 treated as Str*. Fixed by Option[Ref[T]]
+    // pattern extraction now Loading the Ref value instead of taking its
+    // address (src/lir/lower/insts.rs EnumFieldLoad handler).
+    security_safe("attack_30_option_ref_match_arm", "beta");
+}
+
+#[test]
+fn sec_31_option_ref_if_is() {
+    // Parallel to sec_30 — `if ... is Some(s):` sugar.
+    security_safe("attack_31_option_ref_if_is", "alpha");
+}
+
+#[test]
+fn sec_32_option_ref_resource_struct() {
+    // Parallel to sec_30 — Option[Ref[S]] where S is a user struct with a
+    // resource field. Exercises the Ref→struct extraction path.
+    security_safe("attack_32_option_ref_resource_struct", "4");
+}
+
+#[test]
+fn sec_33_integer_shift_all_counts() {
+    // Regression for the shift guards: `1 << 63` must produce INT64_MIN
+    // (defined via unsigned intermediate), `-8 >> 2` must produce -2
+    // (arithmetic right shift), and `1 << 64` must trap with the Gorget
+    // message. The program traps on the third line.
+    security_traps("attack_33_integer_shift_all_counts", "shift out of range");
+}
+
+#[test]
+fn sec_34_div_zero_in_expression() {
+    // Regression for the DCE side-effect fix: `(x / 0) * 0 + x` has a dead
+    // division (multiplied by zero then replaced by x), and DCE must NOT
+    // eliminate it.
+    security_traps("attack_34_div_zero_in_expression", "division by zero");
+}
+
+#[test]
+fn sec_35_shared_move_chain_trivial_payload() {
+    // Shared[T] where T is trivial-only struct — `!s` at consuming call
+    // doesn't fully drop the control block. No UAF (program exits clean
+    // under ASan), but upgrade() wrongly finds Some. Separate bug from
+    // sec_22 (which prints -1 correctly for Shared[struct-with-Vector]);
+    // tracked to catch regressions in both directions.
     security_known_unsafe(
-        "attack_12_vector_iter_resource",
-        KnownBug::BuildFails,
-        "`for s in v.iter():` over Vector[String] (resource-typed T) trips a \
-         `debug_assert!` in the C backend at emit_types.rs:965 — the Option[Ref[T]] \
-         Some_0 load is tagged LIR::I64 instead of LIR::Ptr, which a debug-profile \
-         compiler rejects before emit. **The release-profile compiler builds it and \
-         the binary runs correctly** (the cast is cosmetic — void* and int64_t are \
-         the same size on all supported targets). Same bug family as the Option[Ref[T]] \
-         info leak, but in the for-loop payload-extraction path rather than VarDecl. \
-         The deeper fix is to make the Option[Ref[T]] Some field type resolve as \
-         LIR::Ptr everywhere, not I64.",
+        "attack_35_shared_move_chain",
+        KnownBug::SilentlyProduces("1"),
+        "Shared[T] over trivial-only T doesn't fully decrement strong count \
+         after `!` consuming call — upgrade() returns Some instead of None. \
+         No UAF. Likely needs_param_drop metadata is wrong for the \
+         monomorphized Shared[Cell] when Cell has no resource fields.",
     );
 }
 

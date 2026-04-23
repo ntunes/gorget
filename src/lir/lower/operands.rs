@@ -430,10 +430,31 @@ impl<'a> FuncLowering<'a> {
         };
         if let Some(GirType::Named(name)) = inner_type {
             if let Some(def) = self.gir_types.get_type_def(name) {
-                if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
-                    if let Some(f) = sdef.fields.get(field as usize) {
-                        return self.map_type(&f.type_id);
+                match &def.kind {
+                    gir_types::TypeDefKind::Struct(sdef) => {
+                        if let Some(f) = sdef.fields.get(field as usize) {
+                            return self.map_type(&f.type_id);
+                        }
                     }
+                    // Enum with flat layout (Option, Result, etc.): the LIR struct
+                    // has [("tag", I32), ("<variant>_<idx>", payload_type), …]
+                    // built in `lower_type_defs` Pass 2. Reading it back from the
+                    // struct registry gives us the authoritative LirType — without
+                    // this, Field(1) on `Option__Ref_T` falls through to I64 and
+                    // the C backend emits `*(int64_t*)(&Some_0)` which trips the
+                    // Ptr-ABI debug_assert when passed to a clone function.
+                    // (Soundness-wise the cast is cosmetic on 64-bit targets, but
+                    // we want the LIR type tag to match the declared field type.)
+                    gir_types::TypeDefKind::Enum(_) => {
+                        if let Some(sid) = self.struct_reg.lookup(name) {
+                            if let Some(sdef) = self.module_structs.get(sid.0 as usize) {
+                                if let Some((_name, ty)) = sdef.fields.get(field as usize) {
+                                    return ty.clone();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1055,11 +1076,33 @@ impl<'a> FuncLowering<'a> {
                 Projection::Field(field) => {
                     if let Some(GirType::Named(name)) = self.gir_types.get(current_type) {
                         if let Some(def) = self.gir_types.get_type_def(&name) {
-                            if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
-                                if let Some(f) = sdef.fields.get(*field as usize) {
-                                    current_type = f.type_id;
-                                    continue;
+                            match &def.kind {
+                                gir_types::TypeDefKind::Struct(sdef) => {
+                                    if let Some(f) = sdef.fields.get(*field as usize) {
+                                        current_type = f.type_id;
+                                        continue;
+                                    }
                                 }
+                                // Enum with flat layout (Option/Result, etc.): the
+                                // LIR struct has [("tag", I32), ("<variant>_<idx>", payload), …].
+                                // Reading from the LIR struct registry gives the
+                                // authoritative LirType for the projected field —
+                                // without this, Field(1) on `Option__Ref_T` falls
+                                // through to I64 and the C backend emits
+                                // `*(int64_t*)(&Some_0)`, tripping the Ptr-ABI
+                                // debug_assert when the value is passed to a clone
+                                // function. Return the LIR type directly (no further
+                                // projection possible — enum payload reads are terminal).
+                                gir_types::TypeDefKind::Enum(_) => {
+                                    if let Some(sid) = self.struct_reg.lookup(&name) {
+                                        if let Some(sdef) = self.module_structs.get(sid.0 as usize) {
+                                            if let Some((_n, ty)) = sdef.fields.get(*field as usize) {
+                                                return ty.clone();
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     }
