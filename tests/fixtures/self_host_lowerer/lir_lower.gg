@@ -664,6 +664,8 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             if rsdef.is_union_layout and rsdef.enum_kind > 0:
                 # Union-layout enum: tag + pad to alignof + max variant.
                 # Variant grouping by `VariantName_N` field-name prefix.
+                # Each variant's payload is computed with inter-field
+                # alignment padding (same rule as flat structs).
                 int max_v = 0
                 int cur_v = 0
                 String cur_pfx = ""
@@ -678,11 +680,13 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         last_us -= 1
                     String pfx = rsf.name.slice(0, last_us)
                     int field_sz = lir_type_byte_size_in_mod(rsf.ty, &m, 0)
+                    int field_al = alignof_lir_type(rsf.ty, &m, 0)
                     if pfx != cur_pfx:
                         if cur_v > max_v:
                             max_v = cur_v
                         cur_v = 0
                         cur_pfx = pfx
+                    cur_v = round_up_to(cur_v, field_al)
                     cur_v = cur_v + field_sz
                     rfi += 1
                 if cur_v > max_v:
@@ -691,14 +695,30 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 int tag_pad = round_up_to(4, struct_align_rs)
                 new_size = tag_pad + padded_max
             else:
-                # Flat layout: sum all fields, pad to struct alignof.
-                int total = 0
+                # Flat layout: walk fields, aligning each to its natural
+                # boundary before adding its size (mirrors C's struct layout
+                # rules — field_i starts at offset round_up(prev_end,
+                # alignof(field_i))), then pad total to struct alignof.
+                #
+                # Previously this summed sizes without inter-field padding,
+                # producing a smaller size than C's sizeof. For
+                # `DefInfo { Str(32) DefKind(4) Span(16) int64 int64 bool bool }`
+                # the naive sum gives 70 → round_up(70, 8) = 72; C gives 80
+                # because it pads the 4-byte DefKind to 8 before Span. When
+                # the self-host used 72 as `Vector[DefInfo].elem_size` and
+                # C's sizeof gave 80, every push wrote 80 bytes at a 72-byte
+                # stride — corrupting adjacent elements. Surfaced as a heap
+                # overflow in `ScopeTable__set_def_param` during stage-1's
+                # own run on the self-host driver.
+                int offset = 0
                 int rfi2 = 0
                 while rfi2 < rsdef.fields.len():
                     int fty2 = rsdef.fields.get(rfi2).unwrap().ty
-                    total = total + lir_type_byte_size_in_mod(fty2, &m, 0)
+                    int fa2 = alignof_lir_type(fty2, &m, 0)
+                    offset = round_up_to(offset, fa2)
+                    offset = offset + lir_type_byte_size_in_mod(fty2, &m, 0)
                     rfi2 += 1
-                new_size = round_up_to(total, struct_align_rs)
+                new_size = round_up_to(offset, struct_align_rs)
             if new_size == 0:
                 new_size = 8
             if new_size != rsdef.computed_c_size:
