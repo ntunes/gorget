@@ -38,6 +38,12 @@ struct LowerCtx:
     String pending_vec_elem_tyname
     String pending_dict_key_tyname
     String pending_dict_val_tyname
+    # Name of the function currently being lowered. Threaded for
+    # diagnostic attribution — without this, the ~58k EIdentifier
+    # unknown-identifier bug reports can't be tied back to specific
+    # function bodies, which is what we need to figure out which
+    # lowering paths fail to populate `named_locals`.
+    String current_fn_name
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -982,7 +988,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # been running with `gmod`, `self`, and similar getting this
             # fallback and cascading into PConstructor failures. Emit a
             # diagnostic so each miss is visible.
-            diag_bug("EIdentifier", "unknown identifier '" + name + "' — returning OpConstI64(0) placeholder (WRONG)")
+            diag_bug("EIdentifier", "in fn '" + ctx.current_fn_name + "': unknown identifier '" + name + "' — returning OpConstI64(0) placeholder (WRONG)")
             int unk = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(unk, OpConstI64(0)))
             return unk
@@ -1416,7 +1422,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # is typed int64 — responsible for the cascade of PConstructor
             # failures in stage-1 output. Report each miss with the base
             # type name and field name so the root cause is visible.
-            diag_bug("EFieldAccess", "unknown field '" + field_name + "' on base type '" + base_type_name + "' — returning I64(0) placeholder (WRONG)")
+            diag_bug("EFieldAccess", "in fn '" + ctx.current_fn_name + "': unknown field '" + field_name + "' on base type '" + base_type_name + "' — returning I64(0) placeholder (WRONG)")
             int fdst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
@@ -2493,7 +2499,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Terminator] block_terms = [GTNone()]
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk, "", "", "")
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -2618,7 +2624,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2, "", "", "")
+        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -4438,7 +4444,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3, "", "", "")
+                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

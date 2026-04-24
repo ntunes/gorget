@@ -9,6 +9,7 @@ from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, Stru
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
+from std.conv import int_to_str
 
 # ── Path resolution ──────────────────────────────────────
 
@@ -41,11 +42,28 @@ String mangle_prefix(String module_path):
     # "std.conv" → "std__conv___"
     return module_path.replace(".", "__") + "___"
 
+# Linear-scan string-set containment. Avoids Dict[String, bool].contains
+# which doesn't reliably see prior `put`s when the lookup is driven by a
+# self-host compiled driver binary.
+bool loaded_contains(Vector[String] v, String s):
+    int i = 0
+    while i < v.len():
+        String cur = v.get(i).unwrap()
+        if cur == s:
+            return true
+        i += 1
+    return false
+
 # ── Import loading ───────────────────────────────────────
 
 Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns):
     String base_dir = parent_dir(entry_path)
-    Dict[String, bool] loaded = {}
+    # Linear-scan dedup — the self-host compiled Dict[String, bool]
+    # does not reliably persist `put` / `contains` across iterations
+    # (stage-1 loaded `std.collections` 286× when `loaded` was a Dict).
+    # A Vector linear scan is O(N²) but N is small (~20 modules), and it
+    # actually works.
+    Vector[String] loaded = []
     Dict[String, String] call_redirects = {}
 
     # Collect import paths from the module
@@ -56,10 +74,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
         Item item = m.items.get(ii).unwrap()
         match item:
             case IImport(imp):
-                if not loaded.contains(imp.module_path):
+                if not loaded_contains(loaded, imp.module_path):
                     import_paths.push(imp.module_path.clone())
                     import_mod_paths.push(imp.module_path.clone())
-                    loaded.put(imp.module_path, true)
+                    loaded.push(imp.module_path.clone())
             else:
                 pass
         ii += 1
@@ -86,10 +104,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                 match imp_item:
                     case IImport(sub_imp):
                         # Recursively discover imports from the imported module
-                        if not loaded.contains(sub_imp.module_path):
+                        if not loaded_contains(loaded, sub_imp.module_path):
                             import_paths.push(sub_imp.module_path.clone())
                             import_mod_paths.push(sub_imp.module_path.clone())
-                            loaded.put(sub_imp.module_path, true)
+                            loaded.push(sub_imp.module_path.clone())
                     case IFunction(fdef):
                         # Aliased extern stub: body is one of SExpr(EStringLiteral)
                         # or SReturn(Some(EStringLiteral)) depending on how the
