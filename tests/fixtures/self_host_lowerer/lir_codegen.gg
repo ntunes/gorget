@@ -3271,6 +3271,17 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             # Runtime fn wants const char*, caller has Str — convert via
             # gorget_str_to_cstr(s) for null-terminated path (takes Str by value).
             out = out + "gorget_str_to_cstr(" + v(arg_id) + ")"
+        elif cstr_pos and is_ptr:
+            # Runtime fn wants const char*, caller has *Str (aggregate
+            # passed by pointer — the self-host's default ABI for
+            # resource-type bare params). Deref and convert. Without
+            # this, `gorget_parse_int(&str_val)` passes the address of
+            # the Str aggregate where a cstring is expected, and
+            # `strtoll` reads the bytes of the Str.data POINTER as if
+            # they were the string's digits — always returns 0 for
+            # non-matching pointer bytes. This is the root cause of
+            # stage-1 lexer's `parse_int("42")` returning 0.
+            out = out + "gorget_str_to_cstr(*(Str*)" + v(arg_id) + ")"
         elif str_pos and not is_str:
             if is_ptr:
                 out = out + "*(Str*)" + v(arg_id)
