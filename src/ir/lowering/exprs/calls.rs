@@ -1320,6 +1320,27 @@ fn format_for_printf(
         let tmp = builder.add_local(str_ty, None);
         builder.assign(builder.local(tmp), operand);
         ("%.*s".to_string(), vec![FunctionBuilder::copy(tmp)])
+    } else if let Some(pointee) = ctx.pointee_type(type_id) {
+        // Ptr(T) / MutPtr(T) for primitives or user types — auto-deref to the
+        // pointee value. Covers user-written Ref[T]/MutRef[T] field loads and
+        // field accesses on borrow-param receivers. Recurse so the pointee can
+        // pick up its own formatting (narrow-int widening, Displayable, etc.).
+        let deref_place = match &operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let mut p = place.clone();
+                p.projections.push(Projection::Deref);
+                p
+            }
+            // Non-place operand (constant, literal) — can't add a Deref
+            // projection; fall through to default int formatting.
+            _ => return (
+                ctx.type_mapper.format_specifier(type_id).to_string(),
+                vec![operand],
+            ),
+        };
+        let tmp = builder.add_local(pointee, None);
+        builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+        return format_for_printf(ctx, builder, pointee, FunctionBuilder::copy(tmp), fmt_spec);
     } else if type_id == BOOL_TYPE {
         ("%s".to_string(), vec![operand])
     } else if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(type_id).cloned() {

@@ -15259,6 +15259,14 @@ fn match_int_ranges() {
 // ── Borrow edge cases ──
 
 #[test]
+fn borrow_field_basic() {
+    run_gg(
+        "borrow_field_basic.gg",
+        "99\n42",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",

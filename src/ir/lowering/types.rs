@@ -67,6 +67,12 @@ impl TypeMapper {
             Type::Inferred => panic!("BUG: Inferred type should be resolved before GIR lowering"),
             Type::Named { name, generic_args } => {
                 if !generic_args.is_empty() {
+                    // Ref[T] / MutRef[T] at field positions — can't insert from
+                    // the immutable path, caller should use map_ast_type_mut.
+                    let base = name.node.as_str();
+                    if (base == "Ref" || base == "MutRef") && generic_args.len() == 1 {
+                        return None;
+                    }
                     let mangled = mangle_generic_name(&name.node, generic_args);
                     return self.named_types.get(&mangled).copied();
                 }
@@ -108,12 +114,25 @@ impl TypeMapper {
         match ty {
             Type::Named { name, generic_args } => {
                 if !generic_args.is_empty() {
+                    // Ref[T] / MutRef[T] at field positions — map to GirType::Ptr/MutPtr.
+                    // Borrow-field feature (Phase 1). Does NOT cache in named_types:
+                    // Ptr/MutPtr types are interchangeable at the GIR level — each
+                    // call-site gets a fresh TypeId pointing to the same pointee.
+                    let base = name.node.as_str();
+                    if (base == "Ref" || base == "MutRef") && generic_args.len() == 1 {
+                        let inner = self.map_ast_type_mut(&generic_args[0].node, registry);
+                        let gir_ty = if base == "Ref" {
+                            GirType::Ptr(inner)
+                        } else {
+                            GirType::MutPtr(inner)
+                        };
+                        return registry.insert(gir_ty);
+                    }
                     let mangled = mangle_generic_name(&name.node, generic_args);
                     if let Some(&id) = self.named_types.get(&mangled) {
                         return id;
                     }
                     // Auto-register Option[T] and Result[T, E] types
-                    let base = name.node.as_str();
                     if base == "Option" && generic_args.len() == 1 {
                         let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
                         return self.get_or_register(&mangled, registry, |n| {
