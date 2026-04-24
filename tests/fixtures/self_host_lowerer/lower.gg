@@ -61,34 +61,41 @@ Option[String] NO_NAME = None
 # named_locals helpers — see LowerCtx.nl_keys for why these are
 # linear-scan Vectors and not a Dict.
 bool nl_contains(LowerCtx &ctx, String name):
+    bool found = false
     int i = 0
     while i < ctx.nl_keys.len():
         String k = ctx.nl_keys.get(i).unwrap()
         if k == name:
-            return true
+            found = true
         i += 1
-    return false
+    return found
 
 int nl_get(LowerCtx &ctx, String name):
+    int result = -1
     int i = 0
     while i < ctx.nl_keys.len():
         String k = ctx.nl_keys.get(i).unwrap()
         if k == name:
-            return ctx.nl_vals.get(i).unwrap()
+            result = ctx.nl_vals.get(i).unwrap()
         i += 1
-    return -1
+    return result
 
 # Append or overwrite: match Dict.put semantics (last-write-wins).
+# Explicitly structured without early-return — self-host-compiled
+# functions with `&ctx` param and an early return can trip the borrow
+# checker in misleading ways (see feedback_selfhost_workarounds.md).
 void nl_put(LowerCtx &ctx, String name, int val):
+    bool found = false
     int i = 0
     while i < ctx.nl_keys.len():
         String k = ctx.nl_keys.get(i).unwrap()
         if k == name:
             ctx.nl_vals.set(i, val)
-            return
+            found = true
         i += 1
-    ctx.nl_keys.push(name.clone())
-    ctx.nl_vals.push(val)
+    if not found:
+        ctx.nl_keys.push(name.clone())
+        ctx.nl_vals.push(val)
 
 # Diagnostic helper for unhandled AST variants. Called from the
 # `else: ...` fall-through arms in lower_stmt / lower_expr. The message
