@@ -880,6 +880,18 @@ String map_runtime_name(String name):
                 return "gorget_string_free"
             case "substring":
                 return "gorget_str_slice"
+            case "debug":
+                # Debuggable.debug is defined in the runtime as
+                # `gorget_string_debug`, not `gorget_str_debug`. Without
+                # this special case the fallback emitted the wrong name and
+                # stage-1 failed to link.
+                return "gorget_string_debug"
+            case "concat":
+                return "gorget_string_concat"
+            case "eq":
+                return "gorget_string_eq"
+            case "format":
+                return "gorget_string_format"
             else:
                 return "gorget_str_" + method
 

@@ -2203,6 +2203,10 @@ bool lower_is_ptr_type(int tid, GirModule &gmod):
 # Look up the parent enum name for a type. If `type_name` itself is an
 # enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".
 String match_enum_type(String type_name, GirModule &gmod):
+    # Prefer the parallel enum registry — the gmod.type_infos Dict silently
+    # drops lookups for some keys in self-host-compiled runs.
+    if enum_registered(&gmod, type_name):
+        return type_name
     if gmod.type_infos.contains(type_name):
         GirTypeInfo ti = gmod.type_infos.get(type_name).unwrap()
         if ti.is_enum:
@@ -2236,6 +2240,12 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
         if variant_name == "Error":
             return 1
         return -1
+    # Prefer the parallel enum registry — gmod.type_infos Dict[String, _]
+    # lookups silently miss for some keys in self-host-compiled runs. The
+    # registry walks parallel Vectors and finds the right index.
+    int reg_idx = enum_variant_index(&gmod, enum_name, variant_name)
+    if reg_idx >= 0:
+        return reg_idx
     if not gmod.type_infos.contains(enum_name):
         return -1
     GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
@@ -2368,21 +2378,43 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
             set_terminator(&ctx, GTJump(match_bb))
 
 void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vector[SpannedPattern] sub_pats, String enum_name, int match_bb, int no_match_bb, GirModule &gmod):
-    if enum_name == "":
-        # Scrutinee isn't a known enum — fall through to match. This hits
-        # on monomorphized Option / Result which use `__` separators the
-        # __field_read_ parser can't split cleanly. Handling them needs
-        # numeric-id routing (TODO).
-        lower_fail("PConstructor on non-enum scrutinee — enum_name empty")
+    # Mirrors Rust's `patterns.rs:388-397`: prefer enum_name from the
+    # scrutinee's type, but fall back to the pattern's qualified name,
+    # and finally scan all registered enums for a variant with this name.
+    # `case ParseError.Empty()` arrives as variant_name="ParseError.Empty"
+    # — when the scrutinee type info is missing (Dict[String,_] bug on
+    # `gmod.type_infos`), we can still recover the enum from the pattern
+    # itself. Bare variants like `case EBinaryOp(...)` don't carry enum
+    # info, so we scan for a unique enum that declares this variant.
+    String effective_enum = enum_name
+    String effective_variant = variant_name
+    if variant_name.contains("."):
+        int dot_pos = variant_name.index_of(".").unwrap()
+        String qual_enum = variant_name.slice(0, dot_pos)
+        String bare_variant = variant_name.slice(dot_pos + 1, variant_name.len())
+        if effective_enum == "":
+            effective_enum = qual_enum
+        effective_variant = bare_variant
+    # If still unresolved, scan the enum registry for a matching variant.
+    # This mirrors Rust's `ctx.resolve_enum_variant(...)` fallback.
+    if effective_enum == "":
+        String guessed = find_enum_by_variant(&gmod, effective_variant)
+        if guessed.len() > 0:
+            effective_enum = guessed
+    if effective_enum == "":
+        # Truly nothing we can do. Hits on monomorphized Option / Result
+        # which use `__` separators the __field_read_ parser can't split
+        # cleanly, or on variants we never registered.
+        lower_fail("PConstructor on non-enum scrutinee — enum_name empty (variant='" + variant_name + "')")
         set_terminator(&ctx, GTJump(match_bb))
         return
-    int expected_tag = match_variant_index(enum_name, variant_name, &gmod)
+    int expected_tag = match_variant_index(effective_enum, effective_variant, &gmod)
     if expected_tag < 0:
-        lower_fail("PConstructor variant not in enum: " + variant_name)
+        lower_fail("PConstructor variant not in enum: enum='" + effective_enum + "' variant='" + effective_variant + "'")
         set_terminator(&ctx, GTJump(match_bb))
         return
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, scrutinee)
-    int tag = emit_tag_read(&ctx, scrutinee_ptr, enum_name, &gmod)
+    int tag = emit_tag_read(&ctx, scrutinee_ptr, effective_enum, &gmod)
     int expected = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
     int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
@@ -2410,8 +2442,8 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 pass
             case PBinding(bname):
                 # Look up field type from the enum's variant's field info.
-                int fty = lookup_ctor_field_type(enum_name, variant_name, fi, &gmod)
-                int field_val = emit_payload_read(&ctx, scrutinee_ptr, enum_name, variant_name, fi, fty, &gmod)
+                int fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                int field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod)
                 Option[String] bname_opt = Some(bname.clone())
                 int bound = add_local(&ctx, fty, bname_opt)
                 emit(&ctx, GIAssign(bound, OpCopy(field_val)))
@@ -4169,6 +4201,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         tai += 1
     # Build type field info for LIR drop analysis
     Dict[String, GirTypeInfo] type_infos = {}
+    # Parallel enum registry — `type_infos.contains(enum_name)` silently
+    # misses on self-host-compiled Dict[String, _] lookups, so we also
+    # track enum names + variant lists here for match lowering.
+    Vector[String] enum_names = []
+    Vector[Vector[String]] enum_variants = []
     int tfi = 0
     while tfi < m.items.len():
         Item tfi_item = m.items.get(tfi).unwrap()
@@ -4186,6 +4223,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case IEnum(edef):
                 Vector[GirFieldInfo] no_fields = []
                 Vector[GirEnumVariantInfo] variants = []
+                Vector[String] variant_names_only = []
                 int evi = 0
                 while evi < edef.variants.len():
                     EnumVariant var = edef.variants.get(evi).unwrap()
@@ -4197,15 +4235,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         vfields.push(GirFieldInfo("_" + int_to_str(evfi), vftype_name))
                         evfi += 1
                     variants.push(GirEnumVariantInfo(var.name, vfields))
+                    variant_names_only.push(var.name.clone())
                     evi += 1
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
+                enum_names.push(edef.name.clone())
+                enum_variants.push(!variant_names_only)
             else:
                 pass
         tfi += 1
     Vector[String] const_keys = []
     Vector[int] const_vals = []
     Vector[String] none_keys = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`

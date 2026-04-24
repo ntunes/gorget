@@ -1105,6 +1105,10 @@ int runtime_fn_return_type(String name, LirModule &m):
         return find_struct_type("GorgetString", &m)
     if name == "gorget_str_from_literal" or name == "gorget_str_from_raw":
         return find_struct_type("GorgetString", &m)
+    if name == "gorget_string_debug" or name == "gorget_string_concat":
+        return find_struct_type("GorgetString", &m)
+    if name == "gorget_string_format":
+        return find_struct_type("GorgetString", &m)
     # String functions returning GorgetArray
     if name == "gorget_str_split" or name == "gorget_str_split_n":
         return find_struct_type("GorgetArray", &m)

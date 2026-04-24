@@ -164,6 +164,12 @@ struct GirModule:
     Vector[int] const_vals
     # none_decls was Dict[String, bool]; same workaround.
     Vector[String] none_keys
+    # Parallel cache over type_infos: names of registered enum types, and
+    # for each enum a Vector of its variant names. Same Dict[String, _]
+    # workaround — needed so match_enum_type / match_variant_index can
+    # succeed when type_infos.contains() silently misses.
+    Vector[String] enum_names
+    Vector[Vector[String]] enum_variants
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -216,6 +222,59 @@ bool none_contains(GirModule &gmod, String name):
 void none_mark(GirModule &gmod, String name):
     if not none_contains(&gmod, name):
         gmod.none_keys.push(name.clone())
+
+# enum registry accessors. Used when match_enum_type can't trust
+# gmod.type_infos.contains() due to the Dict[String, _] bug.
+bool enum_registered(GirModule &gmod, String enum_name):
+    bool found = false
+    int i = 0
+    while i < gmod.enum_names.len():
+        String k = gmod.enum_names.get(i).unwrap()
+        if k == enum_name:
+            found = true
+        i += 1
+    return found
+
+void register_enum(GirModule &gmod, String enum_name, Vector[String] variants):
+    if not enum_registered(&gmod, enum_name):
+        gmod.enum_names.push(enum_name.clone())
+        gmod.enum_variants.push(variants)
+
+# Scan registered enums to find one that declares a given variant.
+# Mirrors Rust's `resolve_enum_variant` fallback used by the pattern
+# lowerer when the scrutinee's type can't be resolved. Returns empty
+# string if no enum has this variant (or if multiple do — we pick the
+# first to stay deterministic).
+String find_enum_by_variant(GirModule &gmod, String variant_name):
+    String result = ""
+    int i = 0
+    while i < gmod.enum_names.len():
+        Vector[String] vs = gmod.enum_variants.get(i).unwrap()
+        int j = 0
+        while j < vs.len():
+            String vn = vs.get(j).unwrap()
+            if vn == variant_name and result == "":
+                result = gmod.enum_names.get(i).unwrap().clone()
+            j += 1
+        i += 1
+    return result
+
+# Look up the variant index (ordinal) for a given enum + variant.
+int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
+    int result = -1
+    int i = 0
+    while i < gmod.enum_names.len():
+        String k = gmod.enum_names.get(i).unwrap()
+        if k == enum_name:
+            Vector[String] vs = gmod.enum_variants.get(i).unwrap()
+            int j = 0
+            while j < vs.len():
+                String vn = vs.get(j).unwrap()
+                if vn == variant_name and result == -1:
+                    result = j
+                j += 1
+        i += 1
+    return result
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
