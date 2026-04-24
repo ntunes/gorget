@@ -424,9 +424,12 @@ pub fn register_struct_type(
     // Map fields. String fields keep owned_string_type (GorgetString) so the struct
     // OWNS its strings and recursive drop frees them. Field LOADS return str_type (Str
     // view) to prevent shallow-copy double-frees — this is handled in lower_field_access.
+    // Uses `map_ast_type_mut` so user-written `Ref[T]` / `MutRef[T]` fields get
+    // registered as `GirType::Ptr(T)` / `GirType::MutPtr(T)` instead of falling
+    // back to UNIT_TYPE — the immutable path can't insert Ptr types.
     let fields: Vec<StructField> = struct_def.fields.iter()
         .map(|f| {
-            let field_type = mapper.map_ast_type(&f.node.type_.node);
+            let field_type = mapper.map_ast_type_mut(&f.node.type_.node, registry);
             StructField {
                 name: f.node.name.node.clone(),
                 type_id: field_type,

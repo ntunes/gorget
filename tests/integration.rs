@@ -15267,6 +15267,14 @@ fn borrow_field_basic() {
 }
 
 #[test]
+fn borrow_field_nongeneric() {
+    run_gg(
+        "borrow_field_nongeneric.gg",
+        "99",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",
