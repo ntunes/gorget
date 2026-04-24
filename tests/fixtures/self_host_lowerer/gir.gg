@@ -156,6 +156,7 @@ struct GirModule:
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
     Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
     Dict[String, int] const_decls  # module-level const int decls — value inlined at EIdentifier
+    Dict[String, bool] none_decls  # module-level static decls initialized to None — EIdentifier emits OpConstUnit
 
 # ── Helpers ──────────────────────────────────────────────
 

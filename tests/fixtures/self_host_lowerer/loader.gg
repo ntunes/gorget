@@ -246,6 +246,14 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                         # TOK_* / KW_* constants stay invisible and the
                         # compiled parser deadlocks in skip_trivia.
                         m.items.push(imp_item)
+                    case IStaticDecl(_, _, _):
+                        # Same as IConstDecl: module-level `int X = -2` (the
+                        # non-`const` spelling) is parsed as IStaticDecl by
+                        # parser.gg:3654-3656. Without merging, references
+                        # to module-level statics like `STRING_MARKER` (in
+                        # lower.gg) fall through to the EIdentifier
+                        # unknown-fallback (OpConstI64(0)) when imported.
+                        m.items.push(imp_item)
                     case IExternBlock(ext_fns):
                         # Extract aliases from extern stubs: body is one of
                         # SExpr(EStringLiteral) or SReturn(Some(EStringLiteral))

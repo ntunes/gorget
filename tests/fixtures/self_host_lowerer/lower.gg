@@ -52,6 +52,24 @@ Option[String] NO_NAME = None
 void lower_fail(String msg):
     print("/* [lower_fail] " + msg + " */")
 
+# Diagnostics for silent-fallback sites. Earlier versions of the
+# self-host made several dispatch functions (map_binop,
+# infer_method_return_type, collection_element_type, type_id_to_name,
+# EFieldAccess, EIdentifier) quietly return a sentinel value for any
+# unrecognised input — hiding real bugs that compounded into runtime
+# corruption. Every "hard bug" fallback now emits a `[bug]` diagnostic
+# so the mis-compilation is visible in the produced output. Grep
+# `\[bug\]` on stage-0/stage-1 output to surface them.
+void diag_bug(String site, String msg):
+    print("/* [bug] " + site + ": " + msg + " */")
+
+# Softer diagnostic for fallbacks that *may* be legitimate (unknown
+# builtins, compound types without registered names). Suppressible via
+# `GORGET_QUIET_FALLBACKS=1` once the env-var reader lands — for now
+# everything is loud so we surface every site.
+void diag_warn(String site, String msg):
+    print("/* [warn] " + site + ": " + msg + " */")
+
 # Return the variant name of a Stmt. Used by lower_fail diagnostics to
 # pinpoint which AST variant the self-host isn't handling.
 String stmt_kind(Stmt s):
@@ -806,6 +824,10 @@ int map_binop(String op):
         case "%":
             return OP_REM
         else:
+            # HARD BUG: returning OP_ADD for an unrecognised operator
+            # silently mis-compiles it as addition. Emit a diagnostic
+            # so the mis-compile is visible.
+            diag_bug("map_binop", "unknown operator '" + op + "' — defaulting to OP_ADD (WRONG)")
             return OP_ADD
 
 # Map the compound-assignment operator spelling (`+=`, `-=`, `*=`, `/=`,
@@ -828,9 +850,12 @@ int map_compound_binop(String op):
         case "%=":
             return OP_REM
         else:
-            # Fall back to the bare-operator mapping (for legacy callers
-            # and defensive handling — the parser should always emit the
-            # compound spelling, but the plain binop form is harmless).
+            # Defensive: the parser should always emit the compound
+            # spelling for SCompoundAssign. Falling back to the bare-op
+            # mapping mostly works but emits a diagnostic — an unmapped
+            # compound op here is almost certainly a parser/lowerer
+            # mismatch worth noticing.
+            diag_warn("map_compound_binop", "unknown compound operator '" + op + "' — routing through map_binop")
             return map_binop(op)
 
 bool is_comparison(String op):
@@ -908,7 +933,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int cdst = add_local(&ctx, I64_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
-            # Unknown identifier (imported constant, unresolved) — placeholder
+            # Module-level `Option[T] X = None` — emit a Unit (None) value
+            # rather than the int-0 EIdentifier fallback. Used in
+            # `add_local(&ctx, type, NO_NAME)` and similar callsites.
+            if gmod.none_decls.contains(name):
+                int ndst = add_local(&ctx, UNIT_TYPE, NO_NAME)
+                emit(&ctx, GIAssign(ndst, OpConstUnit()))
+                return ndst
+            # HARD BUG: silently returning `OpConstI64(0)` for an unknown
+            # identifier lies about both value and type — every downstream
+            # use thinks it's holding an int64 with value 0. Stage-1 has
+            # been running with `gmod`, `self`, and similar getting this
+            # fallback and cascading into PConstructor failures. Emit a
+            # diagnostic so each miss is visible.
+            diag_bug("EIdentifier", "unknown identifier '" + name + "' — returning OpConstI64(0) placeholder (WRONG)")
             int unk = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(unk, OpConstI64(0)))
             return unk
@@ -1317,7 +1355,13 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         emit(&ctx, GICallExtern(fdst, field_fn, field_args))
                         return fdst
                     fi += 1
-            # Fallback: return I64 placeholder for unknown fields
+            # HARD BUG: unknown field access fell through to I64/0
+            # placeholder, losing both the struct identity and the field
+            # type. Every downstream read of the "field value" sees 0 and
+            # is typed int64 — responsible for the cascade of PConstructor
+            # failures in stage-1 output. Report each miss with the base
+            # type name and field name so the root cause is visible.
+            diag_bug("EFieldAccess", "unknown field '" + field_name + "' on base type '" + base_type_name + "' — returning I64(0) placeholder (WRONG)")
             int fdst = add_local(&ctx, I64_TYPE, NO_NAME)
             emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
@@ -4029,13 +4073,21 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         tfi += 1
     Dict[String, int] const_decls = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls)
+    Dict[String, bool] none_decls = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls)
 
-    # Pre-scan: evaluate IConstDecl init exprs and register values in
-    # gmod.const_decls. Without this, references to module-level consts
-    # (e.g. `const int KW_IF = 5` in parser.gg) default to 0 at EIdentifier
-    # lowering, which confuses the self-compiled parser's keyword dispatch
-    # and deadlocks in check_kw(kw=0, pos=0).
+    # Pre-scan: evaluate IConstDecl AND IStaticDecl init exprs and register
+    # values in gmod.const_decls. Without this, references to module-level
+    # consts (e.g. `const int KW_IF = 5` in parser.gg) default to 0 at
+    # EIdentifier lowering, which confuses the self-compiled parser's
+    # keyword dispatch and deadlocks in check_kw(kw=0, pos=0).
+    #
+    # IStaticDecl covers the *non-const* spelling at module scope, e.g.
+    # `int STRING_MARKER = -2` in lower.gg. The parser routes those
+    # through `IStaticDecl(ty, name, val)` (parser.gg:3517-3519), but
+    # before this loop was extended, the lowerer ignored them entirely
+    # — every reference to `STRING_MARKER` got the EIdentifier
+    # unknown-fallback (OpConstI64(0)).
     int cdi = 0
     while cdi < m.items.len():
         Item cd_item = m.items.get(cdi).unwrap()
@@ -4047,6 +4099,19 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         gmod.const_decls.put(cd_name, cv)
                     case None:
                         pass
+            case IStaticDecl(_, sd_name, sd_val):
+                Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
+                match sd_eval:
+                    case Some(sv):
+                        gmod.const_decls.put(sd_name, sv)
+                    case None:
+                        # Recognise `Option[T] X = None` so EIdentifier can
+                        # emit OpConstUnit() instead of the int-0 fallback.
+                        match sd_val.expr:
+                            case ENoneLiteral():
+                                gmod.none_decls.put(sd_name, true)
+                            else:
+                                pass
             else:
                 pass
         cdi += 1
