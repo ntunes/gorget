@@ -1,0 +1,21 @@
+# Probe: Dict with a user-struct key. Requires the struct to satisfy
+# Hashable + Equatable. If either is missing, must reject at compile.
+
+@derive(Hashable, Equatable)
+struct Point:
+    int x
+    int y
+
+void main():
+    Dict[Point, String] names = {}
+    names.put(Point(1, 2), "origin-ish")
+    names.put(Point(10, 20), "far")
+    Option[String] got = names.get(Point(1, 2))
+    match got:
+        case Some(n): print(n)
+        case None(): print("missing")
+    # Key with different identity but equal value — should hit.
+    Option[String] hit = names.get(Point(1, 2))
+    match hit:
+        case Some(n): print(n)
+        case None(): print("missing")

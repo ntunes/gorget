@@ -1,0 +1,9 @@
+# Probe: print with many user-controlled values. Ensure the printf
+# formatter handles each argument independently and doesn't treat
+# `%s` in a prior argument's data as format directives.
+
+void main():
+    String evil = "%s %n %d %%"
+    print("header")
+    print(evil)
+    print(evil, evil)

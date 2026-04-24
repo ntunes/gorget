@@ -1,0 +1,17 @@
+# Probe: parse_float / parse_int followed by re-format. Round-trip
+# invariant should hold for normal values. Edge: negative zero, tiny
+# values, INT_MIN.
+
+from std.conv import parse_int, parse_float
+
+void main():
+    String s1 = "-9223372036854775808"   # INT64_MIN
+    match parse_int(s1):
+        case Ok(v): print(v)
+        case Error(_): print("parse-fail")
+    match parse_float("0.1"):
+        case Ok(v): print(v)
+        case Error(_): print("parse-fail")
+    match parse_float("-0.0"):
+        case Ok(v): print(v)
+        case Error(_): print("parse-fail")

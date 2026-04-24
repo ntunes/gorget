@@ -887,3 +887,114 @@ fn sec_80_char_construction_edges() {
     // All deterministic — no invalid UTF-8 is ever produced.
     security_safe("attack_80_char_edge_cases", "0\n1\n1");
 }
+
+// ── Round 7 attacks: self-ref, closures-in-vector, atomic races, etc. ────
+
+#[test]
+fn sec_81_match_expr_some_arm_dropped() {
+    // BUG: `x = match o: case Some(n): compute(n); else: 0` silently
+    // discards the Some-arm value; x always equals the else-arm value.
+    // Traced in codegen: bb_some computes `__v45 = compute(n)` then
+    // `goto exit`, but the exit block unconditionally re-emits the
+    // literal `0` as the match result — the Some arm's value is never
+    // merged into the match's result slot. A 1+2+3 list sum returns 1.
+    security_known_unsafe(
+        "attack_81_self_referential_struct",
+        KnownBug::SilentlyProduces("1"),
+        "Match-expression drops Some-arm value when used in assignment. \
+         `x = match o: case Some(n): f(n); else: 0` — the Some arm's \
+         computed value isn't stored into x; x always gets the else-arm \
+         value (0). Silent wrong-result bug, not memory-unsafe.",
+    );
+}
+
+#[test]
+fn sec_82_vector_of_closures_segv() {
+    // BUG: Vector[Callable[...]].get().unwrap().clone() SEGVs. The
+    // generated Option[Callable] struct defines Some_0 as int64_t,
+    // but a Callable (= GorgetClosure) is 16 bytes (fn_ptr + env).
+    // When extracted, the code reads fn_ptr as an int64 and then
+    // memcpy's 16 bytes from (void*)fn_ptr — dereferences a code
+    // pointer, reading from executable memory. Then invokes through
+    // garbage fn_ptr → SIGSEGV.
+    security_known_unsafe(
+        "attack_82_vector_of_closures",
+        KnownBug::SanitizerTrips,
+        "Option[Callable] payload field typed int64_t, but Callable \
+         is 16 bytes (GorgetClosure). v.get().unwrap().clone() reads \
+         only 8 bytes, then misinterprets fn_ptr as a pointer to the \
+         closure struct → SEGV reading code memory.",
+    );
+}
+
+#[test]
+fn sec_83_parse_format_roundtrip() {
+    security_safe(
+        "attack_83_parse_format_roundtrip",
+        "-9223372036854775808\n0.100000\n-0.000000",
+    );
+}
+
+#[test]
+fn sec_84_negative_subscript_traps() {
+    // `v.get(-1)` → None (safe Option path). `v[-1]` traps via unsigned
+    // bounds check (index UINT64_MAX > length). Error message prints
+    // the unsigned value, which is misleading but not wrong.
+    security_traps(
+        "attack_84_negative_subscript",
+        "index out of bounds",
+    );
+}
+
+#[test]
+fn sec_85_dict_struct_key_codegen() {
+    // BUG: `@derive(Hashable, Equatable) struct Point` used as Dict
+    // key generates a key-equality wrapper that passes `const void*`
+    // for both args, but Point__eq is declared `(const void*, Point)`
+    // — incompatible C types. Build fails.
+    security_known_unsafe(
+        "attack_85_dict_struct_key",
+        KnownBug::BuildFails,
+        "Dict key-eq wrapper emitted with wrong ABI. __gorget_ktable_eq \
+         passes (void*, void*) but Point__eq wants (void*, Point-by-value). \
+         Either fix the wrapper to deref + pass-by-value, or mono Point__eq \
+         with void* param.",
+    );
+}
+
+#[test]
+fn sec_86_multi_arg_print() {
+    // `print(evil, evil)` — the second positional arg is silently
+    // ignored (print only uses the first positional; extra args would
+    // need to be kwargs like terminator=/file=). User data is treated
+    // as opaque %.*s payload — no format injection.
+    security_safe(
+        "attack_86_multi_arg_print",
+        "header\n%s %n %d %%\n%s %n %d %%",
+    );
+}
+
+#[test]
+fn sec_87_atomic_counter_four_spawners() {
+    // 4 threads × 10000 increments = 40000. No lost updates.
+    security_safe("attack_87_atomic_counter_race", "40000");
+}
+
+#[test]
+fn sec_88_iterator_fusion_take_after_filter_map() {
+    // filter(x%7==0).map(*2).take(3) → [0, 14, 28]. Lazy — stops
+    // early instead of materializing all 100 elements.
+    security_safe("attack_88_iterator_fusion", "3\n0\n14\n28");
+}
+
+#[test]
+fn sec_89_large_dict_drop() {
+    // 1000-entry Dict[String, Vector[int]] drops cleanly.
+    security_safe("attack_89_large_dict_drop", "1000");
+}
+
+#[test]
+fn sec_90_vector_zero_capacity_then_push() {
+    // reserve(0) is a no-op; push allocates on demand.
+    security_safe("attack_90_vector_zero_capacity", "2\n42\n43");
+}

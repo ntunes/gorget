@@ -1,0 +1,18 @@
+# Probe: self-referential struct via Option[Box[Self]]. Build a linked
+# list and walk it iteratively (recursive walk hits attack_45's C
+# stack overflow).
+
+struct List:
+    int val
+    Option[Box[List]] next
+
+int sum(List l):
+    int acc = l.val
+    int more = match l.next:
+        case Some(n): sum(*n)
+        case None(): 0
+    return acc + more
+
+void main():
+    List a = List(1, Some(Box.new(List(2, Some(Box.new(List(3, None())))))))
+    print(sum(a))

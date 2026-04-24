@@ -1,0 +1,16 @@
+# Probe: Vector of Callables — heterogeneous closures stored in a
+# container. Each closure has its own env; dispatching through the
+# common Callable type must find the right fn_ptr + env.
+
+void main():
+    int x = 10
+    int y = 100
+    Vector[Callable[int()]] fns = []
+    fns.push((): x + 1)
+    fns.push((): y + 2)
+    fns.push((): x * y)
+    int i = 0
+    while i < fns.len():
+        Callable[int()] f = fns.get(i).unwrap().clone()
+        print(f())
+        i += 1

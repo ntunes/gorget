@@ -1,0 +1,12 @@
+# Probe: drop a large Dict (many entries of resource-typed values).
+# Exercises the drop loop — for each bucket, drop key AND drop value.
+
+void main():
+    Dict[String, Vector[int]] d = {}
+    int i = 0
+    while i < 1000:
+        Vector[int] v = [i, i + 1, i + 2]
+        d.put(f"k{i}", v)
+        i += 1
+    print(d.len())
+    # Dict + all Vectors get dropped at main exit.

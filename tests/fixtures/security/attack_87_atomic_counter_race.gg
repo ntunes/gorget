@@ -1,0 +1,21 @@
+# Probe: multiple spawned tasks increment a shared atomic. Final value
+# must equal N*iter; if the atomic ops aren't actually atomic, we'll
+# see a lower count (write-write race).
+
+async void increment(AtomicInt c, int n):
+    int i = 0
+    while i < n:
+        c.add(1)
+        i += 1
+
+async void main():
+    shared(atomic) int c = 0
+    Task[void] t1 = spawn increment(c, 10000)
+    Task[void] t2 = spawn increment(c, 10000)
+    Task[void] t3 = spawn increment(c, 10000)
+    Task[void] t4 = spawn increment(c, 10000)
+    t1.await()
+    t2.await()
+    t3.await()
+    t4.await()
+    print(c)
