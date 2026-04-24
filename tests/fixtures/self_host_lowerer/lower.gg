@@ -3268,9 +3268,25 @@ struct GenericInstance:
     Vector[SpannedType] type_args
     String mangled_name
 
+# Linear-scan membership check for `seen` Vector. Avoids both
+# `Vector.contains` (may be bytewise on Str structs) and the former
+# `Dict[String, bool]` (silently misses for parser-derived strings on
+# self-host-compiled runs — triggered the transitive-generic fixpoint
+# loop to never terminate because every round re-added the "already
+# seen" instance, keeping transitive_changed=true forever).
+bool seen_has(Vector[String] &v, String s):
+    bool found = false
+    int i = 0
+    while i < v.len():
+        String k = v.get(i).unwrap()
+        if k == s:
+            found = true
+        i += 1
+    return found
+
 # Expand generic calls inside meta for bodies to the 4 standard types.
 # meta for T in type_variants(...): generates code for int, float, String, bool.
-void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void expand_meta_for_generics(Vector[Stmt] stmts, Vector[String] &seen, Vector[GenericInstance] &instances):
     # Standard column types that type_variants typically expands to.
     # Deliberately excludes 'bool' — variant_payloads() expands to enum payload
     # types (typically int/float/String), not bool.  Adding bool causes spurious
@@ -3286,7 +3302,7 @@ void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vect
         expand_meta_for_stmt(stmt, &seen, &instances, std_types)
         si += 1
 
-void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_stmt(Stmt stmt, Vector[String] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match stmt:
         case SVarDecl(_, _, init, _, _, _):
             expand_meta_for_expr(init, &seen, &instances, std_types)
@@ -3325,7 +3341,7 @@ void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericIns
         else:
             pass
 
-void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match sexpr.expr:
         case ECall(callee_box, args, targs):
             if targs.len() > 0 and has_type_variable(targs):
@@ -3353,8 +3369,8 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                                     expanded.push(ta)
                                 tai += 1
                             String mangled = compute_mangled_name(expanded, fname)
-                            if not seen.contains(mangled):
-                                seen.put(mangled.clone(), true)
+                            if not seen_has(&seen, mangled):
+                                seen.push(mangled.clone())
                                 instances.push(GenericInstance(fname.clone(), !expanded, mangled))
                             ti += 1
                     else:
@@ -3373,7 +3389,7 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
             pass
 
 # Discover generic call sites in an expression
-void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
         case ECall(callee_box, args, targs):
             if targs.len() > 0 and not has_type_variable(targs):
@@ -3381,8 +3397,8 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
                 match callee.expr:
                     case EIdentifier(fname):
                         String mangled = compute_mangled_name(targs, fname)
-                        if not seen.contains(mangled):
-                            seen.put(mangled.clone(), true)
+                        if not seen_has(&seen, mangled):
+                            seen.push(mangled.clone())
                             GenericInstance gi = GenericInstance(fname, targs, mangled)
                             instances.push(!gi)
                     else:
@@ -3424,7 +3440,7 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
         else:
             pass
 
-void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmt(Stmt stmt, Vector[String] &seen, Vector[GenericInstance] &instances):
     match stmt:
         case SVarDecl(stype, _, init, _, _, _):
             # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
@@ -3432,8 +3448,8 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
                 case TNamed(tname, targs):
                     if targs.len() > 0 and not has_type_variable(targs):
                         String mangled = compute_mangled_name(targs, tname)
-                        if not seen.contains(mangled):
-                            seen.put(mangled.clone(), true)
+                        if not seen_has(&seen, mangled):
+                            seen.push(mangled.clone())
                             GenericInstance gi = GenericInstance(tname, targs, mangled)
                             instances.push(!gi)
                 else:
@@ -3485,7 +3501,7 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
         else:
             pass
 
-void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmts(Vector[Stmt] stmts, Vector[String] &seen, Vector[GenericInstance] &instances):
     int si = 0
     while si < stmts.len():
         Stmt stmt = stmts.get(si).unwrap()
@@ -3957,7 +3973,7 @@ String extract_meta_op_suffix(Vector[SpannedExpr] args):
         ai += 1
     return ""
 
-int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match sexpr.expr:
         case ECall(callee_box, args, targs):
@@ -3972,8 +3988,8 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                     match (*callee_box).expr:
                         case EIdentifier(fname):
                             String mangled = compute_mangled_name(resolved, fname) + meta_suffix
-                            if not seen.contains(mangled):
-                                seen.put(mangled.clone(), true)
+                            if not seen_has(&seen, mangled):
+                                seen.push(mangled.clone())
                                 instances.push(GenericInstance(fname, resolved, mangled))
                                 added += 1
                         else:
@@ -4018,7 +4034,7 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
             pass
     return added
 
-int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match stmt:
         case SVarDecl(_, _, init, _, _, _):
@@ -4058,7 +4074,7 @@ int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map,
             pass
     return added
 
-int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
     int added = 0
     int si = 0
     while si < stmts.len():
@@ -4326,7 +4342,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, FunctionDef] fn_templates = {}
     Vector[EquipBlock] equip_templates = []
     Dict[String, bool] equip_generic_names = {}
-    Dict[String, bool] seen_instances = {}
+    Vector[String] seen_instances = []
     Vector[GenericInstance] generic_instances = []
 
     int gi = 0
@@ -4385,6 +4401,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Transitive generic discovery: fixpoint loop to find instances needed
     # inside already-discovered generic function bodies (e.g. tensor_zeros[T]
     # inside tensor_sum_axis[float], meta-op calls like tensor_scalar_op[T](t, val, meta /)).
+    #
+    # The `seen` Vector used inside discover_transitive_* is a linear-scan
+    # workaround for the self-host Dict[String, _] state-loss bug. Without
+    # it, contains() silently misses and the "already seen" instance keeps
+    # getting re-added, making transitive_changed stay true forever.
     bool transitive_changed = true
     while transitive_changed:
         transitive_changed = false
