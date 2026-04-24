@@ -1,0 +1,16 @@
+# Probe: mutating a nested field via a chain `self.a.b = x`. The
+# CoW / borrow checker must handle the intermediate field access.
+
+struct Inner:
+    int count
+
+struct Outer:
+    Inner inner
+
+void main():
+    Outer o = Outer(Inner(0))
+    int i = 0
+    while i < 100:
+        o.inner.count = o.inner.count + 1
+        i += 1
+    print(o.inner.count)

@@ -1,0 +1,21 @@
+# Probe: pattern guard with side effects. Use a counter threaded through
+# a tuple return to avoid global-state syntax issues. If the guard
+# evaluates multiple times, the returned counter would be wrong.
+
+(bool, int) check(int x, int n):
+    return (x > 10, n + 1)
+
+int match_and_count(int value):
+    int counter = 0
+    bool hit = false
+    auto res, n = check(value, counter)
+    hit = res
+    counter = n
+    if hit:
+        print("big")
+    else:
+        print("small")
+    return counter
+
+void main():
+    print(match_and_count(42))

@@ -1,0 +1,12 @@
+# Probe: sort_by with a non-transitive comparator. In Rust, a bad
+# comparator is a logic bug but not a memory safety bug — the sort
+# algorithm assumes total order. If Gorget's sort reads past the
+# buffer or uses unchecked indexing internally, bad comparator could
+# corrupt memory.
+
+void main():
+    Vector[int] v = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+    # Non-transitive compare: always returns -1 (claims every elem is
+    # smaller than every other). Not a valid total order.
+    Vector[int] sorted = v.sorted_by((int a, int b): -1)
+    print(sorted.len())

@@ -1,0 +1,8 @@
+# Probe: range from negative to positive. Must not overflow the
+# signed-subtraction-as-len calculation inside range iteration.
+
+void main():
+    int total = 0
+    for i in -3..3:
+        total += i
+    print(total)

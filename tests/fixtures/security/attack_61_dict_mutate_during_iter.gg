@@ -1,0 +1,16 @@
+# Probe: mutate a Dict while iterating over its keys. Classic
+# iterator-invalidation shape. Safe outcomes: CoW materialize or panic;
+# unsafe: UAF on freed buckets after rehash.
+
+void main():
+    Dict[String, int] d = {}
+    d.put("a", 1)
+    d.put("b", 2)
+    d.put("c", 3)
+    int count = 0
+    for key in d.keys():
+        d.put("extra", 999)
+        count += 1
+        if count >= 10:
+            break
+    print(count)

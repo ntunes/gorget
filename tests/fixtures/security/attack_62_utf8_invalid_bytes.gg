@@ -1,0 +1,15 @@
+# Probe: construct a String from raw bytes that contain invalid UTF-8
+# sequences. `std.bytes.bytes_to_str` validates and returns
+# `Result[String, IoError]` — must not silently accept invalid UTF-8.
+
+from std.bytes import bytes_to_str
+
+void main():
+    Vector[uint8] invalid = []
+    invalid.push(0xC3 as uint8)   # start of 2-byte sequence
+    invalid.push(0x28 as uint8)   # but followed by non-continuation
+    invalid.push(0xFF as uint8)   # never valid in UTF-8
+    Result[String, IoError] r = bytes_to_str(invalid)
+    match r:
+        case Ok(s): print(s.len())
+        case Error(_): print("invalid")

@@ -5213,10 +5213,25 @@ static inline bool gorget_array_contains(const GorgetArray* a, const void* needl
     return false;
 }
 
+// Allocation-size sanity:
+// 1. `cap * elem_size` must not overflow size_t — otherwise the allocator
+//    receives a truncated size, returns a buffer smaller than the user
+//    requested, and subsequent pushes walk past the end.
+// 2. `realloc` / `alloc` may return NULL on OOM or on size > platform limit.
+//    Silently assigning NULL to `arr->data` then returning leaves the Vector
+//    with cap>0 but a null buffer — the next push segfaults.
+// Both must trap with a clean Gorget-level message.
 static inline void gorget_array_reserve(GorgetArray* arr, size_t new_cap) {
     if (new_cap > arr->cap) {
-        size_t old_cap = arr->cap;
-        arr->data = arr->alloc->realloc(arr->alloc->ctx, arr->data, old_cap * arr->elem_size, new_cap * arr->elem_size);
+        size_t new_size;
+        if (__builtin_mul_overflow(new_cap, arr->elem_size, &new_size)) {
+            fprintf(stderr, "gorget: panic: array capacity overflow\n"); exit(1);
+        }
+        void* new_data = arr->alloc->realloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size, new_size);
+        if (new_data == NULL) {
+            fprintf(stderr, "gorget: panic: allocation failed\n"); exit(1);
+        }
+        arr->data = new_data;
         arr->cap = new_cap;
     }
 }
@@ -5224,8 +5239,15 @@ static inline void gorget_array_reserve(GorgetArray* arr, size_t new_cap) {
 static inline void gorget_array_ensure_capacity(GorgetArray* arr, size_t needed, size_t elem_size) {
     arr->elem_size = elem_size;
     if (needed > arr->cap) {
-        size_t old_cap = arr->cap;
-        arr->data = arr->alloc->realloc(arr->alloc->ctx, arr->data, old_cap * elem_size, needed * elem_size);
+        size_t new_size;
+        if (__builtin_mul_overflow(needed, elem_size, &new_size)) {
+            fprintf(stderr, "gorget: panic: array capacity overflow\n"); exit(1);
+        }
+        void* new_data = arr->alloc->realloc(arr->alloc->ctx, arr->data, arr->cap * elem_size, new_size);
+        if (new_data == NULL) {
+            fprintf(stderr, "gorget: panic: allocation failed\n"); exit(1);
+        }
+        arr->data = new_data;
         arr->cap = needed;
     }
 }
@@ -5234,7 +5256,14 @@ static inline GorgetArray gorget_array_with_capacity(size_t elem_size, size_t ca
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetArray arr = {NULL, 0, 0, elem_size, a, NULL, NULL, NULL};
     if (capacity > 0) {
-        arr.data = a->alloc(a->ctx, capacity * elem_size);
+        size_t total_size;
+        if (__builtin_mul_overflow(capacity, elem_size, &total_size)) {
+            fprintf(stderr, "gorget: panic: array capacity overflow\n"); exit(1);
+        }
+        arr.data = a->alloc(a->ctx, total_size);
+        if (arr.data == NULL) {
+            fprintf(stderr, "gorget: panic: allocation failed\n"); exit(1);
+        }
         arr.cap = capacity;
     }
     return arr;

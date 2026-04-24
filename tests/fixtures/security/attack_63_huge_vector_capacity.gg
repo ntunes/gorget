@@ -1,0 +1,12 @@
+# Probe: huge Vector.reserve capacity. Pass a value close to SIZE_MAX —
+# multiplication by sizeof(T) in the runtime would overflow size_t if
+# done naively, leading to undersized allocation and subsequent OOB
+# writes during push. Must either OOM cleanly or trap.
+
+void main():
+    Vector[int] v = []
+    # Just shy of SIZE_MAX / 8 — `n * 8` would overflow size_t if done
+    # without a checked multiplication in the runtime.
+    int huge = 2305843009213693951
+    v.reserve(huge)
+    print(v.len())

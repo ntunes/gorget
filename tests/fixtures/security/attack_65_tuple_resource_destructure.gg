@@ -1,0 +1,14 @@
+# Probe: returning a tuple with resource-typed components. Callers that
+# destructure (auto a, b = fn()) must take ownership of each, and the
+# originally-constructed tuple's drop must not fire on values that moved
+# into the bindings.
+
+(String, Vector[int]) make_pair():
+    String s = "hello"
+    Vector[int] v = [1, 2, 3]
+    return (s, v)
+
+void main():
+    auto name, nums = make_pair()
+    print(name)
+    print(nums.len())

@@ -1,0 +1,21 @@
+# Probe: deeply nested Option[Option[...]]. Each monomorphized type
+# needs drop/clone fns; ensure the compiler handles multiple levels.
+
+void main():
+    Option[Option[Option[int]]] x = Some(Some(Some(42)))
+    Option[Option[int]] y = x.unwrap()
+    Option[int] z = y.unwrap()
+    int n = z.unwrap()
+    print(n)
+
+    # Mixed None levels
+    Option[Option[Option[int]]] partial = Some(Some(None()))
+    match partial:
+        case Some(a):
+            match a:
+                case Some(b):
+                    match b:
+                        case Some(c): print(c)
+                        case None(): print("inner-none")
+                case None(): print("mid-none")
+        case None(): print("outer-none")

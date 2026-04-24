@@ -1,0 +1,22 @@
+# Probe: range iteration with edge values. 0..0 should be empty;
+# negative-step ranges and very-large ranges should either trap or
+# produce expected empty/wrap behavior.
+
+void main():
+    # Empty range
+    int count_empty = 0
+    for i in 0..0:
+        count_empty += 1
+    print(count_empty)
+
+    # Reverse range (start > end)
+    int count_rev = 0
+    for i in 5..3:
+        count_rev += 1
+    print(count_rev)
+
+    # Normal range
+    int count_norm = 0
+    for i in 0..5:
+        count_norm += 1
+    print(count_norm)

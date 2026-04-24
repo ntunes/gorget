@@ -152,9 +152,12 @@ fn sanitize_build_and_run(fixture_name: &str) -> (SanitizeOutcome, PathBuf) {
 
     let mut run_cmd = Command::new(&exe_path);
     // Halt on first sanitizer error so a trip produces nonzero exit.
+    // `allocator_may_return_null=1` lets the runtime's own null-check-after-
+    // alloc paths run — otherwise ASan pre-aborts on oversized allocations
+    // and masks Gorget's cleaner runtime trap.
     run_cmd.env(
         "ASAN_OPTIONS",
-        "detect_leaks=0:halt_on_error=1:abort_on_error=0:print_summary=1",
+        "detect_leaks=0:halt_on_error=1:abort_on_error=0:print_summary=1:allocator_may_return_null=1",
     );
     run_cmd.env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1");
 
@@ -745,4 +748,64 @@ fn sec_58_string_concat_loop() {
 #[test]
 fn sec_59_generic_resource_monomorphization() {
     security_safe("attack_59_generic_resource_collision", "10\nhello");
+}
+
+// ── Round 5 attacks: sort, UTF-8, allocator edges, nested types ──────────
+
+#[test]
+fn sec_60_sort_non_transitive_comparator() {
+    security_safe("attack_60_sort_non_transitive", "11");
+}
+
+#[test]
+fn sec_61_dict_mutate_during_iter() {
+    // `.keys()` materializes — iteration is over a snapshot. No UAF even
+    // if the Dict is rehashed mid-loop.
+    security_safe("attack_61_dict_mutate_during_iter", "3");
+}
+
+#[test]
+fn sec_62_utf8_invalid_bytes() {
+    security_safe("attack_62_utf8_invalid_bytes", "invalid");
+}
+
+#[test]
+fn sec_63_huge_vector_capacity_traps() {
+    // Regression — `v.reserve(huge)` used to silently fail (realloc → NULL),
+    // leaving the vector with cap > 0 and data = NULL; the next push
+    // segfaulted. Fix in src/backend/c/c_runtime.rs: gorget_array_reserve /
+    // ensure_capacity / with_capacity now check __builtin_mul_overflow on
+    // the size computation AND null-check the allocator's return, trapping
+    // with `gorget: panic: allocation failed` or `array capacity overflow`.
+    security_traps("attack_63_huge_vector_capacity", "allocation failed");
+}
+
+#[test]
+fn sec_64_deep_option_unwrap() {
+    security_safe("attack_64_deep_option_unwrap", "42\ninner-none");
+}
+
+#[test]
+fn sec_65_tuple_resource_destructure() {
+    security_safe("attack_65_tuple_resource_destructure", "hello\n3");
+}
+
+#[test]
+fn sec_66_chained_field_mutation() {
+    security_safe("attack_66_chained_field_mutation", "100");
+}
+
+#[test]
+fn sec_67_tuple_return_auto_destructure() {
+    security_safe("attack_67_pattern_guard_side_effects", "big\n1");
+}
+
+#[test]
+fn sec_68_range_edge_cases() {
+    security_safe("attack_68_range_edge_cases", "0\n0\n5");
+}
+
+#[test]
+fn sec_69_negative_range() {
+    security_safe("attack_69_negative_range", "-3");
 }
