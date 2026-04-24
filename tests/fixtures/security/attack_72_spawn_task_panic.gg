@@ -1,0 +1,12 @@
+# Probe: a spawned task panics (division by zero). Does the main task
+# observe the error, or does the panic silently terminate that task
+# leaving the main process alive with lost work?
+
+async void boom():
+    int z = 0
+    int _dead = 10 / z
+
+async void main():
+    Task[void] t = spawn boom()
+    t.await()
+    print("main survived")

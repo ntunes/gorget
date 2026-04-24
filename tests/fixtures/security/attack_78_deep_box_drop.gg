@@ -1,0 +1,19 @@
+# Probe: a deeply nested Box chain. Each Box drop calls the inner Box's
+# drop recursively — if the emitted drop is itself recursive C, we get
+# C-level stack overflow (the attacker builds a linked list of
+# millions of nodes). Compiler should either iterate the drop or
+# document the limit.
+
+struct Node:
+    int val
+    Option[Box[Node]] next
+
+Node make_chain(int n):
+    if n <= 0:
+        return Node(0, None())
+    return Node(n, Some(Box.new(make_chain(n - 1))))
+
+void main():
+    Node head = make_chain(1000)
+    # The list will be dropped at main exit — recursive drop stack.
+    print(head.val)

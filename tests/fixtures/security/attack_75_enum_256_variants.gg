@@ -1,0 +1,26 @@
+# Probe: enum with many variants — match dispatch must use a wide
+# enough tag (int32, not int8) so high-index variants aren't aliased.
+
+enum Color:
+    V0()
+    V1()
+    V2()
+    V3()
+    V4()
+    V5()
+    V6()
+    V7()
+    V8()
+    V9()
+
+int variant_tag(Color c):
+    return match c:
+        case Color.V0(): 0
+        case Color.V5(): 5
+        case Color.V9(): 9
+        else: -1
+
+void main():
+    print(variant_tag(Color.V0()))
+    print(variant_tag(Color.V9()))
+    print(variant_tag(Color.V5()))

@@ -1,0 +1,14 @@
+# Probe: float → int conversion with out-of-range, NaN, Inf. In C this
+# is UB (result is platform-defined or produces INT_MIN). A safe language
+# should trap, clamp, or at minimum produce consistent output.
+
+void main():
+    float zero = 0.0
+    float nan = zero / zero
+    float inf = 1.0 / zero
+    float huge = 1.0e100
+
+    print(nan as int)
+    print(inf as int)
+    print(huge as int)
+    print(3.7 as int)

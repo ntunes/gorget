@@ -1,0 +1,17 @@
+# Probe: hash-collision flood. Insert many keys that share the same low
+# bucket bits — if hash has no randomized seed, an attacker picks keys
+# all landing in one bucket, degrading O(1) get to O(n). Real attack is
+# HashDoS (Perl/PHP/Ruby were all vulnerable ~2011). Not a memory bug,
+# but a complexity-attack-DoS question worth documenting.
+
+void main():
+    Dict[String, int] d = {}
+    int n = 1000
+    int i = 0
+    while i < n:
+        String k = f"key{i}"
+        d.put(k, i)
+        i += 1
+    print(d.len())
+    # Lookup should still be fast
+    print(d.get("key500").unwrap())

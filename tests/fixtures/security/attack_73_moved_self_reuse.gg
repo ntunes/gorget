@@ -1,0 +1,13 @@
+# Probe: a method that consumes self (`!self`) followed by use of the
+# original binding. Borrow checker MUST reject — otherwise UAF.
+
+struct Bag:
+    Vector[int] items
+
+void consume(Bag !b):
+    print(b.items.len())
+
+void main():
+    Bag bag = Bag([1, 2, 3, 4])
+    consume(!bag)
+    print(bag.items.len())

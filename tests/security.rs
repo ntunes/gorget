@@ -620,15 +620,18 @@ fn sec_43_string_slice_oob() {
 
 #[test]
 fn sec_45_deep_recursion_stack_overflow() {
-    // C-level stack overflow when recursing 500000 deep. Gorget doesn't
-    // bound recursion depth; this is classified as known_unsafe so that any
-    // future stack-guard work flips it to `security_traps`.
+    // Accepted as-is (2026-04-24, matches Rust / C++ / Zig): unbounded
+    // recursion hits the OS guard page and SIGSEGVs. ASan surfaces this as
+    // `stack-overflow`. A per-call depth counter would trap cleanly at
+    // ~1-2 ns/call overhead; for now we prefer Gorget's "thin C ABI, no
+    // hidden per-call cost" promise. Keeping the fixture as known_unsafe
+    // documents the behavior so any future stack-guard work flips it.
     security_known_unsafe(
         "attack_45_deep_recursion",
         KnownBug::SanitizerTrips,
-        "Unbounded recursion → C stack overflow (SIGSEGV under ASan, \
-         silent segfault otherwise). Gorget has no per-function stack-depth \
-         check. Low priority — the blast radius is crash, not corruption.",
+        "By design (matches Rust / C++ / Zig): unbounded recursion hits the \
+         OS guard page → SIGSEGV. ASan surfaces `stack-overflow`. Closing \
+         this means adding a per-call depth counter, which isn't free.",
     );
 }
 
@@ -808,4 +811,79 @@ fn sec_70_inline_none_nested() {
     // `level_2(Some(None()))` all used to emit NULL-ptr-deref; now each
     // constructs the correct Option[T]::None struct from expected_type.
     security_safe("attack_70_inline_none_nested", "-1\n42\n-2\n-1\n7");
+}
+
+// ── Round 6 attacks: float casts, async panics, struct ABI, enum dispatch ─
+
+#[test]
+fn sec_71_float_to_int_saturation() {
+    // Matches Rust `as i64` semantics (defined since 1.45): NaN → 0,
+    // +Inf / huge → INT64_MAX. Not C UB on this platform; our cast
+    // sequence is deterministic.
+    security_safe(
+        "attack_71_float_to_int_edge",
+        "0\n9223372036854775807\n9223372036854775807\n3",
+    );
+}
+
+#[test]
+fn sec_72_spawn_task_panic_propagates() {
+    // A panic inside a spawned task exits the whole process with a
+    // clean Gorget-level message — the main task doesn't silently
+    // survive while the worker dies.
+    security_traps("attack_72_spawn_task_panic", "division by zero");
+}
+
+#[test]
+fn sec_73_moved_self_reuse_rejected() {
+    // Compiler correctly rejects `bag` use after `consume(!bag)`.
+    security_rejected("attack_73_moved_self_reuse", "use of moved value");
+}
+
+#[test]
+fn sec_74_hashmap_1k_keys() {
+    // 1000 inserts + lookup — baseline for HashMap at moderate scale.
+    // A pathological collision test would need attacker-crafted keys
+    // that defeat the hash function; without knowing the hash, this
+    // just confirms correctness at scale.
+    security_safe("attack_74_hashmap_collision_dos", "1000\n500");
+}
+
+#[test]
+fn sec_75_enum_variant_dispatch() {
+    security_safe("attack_75_enum_256_variants", "0\n9\n5");
+}
+
+#[test]
+fn sec_76_big_struct_return() {
+    // Returning a 10-field struct by value — exercises the sret ABI.
+    security_safe("attack_76_big_struct_return", "1\n10\n55");
+}
+
+#[test]
+fn sec_77_dict_remove_during_iter() {
+    // Collect keys first, then remove in a second pass. Safe pattern.
+    security_safe("attack_77_dict_remove_during_iter", "3");
+}
+
+#[test]
+fn sec_78_deep_box_drop() {
+    // 1000-node Box chain. Each node's Drop recurses into next's Drop.
+    // Passes — C stack handles 1000 fine. A 1M-node chain would SIGSEGV
+    // via the same path as attack_45.
+    security_safe("attack_78_deep_box_drop", "1000");
+}
+
+#[test]
+fn sec_79_weak_clone_sanity() {
+    security_safe("attack_79_weak_clone_sanity", "1\ndone");
+}
+
+#[test]
+fn sec_80_char_construction_edges() {
+    // `chr(0)` → empty String (0 bytes — Gorget refuses to embed NUL).
+    // `chr(1114111)` → U+10FFFF, 1 grapheme, 4 UTF-8 bytes (len counts
+    // codepoints here). `chr(1200000)` (invalid) → U+FFFD replacement.
+    // All deterministic — no invalid UTF-8 is ever produced.
+    security_safe("attack_80_char_edge_cases", "0\n1\n1");
 }

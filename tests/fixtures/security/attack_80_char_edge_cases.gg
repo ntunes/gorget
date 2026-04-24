@@ -1,0 +1,15 @@
+# Probe: char-like ops via the codepoint-indexed conv functions.
+# `chr(n)` returns a single-char String — its codepoint construction
+# should trap or clamp on out-of-range values rather than producing
+# garbage bytes that later trip UTF-8 readers.
+
+from std.conv import chr
+
+void main():
+    String null_char = chr(0)
+    print(null_char.len())
+    String max_valid = chr(1114111)
+    print(max_valid.len())
+    # Past max valid — UTF-8 can't encode beyond U+10FFFF.
+    String beyond = chr(1200000)
+    print(beyond.len())

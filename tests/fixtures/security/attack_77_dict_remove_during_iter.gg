@@ -1,0 +1,20 @@
+# Probe: call `d.remove(k)` during iteration. Like attack_61 (which
+# tested .put during iter), but .remove triggers a different code path
+# — bucket moves, rehashing, possibly shrink.
+
+void main():
+    Dict[String, int] d = {}
+    d.put("a", 1)
+    d.put("b", 2)
+    d.put("c", 3)
+    d.put("d", 4)
+    d.put("e", 5)
+    Vector[String] to_remove = []
+    for key in d.keys():
+        if d.get(key).unwrap() % 2 == 0:
+            to_remove.push(key.clone())
+    int i = 0
+    while i < to_remove.len():
+        d.remove(to_remove.get(i).unwrap().clone())
+        i += 1
+    print(d.len())

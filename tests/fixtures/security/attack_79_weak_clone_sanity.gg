@@ -1,0 +1,18 @@
+# Probe: Weak reference sanity. Weak.clone increments the weak refcount;
+# dropping all Weaks without any Shared must free the control block.
+
+struct Payload:
+    int val
+
+void main():
+    Shared[Payload] s = Shared[Payload](Payload(7))
+    Weak[Payload] w1 = s.downgrade()
+    Weak[Payload] w2 = w1.clone()
+    Weak[Payload] w3 = w2.clone()
+    # Try upgrading — still alive because s is live.
+    match w1.upgrade():
+        case Some(alive): print(1)
+        case None(): print(0)
+    # All weaks + s go out of scope together at main exit. LSan would
+    # report a leak if the control block isn't freed.
+    print("done")
