@@ -22,7 +22,16 @@ struct LowerCtx:
     Vector[Vector[Instruction]] block_insts
     Vector[Terminator] block_terms
     int current_block
-    Dict[String, int] named_locals
+    # named_locals was `Dict[String, int]` but the self-host-compiled
+    # binary silently drops keys looked up by literal strings — e.g.
+    # `put(param_name, plid)` followed by `contains("buf")` returns
+    # false for keys where `put` got a parser-derived String but
+    # `contains` gets a literal one. The same lookup using a clone of
+    # the stashed parser String succeeds. That's a `hash_fn`-gone-
+    # missing symptom. Linear-scan Vectors are O(N²) but robust — N is
+    # usually <20 (params + local bindings) so it's fine.
+    Vector[String] nl_keys
+    Vector[int] nl_vals
     int next_closure_id
     # Stack of (continue_target, break_target) bb ids for the enclosing
     # loops. break / continue inside a loop body jump to the innermost
@@ -48,6 +57,38 @@ struct LowerCtx:
 # ── Helpers ──────────────────────────────────────────────
 
 Option[String] NO_NAME = None
+
+# named_locals helpers — see LowerCtx.nl_keys for why these are
+# linear-scan Vectors and not a Dict.
+bool nl_contains(LowerCtx &ctx, String name):
+    int i = 0
+    while i < ctx.nl_keys.len():
+        String k = ctx.nl_keys.get(i).unwrap()
+        if k == name:
+            return true
+        i += 1
+    return false
+
+int nl_get(LowerCtx &ctx, String name):
+    int i = 0
+    while i < ctx.nl_keys.len():
+        String k = ctx.nl_keys.get(i).unwrap()
+        if k == name:
+            return ctx.nl_vals.get(i).unwrap()
+        i += 1
+    return -1
+
+# Append or overwrite: match Dict.put semantics (last-write-wins).
+void nl_put(LowerCtx &ctx, String name, int val):
+    int i = 0
+    while i < ctx.nl_keys.len():
+        String k = ctx.nl_keys.get(i).unwrap()
+        if k == name:
+            ctx.nl_vals.set(i, val)
+            return
+        i += 1
+    ctx.nl_keys.push(name.clone())
+    ctx.nl_vals.push(val)
 
 # Diagnostic helper for unhandled AST variants. Called from the
 # `else: ...` fall-through arms in lower_stmt / lower_expr. The message
@@ -965,8 +1006,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
         case EIdentifier(name):
-            if ctx.named_locals.contains(name):
-                return ctx.named_locals.get(name).unwrap()
+            if nl_contains(&ctx, name):
+                return nl_get(&ctx, name)
             # Module-level `const int` — inline the evaluated value.
             # Without this, the self-compiled parser's KW_* / PREC_*
             # constants all become 0 and check_kw(0, 0) hangs.
@@ -1127,8 +1168,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Check if fname is a local variable (callable parameter or closure).
                     # If so, dispatch through closure protocol instead of direct call.
                     # Skip if fname is a known function (fn_sigs) or redirect target.
-                    if ctx.named_locals.contains(fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
-                        int callable_local = ctx.named_locals.get(fname).unwrap()
+                    if nl_contains(&ctx, fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
+                        int callable_local = nl_get(&ctx, fname)
                         # Lower args
                         Vector[Operand] cl_args = []
                         cl_args.push(OpCopy(callable_local))  # closure/callable as first arg
@@ -1571,8 +1612,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int bdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
             return bdst
         case ESelfExpr():
-            if ctx.named_locals.contains("self"):
-                return ctx.named_locals.get("self").unwrap()
+            if nl_contains(&ctx, "self"):
+                return nl_get(&ctx, "self")
             int sdst = add_local(&ctx, UNIT_TYPE, NO_NAME)
             return sdst
         case EDefaultOp(lhs_box, rhs_box):
@@ -1891,7 +1932,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 var_type = gs_tid_decl
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
             emit(&ctx, GIAssign(var_local, OpCopy(val)))
-            ctx.named_locals.put(name, var_local)
+            nl_put(&ctx, name, var_local)
         case SReturn(opt_expr):
             match opt_expr:
                 case Some(ret_expr):
@@ -1909,8 +1950,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SAssign(target_expr, value_expr):
             match target_expr.expr:
                 case EIdentifier(name):
-                    if ctx.named_locals.contains(name):
-                        int lid = ctx.named_locals.get(name).unwrap()
+                    if nl_contains(&ctx, name):
+                        int lid = nl_get(&ctx, name)
                         int val = lower_expr(&ctx, value_expr, &gmod)
                         emit(&ctx, GIAssign(lid, OpCopy(val)))
                 case EFieldAccess(base_box, field_name):
@@ -1985,8 +2026,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # __field_read + binop + __field_write.
             match target_expr.expr:
                 case EIdentifier(name):
-                    if ctx.named_locals.contains(name):
-                        int lid = ctx.named_locals.get(name).unwrap()
+                    if nl_contains(&ctx, name):
+                        int lid = nl_get(&ctx, name)
                         int lhs_type = ctx.locals.get(lid).unwrap().type_id
                         int lhs_val = add_local(&ctx, lhs_type, NO_NAME)
                         emit(&ctx, GIAssign(lhs_val, OpCopy(lid)))
@@ -2255,7 +2296,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 Option[String] name_opt = Some(name.clone())
                 int bound = add_local(&ctx, scr_tid, name_opt)
                 emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
-                ctx.named_locals.put(name, bound)
+                nl_put(&ctx, name, bound)
                 set_terminator(&ctx, GTJump(match_bb))
         case PConstructor(variant_name, sub_pats):
             lower_ctor_pattern(&ctx, scrutinee, variant_name, sub_pats, enum_name, match_bb, no_match_bb, &gmod)
@@ -2367,7 +2408,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 Option[String] bname_opt = Some(bname.clone())
                 int bound = add_local(&ctx, fty, bname_opt)
                 emit(&ctx, GIAssign(bound, OpCopy(field_val)))
-                ctx.named_locals.put(bname, bound)
+                nl_put(&ctx, bname, bound)
             else:
                 lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback")
         fi += 1
@@ -2499,7 +2540,9 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Terminator] block_terms = [GTNone()]
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, {}, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
+    Vector[String] _nl_keys = []
+    Vector[int] _nl_vals = []
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_nl_keys, !_nl_vals, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -2522,7 +2565,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             pt = register_type(&gmod, GtMutPtr(pt))
         param_types.push(pt)
         int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
-        ctx.named_locals.put(p.param_name, plid)
+        nl_put(&ctx, p.param_name, plid)
         pi = pi + 1
 
 
@@ -2624,7 +2667,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
+        Vector[String] _nl_keys2 = []
+        Vector[int] _nl_vals2 = []
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_nl_keys2, !_nl_vals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -2672,7 +2717,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                     self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
             int self_lid = add_local(&ctx, self_tid, Some("self"))
-            ctx.named_locals.put("self", self_lid)
+            nl_put(&ctx, "self", self_lid)
 
         # _2.._N = explicit params (skip self — already added above)
         int pi = 0
@@ -2695,7 +2740,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 pt = register_type(&gmod, GtMutPtr(pt))
             param_types.push(pt)
             int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
-            ctx.named_locals.put(p.param_name, plid)
+            nl_put(&ctx, p.param_name, plid)
             pi += 1
 
         # Lower body
@@ -4444,7 +4489,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, {}, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
+                        Vector[String] _nl_keys3 = []
+                        Vector[int] _nl_vals3 = []
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_nl_keys3, !_nl_vals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
