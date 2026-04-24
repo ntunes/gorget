@@ -2,8 +2,6 @@
 
 ## High
 
-- **SECURITY: `f(None())` inline null-ptr deref** (audit 2026-04-23). `None()` passed as a function argument of type `Option[T]` compiles to `void* __v0 = NULL; f(*(Option[T]*)__v0)` — null-pointer dereference at the call site, SIGSEGV under ASan. Workaround: bind to a typed local first (`Option[int] o = None(); f(o)` works). Pre-existing TODO-Low "Inline None() without typed variable produces garbage" is this same bug; adversarial probe promoted it to SEGV. Fix: lower `None()` as an argument as `Option[T]::None` struct literal based on the param type, not as a raw NULL constant. Fixture `attack_44_match_partial_option.gg` (security_known_unsafe). [added: 2026-04-23]
-
 - **Mutex double-lock deadlocks silently** (audit 2026-04-23). `Guard[int] g1 = m.lock(); Guard[int] g2 = m.lock();` compiles cleanly (`gg check` reports OK) and the runtime hangs on the second lock. Non-reentrant semantics are fine; the borrow checker should detect the live Guard and reject the second lock at compile time. Fixture `attack_56_mutex_double_lock.gg` (not wired in the harness — the deadlock-test would need a timeout variant of `security_known_unsafe`; deferred). Low severity: deadlock is visible, not silently wrong. [added: 2026-04-23]
 
 - **SECURITY: Unbounded recursion → C stack overflow** (audit 2026-04-23). 500k-deep recursion crashes with SIGSEGV (stack-overflow, C-level). Gorget has no per-function stack-depth guard. Low priority — blast radius is crash, not corruption — but a language that claims safety could provide a clean trap. Fixture `attack_45_deep_recursion.gg` (security_known_unsafe). [added: 2026-04-23]

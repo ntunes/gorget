@@ -660,20 +660,11 @@ fn sec_48_vector_remove_while_iterating() {
 }
 
 #[test]
-fn sec_44_match_partial_option_null_deref() {
-    // Inline `None()` passed as argument compiles to `unpack(*NULL)` —
-    // null-pointer dereference. TODO already flags "inline None() without
-    // typed variable produces garbage"; this attack promotes it to SIGSEGV.
-    // Bind to `Option[T] o = None()` first as workaround.
-    security_known_unsafe(
-        "attack_44_match_partial_option",
-        KnownBug::SanitizerTrips,
-        "`f(None())` emits `__v0 = NULL; f(*(Option[T]*)__v0)` — null-ptr \
-         deref. Inline None() as a call argument isn't lowered as an \
-         Option struct literal; it's emitted as a NULL constant, then \
-         dereferenced at the call site. Workaround: bind to a typed local \
-         first.",
-    );
+fn sec_44_match_partial_option() {
+    // Fixed 2026-04-24 at src/ir/lowering/exprs/mod.rs — inline `None()` in
+    // a call argument now constructs Option[T]::None from expected_type
+    // context instead of emitting a raw NULL constant.
+    security_safe("attack_44_match_partial_option", "42\n-1");
 }
 
 #[test]
@@ -808,4 +799,13 @@ fn sec_68_range_edge_cases() {
 #[test]
 fn sec_69_negative_range() {
     security_safe("attack_69_negative_range", "-3");
+}
+
+#[test]
+fn sec_70_inline_none_nested() {
+    // Regression — cover several inline-None shapes so the fix doesn't
+    // regress only at the top level. `level_1(None())`, `level_2(None())`,
+    // `level_2(Some(None()))` all used to emit NULL-ptr-deref; now each
+    // constructs the correct Option[T]::None struct from expected_type.
+    security_safe("attack_70_inline_none_nested", "-1\n42\n-2\n-1\n7");
 }

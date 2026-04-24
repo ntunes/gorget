@@ -151,8 +151,39 @@ fn lower_expr_inner(
         }
 
         Expr::Call { callee, args, generic_args } => {
-            // None() call → Constant::Null (the Assign handler converts to tagged enum)
+            // None() call. When the expected type is a known `Option[T]`,
+            // construct the Option[T]::None variant directly — otherwise the
+            // bare `Constant::Null` is passed to the callsite, which the C
+            // backend treats as NULL and later dereferences (`*(Option[T]*)NULL`)
+            // → null-pointer deref / SEGV. The Assign handler already converts
+            // Null → tagged struct for VarDecl / StoreSlot, but function args
+            // don't flow through Assign, so they need this call-site
+            // conversion.
             if matches!(callee.node, Expr::NoneLiteral) {
+                if let Some(expected) = ctx.func_state.expected_type {
+                    if let Some(name) = ctx.type_registry.type_name(expected) {
+                        if name.starts_with("Option__") && !name.starts_with("Option__Ref_") {
+                            // Register the Option's enum TypeDef if it isn't
+                            // already — Weak.upgrade's upgrade handler does
+                            // the same dance; the helper short-circuits when
+                            // already registered.
+                            let inner = ctx.type_registry
+                                .get_type_def(&name)
+                                .and_then(|td| match &td.kind {
+                                    crate::ir::types::TypeDefKind::Enum(e) => {
+                                        e.variants.iter().find(|v| v.name == "Some")
+                                            .and_then(|v| v.fields.first().map(|f| f.type_id))
+                                    }
+                                    _ => None,
+                                });
+                            if let Some(inner_type) = inner {
+                                ctx.ensure_option_type_registered(&name, inner_type);
+                                let dst = builder.enum_init(&name, "None", expected, vec![]);
+                                return FunctionBuilder::copy(dst);
+                            }
+                        }
+                    }
+                }
                 return Operand::Constant(Constant::Null);
             }
             // Check if this is a blocking call that should trigger with-shared refresh

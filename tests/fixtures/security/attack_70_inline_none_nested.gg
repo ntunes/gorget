@@ -1,0 +1,19 @@
+# Regression: inline `None()` as a call argument was a SEGV primitive
+# before the inline-None fix. Cover several shapes of inline None usage.
+
+int level_1(Option[int] o):
+    return match o:
+        case Some(v): v
+        else: -1
+
+int level_2(Option[Option[int]] oo):
+    return match oo:
+        case Some(inner): level_1(inner)
+        else: -2
+
+void main():
+    print(level_1(None()))
+    print(level_1(Some(42)))
+    print(level_2(None()))
+    print(level_2(Some(None())))
+    print(level_2(Some(Some(7))))
