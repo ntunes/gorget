@@ -750,6 +750,39 @@ String collection_element_type(String name):
         return name.slice(8, name.len())
     return ""
 
+# Return true when the init expression is a call to a known
+# `cstr`-returning runtime/extern function. Used at SVarDecl to
+# insert a `gorget_str_from_cstr` coercion before storing into a
+# Str-typed slot, matching the Rust backend's
+# `extern_cstr_return_vals` handling. Conservative allow-list
+# covering the std.conv / std.fs / env extern surface —
+# adding a new cstr-returning extern here is the same shape of
+# change as the Rust-side `fn_return_abis` registration.
+bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
+    match init_expr.expr:
+        case ECall(callee_box, _, _):
+            match (*callee_box).expr:
+                case EIdentifier(fname):
+                    # Resolve through call_redirects so both the Gorget
+                    # source name (`_parse_last_error`) and the C symbol
+                    # (`gorget_parse_last_error`) match.
+                    String resolved = fname
+                    if gmod.call_redirects.contains(fname):
+                        resolved = gmod.call_redirects.get(fname).unwrap()
+                    # Current allow-list is narrow: only externs that
+                    # return raw `const char*` via their C signature.
+                    # `gorget_int_to_str` / `_float_to_str` / `_bool_to_str`
+                    # / `_char_chr` all return `Str` (by-value struct), not
+                    # cstr — do NOT include them here.
+                    if resolved == "gorget_parse_last_error":
+                        return true
+                    return false
+                else:
+                    return false
+        else:
+            return false
+    return false
+
 # Check if a GIR local holds a string type.
 bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
@@ -1833,6 +1866,23 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 String inferred_name = type_id_to_name(var_type, &gmod)
                 if declared_name.contains("__") and not inferred_name.contains("__"):
                     var_type = declared_ty
+            # cstr → String coercion at the boundary: `String err =
+            # _parse_last_error()` where the extern returns `cstr`. Without
+            # this, the cstr pointer gets stored into a Str slot and
+            # subsequent `err.len()` calls treat the 8-byte pointer as a
+            # 40-byte Str struct — the `len` field read aliases adjacent
+            # stack and zeroes unrelated locals. Mirrors Rust's
+            # `extern_cstr_return_vals` handling in
+            # `src/backend/c_lir/mod.rs` which wraps the value with
+            # `gorget_str_from_cstr` when the slot is Str-typed and the
+            # source is a cstr-returning extern call.
+            int gs_tid_decl = lookup_or_register_named(&gmod, "GorgetString")
+            if declared_ty == gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
+                int coerced = add_local(&ctx, gs_tid_decl, NO_NAME)
+                Vector[Operand] cstr_args = [OpCopy(val)]
+                emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
+                val = coerced
+                var_type = gs_tid_decl
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
             emit(&ctx, GIAssign(var_local, OpCopy(val)))
             ctx.named_locals.put(name, var_local)
