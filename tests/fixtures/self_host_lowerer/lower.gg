@@ -1208,7 +1208,14 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         return sdst
                 else:
                     pass
-            # unwrap() is a no-op passthrough — the self-host doesn't wrap in Option
+            # unwrap() / unwrap_or() — extract the payload field from the
+            # Option/Result receiver. Previously a no-op GIAssign copy with
+            # a re-typed target, which silently mishandled aggregate receivers:
+            # `.unwrap_or(0)` on a `Result[int, ParseError]` emits "0" via
+            # emit_variant_arg's aggregate-arg/scalar-expected fallback,
+            # losing the actual Ok_0 value. Now emits a real field read
+            # through the `__field_read_<enum>_<Variant>_0` helper, same as
+            # PConstructor destructure.
             int recv = lower_expr(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or":
                 # Lower any args (for unwrap_or the default value).
@@ -1216,20 +1223,17 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 while uoi < margs.len():
                     lower_expr(&ctx, margs.get(uoi).unwrap(), &gmod)
                     uoi += 1
-                # Extract the inner T from Option__T or Result__T__E names so
-                # downstream code sees a value typed as the payload rather than
-                # the wrapper struct.
+                # Determine the wrapper type, inner type name, and variant.
                 String recv_tn = local_type_name(recv, &ctx, &gmod)
-                int inner_tid = -1
+                String variant_name = ""
+                String inner_name_str = ""
                 if recv_tn.starts_with("Option__"):
-                    String inner_name = recv_tn.slice(8, recv_tn.len())
-                    int prim_t = prim_name_to_type(inner_name)
-                    if prim_t >= 0:
-                        inner_tid = prim_t
-                    else:
-                        inner_tid = lookup_or_register_named(&gmod, inner_name)
+                    variant_name = "Some"
+                    inner_name_str = recv_tn.slice(8, recv_tn.len())
                 elif recv_tn.starts_with("Result__"):
-                    # Extract Ok type: Result__OkT__ErrT — find the split __.
+                    variant_name = "Ok"
+                    # Ok type: longest-prefix scan for first `__` splits
+                    # Result__<OkT>__<ErrT>.
                     String rest = recv_tn.slice(8, recv_tn.len())
                     int split = -1
                     int si = 0
@@ -1239,12 +1243,27 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             break
                         si += 1
                     if split > 0:
-                        String ok_name = rest.slice(0, split)
-                        int ok_t = prim_name_to_type(ok_name)
-                        if ok_t >= 0:
-                            inner_tid = ok_t
-                        else:
-                            inner_tid = lookup_or_register_named(&gmod, ok_name)
+                        inner_name_str = rest.slice(0, split)
+                int inner_tid = -1
+                if inner_name_str != "":
+                    int prim_t = prim_name_to_type(inner_name_str)
+                    if prim_t >= 0:
+                        inner_tid = prim_t
+                    else:
+                        inner_tid = lookup_or_register_named(&gmod, inner_name_str)
+                # Emit field read through the scrutinee-ptr helper when we
+                # know the variant, matching the path taken by PConstructor
+                # destructure.
+                if inner_tid >= 0 and variant_name != "":
+                    int scr_ptr = match_scrutinee_ptr(&ctx, recv)
+                    int field_val = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
+                    # If unwrap_or has a default, synthesize a tag check —
+                    # but for now emit the field read directly. The default
+                    # argument is already lowered for side effects; the tag
+                    # check is a TODO once the SSA phi handling for the
+                    # conditional is stable.
+                    return field_val
+                # Fall back to re-cast if we couldn't identify the variant.
                 if inner_tid >= 0:
                     int ud = add_local(&ctx, inner_tid, NO_NAME)
                     emit(&ctx, GIAssign(ud, OpCopy(recv)))

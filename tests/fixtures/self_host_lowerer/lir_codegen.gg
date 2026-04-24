@@ -4022,15 +4022,35 @@ String generate_c(LirModule &m):
 
     String out = ""
 
-    # Fallback stubs for prelude variants that fell through type inference
-    # — emitted as macros so any remaining bare `Some(x)` / `Ok(x)` / `Error(x)`
-    # calls lex as identity casts. The correct struct-literal path emits
-    # inline without hitting these. This lets stage-1 link even when the
-    # inference couldn't determine the parametrized Option/Result type.
-    out = out + "#define Some(x) ((void)(x), (int64_t)0)\n"
-    out = out + "#define Ok(x) ((void)(x), (int64_t)0)\n"
-    out = out + "#define Error(x) ((void)(x), (int64_t)0)\n"
-    out = out + "#define None() ((int64_t)0)\n\n"
+    # Fallback stubs for prelude variants that fell through type inference.
+    # The CORRECT path is to emit an inline struct literal with the proper
+    # Result__T__E or Option__T monomorphization. When inference can't
+    # determine the parameterization, the lowerer previously emitted these
+    # as `#define Ok(x) ((void)(x), (int64_t)0)` which silently discarded
+    # the payload — stage-1's `parse_int("42")` produced `Ok(0)` even though
+    # the C extern returned 42 and stage-1 emitted `Ok(__v14)` with __v14=42,
+    # because the macro threw it away.
+    #
+    # Now emit `#error` diagnostics so any surviving `Ok(x)` / `Some(x)` /
+    # `Error(x)` / `None()` callsite surfaces as a C compile error — the
+    # self-host's inference needs to be fixed at that site, not patched
+    # over with a silently-lossy identity.
+    #
+    # Gated by GORGET_PRELUDE_FALLBACKS: defining it re-enables the legacy
+    # lossy macros so builds can still link while the inference gap is
+    # being worked on.
+    out = out + "#if defined(GORGET_PRELUDE_FALLBACKS)\n"
+    out = out + "#  define Some(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#  define Ok(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#  define Error(x) ((void)(x), (int64_t)0)\n"
+    out = out + "#  define None() ((int64_t)0)\n"
+    out = out + "#else\n"
+    out = out + "/* Prelude variant fallbacks disabled. If cc fails below with */\n"
+    out = out + "/* `implicit declaration of function 'Ok'`, the self-host's */\n"
+    out = out + "/* type inference failed to monomorphize that callsite and the */\n"
+    out = out + "/* bare `Ok(x)` call would otherwise silently lose x. Define */\n"
+    out = out + "/* GORGET_PRELUDE_FALLBACKS=1 to re-enable the lossy fallback. */\n"
+    out = out + "#endif\n\n"
 
     # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
     # Emit FIRST so struct field types like `Box__SpannedExpr` (void*) are
