@@ -587,8 +587,8 @@ Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
         case EIntLiteral(v):
             return Some(v)
         case EIdentifier(name):
-            if gmod.const_decls.contains(name):
-                return Some(gmod.const_decls.get(name).unwrap())
+            if const_contains(&gmod, name):
+                return Some(const_lookup(&gmod, name))
             return None
         case EBinaryOp(lhs_box, op, rhs_box):
             Option[int] lv = eval_const_int_expr(*lhs_box, &gmod)
@@ -1018,15 +1018,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Module-level `const int` — inline the evaluated value.
             # Without this, the self-compiled parser's KW_* / PREC_*
             # constants all become 0 and check_kw(0, 0) hangs.
-            if gmod.const_decls.contains(name):
-                int cv = gmod.const_decls.get(name).unwrap()
+            if const_contains(&gmod, name):
+                int cv = const_lookup(&gmod, name)
                 int cdst = add_local(&ctx, I64_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.
-            if gmod.none_decls.contains(name):
+            if none_contains(&gmod, name):
                 int ndst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(ndst, OpConstUnit()))
                 return ndst
@@ -4202,9 +4202,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tfi += 1
-    Dict[String, int] const_decls = {}
-    Dict[String, bool] none_decls = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls)
+    Vector[String] const_keys = []
+    Vector[int] const_vals = []
+    Vector[String] none_keys = []
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -4260,20 +4261,20 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 Option[int] cd_eval = eval_const_int_expr(cd_val, &gmod)
                 match cd_eval:
                     case Some(cv):
-                        gmod.const_decls.put(cd_name, cv)
+                        const_put(&gmod, cd_name, cv)
                     case None:
                         pass
             case IStaticDecl(_, sd_name, sd_val):
                 Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
                 match sd_eval:
                     case Some(sv):
-                        gmod.const_decls.put(sd_name, sv)
+                        const_put(&gmod, sd_name, sv)
                     case None:
                         # Recognise `Option[T] X = None` so EIdentifier can
                         # emit OpConstUnit() instead of the int-0 fallback.
                         match sd_val.expr:
                             case ENoneLiteral():
-                                gmod.none_decls.put(sd_name, true)
+                                none_mark(&gmod, sd_name)
                             else:
                                 pass
             else:

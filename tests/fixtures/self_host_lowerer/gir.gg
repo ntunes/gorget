@@ -155,10 +155,67 @@ struct GirModule:
     Dict[String, bool] imported_fns
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
     Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
-    Dict[String, int] const_decls  # module-level const int decls — value inlined at EIdentifier
-    Dict[String, bool] none_decls  # module-level static decls initialized to None — EIdentifier emits OpConstUnit
+    # const_decls: Dict[String, int] normally, but self-host-compiled
+    # Dict[String, _] loses its hash_fn in some call paths, so lookups of
+    # LT_STRUCT_BASE/I64_TYPE/NO_NAME module-level constants silently
+    # miss. Swapped to parallel Vectors. Same reason as LowerCtx.nl_keys
+    # — see feedback_selfhost_workarounds.md #9.
+    Vector[String] const_keys
+    Vector[int] const_vals
+    # none_decls was Dict[String, bool]; same workaround.
+    Vector[String] none_keys
 
 # ── Helpers ──────────────────────────────────────────────
+
+# const_decls accessors (see GirModule.const_keys for why these aren't
+# Dict operations).
+bool const_contains(GirModule &gmod, String name):
+    bool found = false
+    int i = 0
+    while i < gmod.const_keys.len():
+        String k = gmod.const_keys.get(i).unwrap()
+        if k == name:
+            found = true
+        i += 1
+    return found
+
+int const_lookup(GirModule &gmod, String name):
+    int result = 0
+    int i = 0
+    while i < gmod.const_keys.len():
+        String k = gmod.const_keys.get(i).unwrap()
+        if k == name:
+            result = gmod.const_vals.get(i).unwrap()
+        i += 1
+    return result
+
+void const_put(GirModule &gmod, String name, int val):
+    bool found = false
+    int i = 0
+    while i < gmod.const_keys.len():
+        String k = gmod.const_keys.get(i).unwrap()
+        if k == name:
+            gmod.const_vals.set(i, val)
+            found = true
+        i += 1
+    if not found:
+        gmod.const_keys.push(name.clone())
+        gmod.const_vals.push(val)
+
+# none_decls accessors.
+bool none_contains(GirModule &gmod, String name):
+    bool found = false
+    int i = 0
+    while i < gmod.none_keys.len():
+        String k = gmod.none_keys.get(i).unwrap()
+        if k == name:
+            found = true
+        i += 1
+    return found
+
+void none_mark(GirModule &gmod, String name):
+    if not none_contains(&gmod, name):
+        gmod.none_keys.push(name.clone())
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
