@@ -60,13 +60,16 @@ void lower_fail(String msg):
 # corruption. Every "hard bug" fallback now emits a `[bug]` diagnostic
 # so the mis-compilation is visible in the produced output. Grep
 # `\[bug\]` on stage-0/stage-1 output to surface them.
+#
+# Loud by default; if the diagnostic volume gets painful (stage-1 running
+# on its own source emits ~58k diagnostics today because many function
+# parameters aren't ending up in `named_locals` — a separate bug still
+# under investigation), grep for the unique messages via
+# `sort -u | uniq -c` and wrap compilation in `| grep -v '\\[bug\\]'` to
+# mute the stream while still having the counts on demand.
 void diag_bug(String site, String msg):
     print("/* [bug] " + site + ": " + msg + " */")
 
-# Softer diagnostic for fallbacks that *may* be legitimate (unknown
-# builtins, compound types without registered names). Suppressible via
-# `GORGET_QUIET_FALLBACKS=1` once the env-var reader lands — for now
-# everything is loud so we surface every site.
 void diag_warn(String site, String msg):
     print("/* [warn] " + site + ": " + msg + " */")
 
