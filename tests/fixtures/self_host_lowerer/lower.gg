@@ -4098,6 +4098,40 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Dict[String, bool] none_decls = {}
     GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls)
 
+    # Refine fn_sigs for functions with named/generic return types. The
+    # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
+    # needs the real `gmod` to resolve generic names. Left uncorrected, a
+    # caller of `parse_int(s) -> Result[int, ParseError]` would think the
+    # return is int64 and allocate an 8-byte slot — the actual 48-byte
+    # Result wouldn't fit, and field reads past the slot read zero. This
+    # is the EIntLiteral-zero bug that made stage-1 produce `print(0)`
+    # for `print(42)`, because `parse_int(clean).unwrap_or(0)` always
+    # returned 0.
+    int rsi = 0
+    while rsi < m.items.len():
+        Item rs_item = m.items.get(rsi).unwrap()
+        match rs_item:
+            case IFunction(rs_fdef):
+                if rs_fdef.name != "main":
+                    match rs_fdef.return_type.ty:
+                        case TNamed(_, _):
+                            int rs_rt = map_ast_type(rs_fdef.return_type, &gmod)
+                            # Honour throws_type for Result[T, E] wrapping.
+                            match rs_fdef.throws_type:
+                                case Some(rs_throws):
+                                    int rs_err = map_ast_type(rs_throws, &gmod)
+                                    String rs_ret_c = type_id_to_name(rs_rt, &gmod)
+                                    String rs_err_c = type_id_to_name(rs_err, &gmod)
+                                    rs_rt = lookup_or_register_named(&gmod, "Result__" + rs_ret_c + "__" + rs_err_c)
+                                case None:
+                                    pass
+                            gmod.fn_sigs.put(rs_fdef.name, rs_rt)
+                        else:
+                            pass
+            else:
+                pass
+        rsi += 1
+
     # Pre-scan: evaluate IConstDecl AND IStaticDecl init exprs and register
     # values in gmod.const_decls. Without this, references to module-level
     # consts (e.g. `const int KW_IF = 5` in parser.gg) default to 0 at
