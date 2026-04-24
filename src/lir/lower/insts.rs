@@ -351,12 +351,36 @@ impl<'a> FuncLowering<'a> {
                         });
                         self.store_to_local(*dst, ord_result, bb);
                     } else {
-                        let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
-                            dst: result,
-                            value: val,
-                            to,
+                        // Pick the right LIR cast kind based on source/target numeric
+                        // families so float→int goes through `Inst::FloatToInt`
+                        // (saturating, Rust-style) instead of a raw `Inst::IntCast`
+                        // that emits a UB C cast.
+                        let src_gir_ty = match value {
+                            Operand::Copy(place) | Operand::Move(place) => {
+                                let idx = place.local.0 as usize;
+                                if idx < self.gir_func.locals.len() {
+                                    Some(self.gir_func.locals[idx].type_id)
+                                } else { None }
+                            }
+                            Operand::Constant(c) => match c {
+                                Constant::F32(_) | Constant::F64(_) => Some(gir_types::F64_TYPE),
+                                _ => None,
+                            },
+                        };
+                        let src_is_float = src_gir_ty.map_or(false, |t| {
+                            t == gir_types::F64_TYPE || t == gir_types::F32_TYPE
                         });
+                        let result = self.lir_func.next_value();
+                        let inst = if src_is_float && to.is_integer() {
+                            Inst::FloatToInt { dst: result, value: val, to }
+                        } else if src_is_float && to.is_float() {
+                            Inst::FloatCast { dst: result, value: val, to }
+                        } else if !src_is_float && to.is_float() {
+                            Inst::IntToFloat { dst: result, value: val, to }
+                        } else {
+                            Inst::IntCast { dst: result, value: val, to }
+                        };
+                        self.lir_func.block_mut(bb).insts.push(inst);
                         self.store_to_local(*dst, result, bb);
                     }
                 }
@@ -731,8 +755,15 @@ impl<'a> FuncLowering<'a> {
                     field: *field,
                 });
                 // If destination is Ptr(T), return field address as pointer reference.
+                // Exception: if the FIELD itself is already a Ptr/MutPtr (user-written
+                // `Ref[T]` / `MutRef[T]` field), the field's storage holds a pointer
+                // value — we must Load it through fptr, not return fptr (which would
+                // be a pointer-to-pointer-field, not the stored pointer).
                 let dst_gir_type = self.gir_func.locals[dst.0 as usize].type_id;
-                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) {
+                let field_gir_id = self.resolve_field_gir_type_id(effective_type, *field);
+                let field_is_ptr = matches!(self.gir_types.get(field_gir_id),
+                    Some(GirType::Ptr(_) | GirType::MutPtr(_)));
+                if matches!(self.gir_types.get(dst_gir_type), Some(GirType::Ptr(_))) && !field_is_ptr {
                     self.store_to_local(*dst, fptr, bb);
                 } else {
                     let field_ty = self.resolve_field_type(effective_type, *field);

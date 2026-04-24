@@ -2079,7 +2079,35 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
         }
         Inst::FloatToInt { dst, value, to } => {
-            write!(out, "{} = ({})({});", v(*dst), c_type_named(to, sn), v(*value)).unwrap();
+            // Rust `as`-style saturating conversion: NaN → 0, value ≥ TYPE_MAX+1
+            // → TYPE_MAX, value < TYPE_MIN → TYPE_MIN. A raw C cast is UB out of
+            // range and, on x86_64 (cvttsd2si), returns INT64_MIN for NaN and
+            // both overflow directions — platform-dependent garbage we don't
+            // want. Upper bound uses "next value past MAX" so the check is
+            // exact even when MAX itself isn't representable as double (I64/U64).
+            let t = c_type_named(to, sn);
+            let val = v(*value);
+            let (upper_bound, type_max, lower_bound, type_min): (&str, &str, &str, &str) = match to {
+                LirType::I8 =>  ("128.0",                    "INT8_MAX",   "-128.0",                    "INT8_MIN"),
+                LirType::I16 => ("32768.0",                  "INT16_MAX",  "-32768.0",                  "INT16_MIN"),
+                LirType::I32 => ("2147483648.0",             "INT32_MAX",  "-2147483648.0",             "INT32_MIN"),
+                LirType::I64 => ("9223372036854775808.0",    "INT64_MAX",  "-9223372036854775808.0",    "INT64_MIN"),
+                LirType::U8 =>  ("256.0",                    "UINT8_MAX",  "0.0",                       "0"),
+                LirType::U16 => ("65536.0",                  "UINT16_MAX", "0.0",                       "0"),
+                LirType::U32 => ("4294967296.0",             "UINT32_MAX", "0.0",                       "0"),
+                LirType::U64 => ("18446744073709551616.0",   "UINT64_MAX", "0.0",                       "0"),
+                _ => {
+                    write!(out, "{} = ({})({});", v(*dst), t, val).unwrap();
+                    return;
+                }
+            };
+            write!(
+                out,
+                "{d} = (({val}) != ({val})) ? ({t})0 : (({val}) >= {ub}) ? ({t}){tmax} : (({val}) < {lb}) ? ({t}){tmin} : ({t})({val});",
+                d = v(*dst), val = val, t = t,
+                ub = upper_bound, tmax = type_max,
+                lb = lower_bound, tmin = type_min,
+            ).unwrap();
         }
         Inst::PtrCast { dst, value } => {
             write!(out, "{} = (void*)({});", v(*dst), v(*value)).unwrap();

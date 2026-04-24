@@ -1511,19 +1511,45 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     // `declare` signatures and rejects unused duplicates).
     let mut overflow_intrinsics: std::collections::HashSet<(char, &'static str, u32)> =
         std::collections::HashSet::new();
+    // (signed_prefix, dst_int_bits, src_float_bits) for fptosi.sat / fptoui.sat.
+    // These give Rust `as`-style saturation (NaN→0, out-of-range→clamp) — a raw
+    // `fptosi`/`fptoui` returns poison out of range, which is UB.
+    let mut fp_sat_intrinsics: std::collections::HashSet<(char, u32, u32)> =
+        std::collections::HashSet::new();
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                let (op, ty) = match inst {
-                    Inst::Add { ty, overflow: Overflow::Trap, .. } => ("add", ty),
-                    Inst::Sub { ty, overflow: Overflow::Trap, .. } => ("sub", ty),
-                    Inst::Mul { ty, overflow: Overflow::Trap, .. } => ("mul", ty),
-                    _ => continue,
-                };
-                if !ty.is_integer() { continue; }
-                let bits = int_bits(ty);
-                let signed = if is_signed(ty) { 's' } else { 'u' };
-                overflow_intrinsics.insert((signed, op, bits));
+                match inst {
+                    Inst::Add { ty, overflow: Overflow::Trap, .. }
+                    | Inst::Sub { ty, overflow: Overflow::Trap, .. }
+                    | Inst::Mul { ty, overflow: Overflow::Trap, .. } => {
+                        let op = match inst {
+                            Inst::Add { .. } => "add",
+                            Inst::Sub { .. } => "sub",
+                            Inst::Mul { .. } => "mul",
+                            _ => unreachable!(),
+                        };
+                        if !ty.is_integer() { continue; }
+                        let bits = int_bits(ty);
+                        let signed = if is_signed(ty) { 's' } else { 'u' };
+                        overflow_intrinsics.insert((signed, op, bits));
+                    }
+                    Inst::FloatToInt { value, to, .. } => {
+                        if !to.is_integer() { continue; }
+                        let dst_bits = int_bits(to);
+                        let signed = if is_signed(to) { 's' } else { 'u' };
+                        // Source float width: look up the function-local value_types;
+                        // default to f64 (the common case — Gorget's `float` is F64).
+                        let src_bits = match func.value_types.get(value.0 as usize)
+                            .and_then(|t| t.as_ref())
+                        {
+                            Some(LirType::F32) => 32,
+                            _ => 64,
+                        };
+                        fp_sat_intrinsics.insert((signed, dst_bits, src_bits));
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -1537,6 +1563,15 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
     for (signed, op, bits) in sorted_intrinsics {
         writeln!(out,
             "declare {{ i{bits}, i1 }} @llvm.{signed}{op}.with.overflow.i{bits}(i{bits}, i{bits})"
+        ).unwrap();
+    }
+    let mut sorted_fp_sat: Vec<_> = fp_sat_intrinsics.into_iter().collect();
+    sorted_fp_sat.sort();
+    for (signed, dst_bits, src_bits) in sorted_fp_sat {
+        let src_ty = if src_bits == 32 { "float" } else { "double" };
+        let kind = if signed == 's' { "fptosi" } else { "fptoui" };
+        writeln!(out,
+            "declare i{dst_bits} @llvm.{kind}.sat.i{dst_bits}.f{src_bits}({src_ty})"
         ).unwrap();
     }
 
@@ -2705,11 +2740,23 @@ fn emit_inst(
             writeln!(out, "  %v{} = {op} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
         }
         Inst::FloatToInt { dst, value, to } => {
+            // Rust `as`-style saturation via LLVM's fptosi.sat / fptoui.sat:
+            // NaN → 0, out-of-range → clamped to TYPE_MIN/TYPE_MAX. A raw
+            // `fptosi` / `fptoui` returns poison out of range (UB), which
+            // the x86_64 lowering surfaces as INT_MIN — platform-dependent
+            // garbage. The saturating intrinsic matches the C backend's
+            // handwritten ternary.
             let src_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let to_ty = llvm_type(to);
             let src_ty_str = src_ty.map_or("double", |t| llvm_type(t));
-            let op = if is_signed(to) { "fptosi" } else { "fptoui" };
-            writeln!(out, "  %v{} = {op} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+            let src_bits = match src_ty { Some(LirType::F32) => 32, _ => 64 };
+            let dst_bits = int_bits(to);
+            let kind = if is_signed(to) { "fptosi" } else { "fptoui" };
+            writeln!(
+                out,
+                "  %v{} = call {to_ty} @llvm.{kind}.sat.i{dst_bits}.f{src_bits}({src_ty_str} %v{})",
+                dst.0, value.0,
+            ).unwrap();
         }
         Inst::PtrCast { dst, value } => {
             writeln!(out, "  %v{} = bitcast ptr %v{} to ptr", dst.0, value.0).unwrap();
