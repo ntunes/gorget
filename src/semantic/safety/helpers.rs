@@ -8,7 +8,7 @@ use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types, ResolvedType};
 
-use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, SharedDerivedInfo, WithGuardKind, BLOCKING_CALL_NAMES};
+use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, SharedDerivedInfo, VarState, WithGuardKind, BLOCKING_CALL_NAMES};
 use super::type_utils::is_ast_type_ref;
 use super::return_borrows::{CapturedRefOriginCollector, CapturedMutationCollector, CaptureSetCollector};
 
@@ -412,6 +412,49 @@ impl<'a> BorrowChecker<'a> {
             if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
                 self.mut_param_mutated.insert(def_id);
             }
+        }
+    }
+
+    /// Reject mutation of `src_def_id` while any live local is a borrow-field
+    /// struct whose origin references `src_def_id`. Mirrors the in-line check
+    /// in `check_expr` for builtin mutating methods, but applied at the call
+    /// site of `f(&v)` (function call with mutable-borrow arg) where the
+    /// existing checker has no mutation-while-borrowed coverage. Sigil
+    /// `T &` borrows of `v` are NOT flagged here — they have their own rules
+    /// elsewhere; we only want to plug the gap for new borrow-field structs.
+    pub(super) fn check_borrow_field_mutation(&mut self, src_def_id: DefId, span: Span) {
+        let src_name = self.scopes.get_def(src_def_id).name.clone();
+        let mut to_flag: Option<String> = None;
+        for (&var_id, origin) in self.var_origins.iter() {
+            if !origin.references_def(src_def_id) { continue; }
+            let def = self.scopes.get_def(var_id);
+            let is_borrow_field_struct = match def.type_id {
+                Some(tid) => match self.types.get(tid) {
+                    crate::semantic::types::ResolvedType::Defined(struct_def_id)
+                    | crate::semantic::types::ResolvedType::Generic(struct_def_id, _) =>
+                        self.ref_type_structs.contains(struct_def_id),
+                    _ => false,
+                },
+                None => false,
+            };
+            if !is_borrow_field_struct { continue; }
+            let is_alive = !matches!(
+                self.var_states.get(&var_id),
+                Some(VarState::Moved { .. })
+            );
+            if is_alive {
+                to_flag = Some(self.scopes.get_def(var_id).name.clone());
+                break;
+            }
+        }
+        if let Some(borrow_name) = to_flag {
+            self.error(
+                SemanticErrorKind::MutationWhileBorrowed {
+                    source: src_name,
+                    borrow: borrow_name,
+                },
+                span,
+            );
         }
     }
 

@@ -1,0 +1,16 @@
+# Borrow-fields Phase 2: passing `&v` to a user function that takes `Vector &`
+# while a borrow-field struct is still borrowing v. The check fires for
+# borrow-field structs only; sigil `T &` borrow-mutation rules are unchanged.
+
+struct Holder:
+    Ref[Vector[int]] r
+
+void mutate(Vector[int] &v):
+    v.push(99)
+
+int main():
+    Vector[int] v = [1, 2, 3]
+    Holder h = Holder(v)
+    mutate(&v)
+    print(h.r.len())
+    return 0

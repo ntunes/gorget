@@ -186,6 +186,14 @@ impl<'a> BorrowChecker<'a> {
                             if arg.node.ownership == Ownership::MutableBorrow {
                                 // Track passing `&` param with `&` to callee as mutation
                                 self.mark_mut_param_if_applicable(&arg.node.value);
+                                // Borrow-fields: passing `&v` to a callee that
+                                // mutates v invalidates any borrow-field struct
+                                // currently borrowing from v. Only flag when the
+                                // borrower is a borrow-field struct — sigil
+                                // borrows have their own existing rules.
+                                if let Some(src_def_id) = self.find_root_def_id(&arg.node.value) {
+                                    self.check_borrow_field_mutation(src_def_id, arg.node.value.span);
+                                }
                             }
                             // For constructor calls, bare non-Copy identifier
                             // args are implicitly consumed (moved into fields).
