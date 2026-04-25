@@ -472,6 +472,9 @@ String emit_structs(LirModule &m, Vector[String] &sn):
         if should_skip_struct(&sdef, &m):
             oi += 1
             continue
+        if sdef.name == "":
+            oi += 1
+            continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
         sb_push(&buf, "typedef struct ")
         sb_push(&buf, cname)
@@ -487,6 +490,9 @@ String emit_structs(LirModule &m, Vector[String] &sn):
         int idx = order.get(oi).unwrap()
         LirStructDef sdef = m.structs.get(idx).unwrap()
         if should_skip_struct(&sdef, &m):
+            oi += 1
+            continue
+        if sdef.name == "":
             oi += 1
             continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)

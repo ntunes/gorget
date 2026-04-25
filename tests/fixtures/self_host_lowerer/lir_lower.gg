@@ -284,6 +284,8 @@ bool is_builtin_runtime_struct(String name):
 # treatment during GIR lowering. Silently no-ops for primitives / names
 # already registered / types lir_lower doesn't know how to size.
 void register_field_type_in_sr(String tname, StructRegistry &sr, LirModule &m):
+    if tname == "":
+        return
     if sr_lookup(&sr, tname) >= 0:
         return
     # Primitives: no registration needed — resolve_field_lir_type returns
@@ -384,6 +386,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         GirType gt = gmod.type_table.get(ti).unwrap()
         match gt:
             case GtNamed(name):
+                if name == "":
+                    ti += 1
+                    continue
                 if is_generic_placeholder_name(name):
                     ti += 1
                     continue
@@ -429,6 +434,9 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     int tki_pre = 0
     while tki_pre < ti_keys.len():
         String tname = ti_keys.get(tki_pre).unwrap()
+        if tname == "":
+            tki_pre += 1
+            continue
         if is_generic_placeholder_name(tname):
             tki_pre += 1
             continue
