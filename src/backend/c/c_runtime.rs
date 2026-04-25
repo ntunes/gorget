@@ -2025,6 +2025,41 @@ static inline const char* gorget_memmem(const char* h, size_t hlen, const char* 
     return NULL;
 }
 
+// In-place append with explicit (cstr, len) for the rhs side. extern
+// "C" coerces `String rhs` to `cstr`, dropping the .len field; the
+// self-host emits cstr+len as separate args and we read both directly
+// — no strlen() walk needed. Used by lir_codegen.gg::sb_push to break
+// the O(N²) `out = out + ...` pattern in code generators.
+//
+// Returns int (always 0) instead of void because the self-host emits
+// `__vN = call(...)` for extern calls and chokes on void-return.
+static inline int64_t gorget_string_append_buf(GorgetString* s, const char* data, int64_t len) {
+    if (len <= 0 || !data) return 0;
+    size_t n = (size_t)len;
+    if (s->cap == 0) {
+        GorgetAllocator* a = __gorget_current_alloc;
+        size_t new_len = s->len + n;
+        size_t new_cap = (new_len + 1) * 2;
+        if (new_cap < 64) new_cap = 64;
+        char* d = (char*)a->alloc(a->ctx, new_cap);
+        if (s->len > 0 && s->data) memcpy(d, s->data, s->len);
+        memcpy(d + s->len, data, n);
+        d[new_len] = '\0';
+        *s = (Str){ .data = d, .cap = new_cap, .len = new_len, .alloc = a };
+        return 0;
+    }
+    size_t new_len = s->len + n;
+    if (new_len + 1 > s->cap) {
+        size_t new_cap = (new_len + 1) * 2;
+        s->data = (char*)s->alloc->realloc(s->alloc->ctx, s->data, s->cap, new_cap);
+        s->cap = new_cap;
+    }
+    memcpy((char*)s->data + s->len, data, n);
+    s->len = new_len;
+    ((char*)s->data)[s->len] = '\0';
+    return 0;
+}
+
 // ── In-place append with both args by pointer ───────────────
 // Companion to gorget_string_append_str — same semantics but takes
 // the rhs string by pointer too. This sidesteps the extern "C" ABI
