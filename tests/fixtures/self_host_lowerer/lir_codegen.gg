@@ -21,6 +21,37 @@ from lir import GINIT_ZEROED, GINIT_FUNC_ADDR, GINIT_RUNTIME_CALL
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
+# ── String builder ──────────────────────────────────────────
+#
+# Mirrors Rust's `out: &mut String` pattern from src/backend/c_lir/mod.rs:
+# every emit_* helper takes a single growing buffer by mutable reference
+# and appends to it via `sb_push(&buf, ...)`. The naive
+# `out = out + emit_function(...)` over 600+ functions is O(N²) — it
+# OOM-kills stage-1 just before output (RSS goes 103MB → 10GB in 4s).
+#
+# Wrapping String in a struct is the workaround for the Gorget compiler
+# never passing String params by pointer in extern decls (even with `&`,
+# String params get the AbiKind::Auto by-value treatment). With the struct
+# wrapper, `&buf` IS passed as `StrBuf*` which aliases `Str*` at offset 0,
+# and the runtime helper dereferences it.
+#
+# Returns int (always 0) instead of void: the self-host's call lowering
+# binds `__vN = call(...)` for extern calls and chokes on void return.
+struct StrBuf:
+    String s
+
+extern "C":
+    extern int gorget_string_append_buf(StrBuf &buf, String data, int n) = "gorget_string_append_buf"
+
+void sb_push(StrBuf &buf, String rhs):
+    # `byte_len()` not `len()` — len() returns codepoint count which
+    # truncates strings containing multi-byte UTF-8 (box-drawing chars
+    # like `──` are 3 bytes each but 1 codepoint each).
+    int unused = gorget_string_append_buf(&buf, rhs, rhs.byte_len())
+
+StrBuf sb_new():
+    return StrBuf("")
+
 # ── C type mapping ─────────────────────────────────────────
 
 # Find substring, returns -1 if not found. Avoids Option[int] return type issue.
@@ -309,28 +340,31 @@ bool is_c_keyword(String name):
 String c_field_name(String name):
     return name.replace(".", "_").replace("-", "_")
 
-# Escape a string for a C string literal.
+# Escape a string for a C string literal. The naive char-by-char concat
+# is O(N²) — for a 1MB string literal, that's 1 trillion byte-copies and
+# OOM-kills stage-1 compiling functions with embedded large strings (e.g.
+# typecheck.gg's pattern-type tables). sb_push amortizes O(1) per byte.
 String escape_c_string(String s):
-    String out = ""
+    StrBuf buf = sb_new()
     int i = 0
     while i < s.len():
         String ch = s.slice(i, i + 1)
         if ch == "\"":
-            out = out + "\\\""
+            sb_push(&buf, "\\\"")
         elif ch == "\\":
-            out = out + "\\\\"
+            sb_push(&buf, "\\\\")
         elif ch == "\n":
-            out = out + "\\n"
+            sb_push(&buf, "\\n")
         elif ch == "\r":
-            out = out + "\\r"
+            sb_push(&buf, "\\r")
         elif ch == "\t":
-            out = out + "\\t"
+            sb_push(&buf, "\\t")
         else:
             # For non-ASCII bytes we'd need hex escaping, but the self-host
             # only handles ASCII fixtures. Pass through as-is.
-            out = out + ch
+            sb_push(&buf, ch)
         i += 1
-    return out
+    return buf.s
 
 # ── Comparison operator to C string ────────────────────────
 
@@ -424,7 +458,7 @@ Vector[int] topo_sort_structs(LirModule &m):
 # ── Struct emission ────────────────────────────────────────
 
 String emit_structs(LirModule &m, Dict[String, String] &sn):
-    String out = ""
+    StrBuf buf = sb_new()
     Vector[int] order = topo_sort_structs(&m)
 
     # Forward declarations
@@ -436,9 +470,13 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
             oi += 1
             continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
-        out = out + "typedef struct " + cname + " " + cname + ";\n"
+        sb_push(&buf, "typedef struct ")
+        sb_push(&buf, cname)
+        sb_push(&buf, " ")
+        sb_push(&buf, cname)
+        sb_push(&buf, ";\n")
         oi += 1
-    out = out + "\n"
+    sb_push(&buf, "\n")
 
     # Struct definitions
     oi = 0
@@ -449,16 +487,24 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
             oi += 1
             continue
         String cname = c_type_name(LT_STRUCT_BASE + idx, &sn)
-        out = out + "// " + sdef.name + "\n"
-        out = out + "struct " + cname + " {\n"
+        sb_push(&buf, "// ")
+        sb_push(&buf, sdef.name)
+        sb_push(&buf, "\n")
+        sb_push(&buf, "struct ")
+        sb_push(&buf, cname)
+        sb_push(&buf, " {\n")
         if sdef.fields.len() == 0:
-            out = out + "    char __pad;\n"
+            sb_push(&buf, "    char __pad;\n")
         elif sdef.is_union_layout and sdef.fields.len() > 1:
             # Enum type: tag + union of variant structs.
             StructField tag_field = sdef.fields.get(0).unwrap()
             String tag_ty = c_type_name(tag_field.ty, &sn)
-            out = out + "    " + tag_ty + " " + c_field_name(tag_field.name) + ";\n"
-            out = out + "    union {\n"
+            sb_push(&buf, "    ")
+            sb_push(&buf, tag_ty)
+            sb_push(&buf, " ")
+            sb_push(&buf, c_field_name(tag_field.name))
+            sb_push(&buf, ";\n")
+            sb_push(&buf, "    union {\n")
             # Group remaining fields by variant prefix.
             Vector[String] variant_names = []
             Vector[Vector[int]] variant_field_indices = []
@@ -483,29 +529,47 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
                     int fidx = indices.get(0).unwrap()
                     StructField f = sdef.fields.get(fidx).unwrap()
                     String fty = field_type_str(f.ty, &sn)
-                    out = out + "        " + fty + " " + c_field_name(f.name) + ";  // " + vname + "\n"
+                    sb_push(&buf, "        ")
+                    sb_push(&buf, fty)
+                    sb_push(&buf, " ")
+                    sb_push(&buf, c_field_name(f.name))
+                    sb_push(&buf, ";  // ")
+                    sb_push(&buf, vname)
+                    sb_push(&buf, "\n")
                 else:
-                    out = out + "        struct {  // " + vname + "\n"
+                    sb_push(&buf, "        struct {  // ")
+                    sb_push(&buf, vname)
+                    sb_push(&buf, "\n")
                     int ii = 0
                     while ii < indices.len():
                         int fidx = indices.get(ii).unwrap()
                         StructField f = sdef.fields.get(fidx).unwrap()
                         String fty = field_type_str(f.ty, &sn)
-                        out = out + "            " + fty + " " + c_field_name(f.name) + ";\n"
+                        sb_push(&buf, "            ")
+                        sb_push(&buf, fty)
+                        sb_push(&buf, " ")
+                        sb_push(&buf, c_field_name(f.name))
+                        sb_push(&buf, ";\n")
                         ii += 1
-                    out = out + "        } " + c_field_name(vname) + ";\n"
+                    sb_push(&buf, "        } ")
+                    sb_push(&buf, c_field_name(vname))
+                    sb_push(&buf, ";\n")
                 vi += 1
-            out = out + "    } data;\n"
+            sb_push(&buf, "    } data;\n")
         else:
             int fi = 0
             while fi < sdef.fields.len():
                 StructField f = sdef.fields.get(fi).unwrap()
                 String fty = field_type_str(f.ty, &sn)
-                out = out + "    " + fty + " " + c_field_name(f.name) + ";\n"
+                sb_push(&buf, "    ")
+                sb_push(&buf, fty)
+                sb_push(&buf, " ")
+                sb_push(&buf, c_field_name(f.name))
+                sb_push(&buf, ";\n")
                 fi += 1
-        out = out + "};\n\n"
+        sb_push(&buf, "};\n\n")
         oi += 1
-    return out
+    return buf.s
 
 # Extract variant name prefix from "VariantName_N" → "VariantName"
 String field_variant_prefix(String fname):
@@ -796,23 +860,26 @@ String emit_string_lits(Vector[StringLitEntry] &entries):
 # ── Function forward declarations ──────────────────────────
 
 String emit_func_forward_decls(LirModule &m, Dict[String, String] &sn):
-    String out = ""
+    StrBuf buf = sb_new()
     int i = 0
     while i < m.functions.len():
         LirFunction func = m.functions.get(i).unwrap()
         if func.name == "main":
-            out = out + "int main(int argc, char** argv);\n"
+            sb_push(&buf, "int main(int argc, char** argv);\n")
             i += 1
             continue
         String ret = c_type_name(func.return_type, &sn)
-        out = out + ret + " " + c_func_name(func.name) + "("
+        sb_push(&buf, ret)
+        sb_push(&buf, " ")
+        sb_push(&buf, c_func_name(func.name))
+        sb_push(&buf, "(")
         if func.params.len() == 0:
-            out = out + "void"
+            sb_push(&buf, "void")
         else:
             int pi = 0
             while pi < func.params.len():
                 if pi > 0:
-                    out = out + ", "
+                    sb_push(&buf, ", ")
                 int pty = func.params.get(pi).unwrap()
                 String ty_str = ""
                 if pty == LT_VOID:
@@ -824,12 +891,14 @@ String emit_func_forward_decls(LirModule &m, Dict[String, String] &sn):
                     bool is_const = func.const_params.get(pi).unwrap()
                     if is_const and lir_is_ptr(pty):
                         ty_str = "const " + ty_str
-                out = out + ty_str + " __p" + int_to_str(pi)
+                sb_push(&buf, ty_str)
+                sb_push(&buf, " __p")
+                sb_push(&buf, int_to_str(pi))
                 pi += 1
-        out = out + ");\n"
+        sb_push(&buf, ");\n")
         i += 1
-    out = out + "\n"
-    return out
+    sb_push(&buf, "\n")
+    return buf.s
 
 # ── Adapter functions ──────────────────────────────────────
 
@@ -979,6 +1048,11 @@ bool runtime_arg_needs_addr(String name, int arg_idx):
         return true
     if name == "gorget_file_read_bytes_buf" and arg_idx == 1:
         return true
+    # In-place String append — arg 0 is the buffer (StrBuf*) which the
+    # runtime mutates. Self-host's caller often holds the local by value,
+    # so wrap with `&` here.
+    if name == "gorget_string_append_buf" and arg_idx == 0:
+        return true
     return false
 
 bool runtime_arg_is_cstr(String name, int arg_idx):
@@ -995,6 +1069,10 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
             return true
     if arg_idx == 1:
         if name == "gorget_write_file":
+            return true
+        # In-place String append — arg 1 is the rhs data passed as cstr+len
+        # (extern "C" coerces String→cstr; the .len comes via arg 2).
+        if name == "gorget_string_append_buf":
             return true
     return false
 
@@ -4103,13 +4181,19 @@ String generate_c(LirModule &m):
     body = body + emit_enum_clones(&m, &sn)
     body = body + emit_type_drop_fns(&m, &sn)
 
-    body = body + "// ── Function Definitions ──\n"
+    # Use sb_push (in-place append) instead of `body = body + ...` —
+    # the latter is O(N) per concat, O(N²) overall. For 600+ functions
+    # producing a few MB total, the naive concat OOM-kills stage-1.
+    # Mirrors src/backend/c_lir/mod.rs:`out: &mut String`.
+    StrBuf body_buf = StrBuf(body)
+    sb_push(&body_buf, "// ── Function Definitions ──\n")
     int fi = 0
     while fi < m.functions.len():
         LirFunction func = m.functions.get(fi).unwrap()
-        body = body + emit_function(&func, &m, &sn, &slit_map)
-        body = body + "\n"
+        sb_push(&body_buf, emit_function(&func, &m, &sn, &slit_map))
+        sb_push(&body_buf, "\n")
         fi += 1
+    body = body_buf.s
 
     # Box allocator helpers: scan body for `__gorget_box_alloc_<SUFFIX>(`
     # occurrences and emit one static inline helper per unique suffix.
