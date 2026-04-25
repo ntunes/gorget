@@ -147,7 +147,13 @@ struct GirModule:
     Vector[GirExtern] externs
     Vector[GirType] type_table
     Dict[String, int] fn_sigs
-    Dict[String, int] named_types
+    # named_types was Dict[String, int]; same Dict[String, _] state-loss bug
+    # as the others — `gmod.named_types.put("Lexer", 100)` then
+    # `gmod.named_types.get("Lexer")` returns a tid pointing to GtNamed("")
+    # at stage-1 runtime (12k+ such corruptions on driver.gg). Parallel
+    # Vectors are the unified workaround. See feedback_selfhost_workarounds.md.
+    Vector[String] named_keys
+    Vector[int] named_vals
     Dict[String, bool] resource_types
     Dict[String, int] type_subs
     Dict[String, String] meta_aliases
@@ -170,6 +176,14 @@ struct GirModule:
     # succeed when type_infos.contains() silently misses.
     Vector[String] enum_names
     Vector[Vector[String]] enum_variants
+    # Parallel storage for type_infos — same Dict[String, _] state-loss
+    # workaround. Populated alongside type_infos.put at construction time;
+    # readers prefer the parallel vectors (linear scan; tens of types so
+    # cost is negligible). Without this, struct field lookups in stage-1
+    # silently miss and EFieldAccess emits "I64(0) placeholder" → all
+    # downstream method dispatch on the wrongly-typed receiver fails.
+    Vector[String] type_info_keys
+    Vector[GirTypeInfo] type_info_vals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -276,6 +290,34 @@ int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
         i += 1
     return result
 
+# Parallel-Vector accessors for type_infos — Dict[String, _] state-loss
+# workaround. Linear scan; tens of types per module so cost negligible.
+bool type_info_contains(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.type_info_keys.len():
+        String k = gmod.type_info_keys.get(i).unwrap()
+        if k == name:
+            return true
+        i += 1
+    return false
+
+int type_info_index(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.type_info_keys.len():
+        String k = gmod.type_info_keys.get(i).unwrap()
+        if k == name:
+            return i
+        i += 1
+    return -1
+
+void type_info_register(GirModule &gmod, String name, GirTypeInfo info):
+    int idx = type_info_index(&gmod, name)
+    if idx < 0:
+        gmod.type_info_keys.push(name.clone())
+        gmod.type_info_vals.push(info)
+    else:
+        gmod.type_info_vals.set(idx, info)
+
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
     t.push(GtBool())
@@ -298,10 +340,19 @@ int register_type(GirModule &gmod, GirType gt):
     return id
 
 int lookup_or_register_named(GirModule &gmod, String name):
-    if gmod.named_types.contains(name):
-        return gmod.named_types.get(name).unwrap()
+    # Linear-scan parallel Vectors instead of Dict — the Dict[String, _]
+    # state-loss bug (#9 in feedback_selfhost_workarounds.md) returns wrong
+    # tids for valid keys at stage-1 runtime, leading to GtNamed("") leakage
+    # and 1700+ "base type ''" cascades in stage-2.
+    int i = 0
+    while i < gmod.named_keys.len():
+        String k = gmod.named_keys.get(i).unwrap()
+        if k == name:
+            return gmod.named_vals.get(i).unwrap()
+        i += 1
     int id = register_type(&gmod, GtNamed(name.clone()))
-    gmod.named_types.put(name, id)
+    gmod.named_keys.push(name)
+    gmod.named_vals.push(id)
     return id
 
 int register_ptr(GirModule &gmod, int inner):

@@ -627,12 +627,23 @@ Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
             return None
 
 # Get and increment the module-level closure ID counter.
-# Uses named_types["__closure_counter"] as storage.
+# Uses named_keys/named_vals "__closure_counter" slot as storage. Same
+# parallel-Vector workaround for the Dict[String, _] state-loss bug.
 int gmod_next_closure_id(GirModule &gmod):
     int cid = 0
-    if gmod.named_types.contains("__closure_counter"):
-        cid = gmod.named_types.get("__closure_counter").unwrap()
-    gmod.named_types.put("__closure_counter", cid + 1)
+    int slot = -1
+    int i = 0
+    while i < gmod.named_keys.len():
+        String k = gmod.named_keys.get(i).unwrap()
+        if k == "__closure_counter":
+            slot = i
+            cid = gmod.named_vals.get(i).unwrap()
+        i += 1
+    if slot < 0:
+        gmod.named_keys.push("__closure_counter")
+        gmod.named_vals.push(cid + 1)
+    else:
+        gmod.named_vals.set(slot, cid + 1)
     return cid
 
 int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
@@ -1439,31 +1450,49 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = inner
                     else:
                         pass
-            # Look up field info from type_infos
-            if gmod.type_infos.contains(base_type_name):
+            # Look up field info from type_infos. Prefer the parallel
+            # ti_keys/ti_vals (Dict[String, _] state-loss workaround); fall
+            # back to Dict if not yet populated. We resolve to (field_name,
+            # field_type_name, field_index) tuples without cloning the whole
+            # GirTypeInfo — the Vector clone path double-frees nested
+            # heap data on the self-host.
+            int found_fi = -1
+            String found_type_name = ""
+            int ti_idx = type_info_index(&gmod, base_type_name)
+            if ti_idx >= 0:
+                GirTypeInfo info_p = gmod.type_info_vals.get(ti_idx).unwrap()
+                int fi = 0
+                while fi < info_p.fields.len():
+                    GirFieldInfo finfo_p = info_p.fields.get(fi).unwrap()
+                    if finfo_p.name == field_name:
+                        found_fi = fi
+                        found_type_name = finfo_p.type_name.clone()
+                        break
+                    fi += 1
+            if found_fi < 0 and gmod.type_infos.contains(base_type_name):
                 GirTypeInfo info = gmod.type_infos.get(base_type_name).unwrap()
                 int fi = 0
                 while fi < info.fields.len():
                     GirFieldInfo finfo = info.fields.get(fi).unwrap()
                     if finfo.name == field_name:
-                        int field_type = resolve_field_gir_type(finfo.type_name, &gmod)
-                        int fdst = add_local(&ctx, field_type, NO_NAME)
-                        # Emit field read as: __field_read(base_ptr, field_index)
-                        # base must be passed as a pointer — if already Ptr, use directly;
-                        # otherwise borrow the local.
-                        String field_fn = "__field_read_" + base_type_name + "_" + field_name
-                        bool base_is_ptr = is_ptr_type(base_tid, &gmod)
-                        Vector[Operand] field_args = []
-                        if base_is_ptr:
-                            field_args.push(OpCopy(base))
-                        else:
-                            field_args.push(OpMove(base))  # will be SlotAddr via needs_ptr_arg
-                        field_args.push(OpConstI64(fi))
-                        # Register the field function signature so param types are known
-                        gmod.fn_sigs.put(field_fn, field_type)
-                        emit(&ctx, GICallExtern(fdst, field_fn, field_args))
-                        return fdst
+                        found_fi = fi
+                        found_type_name = finfo.type_name.clone()
+                        break
                     fi += 1
+            if found_fi >= 0:
+                int field_type = resolve_field_gir_type(found_type_name, &gmod)
+                int fdst = add_local(&ctx, field_type, NO_NAME)
+                String field_fn = "__field_read_" + base_type_name + "_" + field_name
+                bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+                Vector[Operand] field_args = []
+                if base_is_ptr:
+                    field_args.push(OpCopy(base))
+                else:
+                    field_args.push(OpMove(base))
+                field_args.push(OpConstI64(found_fi))
+                gmod.fn_sigs.put(field_fn, field_type)
+                emit(&ctx, GICallExtern(fdst, field_fn, field_args))
+                return fdst
             # HARD BUG: unknown field access fell through to I64/0
             # placeholder, losing both the struct identity and the field
             # type. Every downstream read of the "field value" sees 0 and
@@ -4168,7 +4197,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         bpi += 1
 
-    Dict[String, int] named_types = {}
+    # named_types was Dict[String, int]; replaced with parallel Vectors
+    # to dodge the Dict[String, _] state-loss bug that made stage-1's
+    # type lookups return wrong tids → cascading `base type ''` errors.
+    Vector[String] named_keys = []
+    Vector[int] named_vals = []
     # Scan struct/enum defs to determine which types have resource fields
     Dict[String, bool] resource_types = {}
     resource_types.put("String", true)
@@ -4235,6 +4268,11 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # track enum names + variant lists here for match lowering.
     Vector[String] enum_names = []
     Vector[Vector[String]] enum_variants = []
+    # Parallel type_info storage for the same reason — Dict[String, _]
+    # state-loss makes EFieldAccess fail with "I64(0) placeholder" because
+    # gmod.type_infos.get("Lexer") silently misses at stage-1 runtime.
+    Vector[String] ti_keys = []
+    Vector[GirTypeInfo] ti_vals = []
     int tfi = 0
     while tfi < m.items.len():
         Item tfi_item = m.items.get(tfi).unwrap()
@@ -4248,6 +4286,18 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     fields.push(GirFieldInfo(fld.param_name, ftype_name))
                     ffi += 1
                 Vector[GirEnumVariantInfo] no_variants = []
+                # Build a parallel-vector copy first (clones name/fields).
+                # The Dict.put then consumes the original — keep the clone
+                # for ti_vals so we don't double-free.
+                Vector[GirFieldInfo] fields_clone = []
+                int fc_i = 0
+                while fc_i < fields.len():
+                    GirFieldInfo fi_orig = fields.get(fc_i).unwrap()
+                    fields_clone.push(GirFieldInfo(fi_orig.name.clone(), fi_orig.type_name.clone()))
+                    fc_i += 1
+                Vector[GirEnumVariantInfo] no_variants_clone = []
+                ti_keys.push(sdef.name.clone())
+                ti_vals.push(GirTypeInfo(sdef.name.clone(), !fields_clone, !no_variants_clone, false))
                 type_infos.put(sdef.name, GirTypeInfo(sdef.name, fields, no_variants, false))
             case IEnum(edef):
                 Vector[GirFieldInfo] no_fields = []
@@ -4266,6 +4316,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     variants.push(GirEnumVariantInfo(var.name, vfields))
                     variant_names_only.push(var.name.clone())
                     evi += 1
+                # Same clone-before-put pattern as IStruct.
+                Vector[GirFieldInfo] no_fields_clone = []
+                Vector[GirEnumVariantInfo] variants_clone = []
+                int vc_i = 0
+                while vc_i < variants.len():
+                    GirEnumVariantInfo vi_orig = variants.get(vc_i).unwrap()
+                    Vector[GirFieldInfo] vfields_clone = []
+                    int vfc_i = 0
+                    while vfc_i < vi_orig.fields.len():
+                        GirFieldInfo vf_orig = vi_orig.fields.get(vfc_i).unwrap()
+                        vfields_clone.push(GirFieldInfo(vf_orig.name.clone(), vf_orig.type_name.clone()))
+                        vfc_i += 1
+                    variants_clone.push(GirEnumVariantInfo(vi_orig.name.clone(), !vfields_clone))
+                    vc_i += 1
+                ti_keys.push(edef.name.clone())
+                ti_vals.push(GirTypeInfo(edef.name.clone(), !no_fields_clone, !variants_clone, true))
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
                 enum_names.push(edef.name.clone())
                 enum_variants.push(!variant_names_only)
@@ -4275,7 +4341,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Vector[String] const_keys = []
     Vector[int] const_vals = []
     Vector[String] none_keys = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`

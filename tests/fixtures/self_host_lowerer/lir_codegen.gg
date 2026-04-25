@@ -1011,6 +1011,19 @@ String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, in
         return "(double)(intptr_t)" + v(arg_id)
     if expected == LT_F32 and arg_is_ptr:
         return "(float)(intptr_t)" + v(arg_id)
+    # Aggregate expected, pointer arg — the self-host frequently lowers
+    # the result of clone()/etc. as void* even though the value lives at
+    # the pointee. Deref so the variant payload gets the actual cloned
+    # String/etc., not a zero-initialised placeholder. Without this, the
+    # GtNamed(name.clone()) constructor would store an empty Str — root
+    # cause of the 12k+ "TABLE CORRUPT / base type ''" cascade on stage-2.
+    # Restrict to LT_PTR / LT_PTR_TO_BASE — LT_VOID is too broad; it can
+    # also mean "we have no info" and the value may be a scalar in
+    # disguise, where dereferencing would segfault.
+    bool arg_is_real_ptr = arg_ty == LT_PTR or (arg_ty >= LT_PTR_TO_BASE and arg_ty < LT_STRUCT_BASE)
+    if expected >= 0 and lir_is_aggregate(expected) and arg_is_real_ptr:
+        String exp_name_p = c_type_name(expected, &sn)
+        return "*(" + exp_name_p + "*)" + v(arg_id)
     # Aggregate expected, scalar arg — cast via intptr_t then zero-init.
     if expected >= 0 and lir_is_aggregate(expected) and not lir_is_aggregate(arg_ty):
         String exp_name = c_type_name(expected, &sn)
