@@ -1,0 +1,16 @@
+# Borrow-fields Phase 2: struct holds `Ref[T]` of a local; returning
+# the struct lets the borrow escape its source's lifetime — use-after-
+# free at the caller. The borrow checker must reject this.
+
+struct Holder:
+    Ref[int] r
+
+Holder bad():
+    int x = 42
+    Holder h = Holder(x)
+    return h
+
+int main():
+    Holder h = bad()
+    print(h.r)
+    return 0

@@ -4,7 +4,7 @@ use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
 use crate::semantic::errors::SemanticErrorKind;
-use crate::semantic::ids::DefId;
+use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
@@ -817,23 +817,34 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::StructLiteral { args, .. } => {
-                // Struct fields own their data — non-Copy identifier args
-                // are implicitly consumed (moved into the struct).
-                for arg in args {
-                    if let Expr::Identifier(_) = &arg.node {
-                        if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
-                            let def = self.scopes.get_def(var_def_id);
-                            if def.kind == DefKind::Variable {
-                                if let Some(type_id) = def.type_id {
-                                    if !is_copy_type(type_id, self.types, self.scopes) {
-                                        let skip_implicit_move = self.loop_depth > 0
-                                            && !self.loop_local_defs.last()
-                                                .map_or(false, |s| s.contains(&var_def_id))
-                                            && self.in_return_expr;
-                                        if !skip_implicit_move {
-                                            self.check_move(var_def_id, arg.span);
-                                            continue;
+            Expr::StructLiteral { name, args, .. } => {
+                // Struct fields own their data by default — non-Copy identifier
+                // args are implicitly consumed (moved into the struct).
+                // Exception: if the target field's type is `Ref[T]` / `MutRef[T]`
+                // (or the legacy sigil form), the arg is BORROWED — don't move.
+                // Look up the struct's per-field reference flags computed once
+                // by `compute_struct_field_ref_flags`.
+                let struct_def_id = self.scopes.lookup_from_scope(ScopeId(0), &name.node);
+                let field_ref_flags = struct_def_id
+                    .and_then(|d| self.struct_field_ref_flags.get(&d).cloned())
+                    .unwrap_or_default();
+                for (i, arg) in args.iter().enumerate() {
+                    let target_is_ref = field_ref_flags.get(i).copied().unwrap_or(false);
+                    if !target_is_ref {
+                        if let Expr::Identifier(_) = &arg.node {
+                            if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
+                                let def = self.scopes.get_def(var_def_id);
+                                if def.kind == DefKind::Variable {
+                                    if let Some(type_id) = def.type_id {
+                                        if !is_copy_type(type_id, self.types, self.scopes) {
+                                            let skip_implicit_move = self.loop_depth > 0
+                                                && !self.loop_local_defs.last()
+                                                    .map_or(false, |s| s.contains(&var_def_id))
+                                                && self.in_return_expr;
+                                            if !skip_implicit_move {
+                                                self.check_move(var_def_id, arg.span);
+                                                continue;
+                                            }
                                         }
                                     }
                                 }

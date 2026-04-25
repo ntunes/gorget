@@ -15316,6 +15316,22 @@ fn borrow_field_nongeneric() {
 }
 
 #[test]
+fn borrow_field_use_after_move_error() {
+    check_gg_fails(
+        "borrow_field_use_after_move_error.gg",
+        "after source `v` was moved",
+    );
+}
+
+#[test]
+fn borrow_field_escape_error() {
+    check_gg_fails(
+        "borrow_field_escape_error.gg",
+        "borrows from local variable `x`",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",

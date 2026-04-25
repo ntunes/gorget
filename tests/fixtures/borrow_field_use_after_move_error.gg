@@ -1,0 +1,19 @@
+# Borrow-fields Phase 2: holder stores `Ref[Vector[int]]` of `v`;
+# `v` is moved into a consumer; subsequent access through the borrow
+# field is a use-after-move on the source. The borrow checker must
+# reject this — without Phase 2, the construction was incorrectly
+# treated as moving `v` into the struct.
+
+struct Holder:
+    Ref[Vector[int]] r
+    int n
+
+void consume(Vector[int] !v):
+    pass
+
+int main():
+    Vector[int] v = [1, 2, 3]
+    Holder h = Holder(v, 0)
+    consume(!v)
+    print(h.r.len())
+    return 0

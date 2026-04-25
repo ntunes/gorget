@@ -82,13 +82,20 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
 
 // ─── Reference-Type Struct Detection ──────────────────────
 
-/// Check if an AST Type refers to a reference type: `str`, `Slice`, or a named
-/// type whose DefId is in `ref_structs`.
+/// Check if an AST Type refers to a reference type: `str`, `Slice`, sigil
+/// `T &`, user-written `Ref[T]` / `MutRef[T]` borrow-field types, or a named
+/// type whose DefId is in `ref_structs` (struct that transitively holds a
+/// reference field).
 pub(super) fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHashSet<DefId>) -> bool {
     match ty {
         Type::Ref(_) => true,
         Type::Slice { .. } => true,
-        Type::Named { name, .. } => {
+        Type::Named { name, generic_args } => {
+            // User-written borrow-field types — `Ref[T]` / `MutRef[T]` —
+            // are reference types regardless of T. Greppable, no DefId needed.
+            if generic_args.len() == 1 && (name.node == "Ref" || name.node == "MutRef") {
+                return true;
+            }
             // Search from module scope (scope 0) since struct defs are module-level.
             // scopes.current may be at a nested scope after prior passes.
             if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &name.node) {
