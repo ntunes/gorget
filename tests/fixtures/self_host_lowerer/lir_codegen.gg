@@ -3514,23 +3514,29 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[Str
 # ── Function emission ──────────────────────────────────────
 
 String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, Dict[String, int] &slit_map):
-    String out = ""
+    # Mirrors src/backend/c_lir/mod.rs:emit_function — accumulate into a
+    # single growing buffer via in-place push instead of `out = out + ...`
+    # quadratic concatenation. Each push amortizes O(1) per byte.
+    StrBuf buf = sb_new()
     Dict[int, int] val_types = compute_val_types(&func, &m)
 
     # Function signature
     if func.name == "main":
-        out = out + "int main(int argc, char** argv) {\n"
-        out = out + "    gorget_init_args(argc, argv);\n"
+        sb_push(&buf, "int main(int argc, char** argv) {\n")
+        sb_push(&buf, "    gorget_init_args(argc, argv);\n")
     else:
         String ret = c_type_name(func.return_type, &sn)
-        out = out + ret + " " + c_func_name(func.name) + "("
+        sb_push(&buf, ret)
+        sb_push(&buf, " ")
+        sb_push(&buf, c_func_name(func.name))
+        sb_push(&buf, "(")
         if func.params.len() == 0:
-            out = out + "void"
+            sb_push(&buf, "void")
         else:
             int pi = 0
             while pi < func.params.len():
                 if pi > 0:
-                    out = out + ", "
+                    sb_push(&buf, ", ")
                 int pty = func.params.get(pi).unwrap()
                 String ty_str = ""
                 if pty == LT_VOID:
@@ -3541,9 +3547,11 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
                     bool is_const = func.const_params.get(pi).unwrap()
                     if is_const and lir_is_ptr(pty):
                         ty_str = "const " + ty_str
-                out = out + ty_str + " __p" + int_to_str(pi)
+                sb_push(&buf, ty_str)
+                sb_push(&buf, " __p")
+                sb_push(&buf, int_to_str(pi))
                 pi += 1
-        out = out + ") {\n"
+        sb_push(&buf, ") {\n")
 
     # Slot declarations
     int si = 0
@@ -3552,12 +3560,15 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
         String ty_str = c_type_name(slot.ty, &sn)
         if ty_str == "void":
             ty_str = "void*"
-        out = out + "    " + ty_str + " __s" + int_to_str(si)
+        sb_push(&buf, "    ")
+        sb_push(&buf, ty_str)
+        sb_push(&buf, " __s")
+        sb_push(&buf, int_to_str(si))
         if lir_is_scalar(slot.ty):
-            out = out + " = 0"
+            sb_push(&buf, " = 0")
         else:
-            out = out + " = {0}"
-        out = out + ";\n"
+            sb_push(&buf, " = {0}")
+        sb_push(&buf, ";\n")
         si += 1
 
     # Value declarations — find max value id (scan block params, inst dsts, and func.next_value)
@@ -3590,7 +3601,11 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
                 ty_str = "void*"
             else:
                 ty_str = ts
-        out = out + "    " + ty_str + " __v" + int_to_str(vi) + ";\n"
+        sb_push(&buf, "    ")
+        sb_push(&buf, ty_str)
+        sb_push(&buf, " __v")
+        sb_push(&buf, int_to_str(vi))
+        sb_push(&buf, ";\n")
         vi += 1
 
     # Block parameter move variables
@@ -3601,7 +3616,11 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
         while pi < blk.params.len():
             BlockParam bp = blk.params.get(pi).unwrap()
             String ty_str = c_type_name(bp.ty, &sn)
-            out = out + "    " + ty_str + " __bp" + int_to_str(bp.value_id) + ";\n"
+            sb_push(&buf, "    ")
+            sb_push(&buf, ty_str)
+            sb_push(&buf, " __bp")
+            sb_push(&buf, int_to_str(bp.value_id))
+            sb_push(&buf, ";\n")
             pi += 1
         bi += 1
 
@@ -3618,30 +3637,39 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
                     String ty_str = c_type_name(ty, &sn)
                     if ty_str == "void":
                         ty_str = "void*"
-                    out = out + "    " + ty_str + " __at" + int_to_str(dst)
+                    sb_push(&buf, "    ")
+                    sb_push(&buf, ty_str)
+                    sb_push(&buf, " __at")
+                    sb_push(&buf, int_to_str(dst))
                     if lir_is_scalar(ty):
-                        out = out + " = 0"
+                        sb_push(&buf, " = 0")
                     else:
-                        out = out + " = {0}"
-                    out = out + ";\n"
+                        sb_push(&buf, " = {0}")
+                    sb_push(&buf, ";\n")
                 else:
                     pass
             ii += 1
         bi += 1
 
-    out = out + "\n"
+    sb_push(&buf, "\n")
 
     # Blocks
     bi = 0
     while bi < func.blocks.len():
         LirBlock blk = func.blocks.get(bi).unwrap()
-        out = out + "__bb" + int_to_str(blk.id) + ":\n"
+        sb_push(&buf, "__bb")
+        sb_push(&buf, int_to_str(blk.id))
+        sb_push(&buf, ":\n")
 
         # Move block params from temporaries
         int pi = 0
         while pi < blk.params.len():
             BlockParam bp = blk.params.get(pi).unwrap()
-            out = out + "    __v" + int_to_str(bp.value_id) + " = __bp" + int_to_str(bp.value_id) + ";\n"
+            sb_push(&buf, "    __v")
+            sb_push(&buf, int_to_str(bp.value_id))
+            sb_push(&buf, " = __bp")
+            sb_push(&buf, int_to_str(bp.value_id))
+            sb_push(&buf, ";\n")
             pi += 1
 
         # Instructions
@@ -3649,16 +3677,20 @@ String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, 
         while ii < blk.insts.len():
             LirInst inst = blk.insts.get(ii).unwrap()
             String code = emit_inst(&inst, &m, &func, &sn, &val_types, &slit_map)
-            out = out + "    " + code + "\n"
+            sb_push(&buf, "    ")
+            sb_push(&buf, code)
+            sb_push(&buf, "\n")
             ii += 1
 
         # Terminator
         String tcode = emit_term(&blk.term, &func, &sn, &val_types)
-        out = out + "    " + tcode + "\n"
+        sb_push(&buf, "    ")
+        sb_push(&buf, tcode)
+        sb_push(&buf, "\n")
         bi += 1
 
-    out = out + "}\n"
-    return out
+    sb_push(&buf, "}\n")
+    return buf.s
 
 # ── Drop/Clone function emission ──────────────────────────
 
