@@ -313,14 +313,14 @@ Min-heap by default. Elements must implement `Comparable`.
 
 ### Lazy Iterators (`std.iter`)
 
-Concrete state-machine iterators composable over `Vector[T]` and `Set[T]`:
+Concrete state-machine iterators over `Vector[T]`, `Set[T]`, and
+`Dict[K, V]` — every collection's `.iter()` returns an `Iterator[T]`
+state machine that composes through method chains.
 
 ```gorget
-from std.iter import VectorIter, TakeIter, set_iter
-
 Vector[int] v = [10, 20, 30, 40, 50]
 
-# Terminal: .count(), .collect(), .last(), .nth(n), .any(p), .all(p),
+# Terminals: .count(), .collect(), .last(), .nth(n), .any(p), .all(p),
 # .find(p), .find_index(p), .for_each(f), .fold(init, f) — all live
 # as Iterator[T] default-method bodies. Any adapter that `equip`s
 # the trait inherits them.
@@ -335,19 +335,32 @@ Option[int] first_match = v.iter().find(is_match)
 # self.iter().method() — same shape, less typing at call sites.
 int doubled_sum = v.map(double).fold(0, sum)
 
-# Adapter chain — take/skip/chain/map/filter are equip methods on
-# VectorIter, return the concrete adapter struct by value. No
+# Adapter chain — take / skip / map / filter / etc. are defaults on
+# Iterator[T], returning the concrete adapter struct by value. No
 # boxing, no trait-object dispatch. Each step fuses at the
 # monomorphised layer.
 for x in v.iter().take(2):
     print(x)
 
+# Set.iter() yields a lazy SetIter[T] walking the bucket array —
+# no .items() materialisation.
 Set[int] s = Set[int]()
-s.add(1)
-s.add(2)
-s.add(3)
-for x in set_iter[int](s).take(2):
+s.add(1); s.add(2); s.add(3)
+for x in s.iter().take(2):
     print(x)
+
+# Dict.iter() yields a lazy DictIter[K, V] producing (K, V) tuples.
+Dict[String, int] ages = Dict[String, int]()
+ages.put("Alice", 30)
+ages.put("Bob", 25)
+for p in ages.iter():
+    print(f"{p.0}: {p.1}")
+
+# collect() infers its target from the LHS binding type.
+Vector[int] dups = [1, 1, 2, 3, 3, 3]
+Set[int] uniq = dups.iter().collect()                  # → Set[int]
+Vector[(int, int)] pairs = [(1, 10), (2, 20)]
+Dict[int, int] d = pairs.iter().collect()              # → Dict[int, int]
 ```
 
 Adapters: `TakeIter[Iter, T]`, `SkipIter[Iter, T]`,
@@ -358,15 +371,14 @@ Adapters: `TakeIter[Iter, T]`, `SkipIter[Iter, T]`,
 iterator type so chains compose at monomorphisation without
 virtual dispatch.
 
-Bound-needing terminals stay as free functions until per-method
-trait bounds land: `sum_iter[Iter]`, `product_iter[Iter]`,
-`min_iter[Iter]`, `max_iter[Iter]` (all int), `join_iter[Iter,
-Displayable T]`. Called as `sum_iter[VectorIter[int]](v.iter())`.
+Free-function terminals for cases that need explicit bounds:
+`sum_iter[Iter]`, `product_iter[Iter]`, `min_iter[Iter]`,
+`max_iter[Iter]` (all int), and `join_iter[Iter, Displayable T]`.
+Called as `sum_iter[VectorIter[int]](v.iter())`.
 
-Dict key/value iteration goes through `d.keys()` / `d.values()` /
-`d.items()` + `.iter()` on the resulting Vector for now — a direct
-`DictKeyIter` / `DictValueIter` wrapper trips a pre-existing
-Ptr-ABI codegen issue that's tracked for Phase 2c.
+`Dict.keys()` / `.values()` / `.items()` still return eager
+`Vector[K]` / `Vector[V]` / `Vector[(K, V)]` for callers that want
+the materialised form.
 
 ### Byte-shaped I/O (`std.io`)
 

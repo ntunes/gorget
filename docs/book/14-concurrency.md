@@ -462,7 +462,7 @@ A `spawn` argument is a plain borrow (not wrapped in a `shared T` container). Th
 task could outlive the borrow's owner, leaving a dangling reference.
 
 ```gorget
-void child(&Config cfg):    # takes a borrow
+void child(Config &cfg):    # takes a borrow
     use(cfg)
 
 void parent():

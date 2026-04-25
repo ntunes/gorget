@@ -74,9 +74,10 @@ trait Hasher:
 ```
 
 Accumulates hash state. `std.hash` ships one concrete implementation,
-`FxHasher`, which uses a simple multiplicative mix suitable for most
-in-process keyed collections. Swap in a different Hasher implementation
-when DoS-resistance matters.
+`FxHasher`, which uses a simple multiplicative mix suitable for
+in-process keyed collections. The `Hashable` trait names `FxHasher`
+directly in its signature; alternative `Hasher` implementations
+compose by wrapping `FxHasher` via field composition.
 
 ### Ordinal
 
@@ -193,19 +194,17 @@ trait Iterator[T]:
 The core iteration protocol. Returns `Some(value)` for each element, `None`
 when exhausted. Takes `&self` (mutable borrow) to advance internal state.
 
-### Iterable[T]
+### iter() — name-based iteration
 
-```gorget
-trait Iterable[T]:
-    IterType iter(&self)
-```
+`for x in collection` calls `collection.iter()` to get an `Iterator[T]`,
+then calls `next()` repeatedly. The convention is name-based — any type
+with an `iter()` method that returns something equipped with
+`Iterator[T]` can drive a for-loop. `Vector[T]`, `Set[T]`, `Dict[K, V]`,
+and the lazy adapter chain (`TakeIter`, `MapIter`, …) all participate.
 
-Creates an iterator. `for x in collection` calls `collection.iter()` to get
-an `Iterator`, then calls `next()` repeatedly.
-
-> Types that implement `Iterator[T]` directly (no separate iterator struct)
-> can also be used in a `for`-loop — the compiler treats the value as its
-> own iterator when it has `next()` but no `iter()`.
+> Types that implement `Iterator[T]` directly (no separate iterator
+> struct) can also be used in a `for`-loop — the compiler treats the
+> value as its own iterator when it has `next()` but no `iter()`.
 
 ---
 
@@ -316,21 +315,24 @@ Coexists with the `Result.Error(x)` variant via type/value namespace
 separation — the trait lives in the type namespace, the variant in
 the value namespace, and context picks the right one.
 
-### println / writeln / println_str
+### print — infallible builtin / Writer primitives — typed-error
 
-Narrow-waist convenience helpers for writing text with typed errors:
+The compiler builtin `print(v, terminator="\n", file=stdout)` is the
+script ergonomic for stdout writes; it panics on failure (rare for
+stdout). For typed-error callers, write directly on the `Writer`
+primitives:
 
 ```gorget
-Result[int, IoError] writeln[W, Displayable D](W &w, D v)
-Result[int, IoError] println[Displayable D](D v)            # → stdout
-Result[int, IoError] println_str(String s)                  # → stdout
+from std.io import stdout, stderr, IoError, write_display, write_str, write_all
+
+Result[int, IoError] r1 = write_display[File, int](&stdout, 42)
+Result[int, IoError] r2 = write_str[File](&stderr, "oops\n")
+Result[int, IoError] r3 = write_all[File](&stdout, "raw bytes\n".bytes())
 ```
 
-`println[D](v)` renders `v` through `Displayable.display()`, appends
-`"\n"`, and writes the combined bytes to `stdout` via the `Writer`
-trait. Equivalent to the builtin `print(v)` but routes through the
-full typed-error Writer stack. Use `writeln[W, D](&w, v)` for
-non-stdout destinations.
+`write_display` / `write_str` / `write_all` compose with any `Writer`,
+not just stdout — files, sockets, in-memory `String` builders all
+plug in via the same primitives.
 
 ### Typed file I/O
 

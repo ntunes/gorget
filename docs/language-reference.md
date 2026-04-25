@@ -2981,19 +2981,21 @@ The following methods are available on built-in types without any import.
 | `contains(needle)` | `String → bool` | True if `needle` is a substring |
 | `starts_with(prefix)` | `String → bool` | True if string starts with `prefix` |
 | `ends_with(suffix)` | `String → bool` | True if string ends with `suffix` |
-| `index_of(needle)` | `String → Option[int]` | Codepoint index of first occurrence (`None` if not found) |
+| `find(pattern, from?, reverse?)` | `String, int = 0, bool = false → Option[int]` | Unified search primitive — codepoint index of first match starting at `from`, or last match when `reverse=true` |
+| `index_of(needle)` | `String → Option[int]` | Alias for `find(needle)` |
 | `count(needle)` | `String → int` | Number of non-overlapping occurrences |
-| `char_at(index)` | `int → String` | Byte at byte index (panics if out of bounds; for parser/codec use, deprecated — prefer `byte_at`) |
+| `byte_at(index)` | `int → uint8` | Raw byte at byte index (O(1), for parser/codec use; panics if out of bounds) |
 | `byte_slice(start, end)` | `int, int → String` | Byte-range substring view (O(1), for parser/codec use) |
 | `substring(start, end)` | `int, int → String` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
 | `trim()` | `→ String` | Strip leading/trailing Unicode whitespace (view, no allocation) |
 | `strip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from both ends (view) |
-| `lstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from left (view) |
-| `rstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from right (view) |
-| `to_upper()` | `→ String` | Unicode-aware uppercase (Latin/Greek/Cyrillic) |
-| `to_lower()` | `→ String` | Unicode-aware lowercase (Latin/Greek/Cyrillic) |
-| `replace(old, new)` | `String, String → String` | Replace all occurrences of `old` with `new` |
-| `split(delim)` | `String → Vector[String]` | Split into parts by delimiter |
+| `trim_left(chars?)` / `lstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from left (view) |
+| `trim_right(chars?)` / `rstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from right (view) |
+| `to_upper()` / `upper()` | `→ String` | Unicode-aware uppercase (Latin/Greek/Cyrillic) |
+| `to_lower()` / `lower()` | `→ String` | Unicode-aware lowercase (Latin/Greek/Cyrillic) |
+| `replace(old, new, limit?)` | `String, String, int = 0 → String` | Replace occurrences of `old` with `new`; `limit=0` means unlimited, `limit=1` is replace-first |
+| `split(sep, limit?)` | `String, int = 0 → Vector[String]` | Split into parts by delimiter; `limit=0` means unlimited, `limit=2` is split-once |
+| `lines()` | `→ Vector[String]` | Split on `\n` / `\r\n` / `\r` (handles all common line terminators) |
 | `join(parts)` | `Vector[String] → String` | Join strings with receiver as separator |
 | `repeat(n)` | `int → String` | Repeat string `n` times |
 | `removeprefix(prefix)` | `String → String` | Remove `prefix` if present, otherwise return unchanged (view) |
@@ -3003,7 +3005,7 @@ The following methods are available on built-in types without any import.
 | `bytes()` | `→ Vector[uint8]` | Raw UTF-8 bytes as a vector |
 | `codepoints()` | `→ Vector[int]` | Unicode codepoint values as a vector |
 | `chars()` | `→ Vector[String]` | Individual characters (codepoints) as `String` views |
-| `hash()` | `→ int` | Hash value |
+| `hash(h)` | `FxHasher → void` | Feed bytes into a `Hasher` (state-based hashing — see `std.hash`) |
 
 **Unicode support scope:**
 - `to_upper()`/`to_lower()` handle 1:1 simple case mappings for Latin (U+0000–024F), Greek (U+0370–03FF), and Cyrillic (U+0400–04FF). Locale-dependent mappings (e.g., Turkish İ/ı) and one-to-many mappings (e.g., ß→SS) are not yet supported.
@@ -3023,14 +3025,14 @@ The following methods are available on built-in types without any import.
 
 For byte-level access (useful in parsers and codecs), use `byte_at(i)` (returns `byte`) and `byte_slice(a, b)` (returns `String` byte-range view in O(1)).
 
-**UTF-8 validation at system boundaries.** All `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world:
+**UTF-8 validation at system boundaries.** All `String` values are guaranteed to contain valid UTF-8. The compiler enforces this at the boundaries where external bytes enter the string world. Boundary functions return `Result[String, IoError]` (typed I/O error from `std.io`); invalid UTF-8 surfaces as `IoError.Utf8Invalid(byte_offset)`:
 
 | Boundary | Return type | On invalid UTF-8 |
 |---|---|---|
-| `File.read_all()` | `Result[String, String]` | Returns `Error("invalid UTF-8 in file")` |
-| `Socket.read_line()` | `Result[String, String]` | Returns `Error("invalid UTF-8 from socket")` |
-| `TlsSocket.read_line()` | `Result[String, String]` | Returns `Error("invalid UTF-8 from socket")` |
-| `bytes_to_str(buf)` | `Result[String, String]` | Returns `Error("invalid UTF-8 in byte buffer")` |
+| `read_to_string(path)` | `Result[String, IoError]` | `Error(IoError.Utf8Invalid(offset))` |
+| `Socket.read_line()` | `Result[String, IoError]` | `Error(IoError.Utf8Invalid(offset))` |
+| `TlsSocket.read_line()` | `Result[String, IoError]` | `Error(IoError.Utf8Invalid(offset))` |
+| `bytes_str_checked(buf)` | `Result[String, IoError]` | `Error(IoError.Utf8Invalid(offset))` |
 
 String literals are validated at compile time by the lexer. Internal string operations (slicing, concatenation, indexing) preserve UTF-8 validity by construction.
 
@@ -3117,7 +3119,7 @@ Iteration, `keys()`, `values()`, and `items()` all return entries in insertion o
 | `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
 | `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
-| `remove(key)` | `K → bool` | Remove key, return whether it existed |
+| `remove(key)` | `K → Option[V]` | Remove key, return the value if it existed |
 | `len()` | `→ int` | Number of entries |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
@@ -3127,6 +3129,7 @@ Iteration, `keys()`, `values()`, and `items()` all return entries in insertion o
 | `keys()` | `→ Vector[K]` | All keys in insertion order |
 | `values()` | `→ Vector[V]` | All values in insertion order |
 | `items()` | `→ Vector[(K, V)]` | All key-value pairs in insertion order |
+| `iter()` | `→ DictIter[K, V]` | Lazy bucket-walk over `(K, V)` pairs (no `.items()` materialisation) |
 | `filter(pred)` | `(K, V) → bool → Dict[K, V]` | Entries satisfying predicate |
 | `fold(init, f)` | `U, (U, K, V) → U → U` | Left fold over entries |
 
@@ -3139,7 +3142,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
 | `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
-| `remove(key)` | `K → bool` | Remove key, return whether it existed |
+| `remove(key)` | `K → Option[V]` | Remove key, return the value if it existed |
 | `len()` | `→ int` | Number of entries |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
@@ -3164,12 +3167,14 @@ Iteration yields elements in insertion order. Adding a duplicate does not change
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all elements |
+| `is_disjoint(other)` | `Set[T] → bool` | True if `self` and `other` share no elements |
 | `union(other)` | `Set[T] → Set[T]` | New set with elements from both (preserves insertion order) |
 | `intersection(other)` | `Set[T] → Set[T]` | New set with elements in both (preserves self's insertion order) |
 | `difference(other)` | `Set[T] → Set[T]` | New set with elements in self but not `other` |
 | `symmetric_difference(other)` | `Set[T] → Set[T]` | New set with elements in either but not both |
 | `is_subset(other)` | `Set[T] → bool` | True if all elements are in `other` |
 | `is_superset(other)` | `Set[T] → bool` | True if `other`'s elements are all in self |
+| `iter()` | `→ SetIter[T]` | Lazy bucket-walk over elements (no `.items()` materialisation) |
 | `filter(pred)` | `(T) → bool → Set[T]` | Elements satisfying predicate (preserves order) |
 | `fold(init, f)` | `U, (U, T) → U → U` | Left fold over elements in insertion order |
 | `any(pred)` | `(T) → bool → bool` | True if any element satisfies predicate |
@@ -3241,11 +3246,19 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 
 **`File`** — File handle
 
-| Method | Signature | Description |
+`File` implements the `Writer` and `Reader` traits — see `std.io` for
+`write` / `write_all` / `write_str` / `write_display` / `read` /
+`read_exact` / `flush`. The high-level helpers in `std.io` cover the
+common cases:
+
+| Function | Signature | Description |
 |---|---|---|
-| `read_all()` | `→ Result[String, String]` | Read entire file contents (validates UTF-8) |
-| `write(data)` | `String → void` | Write string to file |
-| `close()` | `→ void` | Close the file handle |
+| `read_to_string(path)` | `String → Result[String, IoError]` | Read whole file, validate UTF-8 |
+| `read_all_bytes(path)` | `String → Result[Vector[byte], IoError]` | Read whole file as raw bytes |
+| `write_string(path, s)` | `String, String → Result[int, IoError]` | Write a string to a file |
+| `write_all_bytes(path, buf)` | `String, Vector[byte] → Result[int, IoError]` | Write a byte buffer to a file |
+| `file_open(path, mode)` | `String, String → Result[File, IoError]` | Open a file handle for Writer/Reader use |
+| `File.close()` | `→ void` | Close the file handle |
 
 ### 15.3 Standard Library Modules
 
