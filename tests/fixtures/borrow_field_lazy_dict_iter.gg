@@ -1,0 +1,54 @@
+# Phase 3 proof-of-concept: lazy `Dict[K, V]` iteration using a `Ref[Dict[K, V]]`
+# borrow field. Demonstrates that Phase 1.7's IR groundwork + Phase 2's borrow
+# checker now compose to give us user-space lazy iterators that walk the
+# runtime hashmap in place — no `.items()` materialisation, no allocation
+# beyond the iterator struct itself.
+#
+# The runtime accessors `gorget_map_iter_*` are declared as generic externs.
+# Per commit `ca9b455f`, generic mono preserves the declared C symbol so a
+# single runtime function serves all `Dict[K, V]` instantiations.
+#
+# Limitation in this PoC: String key/value extraction via the `K &out`
+# parameter has a double-free issue (the runtime memcpys the bytes but the
+# caller's drop fires too). int / scalar K, V types work today. Wider
+# coverage is a follow-up.
+
+extern "Gorget":
+    extern int dict_iter_order_len[K, V](Ref[Dict[K, V]] m) = "gorget_map_iter_order_len"
+    extern int dict_iter_order[K, V](Ref[Dict[K, V]] m, int idx) = "gorget_map_iter_order"
+    extern void dict_iter_key[K, V](Ref[Dict[K, V]] m, int idx, K &out) = "gorget_map_iter_key"
+    extern void dict_iter_value[K, V](Ref[Dict[K, V]] m, int idx, V &out) = "gorget_map_iter_value"
+
+struct DictIterKV[K, V]:
+    Ref[Dict[K, V]] source
+    int cursor
+
+equip [K, V] DictIterKV[K, V]:
+    Option[(K, V)] next(&self):
+        int n = dict_iter_order_len[K, V](self.source)
+        if self.cursor >= n:
+            return None
+        int phys = dict_iter_order[K, V](self.source, self.cursor)
+        K k = K.default()
+        V v = V.default()
+        dict_iter_key[K, V](self.source, phys, &k)
+        dict_iter_value[K, V](self.source, phys, &v)
+        self.cursor = self.cursor + 1
+        return Some((k, v))
+
+void main():
+    Dict[int, int] d = {}
+    d.put(10, 100)
+    d.put(20, 200)
+    d.put(30, 300)
+    auto walker = DictIterKV[int, int](d, 0)
+    int sum_k = 0
+    int sum_v = 0
+    auto step = walker.next()
+    while step.is_some():
+        auto pair = step.unwrap()
+        sum_k = sum_k + pair.0
+        sum_v = sum_v + pair.1
+        step = walker.next()
+    print(sum_k)
+    print(sum_v)

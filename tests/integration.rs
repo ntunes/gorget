@@ -15364,6 +15364,14 @@ fn borrow_field_method_dispatch() {
 }
 
 #[test]
+fn borrow_field_lazy_dict_iter() {
+    run_gg(
+        "borrow_field_lazy_dict_iter.gg",
+        "60\n600",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",
