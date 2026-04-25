@@ -15332,6 +15332,14 @@ fn borrow_field_escape_error() {
 }
 
 #[test]
+fn borrow_field_mutation_error() {
+    check_gg_fails(
+        "borrow_field_mutation_error.gg",
+        "cannot mutate `v` while `h` borrows from it",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",

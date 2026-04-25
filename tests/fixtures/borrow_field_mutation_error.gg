@@ -1,0 +1,14 @@
+# Borrow-fields Phase 2: borrow-field struct holds shared `Ref[Vector[int]]`
+# of `v`; calling a mutating method on `v` (push/insert/clear/…) invalidates
+# the borrow. The borrow checker must reject — mutation of a borrowed source
+# must wait until all borrow-field structs that reference it are gone.
+
+struct Holder:
+    Ref[Vector[int]] r
+
+int main():
+    Vector[int] v = [1, 2, 3]
+    Holder h = Holder(v)
+    v.push(99)
+    print(h.r.len())
+    return 0

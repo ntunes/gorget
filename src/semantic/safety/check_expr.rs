@@ -285,15 +285,26 @@ impl<'a> BorrowChecker<'a> {
                     if is_mutating_collection_method {
                         if let Some(recv_def_id) = self.find_root_def_id(receiver) {
                             let recv_name = self.scopes.get_def(recv_def_id).name.clone();
-                            // Check explicit T & borrows
+                            // Check explicit T & borrows AND borrow-field structs
                             for (&var_id, origin) in self.var_origins.iter() {
                                 if origin.references_def(recv_def_id) {
-                                    // Only flag explicit T & borrows, not legacy str views
                                     let def = self.scopes.get_def(var_id);
+                                    // Sigil `T &` borrow OR a struct that
+                                    // transitively holds a `Ref[T]`/`MutRef[T]`
+                                    // field borrowing from the source.
                                     let is_ref_type = def.type_id.map_or(false, |tid| {
                                         matches!(self.types.get(tid), super::super::types::ResolvedType::Ref(_))
                                     });
-                                    if !is_ref_type { continue; }
+                                    let is_borrow_field_struct = match def.type_id {
+                                        Some(tid) => match self.types.get(tid) {
+                                            super::super::types::ResolvedType::Defined(struct_def_id)
+                                            | super::super::types::ResolvedType::Generic(struct_def_id, _) =>
+                                                self.ref_type_structs.contains(struct_def_id),
+                                            _ => false,
+                                        },
+                                        None => false,
+                                    };
+                                    if !is_ref_type && !is_borrow_field_struct { continue; }
                                     let is_alive = !matches!(
                                         self.var_states.get(&var_id),
                                         Some(VarState::Moved { .. })
