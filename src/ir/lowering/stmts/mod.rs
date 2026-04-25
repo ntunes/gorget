@@ -439,10 +439,19 @@ fn lower_var_decl(
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                             ctx.set_bare_param(local_id);
-                        } else if source_is_cow_borrow && (!in_loop || safe_in_loop) {
+                        } else if source_is_cow_borrow && (!in_loop || safe_in_loop)
+                            && ctx.type_registry.is_resource_type(_inner)
+                        {
                             // Propagate CowBorrow as CollectionRef — typed binding
                             // behaves identically to `auto`. cow_before_mutation on the
                             // collection materializes this local before collection mutation.
+                            //
+                            // Only apply to resource pointees: deferring cloning is the
+                            // entire point. For primitive / value-struct pointees, fall
+                            // through to the deref branch — captures a snapshot value at
+                            // the binding site, matches the user's `int x = …` intent,
+                            // and avoids leaking Ref types into phi/SSA back-edges that
+                            // were typed for the original value.
                             let collection = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                                 ctx.cow_borrow_source(p.local).cloned().unwrap()
                             } else { unreachable!() };
