@@ -2143,9 +2143,14 @@ fn emit_function(
         let bid = block.id.0;
         writeln!(out, "bb{bid}:").unwrap();
 
-        // Phi nodes for block parameters
+        // Phi nodes for block parameters.
+        // Aggregates flow as pointers in this backend — emit `phi ptr` (not
+        // `phi <struct>`) so consumers (memcpy, FieldPtr, etc.) get the
+        // pointer they expect. emit_branch_arg_casts spills any predecessor
+        // that has the struct value to a slot and passes its pointer.
         for (pi, (param_val, param_ty)) in block.params.iter().enumerate() {
-            let ty = llvm_type_full(param_ty, snames);
+            let phi_as_ptr = param_ty.is_aggregate();
+            let ty = if phi_as_ptr { "ptr".to_string() } else { llvm_type_full(param_ty, snames) };
             let mut phi_entries = Vec::new();
             if let Some(preds) = pred_map.get(&block.id) {
                 for &pred_id in preds {
@@ -2156,14 +2161,15 @@ fn emit_function(
                         .cloned()
                         .unwrap_or_else(|| format!("bb{}", pred_id.0));
                     if pi < args.len() {
-                        // If emit_branch_arg_casts widened/narrowed this arg, use the cast.
-                        // See branch-arg emission before emit_term at end of each block.
+                        // If emit_branch_arg_casts widened/narrowed/spilled this arg, use the cast.
                         let arg = args[pi];
-                        let needs_cast = param_ty.is_integer() && {
-                            let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+                        let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+                        let needs_int_cast = param_ty.is_integer() && {
                             actual.map(int_bits).unwrap_or(64) != int_bits(param_ty)
                         };
-                        if needs_cast {
+                        let needs_agg_spill = phi_as_ptr
+                            && actual.map_or(false, |t| !matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                        if needs_int_cast || needs_agg_spill {
                             phi_entries.push(format!(
                                 "[ %br.cast.{}.{}.{pi}, %{pred_label} ]",
                                 pred_id.0, block.id.0
@@ -2197,7 +2203,7 @@ fn emit_function(
 
         // Terminator — pre-emit any int-width casts needed for branch args
         // whose types don't match the target block's params.
-        emit_branch_arg_casts(out, &block.terminator, func, bid, &val_types);
+        emit_branch_arg_casts(out, &block.terminator, func, bid, &val_types, snames);
         emit_term(out, &block.terminator, func, module, snames, &val_types);
     }
 
@@ -2695,6 +2701,8 @@ fn emit_inst(
             let src_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let to_ty = llvm_type(to);
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
+            let src_is_ptr = src_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+            let to_is_ptr = matches!(to, LirType::Ptr | LirType::PtrTo(_));
 
             // IntCast to float type → use sitofp/uitofp to convert value (not bitcast)
             if to.is_float() {
@@ -2705,6 +2713,16 @@ fn emit_inst(
                 } else {
                     writeln!(out, "  %v{} = fadd {to_ty} 0.0, %v{}", dst.0, value.0).unwrap();
                 }
+            } else if to_is_ptr && src_is_ptr {
+                // Ptr → Ptr identity cast: `add ptr 0, ...` is invalid in LLVM.
+                // Emit a no-op getelementptr instead.
+                writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i32 0", dst.0, value.0).unwrap();
+            } else if to_is_ptr {
+                // Integer → Ptr
+                writeln!(out, "  %v{} = inttoptr {src_ty_str} %v{} to ptr", dst.0, value.0).unwrap();
+            } else if src_is_ptr {
+                // Ptr → Integer
+                writeln!(out, "  %v{} = ptrtoint ptr %v{} to {to_ty}", dst.0, value.0).unwrap();
             } else {
                 let src_bits = src_ty.map_or(64, int_bits);
                 let to_bits = int_bits(to);
@@ -2893,17 +2911,33 @@ fn emit_inst(
                 // Compute byte offset accounting for C alignment padding.
                 // Can't use LLVM struct GEP indices because the LLVM struct
                 // may have extra padding fields inserted by emit_struct_types.
+                //
+                // VTable note: emit_struct_types collapses closure-typed fields
+                // in `*_VTable` structs to bare `ptr` (matching the C backend).
+                // FieldPtr offsets must follow that override — every field is
+                // exactly 8 bytes — otherwise method lookup uses the wrong slot.
+                let is_vtable = sname.ends_with("_VTable");
                 let mut byte_offset = 0usize;
                 for fi in 0..(*field as usize) {
-                    let fty = &sdef.fields[fi].1;
-                    let fsz = sizeof_lir_type(fty, &module.structs, snames);
-                    let fa = crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs);
+                    let (fsz, fa) = if is_vtable {
+                        (8usize, 8usize)
+                    } else {
+                        let fty = &sdef.fields[fi].1;
+                        (
+                            sizeof_lir_type(fty, &module.structs, snames),
+                            crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs),
+                        )
+                    };
                     byte_offset = (byte_offset + fa - 1) & !(fa - 1);
                     byte_offset += fsz;
                 }
                 // Align to target field's alignment
-                let target_fty = &sdef.fields[*field as usize].1;
-                let target_align = crate::lir::lower::types::c_alignof_lir_type(target_fty, &module.structs);
+                let target_align = if is_vtable {
+                    8
+                } else {
+                    let target_fty = &sdef.fields[*field as usize].1;
+                    crate::lir::lower::types::c_alignof_lir_type(target_fty, &module.structs)
+                };
                 byte_offset = (byte_offset + target_align - 1) & !(target_align - 1);
                 if byte_offset == 0 {
                     writeln!(out, "  %v{} = bitcast ptr %v{} to ptr", dst.0, base.0).unwrap();
@@ -3610,9 +3644,12 @@ fn emit_inst(
                     if is_bool {
                         writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %v{})", d.0, args[0].0).unwrap();
                     } else {
-                        // Truncate i64/i32 → i1 for bool arg
-                        writeln!(out, "  %bts.{uid} = trunc i64 %v{} to i1", args[0].0).unwrap();
-                        writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %bts.{uid})", d.0).unwrap();
+                        // Truncate i64/i32 → i1 for bool arg. Name must be
+                        // function-unique — `trap_counter` resets per block,
+                        // so qualify with block id to avoid SSA collisions
+                        // when two blocks each emit at counter=0.
+                        writeln!(out, "  %bts.{block_id}.{uid} = trunc i64 %v{} to i1", args[0].0).unwrap();
+                        writeln!(out, "  call void @gorget_bool_to_str(ptr sret(%GorgetString) %v{}, i1 %bts.{block_id}.{uid})", d.0).unwrap();
                     }
                 }
                 return;
@@ -5004,8 +5041,12 @@ fn emit_inst(
                 }
             }
         }
-        Inst::CallPtr { dst, callee, args, ret_ty: _ } => {
-            // Indirect call through function pointer
+        Inst::CallPtr { dst, callee, args, ret_ty: call_ret_ty } => {
+            // Indirect call through function pointer. Honor the LIR-declared
+            // return type — for aggregate returns the underlying function uses
+            // sret convention, so we allocate an out slot and pass it as the
+            // first arg. (Legacy emission paths that left ret_ty=Void still
+            // get scalar i64 by default when dst is set.)
             let arg_strs: Vec<String> = args.iter().map(|a| {
                 let pty = val_types.get(a.0 as usize)
                     .and_then(|t| t.as_ref())
@@ -5013,17 +5054,37 @@ fn emit_inst(
                     .unwrap_or_else(|| "i64".to_string());
                 format!("{pty} %v{}", a.0)
             }).collect();
-            let ret_ty = if dst.is_some() { "i64" } else { "void" };
-            let param_tys: Vec<String> = args.iter().map(|a| {
-                val_types.get(a.0 as usize)
-                    .and_then(|t| t.as_ref())
-                    .map(|t| llvm_arg_type(t, snames))
-                    .unwrap_or_else(|| "i64".to_string())
-            }).collect();
-            let _fn_ty = format!("{ret_ty} ({})", param_tys.join(", "));
+
             if let Some(d) = dst {
-                writeln!(out, "  %v{} = call {ret_ty} %v{}({})", d.0, callee.0, arg_strs.join(", ")).unwrap();
+                if !matches!(call_ret_ty, LirType::Void) && needs_sret(call_ret_ty, &module.structs) {
+                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    let prepended = if arg_strs.is_empty() {
+                        format!("ptr sret({ret_ty}) %v{}", d.0)
+                    } else {
+                        format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
+                    };
+                    writeln!(out, "  call void %v{}({prepended})", callee.0).unwrap();
+                } else if !matches!(call_ret_ty, LirType::Void) && call_ret_ty.is_aggregate() {
+                    // Small aggregate: returned in registers, stored to alloca
+                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    writeln!(out, "  %v{}.ret = call {ret_ty} %v{}({})", d.0, callee.0, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
+                } else {
+                    let ret_ty = if matches!(call_ret_ty, LirType::Void) {
+                        "i64".to_string() // legacy fallback when ret_ty wasn't plumbed
+                    } else {
+                        llvm_type_full(call_ret_ty, snames)
+                    };
+                    writeln!(out, "  %v{} = call {ret_ty} %v{}({})", d.0, callee.0, arg_strs.join(", ")).unwrap();
+                }
             } else {
+                let ret_ty = if matches!(call_ret_ty, LirType::Void) {
+                    "void".to_string()
+                } else {
+                    llvm_type_full(call_ret_ty, snames)
+                };
                 writeln!(out, "  call {ret_ty} %v{}({})", callee.0, arg_strs.join(", ")).unwrap();
             }
         }
@@ -5357,6 +5418,7 @@ fn emit_branch_arg_casts(
     func: &LirFunction,
     pred_bid: u32,
     val_types: &[Option<LirType>],
+    snames: &HashMap<u32, String>,
 ) {
     let targets: Vec<(BlockId, Vec<ValueId>)> = match term {
         Term::Jump(tgt, args) => vec![(*tgt, args.clone())],
@@ -5375,8 +5437,24 @@ fn emit_branch_arg_casts(
         let target_block = &func.blocks[tgt.0 as usize];
         for (ai, arg) in args.iter().enumerate() {
             let Some((_, param_ty)) = target_block.params.get(ai) else { continue; };
-            if !param_ty.is_integer() { continue; }
             let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
+
+            // Aggregate-typed param flows as ptr in this backend. Spill any
+            // predecessor that has the struct value into a fresh alloca and
+            // pass its pointer, so phi receives a homogeneous ptr stream.
+            if param_ty.is_aggregate() {
+                let actual_is_ptr = actual.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                if !actual_is_ptr {
+                    let agg_ty = llvm_type_full(param_ty, snames);
+                    writeln!(out, "  %br.cast.{pred_bid}.{}.{ai} = alloca {agg_ty}",
+                        tgt.0).unwrap();
+                    writeln!(out, "  store {agg_ty} %v{}, ptr %br.cast.{pred_bid}.{}.{ai}",
+                        arg.0, tgt.0).unwrap();
+                }
+                continue;
+            }
+
+            if !param_ty.is_integer() { continue; }
             let actual_bits = actual.map(int_bits).unwrap_or(64);
             let param_bits = int_bits(param_ty);
             if actual_bits == param_bits { continue; }
