@@ -2310,12 +2310,27 @@ fn emit_inst(
                 // Views (cap=0) become 32-byte struct copies; owned strings are deep-cloned.
                 // Mirrors the C backend's path in src/backend/c_lir/mod.rs — without this,
                 // shallow memcpy aliases the source buffer and elem_drop/explicit drops
-                // conflict into double-frees. Only fires when val_ty is explicitly Ptr
-                // (matching C's `matches!(val_ty, Some(LirType::Ptr))`) — values with no
-                // type info may be aggregate returns that need plain memcpy transfer.
+                // conflict into double-frees.
+                //
+                // Only fires when the source is an alias into existing storage:
+                //   • `LirType::Ptr` (raw pointer — the original C-backend-equivalent case).
+                //   • `LirType::PtrTo(GorgetString)` *and* the value came from a SlotAddr
+                //     (i.e. `slot_store s_dst, slot_addr s_src`). LLVM converts every
+                //     aggregate `Struct` return type to `PtrTo` in val_types, so we can't
+                //     accept `PtrTo` blanketly — for a CallExtern that genuinely returns
+                //     an owned struct (e.g. `gorget_str_cat`), CoW here would leak the
+                //     fresh allocation. Restricting to SlotAddr-derived values mirrors
+                //     what the C backend distinguishes via raw `LirType::Ptr`.
                 let slot_is_string = matches!(slot_ty, LirType::Struct(sid)
                     if snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str"));
-                let val_ty_is_ptr = matches!(val_ty, Some(LirType::Ptr));
+                let value_from_slot_addr = func.blocks.iter().any(|b| {
+                    b.insts.iter().any(|i| matches!(i, Inst::SlotAddr { dst, .. } if dst.0 == value.0))
+                });
+                let val_ty_is_ptr = match val_ty {
+                    Some(LirType::Ptr) => true,
+                    Some(LirType::PtrTo(_)) => value_from_slot_addr,
+                    _ => false,
+                };
                 let value_is_strlit = func.blocks.iter().any(|b| {
                     b.insts.iter().any(|i| matches!(i, Inst::StrLit { dst, .. } if dst.0 == value.0))
                 });
