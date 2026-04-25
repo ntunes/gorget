@@ -2025,6 +2025,52 @@ static inline const char* gorget_memmem(const char* h, size_t hlen, const char* 
     return NULL;
 }
 
+// ── In-place append with both args by pointer ───────────────
+// Companion to gorget_string_append_str — same semantics but takes
+// the rhs string by pointer too. This sidesteps the extern "C" ABI
+// coercion that turns `String rhs` into `const char*` (cstr) at call
+// sites: by declaring the second arg as a pointer in Gorget too,
+// the compiler keeps it as Str* and we read both data + len directly.
+static inline void gorget_string_append_str_ptr(GorgetString* s, const Str* rhs) {
+    if (!rhs || rhs->len == 0 || !rhs->data) return;
+    size_t n = rhs->len;
+    if (s->cap == 0) {
+        GorgetAllocator* a = __gorget_current_alloc;
+        size_t new_len = s->len + n;
+        size_t new_cap = (new_len + 1) * 2;
+        if (new_cap < 64) new_cap = 64;
+        char* d = (char*)a->alloc(a->ctx, new_cap);
+        if (s->len > 0 && s->data) memcpy(d, s->data, s->len);
+        memcpy(d + s->len, rhs->data, n);
+        d[new_len] = '\0';
+        *s = (Str){ .data = d, .cap = new_cap, .len = new_len, .alloc = a };
+        return;
+    }
+    size_t new_len = s->len + n;
+    if (new_len + 1 > s->cap) {
+        size_t new_cap = (new_len + 1) * 2;
+        s->data = (char*)s->alloc->realloc(s->alloc->ctx, s->data, s->cap, new_cap);
+        s->cap = new_cap;
+    }
+    memcpy((char*)s->data + s->len, rhs->data, n);
+    s->len = new_len;
+    ((char*)s->data)[s->len] = '\0';
+}
+
+// ── Debug stderr writer ─────────────────────────────────────
+// Line-buffered unlike the default stdout path (which is block-buffered
+// when piped to a file). Used by self-host sources for real-time progress
+// markers without pulling in std.io's File handles (which drag in the
+// entire std.io → IoError → derive trait graph that the self-host can't
+// yet lower cleanly).
+static inline int gorget_eprint_debug(Str msg) {
+    if (msg.len > 0 && msg.data) fwrite(msg.data, 1, msg.len, stderr);
+    fputc('\n', stderr);
+    fflush(stderr);
+    return 0;
+}
+
+
 
 "#;
 
