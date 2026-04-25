@@ -11434,6 +11434,47 @@ fn self_host_bootstrap() {
         stage1_bin.display()
     );
 
+    // 8. Stage-1 runs on driver.gg without OOM/hang and produces a
+    //    non-trivial body. This is the regression guard for the
+    //    sb_push refactor in lir_codegen.gg — the naive
+    //    `out = out + emit_function(...)` pattern is O(N²) and
+    //    OOM-killed stage-1 with 5+GB RSS at ~21s. With sb_push
+    //    in-place append, stage-1 finishes in ~25s producing ~350K
+    //    lines of valid C.
+    //
+    //    A stage-1 body smaller than `body_c.len() / 2` is a strong
+    //    signal that the run was killed mid-emission (output
+    //    truncated when the process died). A non-zero exit also
+    //    triggers the panic.
+    //
+    //    Doesn't yet check for byte-equality vs stage-0's output —
+    //    that's the fixed-point property tracked by the separate
+    //    `self_host_bootstrap_fixed_point` test (currently #[ignore]
+    //    pending self-host emission correctness fixes).
+    let stage1_run_out = run_with_deadline(
+        Command::new(&stage1_bin)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_bootstrap stage-1 → stage-2 body",
+        Duration::from_secs(120),
+    );
+    assert!(
+        stage1_run_out.status.success(),
+        "stage-1 binary failed running on driver.gg: status={:?} stderr={}",
+        stage1_run_out.status.code(),
+        String::from_utf8_lossy(&stage1_run_out.stderr),
+    );
+    let stage2_body = String::from_utf8_lossy(&stage1_run_out.stdout);
+    let min_size = body_c.len() / 2;
+    assert!(
+        stage2_body.len() >= min_size,
+        "stage-1 output suspiciously small: {} bytes (expected >= {}, stage-0 produced {})",
+        stage2_body.len(),
+        min_size,
+        body_c.len(),
+    );
+
     // Cleanup stage1 artifacts on success.
     let _ = std::fs::remove_file(&stage1_c);
     let _ = std::fs::remove_file(&stage1_bin);
