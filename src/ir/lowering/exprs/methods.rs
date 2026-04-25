@@ -542,8 +542,8 @@ pub(super) fn lower_method_call(
             let is_result = tn.starts_with("Result__");
             let inner_type = if tn.starts_with("Option__") {
                 let inner_name = &tn["Option__".len()..];
-                // Option__Ref_T → Ptr(T) (borrowed reference from collection)
-                if let Some(pointee_name) = inner_name.strip_prefix("Ref_") {
+                // Option__Ref__T → Ptr(T) (borrowed reference from collection)
+                if let Some(pointee_name) = inner_name.strip_prefix("Ref__") {
                     let pointee_type = resolve_inner_type(ctx, pointee_name);
                     ctx.type_registry.insert(GirType::Ptr(pointee_type))
                 } else {
@@ -1630,8 +1630,12 @@ pub(super) fn lower_method_call(
             }
         }
 
-        // Borrowing methods (get/first/last) on resource-type elements: Option__Ref_T (Ptr payload).
-        // Consuming methods (pop/remove) and primitive elements: Option__T (value payload).
+        // Borrowing methods (get/first/last) always return `Option__Ref__T` with a
+        // Ptr(T) payload, regardless of whether T is a resource type. This keeps
+        // the IR's return type identical to the user-declared `Option[Ref[T]]`
+        // and avoids aliasing an int-value as a pointer when the two forms
+        // used to diverge (IR said Option[T], typechecker said Option[Ref[T]]).
+        // Consuming methods (pop/remove) keep `Option__T` with a value payload.
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
         if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
             && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
@@ -1639,9 +1643,8 @@ pub(super) fn lower_method_call(
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let inner_type = resolve_inner_type(ctx, elem_type_name);
             let is_borrowing = matches!(method_name, "get" | "first" | "last");
-            let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
-            if is_borrowing && is_resource_elem {
-                let option_name = format!("Option__Ref_{elem_type_name}");
+            if is_borrowing {
+                let option_name = format!("Option__Ref__{elem_type_name}");
                 if ctx.lookup_type_by_name(&option_name).is_none() {
                     let ptr_type = ctx.type_registry.insert(GirType::Ptr(inner_type));
                     ctx.ensure_option_type_registered(&option_name, ptr_type);
@@ -1686,11 +1689,10 @@ pub(super) fn lower_method_call(
                 && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
             {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
-                let inner_type = resolve_inner_type(ctx, elem_type_name);
+                let _inner_type = resolve_inner_type(ctx, elem_type_name);
                 let is_borrowing = matches!(method_name, "get" | "first" | "last");
-                let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
-                let option_name = if is_borrowing && is_resource_elem {
-                    format!("Option__Ref_{elem_type_name}")
+                let option_name = if is_borrowing {
+                    format!("Option__Ref__{elem_type_name}")
                 } else {
                     format!("Option__{elem_type_name}")
                 };
@@ -1948,9 +1950,10 @@ pub(super) fn lower_method_call(
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let inner_type = resolve_inner_type(ctx, elem_type_name);
             let is_borrowing = matches!(method_name, "get" | "first" | "last");
-            let is_resource_elem = ctx.type_registry.has_resource_fields(inner_type);
-            // Borrowing + resource element → Option__Ref_T (Ptr payload, no deref needed)
-            let payload_is_ptr = is_borrowing && is_resource_elem;
+            // Borrowing methods always produce Option__Ref__T with a Ptr(T) payload —
+            // the raw pointer from the runtime `gorget_array_safe_get` IS the payload.
+            // Consuming methods (pop/remove) deref to take ownership of the value.
+            let payload_is_ptr = is_borrowing;
 
             // Call with Ptr return type (truthful void* ABI)
             let ptr_type = ctx.register_ptr_type(inner_type);
@@ -2010,7 +2013,7 @@ pub(super) fn lower_method_call(
             //   emits a deep clone for resource-containing struct types instead
             //   of a shallow memcpy, (d) prescan walks every path ancestor.
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
-                if ret_name.starts_with("Option__Ref_") {
+                if ret_name.starts_with("Option__Ref__") {
                     if let Some(recv_local) = recv_local_for_move_zero {
                         if ctx.is_named_local(recv_local) {
                             ctx.set_cow_borrow_source(result_id, CollectionId::Local(recv_local));
@@ -2050,9 +2053,9 @@ pub(super) fn lower_method_call(
                     }
                 }
             }
-            // Track collection provenance for Option__Ref_ results (from .get(), .first(), etc.).
+            // Track collection provenance for Option__Ref__ results (from .get(), .first(), etc.).
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
-                if ret_name.starts_with("Option__Ref_") {
+                if ret_name.starts_with("Option__Ref__") {
                     if let Some(recv_local) = recv_local_for_move_zero {
                         if ctx.is_named_local(recv_local) {
                             ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));

@@ -1357,17 +1357,60 @@ impl<'a> FuncLowering<'a> {
             // -- Ref load/store (explicit Ptr dereference) --
             Instruction::LoadRef { dst, src } => {
                 // Load through Ptr: deref src to get value, store in dst.
-                // Same as FieldLoad with Deref projection, but explicit.
+                //
+                // `lower_place_addr` already resolves ref-locals (is_ref
+                // ownership or PtrTo(GorgetString) slot) to the pointer VALUE
+                // via SlotLoad. For those, a single Load with the pointee type
+                // reads the pointee correctly.
+                //
+                // For a bare `Ptr(T)` local that *isn't* a ref-local (e.g. a
+                // result of `.unwrap()` on `Option[Ref[T]]`, bound to a plain
+                // local), `lower_place_addr` emits `SlotAddr` — src_addr is
+                // `&slot`, and the slot contains the pointer bits. A single
+                // Load with ty=T would read the pointer bits as T. We have to
+                // load the Ptr value from the slot first, then deref it.
                 let src_addr = self.lower_place_addr(src, bb);
                 let src_type = self.effective_place_type(src);
                 let pointee = self.resolve_deref_gir_type_id(src_type);
                 let field_ty = self.map_type(&pointee);
+                let has_deref = src.projections.first()
+                    == Some(&crate::ir::instructions::Projection::Deref);
+                let local_ownership_is_ref = self.gir_func.locals
+                    .get(src.local.0 as usize)
+                    .map_or(false, |l| l.ownership.is_ref());
+                let slot = self.local_to_slot[src.local.0 as usize];
+                let is_ptr_to_slot = match &self.lir_func.slots[slot.0 as usize].ty {
+                    LirType::PtrTo(sid) => self.struct_reg.lookup("GorgetString") == Some(*sid),
+                    _ => false,
+                };
+                // Only double-load when `lower_place_addr` gave us a slot
+                // address (not the pointer value). Matches the else branch in
+                // `lower_place_addr` — bare local, not ref-local, not the
+                // PtrTo(GorgetString) special case.
+                let needs_two_step = matches!(
+                    self.gir_types.get(src_type),
+                    Some(GirType::Ptr(_) | GirType::MutPtr(_))
+                ) && !has_deref && !local_ownership_is_ref && !is_ptr_to_slot;
                 let deref_val = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
-                    dst: deref_val,
-                    ptr: src_addr,
-                    ty: field_ty,
-                });
+                if needs_two_step {
+                    let ptr_val = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: ptr_val,
+                        ptr: src_addr,
+                        ty: LirType::Ptr,
+                    });
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: deref_val,
+                        ptr: ptr_val,
+                        ty: field_ty,
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        dst: deref_val,
+                        ptr: src_addr,
+                        ty: field_ty,
+                    });
+                }
                 self.store_to_local(*dst, deref_val, bb);
             }
             Instruction::StoreRef { dst, value } => {

@@ -1456,6 +1456,48 @@ impl<'a> LoweringContext<'a> {
     ///
     /// Returns the (possibly cloned) operand. Call sites should use the returned
     /// operand instead of the original.
+    /// Auto-deref `Ref[T] → T` at return-value boundaries for primitives and
+    /// value types. Applies when the operand is `Copy(place)` / `Move(place)`
+    /// of a bare `Ptr(T)` local and the enclosing return type is bare `T`
+    /// (not Ptr). Used by expression-body functions and equip methods after
+    /// `ensure_owned_at_boundary` has run.
+    ///
+    /// Returns the updated operand (may be a newly-introduced tmp holding the
+    /// loaded value) or the original operand if no deref is needed.
+    pub fn auto_deref_at_return(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        ret_type: TypeId,
+    ) -> Operand {
+        use crate::ir::types::GirType;
+        use crate::ir::instructions::{Place, Projection};
+        if matches!(self.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+            return operand;
+        }
+        let place = match &operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
+            _ => return operand,
+        };
+        let src_type = builder.local_type(place.local);
+        let inner = match self.type_registry.get(src_type) {
+            Some(GirType::Ptr(inner)) => *inner,
+            _ => return operand,
+        };
+        if self.type_registry.is_resource_type(inner) {
+            return operand;
+        }
+        let tmp = builder.add_local(inner, None);
+        builder.assign(
+            Place::local(tmp),
+            Operand::Copy(Place {
+                local: place.local,
+                projections: vec![Projection::Deref],
+            }),
+        );
+        crate::ir::builder::FunctionBuilder::copy(tmp)
+    }
+
     pub fn ensure_owned_at_boundary(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -1473,6 +1515,14 @@ impl<'a> LoweringContext<'a> {
         // Cannot move through Ptr: the callee doesn't know if the caller still
         // needs the argument. Record the param as consumed so the caller can
         // suggest `!` at last-use call sites.
+        //
+        // NOTE: auto-deref for non-resource pointees (Ref[T] → T) does NOT
+        // live here because this function doesn't know the target slot's type.
+        // Struct field init calls this per-field — when both source and target
+        // are `Ref[T]`, we want pass-through, not deref. The Ref[T] → T deref
+        // is handled at the specific sites that know their target is bare T:
+        // VarDecl, return statement, expression-body function return, call args
+        // (via `auto_clone_if_ptr`).
         if let Some(inner) = self.pointee_type(local_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
                 self.record_param_cloned(builder, local);
@@ -1672,6 +1722,23 @@ impl<'a> LoweringContext<'a> {
                         self.drops.register_local(cloned, inner, &self.type_registry);
                         self.set_owned(cloned);
                         return crate::ir::builder::FunctionBuilder::copy(cloned);
+                    }
+                    // Ptr to a non-resource, non-string value type — e.g. reading a
+                    // `Ref[int]` (from `v.get()` / a `Ref[T]` field) where the callee
+                    // expects `int`. Deref to load the pointee value. Primitives are
+                    // scalars; simple user value structs are Copy-semantics, so a
+                    // by-value load is just a memcpy at the backend.
+                    if !self.type_registry.is_resource_type(inner) {
+                        let deref_place = crate::ir::instructions::Place {
+                            local: place.local,
+                            projections: vec![crate::ir::instructions::Projection::Deref],
+                        };
+                        let tmp = builder.add_local(inner, None);
+                        builder.assign(
+                            crate::ir::instructions::Place::local(tmp),
+                            Operand::Copy(deref_place),
+                        );
+                        return crate::ir::builder::FunctionBuilder::copy(tmp);
                     }
                 }
             }
@@ -2031,25 +2098,42 @@ impl<'a> LoweringContext<'a> {
     ) {
         let ref_type = builder.local_type(ref_local);
         let inner_type = self.pointee_type(ref_type).unwrap_or(ref_type);
+        // Resource pointees: clone the pointee to an independent owned copy.
+        // Non-resource pointees (primitives / Copy value structs): deref the
+        // pointer to capture the current value at this snapshot — subsequent
+        // source mutations can't affect the owned int/float/struct copy.
+        let has_clone = self.clone_fn_for_ptr(inner_type).is_some();
+        if !has_clone && self.type_registry.is_resource_type(inner_type) {
+            return;
+        }
+        self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
+        let name_hint = builder.local_name(ref_local).map(|s| s.to_string());
+        let owned_local = builder.add_local(inner_type, name_hint.as_deref());
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
-            self.warn_implicit_clone(span, inner_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
-            let name_hint = builder.local_name(ref_local).map(|s| s.to_string());
-            let owned_local = builder.add_local(inner_type,
-                name_hint.as_deref());
             builder.assign(crate::ir::instructions::Place::local(owned_local),
                           crate::ir::builder::FunctionBuilder::copy(cloned));
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
             self.set_owned(owned_local);
-            if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
-                let name = hint.clone();
-                self.register_local(&name, owned_local, inner_type);
-                self.func_state.named_locals.insert(owned_local);
-            }
-            // The old ref_local is now dead
-            self.func_state.local_ownership.remove(&ref_local);
+        } else {
+            // Deref the Ref pointer to load the pointee value.
+            builder.assign(
+                crate::ir::instructions::Place::local(owned_local),
+                Operand::Copy(crate::ir::instructions::Place {
+                    local: ref_local,
+                    projections: vec![crate::ir::instructions::Projection::Deref],
+                }),
+            );
+            self.set_owned(owned_local);
         }
+        if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
+            let name = hint.clone();
+            self.register_local(&name, owned_local, inner_type);
+            self.func_state.named_locals.insert(owned_local);
+        }
+        // The old ref_local is now dead
+        self.func_state.local_ownership.remove(&ref_local);
     }
 
     /// If the given local came from a resource-type field load, emit MoveZero for the

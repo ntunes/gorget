@@ -142,17 +142,19 @@ fn ret_option_elem(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
     (ctx.ensure_option)(&option_name, a.elem)
 }
 
-/// Returns Option[Ref_elem] for resource types, Option[elem] for primitives.
-/// Used by borrowing read methods (get/first/last) that return a reference
-/// to resource-type elements but a value copy for primitive elements.
+/// Returns `Option[Ref[T]]` for borrowing read methods (`get`/`first`/`last`).
+/// The Some payload is `Ptr(T)` — the raw pointer into the collection's
+/// storage — regardless of whether T is a resource type. Previously primitives
+/// returned `Option[T]` with a dereferenced value copy, but that caused the
+/// user-declared `Option[Ref[T]]` type and the IR-generated `Option[T]` to
+/// be two different registered types with different payload semantics — a
+/// bit-copy between them would alias an int value as a pointer (UB).
+///
+/// The `Option__Ref__<T>` spelling matches `mangle_generic_name` for user-
+/// written `Option[Ref[T]]` so the IR and the typechecker agree on one type.
 fn ret_option_ref_or_val_elem(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
-    if (ctx.is_resource)(a.elem) {
-        let option_name = format!("Option__Ref_{}", ctx.elem_name);
-        (ctx.ensure_option)(&option_name, a.elem)
-    } else {
-        let option_name = format!("Option__{}", ctx.elem_name);
-        (ctx.ensure_option)(&option_name, a.elem)
-    }
+    let option_name = format!("Option__Ref__{}", ctx.elem_name);
+    (ctx.ensure_option)(&option_name, a.elem)
 }
 
 /// Returns Option[val] (for dict.get).

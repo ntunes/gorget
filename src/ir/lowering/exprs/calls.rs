@@ -839,7 +839,14 @@ pub(super) fn lower_call(
                             }
                         }
                     }
-                    call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                    let val = lower_expr(ctx, builder, &arg.node.value);
+                    // Auto-deref Ptr(T) → T for non-resource value types. A closure
+                    // declared `(Entity e): ...` expects an Entity by value, but
+                    // the caller's local may hold a Ref[Entity] (from a collection
+                    // `.get().unwrap()` or a `Ref[T]` field). Resource types stay
+                    // as Ptr since their adapter expects the pointer form.
+                    let val = ctx.auto_clone_if_ptr(builder, val, arg.span);
+                    call_args.push(val);
                 }
                 let callable_name = format!("__callable_{}", local_id.0);
                 // Look up tracked callable return type, fall back to I64_TYPE

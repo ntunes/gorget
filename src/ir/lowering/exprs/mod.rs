@@ -162,7 +162,7 @@ fn lower_expr_inner(
             if matches!(callee.node, Expr::NoneLiteral) {
                 if let Some(expected) = ctx.func_state.expected_type {
                     if let Some(name) = ctx.type_registry.type_name(expected) {
-                        if name.starts_with("Option__") && !name.starts_with("Option__Ref_") {
+                        if name.starts_with("Option__") && !name.starts_with("Option__Ref__") {
                             // Register the Option's enum TypeDef if it isn't
                             // already — Weak.upgrade's upgrade handler does
                             // the same dance; the helper short-circuits when
@@ -340,6 +340,35 @@ fn lower_expr_inner(
         Expr::As { expr: inner, type_ } => {
             let val = lower_expr(ctx, builder, inner);
             let target_type = ctx.type_mapper.map_ast_type(&type_.node);
+            // Auto-deref Ref[T] before the cast: `r as int` where r is Ref[uint8]
+            // should cast the BYTE VALUE to int, not the pointer bits.
+            // String, resource types, and other-pointer-targets keep the Ptr —
+            // their cast handlers know what to do with it.
+            let val = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
+                if p.projections.is_empty() {
+                    let src_type = builder.local_type(p.local);
+                    if let Some(inner_ty) = ctx.pointee_type(src_type) {
+                        let target_is_ptr = matches!(
+                            ctx.type_registry.get(target_type),
+                            Some(GirType::Ptr(_) | GirType::MutPtr(_))
+                        );
+                        if !target_is_ptr
+                            && !ctx.type_registry.is_resource_type(inner_ty)
+                            && !ctx.type_mapper.is_string_type(inner_ty)
+                        {
+                            let tmp = builder.add_local(inner_ty, None);
+                            builder.assign(
+                                Place::local(tmp),
+                                Operand::Copy(Place {
+                                    local: p.local,
+                                    projections: vec![Projection::Deref],
+                                }),
+                            );
+                            FunctionBuilder::copy(tmp)
+                        } else { val }
+                    } else { val }
+                } else { val }
+            } else { val };
             let dst = builder.cast(target_type, val);
             FunctionBuilder::copy(dst)
         }
