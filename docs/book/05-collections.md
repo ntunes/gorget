@@ -143,7 +143,7 @@ Vector[Vector[int]] chs = v.chunks(2)
 ### Swap and Fill
 
 ```gorget
-auto v = [10, 20, 30, 40, 50]
+Vector[int] v = [10, 20, 30, 40, 50]
 
 # swap(i, j) — in-place swap.
 v.swap(0, 4)                # [50, 20, 30, 40, 10]
@@ -195,77 +195,89 @@ auto c = a + b        # [1, 2, 3, 4, 5]
 
 ### Iteration with Adapters
 
-`for x in v` is the everyday form, but the `std.iter` module provides
-concrete iterator state-machines (`VectorIter[T]`, `TakeIter[T]`,
-`SkipIter[T]`, `ChainIter[T]`) that compose through method chains. Each
-adapter is a struct stored by value — no boxing, no trait-object
-dispatch, and the chain fuses at monomorphization.
+`for x in v` is the everyday form. For chained transformations, every
+collection's `.iter()` returns a concrete `Iterator[T]` state machine:
+`VectorIter[T]` for `Vector`, `SetIter[T]` for `Set`, `DictIter[K, V]`
+for `Dict`. Adapter methods (`take` / `skip` / `map` / `filter` /
+`enumerate` / …) are inherited from the `Iterator[T]` trait and return
+nested adapter structs (`TakeIter[VectorIter[int], int]` etc.) — each
+adapter is stored by value, no boxing, no trait-object dispatch, and
+the whole chain fuses at monomorphization.
 
 ```gorget
-from std.iter import VectorIter, TakeIter, SkipIter
+Vector[int] v = [10, 20, 30, 40, 50]
 
-auto v = [10, 20, 30, 40, 50]
-
-# `.iter()` yields a VectorIter[T]. `.take(n)` / `.skip(n)` /
-# `.chain(other)` return the corresponding concrete adapter.
+# `.iter()` yields a VectorIter[T]; adapter methods come from the
+# Iterator[T] trait. Inferred return types let chains compose freely.
 for x in v.iter().take(3):
     print(x)                # 10 20 30
 
 for x in v.iter().skip(2):
     print(x)                # 30 40 50
 
-auto w = [100, 200]
-for x in v.iter().chain(w.iter()):
+Vector[int] w = [100, 200]
+for x in v.iter().chain(w.iter()):    # chain is VectorIter-specific
     print(x)                # 10 20 30 40 50 100 200
 ```
 
-Bind the chain to a local when you need to reuse the intermediate or
-name the type explicitly:
+Most callers don't have to spell the adapter chain type — `auto` and
+`for-in` infer it. When you do need an explicit type, write the full
+nested form:
 
 ```gorget
-TakeIter[int] prefix = v.iter().take(3)
+TakeIter[VectorIter[int], int] prefix = v.iter().take(3)
 for x in prefix:
     print(x)
 ```
 
-For one-shot materialization / counting / aggregation there are
-terminals in `std.iter`:
+**Eager terminals** are inherited from `Iterator[T]` as default
+methods — call them at the end of the chain:
 
 ```gorget
-from std.iter import collect_vec, count_iter, sum_iter, fold_iter
-from std.iter import product_iter, min_iter, max_iter, join_iter
-from std.iter import find_iter, any_iter, all_iter, for_each_iter
-
-Vector[int] first3 = collect_vec[int, TakeIter[int]](v.iter().take(3))
-int total = sum_iter[VectorIter[int]](v.iter())       # 150
-int prod = product_iter[VectorIter[int]](v.iter())    # element product
-Option[int] lo = min_iter[VectorIter[int]](v.iter())  # Some(lowest)
-
-# Search / short-circuiting
-Option[int] first_big = find_iter[int, VectorIter[int], bool(int)](
-    v.iter(), (x): x > 100)
-bool any_big = any_iter[int, VectorIter[int], bool(int)](
-    v.iter(), (x): x > 100)
-
-# Custom aggregation
-int folded = fold_iter[int, int, VectorIter[int], int(int, int)](
-    v.iter(), 1, (acc, x): acc * x)
-
-# Textual join via Displayable — no intermediate Vector.
-String csv = join_iter[VectorIter[int], int](v.iter(), ", ")
+int n          = v.iter().count()                    # 5
+Vector[int] xs = v.iter().take(3).collect()          # [10, 20, 30]
+int folded     = v.iter().fold(1, (acc, x): acc * x) # product via fold
+bool has_big   = v.iter().any((x): x > 100)
+Option[int] hit = v.iter().find((x): x > 25)         # Some(30)
 ```
 
-Sets iterate through the same machinery — `set_iter[T](s)` returns a
-plain `VectorIter[T]` over the materialized elements so every adapter
-on Vector works identically:
+Bound-needing terminals (`min`, `max`, `sum`, `product`, `join`) ship
+as free functions in `std.iter` until per-method trait bounds land:
 
 ```gorget
-from std.iter import set_iter
+from std.iter import sum_iter, product_iter, min_iter, max_iter, join_iter
 
+int total       = sum_iter[VectorIter[int]](v.iter())     # 150
+int prod        = product_iter[VectorIter[int]](v.iter()) # element product
+Option[int] lo  = min_iter[VectorIter[int]](v.iter())     # Some(10)
+Option[int] hi  = max_iter[VectorIter[int]](v.iter())     # Some(50)
+String csv      = join_iter[VectorIter[int], int](v.iter(), ", ")
+```
+
+`collect()` infers its target from the LHS binding type — Vector, Set,
+or Dict (when the iterator yields tuples):
+
+```gorget
+Vector[int] dups = [1, 1, 2, 3, 3, 3]
+Set[int] uniq    = dups.iter().collect()                  # → Set[int]
+Vector[(int, int)] pairs = [(1, 10), (2, 20)]
+Dict[int, int] d = pairs.iter().collect()                 # → Dict[int, int]
+```
+
+`Set.iter()` and `Dict.iter()` are **lazy** bucket walks — no
+materialisation of `.items()` first:
+
+```gorget
 Set[int] s = Set[int]()
 s.add(1); s.add(2); s.add(3)
-for x in set_iter[int](s).take(2):
-    print(x)
+for x in s.iter().take(2):
+    print(x)                # walks two buckets, stops
+
+Dict[String, int] ages = Dict[String, int]()
+ages.put("Alice", 30)
+ages.put("Bob", 25)
+for p in ages.iter():
+    print(f"{p.0}: {p.1}")  # yields (K, V) tuples lazily
 ```
 
 ---

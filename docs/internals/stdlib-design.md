@@ -1226,17 +1226,54 @@ demand, not shipped speculatively.
   SSL-flush override later but TCP writes go straight to the kernel
   send buffer so the default is correct today.
 
-### Phase 4: Concurrency-model enforcement
+### Phase 4: Concurrency-model enforcement — **DONE**
 
-1. Type-checker pass: reject `&` captures crossing `spawn` boundaries;
-   require `shared T` or `spawn unchecked`.
-2. Parser/syntax for `spawn unchecked` per §8.3.
-3. Audit existing fixtures and `xtd` libraries for patterns that silently
-   relied on `&` escaping spawns; migrate to `shared` or `unchecked` as
-   appropriate.
-4. Hashable migration — switch trait from `int hash(self)` to
-   `void hash(self, Hasher &h)`. Update the `@derive(Hashable)` generator;
-   Dict/Set internals reimplemented against `Hasher`.
+All four items shipped; fixtures wired and green.
+
+1. ✅ **Type-checker pass rejects `&` captures across `spawn`**.
+   `check_spawn_args` (in `src/semantic/safety/helpers.rs`) checks
+   each arg's borrow origin — non-`shared` borrowed locals are
+   rejected with `SpawnWithBorrowedRef`. `check_spawn_closure_captures`
+   walks the closure's `CaptureSet` and emits
+   `SpawnClosureCaptureShared` / `SpawnClosureCaptureBorrowed` /
+   `SpawnClosureCaptureMutable` for the three failure modes.
+   Function-call, closure-variable-call, inline-closure, and
+   method-call spawn forms all route through `check_expr.rs` Spawn
+   handling. Fixture: `shared_closure_capture_error.gg`.
+2. ✅ **`spawn unchecked` parser + safety bypass**. Parsed at
+   `src/parser/expr.rs:465` (also `spawn blocking unchecked` /
+   `spawn unchecked blocking` form). The Spawn handler in
+   `check_expr.rs` short-circuits the capture check when
+   `unchecked` is set — only the inner expression's normal
+   move/borrow rules still apply. Fixtures: `spawn_unchecked.gg`,
+   `spawn_unchecked_bypasses_check.gg`.
+3. ✅ **Fixture / `xtd` audit**. No `xtd` consumer relies on `&`
+   escaping spawns (verified 2026-04-25); the existing spawn
+   fixtures (`spawn_blocking_*`, `spawn_closure_*`, `spawn_method_*`,
+   `spawn_coroutine_*`) all use `shared` for cross-task mutable
+   state or pass owned values through. Migration was effectively
+   a no-op because the enforcement landed alongside the fixtures.
+4. ✅ **Hashable migration to `void hash(self, FxHasher &h)`**.
+   `lib/std/hash.gg` defines the `Hasher` trait
+   (`write_int` / `write_bytes` / `write_string` / `finish`) and
+   `FxHasher` as v1's concrete state machine. The `Hashable` builtin
+   sig in `src/semantic/traits.rs:529` now requires
+   `void hash(self, FxHasher &h)`. `@derive(Hashable)` emits
+   field-by-field forwarding into the passed hasher. The one-shot
+   convenience `int hash_of[Hashable T](T v)` in `lib/std/hash.gg`
+   replaces old `.hash()` callers. Dict / Set internals call
+   `gorget_map_hash_*` runtime helpers that route through
+   `FxHasher__write_int` / `_string` / `_bytes`. Fixtures:
+   `derive_hashable.gg`, `dict_user_key_hashable.gg`,
+   `set_user_key_hashable.gg`, `trait_bound_transitive.gg`.
+   Generic-Hasher dispatch (`void hash[H: Hasher](self, H &h)`)
+   stays deferred until method-level generic dispatch through
+   trait methods lands — present users wrap `FxHasher` via field
+   composition until then.
+
+Status: **closed 2026-04-25**. Spawn-boundary enforcement is the
+~95% safety win the design promised at ~5% of the ergonomic cost
+(§8.4); the rest is documentation polish in Phase 5.
 
 ### Phase 5: Documentation
 
