@@ -1275,14 +1275,43 @@ Status: **closed 2026-04-25**. Spawn-boundary enforcement is the
 ~95% safety win the design promised at ~5% of the ergonomic cost
 (§8.4); the rest is documentation polish in Phase 5.
 
-### Phase 5: Documentation
+### Phase 5: Documentation — **DONE 2026-04-25**
 
-1. Update `docs/language-design.md` §4.4.1 — add Writer/Reader/Hasher/Debuggable to -er/-able examples.
-2. Update `docs/language-reference.md` §15.2 — all method signature changes.
-3. Update `docs/book/05-collections.md` — new methods, consolidated API, Iterator examples.
-4. Update `docs/book/appendix-traits.md` — add Writer, Reader, Debuggable, Error, Hasher; note naming convention.
-5. Update `docs/book/19-stdlib.md` — reflect new std/xtd layering and concurrency model.
-6. New: `docs/book/XX-concurrency.md` — the `&`/`shared`/`unchecked` story with worked examples.
+1. ✅ `docs/language-design.md` §4.4.1 carries Writer / Reader /
+   Hasher / Debuggable in the -er/-able convention tables, plus
+   explainer blocks for the I/O role pair, the hashing
+   capability/role split, and Debuggable vs Displayable.
+2. ✅ `docs/language-reference.md` §15.2 method signatures synced
+   to current API: String table now includes `find(pattern, from?,
+   reverse?)`, `lines()`, `byte_at()`, extended `replace`/`split`
+   `limit` forms, `trim_left`/`trim_right` aliases, and the
+   state-based `hash(h)`. UTF-8 boundary table uses
+   `Result[String, IoError]` with `IoError.Utf8Invalid(offset)`.
+   Dict/HashMap `remove(key)` returns `Option[V]`. Set has
+   `is_disjoint`. Dict/Set show `iter()` returning `DictIter[K, V]`
+   / `SetIter[T]`. File API replaced with the `std.io` Writer/Reader
+   primitives + typed-error helpers.
+3. ✅ `docs/book/05-collections.md` Iteration with Adapters
+   section rewritten 2026-04-25 — concrete iterator types per
+   collection, nested adapter chain, eager terminals from
+   `Iterator[T]` defaults, bound-needing free-function terminals,
+   inferred `collect()`, lazy Set/Dict iteration. All snippets
+   verified end-to-end.
+4. ✅ `docs/book/appendix-traits.md` covers Writer, Reader,
+   Debuggable, Error, IoError, ParseError, and the FxHasher /
+   Hashable shape. Aspirational "swap in a different Hasher" note
+   trimmed; outdated `trait Iterable[T]` declaration replaced with
+   the actual name-based iteration convention; retired
+   `println` / `writeln` / `println_str` block replaced with the
+   surviving `print` builtin + Writer-primitive helpers.
+5. ✅ `docs/book/19-stdlib.md` Lazy Iterators block updated —
+   Set/Dict lazy bucket-walk, inferred `collect()` examples,
+   `.keys()`/`.values()`/`.items()` still eager for callers that
+   want the materialised form.
+6. ✅ `docs/book/14-concurrency.md` carries the complete
+   `&`/`shared`/`spawn`/`spawn unchecked` story (the chapter that
+   was tentatively planned as `XX-concurrency.md`). Sigil-before-
+   type typo fixed in §3.9.
 
 ## 11. Migration / Backward Compatibility
 
