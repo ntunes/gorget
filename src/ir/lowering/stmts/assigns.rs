@@ -115,6 +115,38 @@ pub(super) fn lower_assign(
                 // Auto-propagate: if RHS is Result-typed but target is not, unwrap
                 let mut operand = maybe_auto_propagate(ctx, builder, operand);
                 ctx.func_state.expected_type = prev_expected;
+                // Auto-deref Ref[T] → T at reassignment when target is bare T.
+                // `int ai = 1; ai = a.get(da).unwrap()` — declared int but RHS
+                // is Ptr(i64) post-1.7b. Mirrors VarDecl's deref branch so the
+                // stored value is the int, not the pointer bits.
+                {
+                    use crate::ir::types::GirType;
+                    let rhs_type = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                        if p.projections.is_empty() && (p.local.0 as usize) < builder.locals.len() {
+                            Some(builder.local_type(p.local))
+                        } else { None }
+                    } else { None };
+                    if let Some(rhs) = rhs_type {
+                        if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(rhs).cloned() {
+                            if !matches!(ctx.type_registry.get(type_id), Some(GirType::Ptr(_) | GirType::MutPtr(_)))
+                                && !ctx.type_registry.is_resource_type(inner)
+                                && ctx.clone_fn_for_ptr(inner).is_none()
+                            {
+                                if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                                    let tmp = builder.add_local(inner, None);
+                                    builder.assign(
+                                        Place::local(tmp),
+                                        Operand::Copy(Place {
+                                            local: p.local,
+                                            projections: vec![Projection::Deref],
+                                        }),
+                                    );
+                                    operand = FunctionBuilder::copy(tmp);
+                                }
+                            }
+                        }
+                    }
+                }
                 // String self-referential reassignment fix: if the RHS might be a
                 // view into the old LHS (e.g., `s = s.trim()` or `s = s[0..1]`),
                 // clone-to-owned before dropping. gorget_string_clone_to_owned
