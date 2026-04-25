@@ -1240,8 +1240,11 @@ fn lower_if(
 ) {
     let merge_bb = builder.new_block();
 
-    // Lower the condition
+    // Lower the condition. Auto-deref Ref[bool] → bool — `if v.get(i).unwrap():`
+    // returns Ptr(bool) post-1.7b, but `branch` needs a bool value, not a
+    // pointer (whose non-null bit is always true once safe_get checks pass).
     let cond = lower_expr(ctx, builder, condition);
+    let cond = deref_bool_if_ptr(ctx, builder, cond);
 
     let then_bb = builder.new_block();
     let first_else_bb = if !elif_branches.is_empty() || else_body.is_some() {
@@ -1339,9 +1342,11 @@ fn lower_while(
     // Jump from current block to header
     builder.jump(header_bb);
 
-    // Header: evaluate condition, branch
+    // Header: evaluate condition, branch. Auto-deref Ref[bool] → bool just
+    // like `if`.
     builder.switch_to(header_bb);
     let cond = lower_expr(ctx, builder, condition);
+    let cond = deref_bool_if_ptr(ctx, builder, cond);
     builder.branch(cond, body_bb, else_exit_bb);
 
     // Body: execute, jump back to header (wrapped in Loop scope for drop cleanup)
@@ -2021,6 +2026,37 @@ pub fn emit_is_bindings(
         emit_is_bindings(ctx, builder, left);
         emit_is_bindings(ctx, builder, right);
     }
+}
+
+/// Auto-deref `Ref[bool] → bool` for branch conditions. Applies to plain
+/// `Copy(local)` / `Move(local)` operands whose local type is `Ptr(bool)`
+/// (or `Ptr(T)` whose pointee is BOOL). Other operands pass through.
+/// Used by `if` / `while` so `if v.get(i).unwrap():` evaluates the bool
+/// value, not the pointer's non-null bit.
+fn deref_bool_if_ptr(
+    ctx: &LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+) -> Operand {
+    if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+        if p.projections.is_empty() {
+            let local_type = builder.local_type(p.local);
+            if let Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) = ctx.type_registry.get(local_type).cloned() {
+                if inner == BOOL_TYPE {
+                    let tmp = builder.add_local(BOOL_TYPE, None);
+                    builder.assign(
+                        Place::local(tmp),
+                        Operand::Copy(Place {
+                            local: p.local,
+                            projections: vec![Projection::Deref],
+                        }),
+                    );
+                    return FunctionBuilder::copy(tmp);
+                }
+            }
+        }
+    }
+    operand
 }
 
 /// Resolve a mangled type-name fragment (`int64_t`, `GorgetString`, user

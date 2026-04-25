@@ -1130,7 +1130,13 @@ pub(super) fn lower_method_call(
                                 };
                                 let mut call_args = vec![recv_self];
                                 for arg in args {
-                                    call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                                    let val = lower_expr(ctx, builder, &arg.node.value);
+                                    // Auto-deref Ptr(T) → T for non-resource pointees.
+                                    // Trait-object methods (e.g. `Box[Serializer].write_int`)
+                                    // expect by-value primitives / Copy structs, but the
+                                    // caller may pass a Ref[T] from `v.get(i).unwrap()`.
+                                    let val = ctx.auto_clone_if_ptr(builder, val, arg.span);
+                                    call_args.push(val);
                                 }
                                 if ret_type == UNIT_TYPE {
                                     builder.call_void(mangled, call_args);
