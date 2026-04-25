@@ -1,12 +1,13 @@
-# Iterator sugar over Set — `s.iter()` returns a `VectorIter[T]`
-# wrapping the materialised `.items()`. Callers get the full
-# VectorIter adapter chain (`take` / `skip` / `chain` / terminals) and
+# Iterator sugar over Set — `s.iter()` returns a lazy `SetIter[T]`
+# walking the underlying GorgetMap bucket array in place. Callers get
+# the full Iterator[T] adapter chain (`take` / `skip` / terminals) and
 # the convenience wrappers (`any` / `all` / `find` / `fold` / etc.)
 # via the `equip [T] Set[T]:` block in `lib/std/iter.gg`.
 #
-# Eager up-front; a lazy bucket-walk variant waits on Phase 2c.
+# `chain` lives on VectorIter only (it expects a VectorIter[T] for
+# `other`); test it on Vector inputs in stdlib_vector_iter.gg.
 
-from std.iter import TakeIter, SkipIter, ChainIter, VectorIter
+from std.iter import TakeIter, SkipIter, SetIter
 
 int main():
     Set[int] s = Set[int]()
@@ -15,32 +16,23 @@ int main():
     s.add(30)
     s.add(40)
 
-    # Inline for-loop through `.iter()`.
+    # Inline for-loop through `.iter()` — yields lazily with no
+    # `.items()` materialisation.
     for x in s.iter():
         print(x)
 
     print("--")
 
-    # take on VectorIter (returned by .iter()) yields TakeIter[VectorIter[T], T].
-    TakeIter[VectorIter[int], int] t = s.iter().take(2)
+    # take on SetIter yields TakeIter[SetIter[T], T].
+    TakeIter[SetIter[int], int] t = s.iter().take(2)
     for x in t:
         print(x)
 
     print("--")
 
-    # skip on VectorIter yields SkipIter[VectorIter[T], T].
-    SkipIter[VectorIter[int], int] k = s.iter().skip(2)
+    # skip on SetIter yields SkipIter[SetIter[T], T].
+    SkipIter[SetIter[int], int] k = s.iter().skip(2)
     for x in k:
-        print(x)
-
-    print("--")
-
-    # chain concatenates two VectorIters.
-    Set[int] s2 = Set[int]()
-    s2.add(100)
-    s2.add(200)
-    ChainIter[VectorIter[int], VectorIter[int], int] c = s.iter().chain(s2.iter())
-    for x in c:
         print(x)
 
     return 0

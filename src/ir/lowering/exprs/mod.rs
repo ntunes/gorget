@@ -1515,7 +1515,21 @@ fn lower_struct_literal(
     // by-value resource borrows. Owned locals pass through unchanged — the
     // last-use auto-move of single-use sources runs below via
     // `move_zero_consumed_args`.
+    //
+    // EXCEPT for borrow fields (`Ref[T]` / `MutRef[T]`): the field IS a Ptr,
+    // so a Ptr-typed source operand is exactly what we want stored. Cloning
+    // would dereference and copy the pointee (and then take the address of
+    // a stack-local — see Phase 1.7 dangling-pointer issue), but the field
+    // semantics are "alias the source, don't copy." Skip the boundary for
+    // Ptr-typed fields so the operand passes through unchanged.
     for (i, op) in field_operands.iter_mut().enumerate() {
+        let field_is_ptr = matches!(
+            field_types.get(i).and_then(|f| f.as_ref()).and_then(|tid| ctx.type_registry.get(*tid)),
+            Some(crate::ir::types::GirType::Ptr(_) | crate::ir::types::GirType::MutPtr(_))
+        );
+        if field_is_ptr {
+            continue;
+        }
         let span = args.get(i).map(|a| a.span).unwrap_or(crate::span::Span { start: 0, end: 0 });
         *op = ctx.ensure_owned_at_boundary(
             builder, std::mem::replace(op, Operand::Constant(Constant::Unit)),

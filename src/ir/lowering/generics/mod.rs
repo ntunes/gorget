@@ -1333,18 +1333,21 @@ impl GenericCollector {
             return;
         }
         // Pick the equip block that matches the receiver's template (the
-        // one whose subs are non-empty for our type args).
-        let (equip_type_ast, subs) = {
-            let mut chosen: Option<(Type, Vec<(String, Type)>)> = None;
+        // one whose subs are non-empty for our type args). Track the chosen
+        // block so we can also extract its trait_ref's args for binding the
+        // trait's own generic params (`T` in `Iterator[T]` → `(K, V)` for
+        // `equip [K, V] DictIter[K, V] with Iterator[(K, V)]`).
+        let (equip_type_ast, subs, chosen_equip) = {
+            let mut chosen: Option<(Type, Vec<(String, Type)>, &ast::EquipBlock)> = None;
             for eq in &equip_blocks {
                 let s = build_equip_type_substitutions(eq, &equip_type_args);
                 if !s.is_empty() {
-                    chosen = Some((eq.type_.node.clone(), s));
+                    chosen = Some((eq.type_.node.clone(), s, eq));
                     break;
                 }
             }
             match chosen {
-                Some(pair) => pair,
+                Some(triple) => triple,
                 None => return,
             }
         };
@@ -1352,8 +1355,35 @@ impl GenericCollector {
         // threaded through register_equip_sigs_with_defaults and
         // lower_method_instance).
         let substituted_equipped = substitute::substitute_type_pub(&equip_type_ast, &subs);
-        let mut full_subs = subs;
+        let mut full_subs: Vec<(String, Type)> = Vec::new();
         full_subs.push(("Self".to_string(), substituted_equipped));
+        // Bind trait-scope generic params (e.g. `T` in `Iterator[T]`) to
+        // the equip's substituted trait args (e.g. `(K, V)` for
+        // `with Iterator[(K, V)]`). Without this, default-method return
+        // types like `TakeIter[Self, T]` substitute to `TakeIter[X, T]`
+        // with `T` unresolved — the `scan_type` registration then misses
+        // the concrete `TakeIter[X, (int, int)]` instance and the body-
+        // emission demand-gate skips `take` for the equipping type.
+        if let Some(ref trait_ref) = chosen_equip.trait_ {
+            let trait_name = super::traits::extract_trait_name(&trait_ref.trait_name.node);
+            if let Some(td) = self.trait_defs.get(&trait_name) {
+                let trait_args: Vec<Type> = if let Type::Named { generic_args, .. } = &trait_ref.trait_name.node {
+                    generic_args.iter().map(|a| substitute::substitute_type_pub(&a.node, &subs)).collect()
+                } else {
+                    Vec::new()
+                };
+                if let Some(ref gp) = td.generic_params {
+                    for (param, concrete) in gp.node.params.iter().zip(trait_args.iter()) {
+                        let name = match &param.node {
+                            GenericParam::Type { name: s, .. } => s.node.clone(),
+                            GenericParam::Const { name: s, .. } => s.node.clone(),
+                        };
+                        full_subs.push((name, concrete.clone()));
+                    }
+                }
+            }
+        }
+        full_subs.extend(subs.iter().cloned());
         // Substitute the return type AST and scan it so every nominal
         // inside (including nested ones) registers as a struct/enum
         // instance.

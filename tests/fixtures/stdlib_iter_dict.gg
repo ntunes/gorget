@@ -1,15 +1,14 @@
-# Iterator sugar over Dict — `d.iter()` returns a
-# `VectorIter[(K, V)]` wrapping the materialised `.items()`. Callers
-# get the full VectorIter adapter chain (`take` / `skip` / `chain` /
-# `map` / `filter` / terminals) via the `equip [K, V] Dict[K, V]:`
-# block in `lib/std/iter.gg`.
+# Iterator sugar over Dict — `d.iter()` returns a lazy
+# `DictIter[K, V]` walking the GorgetMap bucket array in place. The
+# yielded `(K, V)` tuples come out of the `gorget_map_iter_key`
+# / `_value` accessors which clone resource-typed K/V via the map's
+# `key_clone` / `val_clone` hooks, so the caller may freely drop the
+# pair without disturbing the source map.
 #
-# `.items()` stays as an eager alias for now; users migrate to
-# `.iter()` at their own pace.
-#
-# Eager up-front; a lazy bucket-walk variant waits on Phase 2c.
+# `.items()` stays as an eager alias for callers that want a
+# materialised Vector.
 
-from std.iter import TakeIter, SkipIter, VectorIter
+from std.iter import TakeIter, DictIter
 
 int sum_pair(int acc, (int, int) p):
     return acc + p.0 + p.1
@@ -28,8 +27,8 @@ int main():
 
     print("--")
 
-    # take on VectorIter[(K, V)] yields TakeIter[VectorIter[(K, V)], (K, V)].
-    TakeIter[VectorIter[(int, int)], (int, int)] t = d.iter().take(2)
+    # take on DictIter[K, V] yields TakeIter[DictIter[K, V], (K, V)].
+    TakeIter[DictIter[int, int], (int, int)] t = d.iter().take(2)
     for p in t:
         print(p.0)
         print(p.1)

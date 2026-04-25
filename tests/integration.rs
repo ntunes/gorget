@@ -2188,7 +2188,7 @@ fn iter_enumerate_zip() {
 fn stdlib_iter_set() {
     run_gg(
         "stdlib_iter_set.gg",
-        "10\n20\n30\n40\n--\n10\n20\n--\n30\n40\n--\n10\n20\n30\n40\n100\n200",
+        "10\n20\n30\n40\n--\n10\n20\n--\n30\n40",
     );
 }
 
