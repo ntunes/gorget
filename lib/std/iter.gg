@@ -673,15 +673,15 @@ Option[int] max_iter[Iter](Iter iter):
 
 # ── Set iteration ────────────────────────────────────────────
 #
-# `Set[T].iter()` wraps the materialised `.items()` as a
-# `VectorIter[T]` — Set callers get the full VectorIter adapter chain
-# (`take` / `skip` / `map` / `filter` / terminals …) for free. Eager
-# up-front but the state machine stays trivial; a fully lazy
-# implementation (walking the underlying GorgetMap bucket array)
-# remains the Phase 2c goal. Terminal convenience wrappers
-# (`.each`, `.any`, `.find`, `.fold`, …) delegate to
-# `self.iter().method[F](args)` — mirroring Vector's user-space
-# surface in the `equip [T] Vector[T]:` block above.
+# `Set[T].iter()` returns a lazy `SetIter[T]` walking the
+# underlying `GorgetMap` bucket array in place via a `Ref[Set[T]]`
+# borrow field — no `.items()` materialisation. Set callers get
+# the full `Iterator[T]` adapter chain (`take` / `skip` / `map` /
+# `filter` / terminals …) inherited through the trait-default
+# emission. Terminal convenience wrappers (`.each`, `.any`,
+# `.find`, `.fold`, …) delegate to `self.iter().method[F](args)`
+# — mirroring Vector's user-space surface in the
+# `equip [T] Vector[T]:` block above.
 #
 # `.map` and `.filter` deliberately left off: `.map` returning
 # `Set[U]` has cardinality-surprise semantics (if `f` collapses
@@ -735,12 +735,14 @@ equip [T] Set[T]:
 
 # ── Dict iteration ───────────────────────────────────────────
 #
-# `Dict[K, V].iter()` wraps the materialised `.items()` as a
-# `VectorIter[(K, V)]` — same eager-up-front pattern as `Set.iter()`.
-# Dict callers get the full VectorIter adapter chain
-# (`take` / `skip` / `map` / `filter` / terminals …) and chain past
-# one step. A fully lazy bucket-walk variant remains a Phase 2c
-# goal.
+# `Dict[K, V].iter()` returns a lazy `DictIter[K, V]` that walks
+# the underlying `GorgetMap` bucket array in place via a
+# `Ref[Dict[K, V]]` borrow field — no `.items()` materialisation,
+# no allocation beyond the iterator struct itself. The yielded
+# `(K, V)` tuples come out of the `__dict_iter_key` / `_value`
+# accessors, which clone resource-typed K/V via the map's
+# `key_clone` / `val_clone` hooks; callers may freely drop the
+# pair without disturbing the source map.
 #
 # Terminal convenience wrappers (`any`/`all`/`find`/`fold`) are
 # deliberately skipped here: the existing builtin `Dict.any(K, V)`
@@ -751,8 +753,8 @@ equip [T] Set[T]:
 # a separate migration pass. Users who want tuple-based semantics
 # write it explicitly: `d.iter().any(p)` / `d.iter().fold(0, f)`.
 #
-# `.items()` stays as an eager alias for now — callers can
-# migrate at their own pace before it gets retired.
+# `.items()` stays as an eager alias for callers that want a
+# materialised `Vector[(K, V)]`.
 
 struct DictIter[K, V]:
     Ref[Dict[K, V]] source

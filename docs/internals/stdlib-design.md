@@ -976,14 +976,18 @@ This phase has **real type-system prerequisites** — see §4.2, §4.3, and §3.
 
 #### Phase 2c: Trait definitions + equip methods (LAZY FROM DAY ONE)
 
-**Status as of 2026-04-22:** Substantially shipped. Trait declared,
+**Status as of 2026-04-25:** Substantially shipped. Trait declared,
 all eager terminals on Iterator as default-method bodies, all 9
 adapter structs generic over a source `Iter` parameter, all four
 "missing lazy adapters" shipped. Self / trait-T substitution in
 default-method sigs + adapter-constructor defaults both landed
-2026-04-21; chain-past-one-step fixture green. Four compiler items
-remain — each blocked on a specific compiler feature itemised below
-the checklist.
+2026-04-21; chain-past-one-step fixture green. **Dict / Set
+lazy iterators landed 2026-04-25** with two compiler fixes
+(borrow-field construction passes Ptr through; default-return-type
+discovery binds trait-T) — Set finally has `.iter()`, Dict.iter()
+yields `(K, V)` tuples lazily without materialising `.items()`.
+Three compiler items remain — each blocked on a specific compiler
+feature itemised below the checklist.
 
 ##### Shipped
 
@@ -1074,12 +1078,69 @@ the checklist.
    (their bodies construct `Vector[T]` locals and keeping them
    there avoids repeated Vector[T] instantiation scans across
    every Iterator implementor).
+8. ✅ **Lazy `Dict.iter()` / `Set.iter()`** — 2026-04-25 (commit
+   `21af33cf`). `DictIter[K, V]` / `SetIter[T]` walk the
+   `GorgetMap` bucket array in place via a `Ref[Dict[K, V]]` /
+   `Ref[Set[T]]` borrow field — no `.items()` materialisation.
+   Yielded `(K, V)` pairs / `T` values come out of the
+   `gorget_map_iter_key` / `_value` accessors, which clone
+   resource-typed K/V via the map's `key_clone` / `val_clone`
+   hooks so callers may freely drop the element without
+   disturbing the source. The runtime fns are declared as
+   generic externs (`extern int __dict_iter_order_len[K, V]
+   (Ref[Dict[K, V]] m) = "gorget_map_iter_order_len"`) — generic
+   mono preserves the C symbol, so a single runtime function
+   serves every Dict / Set instantiation. Two compiler fixes
+   were needed for the new equipping types to compose with the
+   `Iterator[T]` adapter chain (`take`, `skip`, `fold`, …):
+   - **Borrow-field construction passes Ptr through** — struct-
+     literal lowering (`lower_struct_literal` in
+     `src/ir/lowering/exprs/mod.rs`) used to call
+     `ensure_owned_at_boundary` on every field operand, which
+     cloned `Ptr(T)` operands and stored the address of a
+     stack-local clone. For `Ref[T]` / `MutRef[T]` borrow fields
+     the field semantics is "alias the source", so the boundary
+     now skips Ptr-typed fields. Without this, `Dict.iter()`
+     would clone the dict inside the iter() body, store the
+     address of a stack-local clone in `DictIter.source`, and
+     return a dangling pointer (the `borrow_field_basic.gg` /
+     `borrow_field_lazy_dict_iter.gg` fixtures had been passing
+     by accident — stack-local addresses happened to remain
+     valid for the iteration window).
+   - **Trait-default discovery binds trait-T to equip's trait
+     args** — `try_register_default_return_type` (the
+     non-generic-method-default complement to
+     `try_register_method_instance`) didn't bind the trait's
+     own generic params. For `equip [K, V] DictIter[K, V] with
+     Iterator[(K, V)]:`, the trait's `T` should bind to
+     `(K, V)`, so `TakeIter[Self, T] take(self, int n)`
+     substitutes to `TakeIter[DictIter[int,int], (int,int)]`.
+     Without the binding `T` stayed unresolved, the
+     registration scan missed the concrete `TakeIter` instance,
+     and the body-emission demand-gate skipped `take` for the
+     equipping type — manifesting as `undefined reference to
+     DictIter__int64_t__int64_t__take` at link time. The fix
+     (mirroring the binding logic already in
+     `register_equip_sigs_with_defaults` and
+     `lower_generic_equip_methods_with_defaults`) lets any
+     `equip MyType[A, B] with SomeTrait[(A, B)]` impl with
+     renamed trait params inherit the full adapter surface.
+   Fixtures: `tests/fixtures/stdlib_iter_dict.gg` (lazy
+   bucket-walk over `Dict[int, int]`), `stdlib_iter_set.gg`
+   (lazy `SetIter[int]`), plus the existing `borrow_field_*`
+   fixtures that exercise `Ref[T]` field construction without
+   the dangling-stack-address bug. Both fixtures' explicit
+   `TakeIter[VectorIter[…], …]` annotations migrated to
+   `TakeIter[DictIter[…]]` / `TakeIter[SetIter[…]]`.
+   `chain` test dropped from `stdlib_iter_set.gg` — `chain`
+   stays VectorIter-specific (see item 7 above); coverage
+   remains in `stdlib_vector_iter.gg`.
 
 ##### Deferred (each blocked on a specific compiler feature)
 
 | Item | Blocked on | Plan doc |
 |---|---|---|
-| Dict/Set convenience wrappers — **Vector wrappers shipped 2026-04-21** (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter`). Dict/Set deferred — different iterator surface (Dict[K,V] iter element shape unclear; Set lacks an `.iter()` method today). `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 2) | row 2 + Dict/Set `.iter()` design | `docs/internals/method-level-inference.md` |
+| Dict-flavoured convenience wrappers — **Vector wrappers shipped 2026-04-21** (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter`). **Set wrappers also ship today** (`s.each` / `s.for_each` / `s.any` / `s.all` / `s.find` / `s.find_index` / `s.fold`) — same shape as Vector, delegating through `s.iter()` which now returns the lazy `SetIter[T]` (item 8). **Dict wrappers still deferred** — design hold, not a compiler limitation. The existing builtin `Dict.any(K, V)` / `.all(K, V)` / `.each(K, V)` / `.fold(A, K, V)` methods take key and value as TWO separate closure args; iterator wrappers would take a single `(K, V)` tuple arg. Picking either shape breaks the other set of callers. Users who want tuple semantics today write it explicitly (`d.iter().any(p)` / `d.iter().fold(0, f)`); the public-API decision can wait for a deliberate breaking-change pass. `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 2) | Dict tuple-vs-2-args API decision | `docs/internals/method-level-inference.md` |
 | Comparable-bounded defaults (`min` / `max` / `sum` / `product` / `join` / `contains` as Iterator defaults) | per-method trait-bound declarations (e.g. `where T: Comparable`) + bulk-emission skip logic for impls that fail the bound; without this, default-method emission specialises Iterator[T] for self-host driver Ts that don't satisfy `<` / `+` / `.display()` etc. and emits broken codegen — verified by self_host_bootstrap regression on 2026-04-20 | _to be written_ |
 | Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) — **all three targets shipped 2026-04-22/23**. Vector (`Vector[T] v = it.collect()`): default-method sig registration in `register_trait_equip_sigs` + demand-gated bulk emission produce a concrete `X__collect` returning `Vector[T]` per iterator impl. Set (`Set[T] s = it.collect()`): Pass 2.6 AST rewrite (`apply_collect_target_rewrites` in `src/semantic/typecheck.rs`) swaps `.collect()` → `.to_set()` when the VarDecl's declared type is `Set[_]`, routing through a new `Iterator[T]::to_set(&self)` trait default. Dict (`Dict[K, V] d = pairs.collect()`): same rewrite splices K/V from the LHS into the method's generic args and swaps to `.to_dict[K, V]()`, routing through a new `Iterator[T]::to_dict[K, V](&self)` trait default that `.put(x.0, x.1)`s tuple elements from the iterator. Non-tuple `T`s fail at mono emission since the body reaches for `x.0`/`x.1` — users who try `Dict[K, V] = non_pairs.iter().collect()` get a compile error. Fixtures: `tests/fixtures/iter_collect_set.gg`, `iter_collect_dict.gg`. Still deferred (low priority): turbofish form `it.collect[Set[int]]()` would require `.collect()` itself to become method-generic; today explicit turbofish routes through `.to_set[T]()` / `.to_dict[K, V]()` directly. | — | — |
 | Auto-import std.iter via the loader — **SHIPPED 2026-04-23** (commit a5b3ba7a). `v.iter().map(f).filter(p).collect()` in a scratch file compiles and runs without any `from std.iter import ...` boilerplate. The heuristic fires when the entry module references `Iterator`/`Iterable`/`IntoIterable`/adapter-struct names or calls `.iter()` anywhere, subject to shadowing (e.g. `vector_iter_userdef.gg` defines its own `VectorIter`) and existing-import checks. Turn-on required two prerequisites landed in the same commit: (1) trait-T binding in per-call-site mono (`try_register_method_instance` + `lower_method_instance` push trait-generic-name → substituted-trait-arg BEFORE Self + impl subs so trait-body refs win when names collide, e.g. `equip CounterIter with Iterator[int]:`'s inherited `fold[A, F]` specialises correctly); (2) non-generic-equip registration in `equip_templates` when the trait has defaults OR is an iterator-protocol name, so chain inference via `infer_expr_ast_type` can resolve `Counter(0, 5).iter()` → `CounterIter`. Fixture migrations: `iterator_adapters.gg` + `linked_list.gg` + `examples/iterator_demo.gg` + `examples/linked_list.gg` now call `.collect()` explicitly where they previously relied on the eager `try_lower_iterator_adapter` shortcut (that path stays as a fallback when the trait default isn't in scope). | — | — |
