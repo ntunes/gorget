@@ -1,0 +1,13 @@
+# Borrow-fields Phase 2: `MutRef[T]` is exclusive. Constructing a second
+# borrow-field struct on a source that's already exclusively borrowed
+# (whether the second one is shared or exclusive) is an error.
+
+struct MutHolder:
+    MutRef[Vector[int]] r
+
+int main():
+    Vector[int] v = [1, 2, 3]
+    MutHolder h1 = MutHolder(v)
+    MutHolder h2 = MutHolder(v)
+    print(h1.r.len())
+    return 0

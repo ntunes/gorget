@@ -415,6 +415,51 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Enforce `MutRef[T]` exclusivity at struct construction. When a new
+    /// borrow-field struct is being built that takes `src_def_id` as a
+    /// `MutRef[T]` field arg, no other live borrow-field struct may already
+    /// borrow from `src_def_id` (shared OR exclusive). Mirrors Rust's "one
+    /// `&mut T` xor many `&T`" invariant, applied to user `MutRef[T]` fields.
+    pub(super) fn check_mut_ref_exclusive(&mut self, src_def_id: DefId, span: Span) {
+        let src_name = self.scopes.get_def(src_def_id).name.clone();
+        let mut existing: Option<String> = None;
+        for (&var_id, origin) in self.var_origins.iter() {
+            if !origin.references_def(src_def_id) { continue; }
+            let def = self.scopes.get_def(var_id);
+            let is_borrow_field_struct = match def.type_id {
+                Some(tid) => match self.types.get(tid) {
+                    crate::semantic::types::ResolvedType::Defined(struct_def_id)
+                    | crate::semantic::types::ResolvedType::Generic(struct_def_id, _) =>
+                        self.ref_type_structs.contains(struct_def_id),
+                    _ => false,
+                },
+                None => false,
+            };
+            if !is_borrow_field_struct { continue; }
+            let is_alive = !matches!(
+                self.var_states.get(&var_id),
+                Some(VarState::Moved { .. })
+            );
+            if is_alive {
+                existing = Some(self.scopes.get_def(var_id).name.clone());
+                break;
+            }
+        }
+        if let Some(borrow_name) = existing {
+            // Reuse MutationWhileBorrowed phrasing — semantically: the new
+            // exclusive borrow conflicts with the existing one (much like a
+            // mutation would). A dedicated error variant could be cleaner
+            // but reusing keeps the user-facing surface small for now.
+            self.error(
+                SemanticErrorKind::MutationWhileBorrowed {
+                    source: src_name,
+                    borrow: borrow_name,
+                },
+                span,
+            );
+        }
+    }
+
     /// Reject mutation of `src_def_id` while any live local is a borrow-field
     /// struct whose origin references `src_def_id`. Mirrors the in-line check
     /// in `check_expr` for builtin mutating methods, but applied at the call

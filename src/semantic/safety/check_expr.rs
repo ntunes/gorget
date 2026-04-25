@@ -847,8 +847,16 @@ impl<'a> BorrowChecker<'a> {
                 let field_ref_flags = struct_def_id
                     .and_then(|d| self.struct_field_ref_flags.get(&d).cloned())
                     .unwrap_or_default();
+                let field_mut_ref_flags = struct_def_id
+                    .and_then(|d| self.struct_field_mut_ref_flags.get(&d).cloned())
+                    .unwrap_or_default();
+                // Track sources borrowed by this struct construction's MutRef
+                // fields so we can enforce exclusivity *before* the new struct
+                // becomes part of `var_origins`.
+                let mut mut_ref_sources: Vec<(DefId, Span)> = Vec::new();
                 for (i, arg) in args.iter().enumerate() {
                     let target_is_ref = field_ref_flags.get(i).copied().unwrap_or(false);
+                    let target_is_mut_ref = field_mut_ref_flags.get(i).copied().unwrap_or(false);
                     if !target_is_ref {
                         if let Expr::Identifier(_) = &arg.node {
                             if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
@@ -869,8 +877,20 @@ impl<'a> BorrowChecker<'a> {
                                 }
                             }
                         }
+                    } else if target_is_mut_ref {
+                        // Identify the source local being mutably-borrowed.
+                        if let Some(src) = self.find_root_def_id(arg) {
+                            mut_ref_sources.push((src, arg.span));
+                        }
                     }
                     self.check_expr(arg);
+                }
+                // MutRef[T] exclusivity: for each source taken as a `MutRef[T]`
+                // field, no other live borrow-field struct may already borrow
+                // from it (shared OR exclusive). Conservative — disallows any
+                // overlap with a MutRef participant.
+                for (src_def_id, span) in &mut_ref_sources {
+                    self.check_mut_ref_exclusive(*src_def_id, *span);
                 }
             }
 

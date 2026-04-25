@@ -15348,6 +15348,14 @@ fn borrow_field_fn_mutation_error() {
 }
 
 #[test]
+fn borrow_field_mut_ref_exclusive_error() {
+    check_gg_fails(
+        "borrow_field_mut_ref_exclusive_error.gg",
+        "cannot mutate `v` while `h1` borrows from it",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",

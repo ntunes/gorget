@@ -108,6 +108,19 @@ pub(super) fn is_ast_type_ref(ty: &Type, scopes: &ScopeTable, ref_structs: &FxHa
     }
 }
 
+/// Like `is_ast_type_ref` but returns true ONLY for `MutRef[T]` field types
+/// (and the sigil `T &` form). Distinguishes exclusive-borrow fields from
+/// shared `Ref[T]` ones for aliasing checks.
+pub(super) fn is_ast_type_mut_ref(ty: &Type) -> bool {
+    match ty {
+        Type::Ref(_) => true, // sigil `T &` is mutable
+        Type::Named { name, generic_args } => {
+            generic_args.len() == 1 && name.node == "MutRef"
+        }
+        _ => false,
+    }
+}
+
 /// Recursively collect all `Spanned<Item>`s, descending into `Item::Module` wrappers
 /// so that imported-module contents are visited by every borrow-checker pass.
 pub(super) fn all_spanned_items(items: &[Spanned<Item>]) -> Vec<&Spanned<Item>> {
@@ -202,6 +215,31 @@ pub(super) fn compute_struct_field_ref_flags(
                 if ref_type_structs.contains(&def_id) {
                     let flags: Vec<bool> = s.fields.iter()
                         .map(|f| is_ast_type_ref(&f.node.type_.node, scopes, ref_type_structs))
+                        .collect();
+                    result.insert(def_id, flags);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Per-struct vector: true for fields whose type is `MutRef[T]` (or the
+/// sigil `T &`). Mirrors `compute_struct_field_ref_flags` but distinguishes
+/// exclusive-borrow fields. Only structs already in `ref_type_structs`
+/// appear in the map.
+pub(super) fn compute_struct_field_mut_ref_flags(
+    module: &Module,
+    scopes: &ScopeTable,
+    ref_type_structs: &FxHashSet<DefId>,
+) -> FxHashMap<DefId, Vec<bool>> {
+    let mut result = FxHashMap::default();
+    for item in all_spanned_items(&module.items) {
+        if let Item::Struct(s) = &item.node {
+            if let Some(def_id) = scopes.lookup_from_scope(ScopeId(0), &s.name.node) {
+                if ref_type_structs.contains(&def_id) {
+                    let flags: Vec<bool> = s.fields.iter()
+                        .map(|f| is_ast_type_mut_ref(&f.node.type_.node))
                         .collect();
                     result.insert(def_id, flags);
                 }

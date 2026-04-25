@@ -252,6 +252,11 @@ pub(super) struct BorrowChecker<'a> {
     pub(super) ref_type_structs: FxHashSet<DefId>,
     /// Per-struct field flags: true if that field's type is a reference type.
     pub(super) struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
+    /// Per-struct field flags: true if that field's type is a `MutRef[T]`
+    /// (or sigil `T &`) — i.e. an exclusive borrow. Subset of
+    /// `struct_field_ref_flags`. Used to enforce MutRef exclusivity at
+    /// construction time.
+    pub(super) struct_field_mut_ref_flags: FxHashMap<DefId, Vec<bool>>,
 
     // ── Lifetime inference state ──
     /// Origin of each reference-typed variable.
@@ -396,6 +401,7 @@ impl<'a> BorrowChecker<'a> {
         method_resolutions: &'a FxHashMap<usize, DefId>,
         ref_type_structs: FxHashSet<DefId>,
         struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
+        struct_field_mut_ref_flags: FxHashMap<DefId, Vec<bool>>,
         fn_purity: &'a super::purity::PurityByName,
     ) -> Self {
         Self {
@@ -416,6 +422,7 @@ impl<'a> BorrowChecker<'a> {
             method_resolutions,
             ref_type_structs,
             struct_field_ref_flags,
+            struct_field_mut_ref_flags,
             var_origins: FxHashMap::default(),
             invalidated_origins: FxHashSet::default(),
             index_borrow_sources: FxHashMap::default(),
@@ -495,6 +502,7 @@ pub fn check_module(
     // Phase 4: compute which structs have reference-type fields
     let ref_type_structs = compute_ref_type_structs(module, scopes);
     let struct_field_ref_flags = compute_struct_field_ref_flags(module, scopes, &ref_type_structs);
+    let struct_field_mut_ref_flags = compute_struct_field_mut_ref_flags(module, scopes, &ref_type_structs);
 
     // Pass 5a: compute return_borrows_from for each function
     compute_all_return_borrows(module, scopes, types, resolution_map, function_info, &ref_type_structs);
@@ -508,6 +516,7 @@ pub fn check_module(
         scopes, types, resolution_map, function_info, function_body_scopes,
         expr_types,
         method_resolutions, ref_type_structs, struct_field_ref_flags,
+        struct_field_mut_ref_flags,
         &purity_by_name,
     );
     checker.warn_const = warn_const;
