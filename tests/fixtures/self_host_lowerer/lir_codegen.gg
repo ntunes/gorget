@@ -64,7 +64,7 @@ int find_substr(String haystack, String needle):
         hi += 1
     return -1
 
-String c_type_name(int ty, Dict[String, String] &sn):
+String c_type_name(int ty, Vector[String] &sn):
     if ty == LT_I8:
         return "int8_t"
     elif ty == LT_I16:
@@ -93,10 +93,9 @@ String c_type_name(int ty, Dict[String, String] &sn):
         return "void"
     elif ty >= LT_STRUCT_BASE:
         int sid = ty - LT_STRUCT_BASE
-        String key = int_to_str(sid)
-        if sn.contains(key):
-            return sn.get(key).unwrap()
-        return "__lir_s" + key
+        if sid >= 0 and sid < sn.len():
+            return sn.get(sid).unwrap()
+        return "__lir_s" + int_to_str(sid)
     elif ty >= LT_PTR_TO_BASE:
         return "void*"
     return "void*"
@@ -252,23 +251,27 @@ String lir_to_runtime_name(String name):
     return ""
 
 # Build a mapping from struct index (as string) → C type name.
-Dict[String, String] build_struct_names(LirModule &m):
-    Dict[String, String] map = {}
+# Returns a Vector indexed by struct index (sid) — the keys would
+# otherwise be int-as-String in a Dict[String, String], hitting the
+# self-host's Dict[String, _] state-loss bug. With a Vector, lookups
+# are O(1) and reliable: stage-1 was emitting `__lir_s0` placeholders
+# all over because the Dict lookups silently missed for many sid keys.
+Vector[String] build_struct_names(LirModule &m):
+    Vector[String] map = []
     int i = 0
     while i < m.structs.len():
         LirStructDef sdef = m.structs.get(i).unwrap()
-        String key = int_to_str(i)
         String rt = lir_to_runtime_name(sdef.name)
         if rt != "":
-            map.put(key, rt)
+            map.push(rt)
         elif is_runtime_struct(sdef.name) or is_lir_named_struct(sdef.name):
-            map.put(key, sdef.name)
+            map.push(sdef.name.clone())
         elif is_mono_wrapper(sdef.name):
-            map.put(key, sdef.name)
+            map.push(sdef.name.clone())
         else:
             # Sanitize: replace non-alphanumeric chars with underscores.
             String sanitized = sanitize_c_name(sdef.name)
-            map.put(key, "__gg_" + sanitized)
+            map.push("__gg_" + sanitized)
         i += 1
     return map
 
@@ -457,7 +460,7 @@ Vector[int] topo_sort_structs(LirModule &m):
 
 # ── Struct emission ────────────────────────────────────────
 
-String emit_structs(LirModule &m, Dict[String, String] &sn):
+String emit_structs(LirModule &m, Vector[String] &sn):
     StrBuf buf = sb_new()
     Vector[int] order = topo_sort_structs(&m)
 
@@ -505,28 +508,42 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
             sb_push(&buf, c_field_name(tag_field.name))
             sb_push(&buf, ";\n")
             sb_push(&buf, "    union {\n")
-            # Group remaining fields by variant prefix.
+            # Group remaining fields by variant prefix. Avoid the nested
+            # Vector[Vector[int]] mutation pattern (`outer.get(i).unwrap().push(x)`
+            # mutates a copy in self-host-compiled code — see
+            # feedback_nested_vector_get_set.md). Use parallel flat vectors:
+            # `variant_starts[i]` is the start index in `variant_indices`
+            # for variant i; the count is `variant_starts[i+1] - variant_starts[i]`
+            # (with sentinel = total length appended at the end).
             Vector[String] variant_names = []
-            Vector[Vector[int]] variant_field_indices = []
+            Vector[int] variant_starts = []
+            Vector[int] variant_indices = []
             int fi = 1
             while fi < sdef.fields.len():
                 StructField f = sdef.fields.get(fi).unwrap()
                 String vname = field_variant_prefix(f.name)
-                if variant_names.len() == 0 or variant_names.get(variant_names.len() - 1).unwrap() != vname:
-                    variant_names.push(vname)
-                    Vector[int] indices = []
-                    indices.push(fi)
-                    variant_field_indices.push(indices)
+                bool new_group = false
+                if variant_names.len() == 0:
+                    new_group = true
                 else:
-                    variant_field_indices.get(variant_field_indices.len() - 1).unwrap().push(fi)
+                    String prev = variant_names.get(variant_names.len() - 1).unwrap()
+                    if prev != vname:
+                        new_group = true
+                if new_group:
+                    variant_names.push(vname)
+                    variant_starts.push(variant_indices.len())
+                variant_indices.push(fi)
                 fi += 1
+            variant_starts.push(variant_indices.len())
 
             int vi = 0
             while vi < variant_names.len():
                 String vname = variant_names.get(vi).unwrap()
-                Vector[int] indices = variant_field_indices.get(vi).unwrap()
-                if indices.len() == 1:
-                    int fidx = indices.get(0).unwrap()
+                int start = variant_starts.get(vi).unwrap()
+                int end = variant_starts.get(vi + 1).unwrap()
+                int icount = end - start
+                if icount == 1:
+                    int fidx = variant_indices.get(start).unwrap()
                     StructField f = sdef.fields.get(fidx).unwrap()
                     String fty = field_type_str(f.ty, &sn)
                     sb_push(&buf, "        ")
@@ -540,9 +557,9 @@ String emit_structs(LirModule &m, Dict[String, String] &sn):
                     sb_push(&buf, "        struct {  // ")
                     sb_push(&buf, vname)
                     sb_push(&buf, "\n")
-                    int ii = 0
-                    while ii < indices.len():
-                        int fidx = indices.get(ii).unwrap()
+                    int ii = start
+                    while ii < end:
+                        int fidx = variant_indices.get(ii).unwrap()
                         StructField f = sdef.fields.get(fidx).unwrap()
                         String fty = field_type_str(f.ty, &sn)
                         sb_push(&buf, "            ")
@@ -582,14 +599,14 @@ String field_variant_prefix(String fname):
     return fname
 
 # Type string for a struct field (Void → uint8_t placeholder).
-String field_type_str(int ty, Dict[String, String] &sn):
+String field_type_str(int ty, Vector[String] &sn):
     if ty == LT_VOID:
         return "uint8_t"
     return c_type_name(ty, &sn)
 
 # ── Extern declarations ────────────────────────────────────
 
-String emit_externs(LirModule &m, Dict[String, String] &sn):
+String emit_externs(LirModule &m, Vector[String] &sn):
     String out = ""
     int i = 0
     while i < m.externs.len():
@@ -681,7 +698,7 @@ bool is_std_header_fn(String name):
 # Scan the module for `__gorget_box_alloc_TYPE(x)` calls and emit one
 # static inline helper per unique suffix. Mirrors src/backend/c_lir's
 # emit_runtime_helpers box_allocs loop.
-String emit_box_allocators(LirModule &m, Dict[String, String] &sn):
+String emit_box_allocators(LirModule &m, Vector[String] &sn):
     Dict[String, bool] seen = {}
     String out = ""
     int fi = 0
@@ -769,7 +786,7 @@ String box_alloc_c_type(String suffix):
 
 # ── Globals ────────────────────────────────────────────────
 
-String emit_globals(LirModule &m, Dict[String, String] &sn):
+String emit_globals(LirModule &m, Vector[String] &sn):
     String out = ""
     int i = 0
     while i < m.globals.len():
@@ -859,7 +876,7 @@ String emit_string_lits(Vector[StringLitEntry] &entries):
 
 # ── Function forward declarations ──────────────────────────
 
-String emit_func_forward_decls(LirModule &m, Dict[String, String] &sn):
+String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
     StrBuf buf = sb_new()
     int i = 0
     while i < m.functions.len():
@@ -924,7 +941,7 @@ Dict[int, bool] collect_func_addr_targets(LirModule &m):
         fi += 1
     return targets
 
-String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, bool] &targets):
+String emit_adapter_functions(LirModule &m, Vector[String] &sn, Dict[int, bool] &targets):
     String out = ""
     int fi = 0
     while fi < m.functions.len():
@@ -968,7 +985,7 @@ String emit_adapter_functions(LirModule &m, Dict[String, String] &sn, Dict[int, 
 # Emit a single variant-payload argument, coercing if the arg's value type
 # differs from the expected field type (e.g. Result aggregate at a scalar
 # int field — lossy self-host lowering).
-String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, int] &val_types, Dict[String, String] &sn, LirModule &m):
+String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, int] &val_types, Vector[String] &sn, LirModule &m):
     int expected = -1
     if idx < field_tys.len():
         expected = field_tys.get(idx).unwrap()
@@ -1387,7 +1404,7 @@ bool is_struct_constructor(String name, LirModule &m):
 #   2. Primitives / well-known C types (int64_t, double, bool, …) pass through.
 #   3. User structs registered in m.structs → their emitted C name
 #      (typically `__gg_<TypeName>`), via find_c_struct_name.
-String resolve_sizeof_c_type(String tyname, LirModule &m, Dict[String, String] &sn):
+String resolve_sizeof_c_type(String tyname, LirModule &m, Vector[String] &sn):
     if tyname.starts_with("Vector__"):
         return "GorgetArray"
     if tyname.starts_with("Dict__") or tyname.starts_with("HashMap__") or tyname.starts_with("Map__") or tyname.starts_with("OrderedDict__"):
@@ -1405,7 +1422,7 @@ String resolve_sizeof_c_type(String tyname, LirModule &m, Dict[String, String] &
     # Fall through to struct-registry lookup for user types and runtime aliases.
     return find_c_struct_name(tyname, &m, &sn)
 
-String find_c_struct_name(String name, LirModule &m, Dict[String, String] &sn):
+String find_c_struct_name(String name, LirModule &m, Vector[String] &sn):
     int i = 0
     while i < m.structs.len():
         LirStructDef sdef = m.structs.get(i).unwrap()
@@ -1922,7 +1939,7 @@ String s(int id): "__s" + int_to_str(id)
 # Build the C lvalue expression for `base->field` given a struct id and
 # field index. Mirrors IFieldPtr's address-of logic but returns the lvalue
 # itself (no `&`), so composable into stores.
-String field_access_lvalue(String base, int struct_id, int field, LirModule &m, Dict[String, String] &sn):
+String field_access_lvalue(String base, int struct_id, int field, LirModule &m, Vector[String] &sn):
     if struct_id >= 0 and struct_id < m.structs.len():
         LirStructDef sdef = m.structs.get(struct_id).unwrap()
         String sname = c_type_name(LT_STRUCT_BASE + struct_id, &sn)
@@ -1946,7 +1963,7 @@ String field_access_lvalue(String base, int struct_id, int field, LirModule &m, 
 
 # Emit a single field store: `lvalue = value;` or memcpy for aggregates.
 # Used by IStructInit / IEnumInit expansion.
-String emit_field_store(String target_v, int struct_id, int field, int value, LirModule &m, Dict[String, String] &sn, Dict[int, int] &val_types):
+String emit_field_store(String target_v, int struct_id, int field, int value, LirModule &m, Vector[String] &sn, Dict[int, int] &val_types):
     String lval = field_access_lvalue(target_v, struct_id, field, &m, &sn)
     int vty = LT_VOID
     if val_types.contains(value):
@@ -2003,7 +2020,7 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
         return lval + " = (void*)" + v(value) + ";"
     return lval + " = " + v(value) + ";"
 
-String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Dict[String, String] &sn,
+String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] &sn,
                  Dict[int, int] &val_types, Dict[String, int] &slit_map):
     match inst:
         # ── Slot access ──
@@ -2624,7 +2641,7 @@ String map_mono_to_runtime(String name, LirModule &m):
 # HOF combinators (map, filter, and_then, or_else) take a closure ptr as second arg.
 
 String emit_option_result_combinator(int dst, String name, Vector[int] &args,
-                                      Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+                                      Vector[String] &sn, Dict[int, int] &val_types, LirModule &m):
     if args.len() == 0:
         return "/* bad option/result combinator */;"
     int src_id = args.get(0).unwrap()
@@ -2755,12 +2772,12 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
     return name + "(" + src + "); /* unknown combinator */"
 
 String emit_call_extern(int dst, String raw_name, Vector[int] &args,
-                        Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m):
+                        Vector[String] &sn, Dict[int, int] &val_types, LirModule &m):
     # Forward to the extended helper with no function-return-type hint.
     return emit_call_extern_with(dst, raw_name, &args, &sn, &val_types, &m, LT_VOID)
 
 String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
-                             Dict[String, String] &sn, Dict[int, int] &val_types, LirModule &m,
+                             Vector[String] &sn, Dict[int, int] &val_types, LirModule &m,
                              int func_ret_ty):
     # Map monomorphized names to runtime names.
     String name = map_mono_to_runtime(raw_name, &m)
@@ -3407,7 +3424,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
 
 # ── Terminator emission ───────────────────────────────────
 
-String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dict[int, int] &val_types):
+String emit_term(LirTerm &term, LirFunction &func, Vector[String] &sn, Dict[int, int] &val_types):
     match term:
         case TRet(value):
             # Void-returning functions: suppress the return value.
@@ -3461,7 +3478,7 @@ String emit_term(LirTerm &term, LirFunction &func, Dict[String, String] &sn, Dic
 # same scalar/aggregate coercion as ISlotStore when the block-param type
 # (set from the slot type at phi creation) doesn't match the incoming
 # value's inferred type — otherwise C refuses `void* = Str` etc.
-String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[String, String] &sn, Dict[int, int] &val_types):
+String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Vector[String] &sn, Dict[int, int] &val_types):
     if args.len() == 0:
         return ""
     LirBlock target_blk = func.blocks.get(target).unwrap()
@@ -3513,7 +3530,7 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Dict[Str
 
 # ── Function emission ──────────────────────────────────────
 
-String emit_function(LirFunction &func, LirModule &m, Dict[String, String] &sn, Dict[String, int] &slit_map):
+String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map):
     # Mirrors src/backend/c_lir/mod.rs:emit_function — accumulate into a
     # single growing buffer via in-place push instead of `out = out + ...`
     # quadratic concatenation. Each push amortizes O(1) per byte.
@@ -3709,7 +3726,7 @@ String drop_to_clone_fn(String drop_fn):
     return ""
 
 # Find the C struct name for a Gorget type name.
-String find_c_name(String type_name, LirModule &m, Dict[String, String] &sn):
+String find_c_name(String type_name, LirModule &m, Vector[String] &sn):
     int i = 0
     while i < m.structs.len():
         LirStructDef sdef = m.structs.get(i).unwrap()
@@ -3729,7 +3746,7 @@ bool fn_exists(String name, LirModule &m):
     return false
 
 # Struct field access pattern — handles union layout for enum types.
-String field_access(String sdef_name, String field_name, LirModule &m, Dict[String, String] &sn, bool use_arrow):
+String field_access(String sdef_name, String field_name, LirModule &m, Vector[String] &sn, bool use_arrow):
     # Find struct def to check union layout
     int i = 0
     while i < m.structs.len():
@@ -3761,7 +3778,7 @@ String field_access(String sdef_name, String field_name, LirModule &m, Dict[Stri
     return "dst." + c_field_name(field_name)
 
 # Emit struct drop functions from recursive_drop_structs metadata.
-String emit_struct_drops(LirModule &m, Dict[String, String] &sn):
+String emit_struct_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
     # Forward declarations first — drop functions may call each other for
@@ -3804,7 +3821,7 @@ String emit_struct_drops(LirModule &m, Dict[String, String] &sn):
     return out
 
 # Emit struct clone functions from recursive_drop_structs metadata.
-String emit_struct_clones(LirModule &m, Dict[String, String] &sn):
+String emit_struct_clones(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
     # Forward declarations to prevent implicit-decl conflicts.
@@ -3853,7 +3870,7 @@ String emit_struct_clones(LirModule &m, Dict[String, String] &sn):
     return out
 
 # Emit enum drop functions from recursive_drop_enums metadata.
-String emit_enum_drops(LirModule &m, Dict[String, String] &sn):
+String emit_enum_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     int ki = 0
@@ -3895,8 +3912,14 @@ String emit_enum_drops(LirModule &m, Dict[String, String] &sn):
                 if evd.variant_index == vi:
                     has_drops = true
                     String access = field_access(type_name, evd.field_name, &m, &sn, true)
+                    # `free` and other drop fns must both go through field_access
+                    # so the union-layout `self->data.<vname>.<fname>` path is
+                    # used consistently. The bare `self->fname` path generates
+                    # `error: '__gg_Expr' has no member named 'EBinaryOp_0'`
+                    # because EBinaryOp_0 lives inside `data.EBinaryOp.` for
+                    # multi-field variants.
                     if evd.drop_fn_name == "free":
-                        case_body = case_body + "            free(self->" + c_field_name(evd.field_name) + ");\n"
+                        case_body = case_body + "            free(" + access + ");\n"
                     else:
                         case_body = case_body + "            " + evd.drop_fn_name + "(&" + access + ");\n"
                 vvi += 1
@@ -3912,7 +3935,7 @@ String emit_enum_drops(LirModule &m, Dict[String, String] &sn):
     return out
 
 # Emit enum clone functions from recursive_drop_enums metadata.
-String emit_enum_clones(LirModule &m, Dict[String, String] &sn):
+String emit_enum_clones(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     int ki = 0
@@ -3971,7 +3994,7 @@ String emit_enum_clones(LirModule &m, Dict[String, String] &sn):
     return out
 
 # Emit unified drop/clone functions from type_drop_fns metadata.
-String emit_type_drop_fns(LirModule &m, Dict[String, String] &sn):
+String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.type_drop_fns.keys()
     int ki = 0
@@ -4159,7 +4182,7 @@ String mono_wrapper_runtime_type(String name):
     return ""
 
 String generate_c(LirModule &m):
-    Dict[String, String] sn = build_struct_names(&m)
+    Vector[String] sn = build_struct_names(&m)
 
     String out = ""
 
