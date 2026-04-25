@@ -462,9 +462,16 @@ impl<'a> FuncLowering<'a> {
     }
 
     /// Return the GIR TypeId of a struct field (for tracking types through projection chains).
+    /// Unwraps `Ptr(T)` / `MutPtr(T)` once so callers using a Ptr-typed base
+    /// (e.g. closure env params, `*Heap__T` self) still resolve the underlying
+    /// struct's field type rather than falling back to the Ptr itself.
     pub(super) fn resolve_field_gir_type_id(&self, gir_type_id: GirTypeId, field: u32) -> GirTypeId {
         let gir_type = self.gir_types.get(gir_type_id);
-        if let Some(GirType::Named(name)) = gir_type {
+        let inner_type = match gir_type {
+            Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => self.gir_types.get(*inner),
+            other => other,
+        };
+        if let Some(GirType::Named(name)) = inner_type {
             if let Some(def) = self.gir_types.get_type_def(name) {
                 if let gir_types::TypeDefKind::Struct(sdef) = &def.kind {
                     if let Some(f) = sdef.fields.get(field as usize) {
