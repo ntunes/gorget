@@ -1226,9 +1226,12 @@ demand, not shipped speculatively.
   SSL-flush override later but TCP writes go straight to the kernel
   send buffer so the default is correct today.
 
-### Phase 4: Concurrency-model enforcement — **DONE**
+### Phase 4: Concurrency-model enforcement — **MOSTLY DONE**
 
-All four items shipped; fixtures wired and green.
+Three of four items fully shipped; the Hashable migration's
+state-based shape is in place, but the consumer-chooses-Hasher
+capability the design promises is not — `Hashable` still names
+`FxHasher` directly in its signature.
 
 1. ✅ **Type-checker pass rejects `&` captures across `spawn`**.
    `check_spawn_args` (in `src/semantic/safety/helpers.rs`) checks
@@ -1253,27 +1256,38 @@ All four items shipped; fixtures wired and green.
    `spawn_coroutine_*`) all use `shared` for cross-task mutable
    state or pass owned values through. Migration was effectively
    a no-op because the enforcement landed alongside the fixtures.
-4. ✅ **Hashable migration to `void hash(self, FxHasher &h)`**.
-   `lib/std/hash.gg` defines the `Hasher` trait
-   (`write_int` / `write_bytes` / `write_string` / `finish`) and
-   `FxHasher` as v1's concrete state machine. The `Hashable` builtin
-   sig in `src/semantic/traits.rs:529` now requires
-   `void hash(self, FxHasher &h)`. `@derive(Hashable)` emits
-   field-by-field forwarding into the passed hasher. The one-shot
-   convenience `int hash_of[Hashable T](T v)` in `lib/std/hash.gg`
-   replaces old `.hash()` callers. Dict / Set internals call
-   `gorget_map_hash_*` runtime helpers that route through
-   `FxHasher__write_int` / `_string` / `_bytes`. Fixtures:
-   `derive_hashable.gg`, `dict_user_key_hashable.gg`,
-   `set_user_key_hashable.gg`, `trait_bound_transitive.gg`.
-   Generic-Hasher dispatch (`void hash[H: Hasher](self, H &h)`)
-   stays deferred until method-level generic dispatch through
-   trait methods lands — present users wrap `FxHasher` via field
-   composition until then.
+4. ⚠️ **Hashable migration — state-based shape SHIPPED, generic
+   Hasher dispatch NOT shipped**. What landed:
+   - `Hasher` trait declared in `lib/std/hash.gg`
+     (`write_int` / `write_bytes` / `write_string` / `finish`).
+   - `FxHasher` ships as the one concrete implementation.
+   - The `Hashable` builtin sig in `src/semantic/traits.rs:529`
+     was migrated from the broken old `int hash(self)` to
+     `void hash(self, FxHasher &h)`.
+   - `@derive(Hashable)` emits field-by-field forwarding into the
+     passed `FxHasher`.
+   - One-shot convenience `int hash_of[Hashable T](T v)` in
+     `lib/std/hash.gg` replaces old `.hash()` callers.
+   - Dict / Set internals call `gorget_map_hash_*` runtime helpers
+     that route through `FxHasher__write_int` / `_string` /
+     `_bytes`.
+   - Fixtures: `derive_hashable.gg`, `dict_user_key_hashable.gg`,
+     `set_user_key_hashable.gg`, `trait_bound_transitive.gg`.
 
-Status: **closed 2026-04-25**. Spawn-boundary enforcement is the
-~95% safety win the design promised at ~5% of the ergonomic cost
-(§8.4); the rest is documentation polish in Phase 5.
+   What is missing: the design (§3) specifies that `Hashable`
+   should be **generic over the Hasher** —
+   `void hash[H: Hasher](self, H &h)` — so the consumer picks the
+   algorithm (FxHash for in-process, SipHash for DoS-resistance,
+   etc.). What ships hardcodes `FxHasher` in every `Hashable`
+   signature, so today's `Hashable` is effectively `FxHashable`. A
+   user defining `MySipHasher` cannot plug it in without rewriting
+   every `hash` impl in their codebase. The blocker is method-level
+   generic dispatch through trait methods, which the compiler
+   doesn't yet support — see TODO.md.
+
+Status (2026-04-25): items 1–3 closed; item 4 scaffolded but the
+consumer-chooses-Hasher capability is the missing piece of this
+phase.
 
 ### Phase 5: Documentation — **DONE 2026-04-25**
 

@@ -74,10 +74,9 @@ trait Hasher:
 ```
 
 Accumulates hash state. `std.hash` ships one concrete implementation,
-`FxHasher`, which uses a simple multiplicative mix suitable for
-in-process keyed collections. The `Hashable` trait names `FxHasher`
-directly in its signature; alternative `Hasher` implementations
-compose by wrapping `FxHasher` via field composition.
+`FxHasher`, which uses a simple multiplicative mix. The `Hashable`
+trait's signature names `FxHasher` directly — every `Hashable` impl
+in the current language version targets `FxHasher`.
 
 ### Ordinal
 
