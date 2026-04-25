@@ -6228,10 +6228,22 @@ static inline int64_t gorget_map_iter_order(const void* m, int64_t idx) {
 static inline void gorget_map_iter_key(const void* m, int64_t idx, void* out) {
     const GorgetMap* mm = (const GorgetMap*)m;
     memcpy(out, (const char*)mm->keys + (size_t)idx * mm->key_size, mm->key_size);
+    // Resource-typed keys (String, Vector, …) need an independent owned
+    // copy at the caller — the memcpy above produces a shallow alias of
+    // the map's storage. `key_clone` is the in-place clone wrapper
+    // installed at map construction (NULL for trivially-copyable keys
+    // like int / bool / cstr).
+    if (mm->key_clone) {
+        mm->key_clone(out);
+    }
 }
 static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) {
     const GorgetMap* mm = (const GorgetMap*)m;
     memcpy(out, (const char*)mm->values + (size_t)idx * mm->val_size, mm->val_size);
+    // Same rationale as `gorget_map_iter_key`: clone resource-typed values.
+    if (mm->val_clone) {
+        mm->val_clone(out);
+    }
 }
 
 "#;

@@ -1,17 +1,14 @@
 # Phase 3 proof-of-concept: lazy `Dict[K, V]` iteration using a `Ref[Dict[K, V]]`
 # borrow field. Demonstrates that Phase 1.7's IR groundwork + Phase 2's borrow
-# checker now compose to give us user-space lazy iterators that walk the
-# runtime hashmap in place — no `.items()` materialisation, no allocation
-# beyond the iterator struct itself.
+# checker compose with the runtime accessors to give us user-space lazy
+# iterators that walk the hash-map in place — no `.items()` materialisation,
+# no allocation beyond the iterator struct itself.
 #
 # The runtime accessors `gorget_map_iter_*` are declared as generic externs.
 # Per commit `ca9b455f`, generic mono preserves the declared C symbol so a
-# single runtime function serves all `Dict[K, V]` instantiations.
-#
-# Limitation in this PoC: String key/value extraction via the `K &out`
-# parameter has a double-free issue (the runtime memcpys the bytes but the
-# caller's drop fires too). int / scalar K, V types work today. Wider
-# coverage is a follow-up.
+# single runtime function serves all `Dict[K, V]` instantiations. The
+# accessors clone via the map's `key_clone`/`val_clone` hooks so resource-
+# typed K/V (String, Vector, …) come out as independent owned copies.
 
 extern "Gorget":
     extern int dict_iter_order_len[K, V](Ref[Dict[K, V]] m) = "gorget_map_iter_order_len"
@@ -52,3 +49,22 @@ void main():
         step = walker.next()
     print(sum_k)
     print(sum_v)
+
+    # String keys / int values — exercises the key_clone hook so we don't
+    # double-free the buffer the map still owns.
+    Dict[String, int] s = {}
+    s.put("alpha", 1)
+    s.put("beta", 2)
+    int slen = dict_iter_order_len[String, int](s)
+    int j = 0
+    int sum_v2 = 0
+    while j < slen:
+        int phys = dict_iter_order[String, int](s, j)
+        String k = ""
+        int v = 0
+        dict_iter_key[String, int](s, phys, &k)
+        dict_iter_value[String, int](s, phys, &v)
+        print(k)
+        sum_v2 = sum_v2 + v
+        j = j + 1
+    print(sum_v2)

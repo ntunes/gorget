@@ -15367,7 +15367,7 @@ fn borrow_field_method_dispatch() {
 fn borrow_field_lazy_dict_iter() {
     run_gg(
         "borrow_field_lazy_dict_iter.gg",
-        "60\n600",
+        "60\n600\nalpha\nbeta\n3",
     );
 }
 
