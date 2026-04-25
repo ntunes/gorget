@@ -351,7 +351,11 @@ pub(super) fn lower_unary_op(
     op: ast::UnaryOp,
     operand: &Spanned<ast::Expr>,
 ) -> Operand {
-    let val = lower_expr(ctx, builder, operand);
+    let mut val = lower_expr(ctx, builder, operand);
+    // Mirror binary-op auto-deref: if operand is a `Ref[T]` (Ptr) from a
+    // `.get(i).unwrap()` or borrowed param, deref before applying the unary
+    // op. Without this, `-x` on a `Ref[float]` C-emits `-(void*)x`.
+    val = cow_deref_if_ptr(ctx, builder, val);
     let operand_type = infer_operand_type_full(ctx, &val, builder);
 
     // Check for unary operator overload (e.g., `-v` → Vec2__neg)
