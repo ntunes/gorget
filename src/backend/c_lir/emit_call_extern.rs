@@ -19,7 +19,6 @@ pub(super) fn emit_call_extern(
     let str_lit_vals = ctx.str_lit_vals;
     let null_vals = ctx.null_vals;
     let ptr_pointee = ctx.ptr_pointee;
-    let func_addr_targets = ctx.func_addr_targets;
     let spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let _s = |id: SlotId| -> String { format!("__s{}", id.0) };
@@ -567,11 +566,6 @@ pub(super) fn emit_call_extern(
                     .find(|f| f.name == lookup_name)
                     .map(|f| f.params.clone())
             } else { None };
-            // For Dict/Set inline methods, String ptr methods, and spawn helpers,
-            // the LIR extern params use ptr for Str args. Set a flag so we can
-            // coerce string literal args to Str at the call site.
-            let force_str_coerce = parse_dict_higher_order(name).is_some()
-                || parse_set_higher_order(name).is_some();
             // For trait box method calls, determine which specific arg positions need Str coercion.
             let trait_str_arg_positions = trait_box_str_arg_positions(module, name);
             let ext_params: Option<&[LirType]> = if fn_params_owned.is_some() {
@@ -610,210 +604,13 @@ pub(super) fn emit_call_extern(
             // Non-struct Task destination (void*) — extract .__task from returned struct.
             let dst_is_spawn_ptr = is_spawn && !dst_is_task_struct && dst.is_some();
 
-            // ── Inline higher-order collection methods ─────────────
-            // Vector/Dict/Set filter/map/fold/etc. must be inlined at each call
-            // site to use the correct __Closure_N__call function for that site.
-            // Helper: resolve __Closure_N__call for a closure arg at this specific call site.
-            let resolve_call_fn = |closure_arg: Option<ValueId>| -> String {
-                closure_arg.and_then(|ca| {
-                    let try_from_val = val_types.get(ca.0 as usize).and_then(|t| t.as_ref()).and_then(|ty| {
-                        if let LirType::Struct(sid) = ty {
-                            let sdef = &module.structs[sid.0 as usize];
-                            let call_name = format!("{}__call", sdef.name);
-                            if module.functions.iter().any(|f| f.name == call_name) { Some(call_name) } else { None }
-                        } else { None }
-                    });
-                    try_from_val.or_else(|| {
-                        ptr_pointee.get(ca.0 as usize).and_then(|t| t.as_ref()).and_then(|ty| {
-                            if let LirType::Struct(sid) = ty {
-                                let sdef = &module.structs[sid.0 as usize];
-                                let call_name = format!("{}__call", sdef.name);
-                                if module.functions.iter().any(|f| f.name == call_name) { Some(call_name) } else { None }
-                            } else { None }
-                        })
-                    }).or_else(|| {
-                        // Check if the arg is a FuncAddr (named function as closure).
-                        // Use the __adapt_* wrapper which follows the closure calling convention.
-                        func_addr_targets.get(ca.0 as usize).and_then(|t| *t).map(|fid| {
-                            format!("__adapt_{}", c_func_name(&module.functions[fid.0 as usize].name))
-                        })
-                    })
-                }).unwrap_or_else(|| find_closure_call_fn(module, "void*", sn))
-            };
-
-            // Vector higher-order methods no longer dispatch here: every
-            // surface method has a path — HofExpand (filter/map/fold/
-            // reduce/any/all/each/find/find_index/count/flat_map),
-            // runtime stubs (sort/sorted/unique/windows/chunks), or the
-            // BIR SynthPool (sort_by / sorted_by / sort_by_key /
-            // sorted_by_key). If a call ever falls through, the linker
-            // surfaces it — we no longer quietly swallow it.
-
-            // ── Inline Dict higher-order methods ─────────────
-            // Note: `filter` / `fold` / `each` / `any` / `all` are all
-            // migrated to `Inst::HofExpand`; this block is the fallback
-            // dispatch for call sites where the LIR intercept bailed
-            // (e.g. unresolved closure signature). `filter` is
-            // deliberately excluded — its migration requires a fresh
-            // result map, and if the intercept bails we'd emit a
-            // broken call instead of a quiet error. The migrated
-            // paths handle it upstream.
-            if let Some((key_ty, val_ty, method)) = parse_dict_higher_order(emit_name) {
-                let has_closure = matches!(method, "fold" | "each" | "any" | "all");
-                if has_closure && (dst.is_some() || method == "each") {
-                    let d_opt = dst;
-                    let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
-                        .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
-                        .collect();
-                    let key_c = elem_type_to_c_with_sn(key_ty, &orig_to_c2);
-                    let val_c = elem_type_to_c_with_sn(val_ty, &orig_to_c2);
-                    let closure_arg = emit_args.last().copied();
-                    let call_fn = resolve_call_fn(closure_arg);
-                    let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
-                    let map_arg = v(emit_args[0]);
-                    let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
-                    let dict_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    let dict_fn_ref = if dict_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
-                    let dict_needs_ref = closure_params_need_ref(module, &call_fn);
-                    let dkr = if dict_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                    let dvr = if dict_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                    match method {
-                        "fold" if emit_args.len() >= 3 => {
-                            let acc_arg = v(emit_args[1]);
-                            let fn_a = v(emit_args[2]);
-                            let dict_fold_is_ptr = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
-                            let dict_fn_a_ref = if dict_fold_is_ptr { fn_a.clone() } else { format!("&{fn_a}") };
-                            let call_fn2 = resolve_call_fn(Some(emit_args[2]));
-                            let dfold_needs_ref = closure_params_need_ref(module, &call_fn2);
-                            let dfar = if dfold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                            let dfkr = if dfold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                            let dfvr = if dfold_needs_ref.get(2).copied().unwrap_or(false) { "&" } else { "" };
-                            write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                __typeof__({acc_arg}) __acc = {acc_arg}; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
-                                {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                __acc = {call_fn2}({dict_fn_a_ref}, {dfar}__acc, {dfkr}__key, {dfvr}__val); \
-                                }} __acc; }});").unwrap();
-                        }
-                        "each" => {
-                            write!(out, "{{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
-                                {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                {call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val); \
-                                }} }}").unwrap();
-                        }
-                        "any" => {
-                            write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                bool __any_r = false; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
-                                {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if ({call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) {{ __any_r = true; break; }} \
-                                }} __any_r; }});").unwrap();
-                        }
-                        "all" => {
-                            write!(out, "{dv} = ({{ GorgetMap __src = *(GorgetMap*){map_arg}; \
-                                bool __all_r = true; \
-                                for (size_t __i = 0; __i < __src.cap; __i++) {{ \
-                                if (__src.states[__i] != 1) continue; \
-                                {key_c} __key = *({key_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {val_c} __val = *({val_c}*)((char*)__src.values + __i * __src.val_size); \
-                                if (!{call_fn}({dict_fn_ref}, {dkr}__key, {dvr}__val)) {{ __all_r = false; break; }} \
-                                }} __all_r; }});").unwrap();
-                        }
-                        _ => {
-                            write!(out, "{}({map_arg}, {fn_arg});", emit_name).unwrap();
-                        }
-                    }
-                    return;
-                }
-            }
-
-            // ── Inline Set higher-order methods ─────────────
-            // Note: `filter` / `fold` / `each` / `any` / `all` are all
-            // migrated to `Inst::HofExpand`; this block is dead code
-            // paths that the LIR-level HOF intercept no longer routes
-            // here. Kept for the fallback dispatch when the intercept
-            // bails (e.g. unresolved closure signature).
-            if let Some((elem_ty, method)) = parse_set_higher_order(emit_name) {
-                let has_closure = matches!(method, "fold" | "each" | "any" | "all");
-                if has_closure && (dst.is_some() || method == "each") {
-                    let d_opt = dst;
-                    let orig_to_c2: HashMap<String, String> = module.structs.iter().enumerate()
-                        .map(|(i, def)| (def.name.clone(), sn.get(&(i as u32)).cloned().unwrap_or_else(|| format!("__lir_s{i}"))))
-                        .collect();
-                    let elem_c = elem_type_to_c_with_sn(elem_ty, &orig_to_c2);
-                    let closure_arg = emit_args.last().copied();
-                    let call_fn = resolve_call_fn(closure_arg);
-                    let dv = d_opt.map(|d| format!("__v{}", d.0)).unwrap_or_default();
-                    let set_arg = v(emit_args[0]);
-                    let fn_arg = closure_arg.map(|ca| v(ca)).unwrap_or_default();
-                    let set_closure_is_ptr = closure_arg.map_or(false, |ca| matches!(val_types.get(ca.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr)));
-                    let set_fn_ref = if set_closure_is_ptr { fn_arg.clone() } else { format!("&{fn_arg}") };
-                    let set_needs_ref = closure_params_need_ref(module, &call_fn);
-                    let ser = if set_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                    let set_is_ordered = !emit_name.starts_with("HashSet__");
-                    let (set_iter_var, set_iter_cond, set_idx_decl) = if set_is_ordered {
-                        ("__j", "__src.order_len", "size_t __i = __src.order[__j]; if (__src.states[__i] != 1) continue; ")
-                    } else {
-                        ("__i", "__src.cap", "if (__src.states[__i] != 1) continue; ")
-                    };
-                    match method {
-                        "fold" if emit_args.len() >= 3 => {
-                            let acc_arg = v(emit_args[1]);
-                            let fn_a = v(emit_args[2]);
-                            let fold_closure_is_ptr2 = matches!(val_types.get(emit_args[2].0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
-                            let fn_a_ref2 = if fold_closure_is_ptr2 { fn_a.clone() } else { format!("&{fn_a}") };
-                            let call_fn2 = resolve_call_fn(Some(emit_args[2]));
-                            let sfold_needs_ref = closure_params_need_ref(module, &call_fn2);
-                            let sfar = if sfold_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
-                            let sfer = if sfold_needs_ref.get(1).copied().unwrap_or(false) { "&" } else { "" };
-                            write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                __typeof__({acc_arg}) __acc = {acc_arg}; \
-                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
-                                {set_idx_decl}\
-                                {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                __acc = {call_fn2}({fn_a_ref2}, {sfar}__acc, {sfer}__elem); \
-                                }} __acc; }});").unwrap();
-                        }
-                        "each" => {
-                            write!(out, "{{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
-                                {set_idx_decl}\
-                                {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                {call_fn}({set_fn_ref}, {ser}__elem); \
-                                }} }}").unwrap();
-                        }
-                        "any" => {
-                            write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                bool __any_r = false; \
-                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
-                                {set_idx_decl}\
-                                {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if ({call_fn}({set_fn_ref}, {ser}__elem)) {{ __any_r = true; break; }} \
-                                }} __any_r; }});").unwrap();
-                        }
-                        "all" => {
-                            write!(out, "{dv} = ({{ GorgetSet __src = *(GorgetSet*){set_arg}; \
-                                bool __all_r = true; \
-                                for (size_t {set_iter_var} = 0; {set_iter_var} < {set_iter_cond}; {set_iter_var}++) {{ \
-                                {set_idx_decl}\
-                                {elem_c} __elem = *({elem_c}*)((char*)__src.keys + __i * __src.key_size); \
-                                if (!{call_fn}({set_fn_ref}, {ser}__elem)) {{ __all_r = false; break; }} \
-                                }} __all_r; }});").unwrap();
-                        }
-                        _ => {
-                            write!(out, "{}({set_arg}, {fn_arg});", emit_name).unwrap();
-                        }
-                    }
-                    return;
-                }
-            }
+            // Vector/Dict/Set higher-order methods no longer dispatch here:
+            // every surface method has a path — HofExpand (filter/map/fold/
+            // reduce/any/all/each/find/find_index/count/flat_map), runtime
+            // stubs (sort/sorted/unique/windows/chunks), or the BIR
+            // SynthPool (sort_by / sorted_by / sort_by_key / sorted_by_key).
+            // If a call ever falls through, the linker surfaces it —
+            // we no longer quietly swallow it.
 
             // ── Nullable cstr → Option wrapping is now handled by the LIR lowerer.
 
@@ -1289,7 +1086,7 @@ pub(super) fn emit_call_extern(
                         write!(out, "{}", v(*a)).unwrap();
                     }
                 }
-                else if is_str_lit && (name.starts_with("gorget_str_") || force_str_coerce
+                else if is_str_lit && (name.starts_with("gorget_str_")
                     || ext_param_is_str(ext_params, i, module))
                     && !str_fn_non_str_arg(name, i) {
                     write!(out, "{}", v(*a)).unwrap();

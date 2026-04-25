@@ -54,18 +54,19 @@ pub(crate) struct SynthKey {
 }
 
 /// Closure signature snapshot — params (env stripped for `__Closure_N__call`)
-/// plus return type. Synthesis needs both to pick per-arg ABIs inside
-/// synthesized `CallClosure`s.
+/// plus return type. Test-only helper used by the synth unit tests to
+/// build synthetic modules; production synth paths derive signatures
+/// directly from the `LirFunction` rather than going through this struct.
+#[cfg(test)]
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // consumed by SortByKey / SortedByKey in a follow-up commit
 pub(crate) struct ClosureSig {
     pub param_tys: Vec<LirType>,
     pub ret_ty: LirType,
 }
 
 /// Look up the call signature of a closure's `__call` function (or a bare
-/// FuncRef target) from the module's current function list.
-#[allow(dead_code)] // consumed by SortByKey / SortedByKey in a follow-up commit
+/// FuncRef target) from the module's current function list. Test-only.
+#[cfg(test)]
 pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<ClosureSig> {
     let f = module.functions.iter().find(|f| f.name == name)?;
     let skip = if name.starts_with("__Closure_") && name.ends_with("__call") {

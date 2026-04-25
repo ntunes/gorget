@@ -1,6 +1,19 @@
 # LIR → BIR Backend-Lift Plan — "Dumb Backend" Endgame
 
-**Status:** Design, 2026-04-17. Not yet implemented.
+**Status:** Mostly landed (2026-04-24). Design written 2026-04-17.
+
+What's in: BIR scaffolding (Step 0), canonical ops `SizeOf` / `EnumInit` /
+`EnumCheck` / `EnumExtract` / `StructInit` / `NamedFieldPtr` / `CowClone` /
+`AddressOf` / `BoxAlloc` / `TraitCall` / `HofExpand` (Steps 3–5, 7, 9, 10), plus
+the bulk of Step 8 HOF migration for Vector / Dict / Set (see the per-row
+migration status later in this doc).
+
+What's missing: Step 1 (trust `LirExtern.return_type` for sret) is partially in —
+`needs_sret()` is used in the LLVM backend, but the `returns_array` /
+`returns_string` / `returns_map` name-matching around `llvm/mod.rs:4961` still
+needs to be killed. Step 6 (`CallClosure.param_kinds` replacing the SlotAddr
+heuristic) is unverified at time of this status update.
+
 **Context:** After several rounds of backend lifts, both C and LLVM backends still
 contain thousands of lines of semantic decisions (HOF inlining, enum construction,
 sentinel wrapping). This document identifies exactly which LIR primitives are

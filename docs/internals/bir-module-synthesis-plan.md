@@ -1,7 +1,14 @@
 # BIR Module-Level Synthesis (Option C) — Plan
 
-**Status:** Design, 2026-04-20 (revised same day after alignment with
-`docs/internals/stdlib-design.md`). Not yet implemented.
+**Status:** Landed (2026-04-24). Design written 2026-04-20 (revised same day
+after alignment with `docs/internals/stdlib-design.md`).
+
+Commits 1–3 are in: `SynthPool` infrastructure, SortBy / SortedBy end-to-end,
+and the SortByKey / SortedByKey pair. Commit 4 (dead-code sweep of
+`HIGHER_ORDER_METHODS` / `parse_vector_higher_order` / `emit_vector_helper` and
+the Dict/Set inline-HOF fallback blocks that went unreachable once HofExpand
+covered them) completed in the 2026-04-24 housekeeping pass.
+
 **Context:** Extension of `docs/internals/lir-backend-lift-plan.md` Step 8.
 Replaces the `sort_by` / `sorted_by` / `sort_by_key` / `sorted_by_key`
 TLS-trampoline at `src/backend/c_lir/emit_types.rs:180-260` with a

@@ -577,12 +577,6 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         if ext.is_variadic && ext.params.is_empty() {
             continue;
         }
-        // Skip higher-order collection methods — generated as static inline helpers.
-        if parse_vector_higher_order(&ext.name).is_some()
-            || parse_dict_higher_order(&ext.name).is_some()
-            || parse_set_higher_order(&ext.name).is_some() {
-            continue;
-        }
         // Skip Option/Result combinator methods — generated as inline helpers.
         if parse_option_result_combinator(&ext.name).is_some() {
             continue;
@@ -751,10 +745,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         writeln!(out).unwrap();
     }
 
-    // Higher-order collection helpers (filter, map, fold, any, all, etc.)
+    // Option/Result combinator helpers.
     // Must come after function forward declarations so closure __call functions are visible.
     if include_runtime || wrappers_only {
-        emit_higher_order_collection_helpers(&mut out, module, &struct_names);
         emit_option_result_combinator_helpers(&mut out, module, &struct_names);
     }
 

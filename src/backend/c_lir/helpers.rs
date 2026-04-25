@@ -735,8 +735,6 @@ fn legacy_self_by_ptr(name: &str) -> bool {
         || name.starts_with("gorget_set_") || name.starts_with("gorget_heap_")
         || name.starts_with("gorget_bytes_"))
         && !name.ends_with("_new"))
-    || parse_dict_higher_order(name).is_some()
-    || parse_set_higher_order(name).is_some()
 }
 
 /// Returns true if a gorget_str_* function has a non-Str parameter at index `i`.
