@@ -1158,7 +1158,13 @@ fn resolve_option_result_variant(
                         }
                     })
                 })
-                .unwrap_or(UNIT_TYPE);
+                .unwrap_or_else(|| {
+                    // Register Option__<T> on demand. Phase 1.7b shifted borrowing
+                    // builtins to Option__Ref__<T>, so Option__<T> isn't always
+                    // pre-registered when a user writes a bare `Some(x)`.
+                    ctx.ensure_option_type_registered(&mangled, inner_type);
+                    ctx.type_mapper.lookup_named(&mangled).unwrap_or(UNIT_TYPE)
+                });
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
             let dst = ctx.emit_enum_init_owned(builder, &type_name, "Some", type_id, vec![field_op]);
             Some(FunctionBuilder::copy(dst))
