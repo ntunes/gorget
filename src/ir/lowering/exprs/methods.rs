@@ -1393,14 +1393,28 @@ pub(super) fn lower_method_call(
 
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).
-        if let Some((field_place, field_type_id)) = &field_place_info {
+        // Exception: if the field's type is already `Ptr(T)` / `MutPtr(T)` —
+        // user-written `Ref[T]` / `MutRef[T]` borrow field — its STORED VALUE
+        // is already the receiver pointer; borrowing the field place would
+        // produce `**T`, which the method's `*T self` ABI rejects. Fall
+        // through to the `recv` (Copy/Move) path which already handles the
+        // existing `is_ptr` check correctly.
+        let field_is_borrow_ptr = field_place_info.as_ref()
+            .map(|(_, fty)| matches!(
+                ctx.type_registry.get(*fty),
+                Some(GirType::Ptr(_) | GirType::MutPtr(_))
+            ))
+            .unwrap_or(false);
+        if let Some((field_place, field_type_id)) = field_place_info.clone()
+            .filter(|_| !field_is_borrow_ptr)
+        {
             if needs_mut {
-                let pt = ctx.register_mut_ptr_type(*field_type_id);
+                let pt = ctx.register_mut_ptr_type(field_type_id);
                 let pl = builder.add_local(pt, None);
                 builder.emit_borrow_mut(pl, field_place.clone());
                 call_args.push(FunctionBuilder::copy(pl));
             } else {
-                let pt = ctx.register_ptr_type(*field_type_id);
+                let pt = ctx.register_ptr_type(field_type_id);
                 let pl = builder.add_local(pt, None);
                 builder.emit_borrow(pl, field_place.clone());
                 call_args.push(FunctionBuilder::copy(pl));

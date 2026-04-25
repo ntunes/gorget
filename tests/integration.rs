@@ -15356,6 +15356,14 @@ fn borrow_field_mut_ref_exclusive_error() {
 }
 
 #[test]
+fn borrow_field_method_dispatch() {
+    run_gg(
+        "borrow_field_method_dispatch.gg",
+        "3\n2",
+    );
+}
+
+#[test]
 fn borrow_method_chain() {
     run_gg(
         "borrow_method_chain.gg",

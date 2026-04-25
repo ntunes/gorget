@@ -1,0 +1,17 @@
+# Method dispatch through a `Ref[T]` struct field. The field load yields
+# the stored pointer value; the method call dispatches that pointer as
+# self directly. Without the borrow-field-aware skip in
+# `lower_method_call`'s field-place branch, the call would receive
+# `**T` instead of `*T` and read garbage.
+
+struct Holder:
+    Ref[Vector[int]] vec
+    Ref[Dict[String, int]] dict
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    Dict[String, int] d = {"a": 1, "b": 2}
+    Holder h = Holder(v, d)
+    print(h.vec.len())
+    print(h.dict.len())
+    return 0
