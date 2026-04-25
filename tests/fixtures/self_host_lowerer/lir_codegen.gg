@@ -4099,20 +4099,36 @@ String emit_type_drop_fns(LirModule &m, Dict[String, String] &sn):
 # These types are skipped as struct definitions (they map to runtime types)
 # but still need typedef'd so C code can reference them.
 String emit_mono_typedefs(LirModule &m):
-    String out = ""
-    Dict[String, bool] seen = {}
+    StrBuf buf = sb_new()
+    # `seen` was Dict[String, bool] but the self-host-compiled
+    # Dict[String, _] silently drops keys (see feedback_selfhost_workarounds.md
+    # #9). Without the dedup, stage-1 emitted 34× duplicate
+    # `typedef void* Box__SpannedExpr;` lines (one per struct iteration that
+    # mentions Box__SpannedExpr). Linear-scan Vector instead.
+    Vector[String] seen = []
     int si = 0
     while si < m.structs.len():
         LirStructDef sdef = m.structs.get(si).unwrap()
-        if is_mono_wrapper(sdef.name) and not seen.contains(sdef.name):
-            seen.put(sdef.name, true)
-            String runtime_ty = mono_wrapper_runtime_type(sdef.name)
-            if runtime_ty != "":
-                out = out + "typedef " + runtime_ty + " " + sdef.name + ";\n"
+        if is_mono_wrapper(sdef.name):
+            bool dup = false
+            int sj = 0
+            while sj < seen.len():
+                if seen.get(sj).unwrap() == sdef.name:
+                    dup = true
+                sj += 1
+            if not dup:
+                seen.push(sdef.name.clone())
+                String runtime_ty = mono_wrapper_runtime_type(sdef.name)
+                if runtime_ty != "":
+                    sb_push(&buf, "typedef ")
+                    sb_push(&buf, runtime_ty)
+                    sb_push(&buf, " ")
+                    sb_push(&buf, sdef.name)
+                    sb_push(&buf, ";\n")
         si += 1
-    if out != "":
-        out = out + "\n"
-    return out
+    if buf.s.byte_len() > 0:
+        sb_push(&buf, "\n")
+    return buf.s
 
 # Map monomorphized wrapper type names to their runtime C type.
 String mono_wrapper_runtime_type(String name):
