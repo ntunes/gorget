@@ -2816,41 +2816,41 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     if name.starts_with("__gorget_closure_call_"):
         if args.len() > 0:
             int closure_val = args.get(0).unwrap()
-            String out = ""
+            String cc_out = ""
             if dst >= 0:
-                out = v(dst) + " = "
+                cc_out = v(dst) + " = "
             # Cast: ret_type(*)(void*, args...) applied to closure's fn_ptr
-            out = out + "((void*(*)(void*"
+            cc_out = cc_out + "((void*(*)(void*"
             int ai = 1
             while ai < args.len():
-                out = out + ", void*"
+                cc_out = cc_out + ", void*"
                 ai += 1
-            out = out + "))(" + v(closure_val) + ".fn_ptr))(" + v(closure_val) + ".env"
+            cc_out = cc_out + "))(" + v(closure_val) + ".fn_ptr))(" + v(closure_val) + ".env"
             ai = 1
             while ai < args.len():
-                out = out + ", " + v(args.get(ai).unwrap())
+                cc_out = cc_out + ", " + v(args.get(ai).unwrap())
                 ai += 1
-            return out + ");"
+            return cc_out + ");"
         return "/* bad closure call */;"
 
     # Callable dispatch.
     if name.starts_with("__callable_"):
         if args.len() > 0:
             int closure_val = args.get(0).unwrap()
-            String out = ""
+            String cb_out = ""
             if dst >= 0:
-                out = v(dst) + " = "
-            out = out + "((void*(*)(void*"
+                cb_out = v(dst) + " = "
+            cb_out = cb_out + "((void*(*)(void*"
             int ai = 1
             while ai < args.len():
-                out = out + ", void*"
+                cb_out = cb_out + ", void*"
                 ai += 1
-            out = out + "))((void**)" + v(closure_val) + ")[0])(((void**)" + v(closure_val) + ")[1]"
+            cb_out = cb_out + "))((void**)" + v(closure_val) + ")[0])(((void**)" + v(closure_val) + ")[1]"
             ai = 1
             while ai < args.len():
-                out = out + ", " + v(args.get(ai).unwrap())
+                cb_out = cb_out + ", " + v(args.get(ai).unwrap())
                 ai += 1
-            return out + ");"
+            return cb_out + ");"
         return "/* bad callable */;"
 
     # ── Option/Result combinator inline expansion ──
@@ -3047,15 +3047,15 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     if is_struct_constructor(name, &m):
         String cname = find_c_struct_name(name, &m, &sn)
         if dst >= 0:
-            String out = v(dst) + " = (" + cname + "){ "
+            String sc_out = v(dst) + " = (" + cname + "){ "
             Vector[String] field_names = get_struct_field_names(name, &m)
             int ai = 0
             while ai < args.len() and ai < field_names.len():
                 if ai > 0:
-                    out = out + ", "
-                out = out + "." + c_field_name(field_names.get(ai).unwrap()) + " = " + v(args.get(ai).unwrap())
+                    sc_out = sc_out + ", "
+                sc_out = sc_out + "." + c_field_name(field_names.get(ai).unwrap()) + " = " + v(args.get(ai).unwrap())
                 ai += 1
-            return out + " };"
+            return sc_out + " };"
         return ";"
 
     # Builtin type casts.
@@ -3076,14 +3076,14 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     # Printf/fprintf: Str args need .data extraction for C's printf.
     if name == "printf" or name == "fprintf":
         int gs_ty = find_struct_type("GorgetString", &m)
-        String out = ""
+        String pf_out = ""
         if dst >= 0:
-            out = v(dst) + " = "
-        out = out + name + "("
+            pf_out = v(dst) + " = "
+        pf_out = pf_out + name + "("
         int ai = 0
         while ai < args.len():
             if ai > 0:
-                out = out + ", "
+                pf_out = pf_out + ", "
             int arg_id = args.get(ai).unwrap()
             int arg_ty = -1
             if val_types.contains(arg_id):
@@ -3091,11 +3091,11 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             # Only Str (GorgetString) has a .data field; other aggregates
             # like Result/Option/user structs must be passed by value.
             if arg_ty == gs_ty:
-                out = out + v(arg_id) + ".data"
+                pf_out = pf_out + v(arg_id) + ".data"
             else:
-                out = out + v(arg_id)
+                pf_out = pf_out + v(arg_id)
             ai += 1
-        return out + ");"
+        return pf_out + ");"
 
     # Generic extern call — pass all args directly.
     # Check if extern returns void to suppress assignment.
@@ -3149,10 +3149,10 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     # on raw_name to avoid false matches with mapped runtime prefixes.
     if raw_name.starts_with("Box__") and args.len() == 1:
         String box_type = raw_name.slice(5, raw_name.len())
-        String out = ""
+        String box_out = ""
         if dst >= 0:
-            out = v(dst) + " = "
-        return out + "__gorget_box_alloc_" + box_type + "(" + v(args.get(0).unwrap()) + ");"
+            box_out = v(dst) + " = "
+        return box_out + "__gorget_box_alloc_" + box_type + "(" + v(args.get(0).unwrap()) + ");"
 
     # Box(x) constructor: Rust emits `__gorget_box_alloc_TYPE(x)` per type.
     # Look up the argument's value type to find the right alloc function.
@@ -3169,14 +3169,14 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             int tsid = box_arg_ty - LT_STRUCT_BASE
             if tsid < m.structs.len():
                 type_suffix = m.structs.get(tsid).unwrap().name
-        String out = ""
+        String box1_out = ""
         if dst >= 0:
-            out = v(dst) + " = "
+            box1_out = v(dst) + " = "
         if type_suffix != "":
-            return out + "__gorget_box_alloc_" + type_suffix + "(" + v(box_arg) + ");"
+            return box1_out + "__gorget_box_alloc_" + type_suffix + "(" + v(box_arg) + ");"
         # Unknown struct type — degenerate cast (arg already a pointer or
         # will be coerced to one via NULL-on-scalar).
-        return out + "(void*)(uintptr_t)" + v(box_arg) + ";"
+        return box1_out + "(void*)(uintptr_t)" + v(box_arg) + ";"
 
     # Prelude variants (Some/None/Ok/Error). Pick the parametrized
     # Option__X / Result__X__Y based on:
@@ -3348,36 +3348,36 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 if vsf.name.starts_with(ev_name + "_"):
                     variant_field_tys.push(vsf.ty)
                 vfi += 1
-            String out = ""
+            String ev_out = ""
             if dst >= 0:
-                out = v(dst) + " = "
-            out = out + "(" + parent_c + "){.tag = " + int_to_str(variant_tag)
+                ev_out = v(dst) + " = "
+            ev_out = ev_out + "(" + parent_c + "){.tag = " + int_to_str(variant_tag)
             if args.len() > 0:
                 if pdef.is_union_layout:
                     # Large enum: payload lives in a union named `data`.
-                    out = out + ", .data = {"
+                    ev_out = ev_out + ", .data = {"
                     if args.len() == 1:
                         # Single-field variant: direct union member.
-                        out = out + "." + ev_name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, &val_types, &sn, &m)
+                        ev_out = ev_out + "." + ev_name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, &val_types, &sn, &m)
                     else:
                         # Multi-field variant: nested struct named after variant.
-                        out = out + "." + ev_name + " = {"
+                        ev_out = ev_out + "." + ev_name + " = {"
                         int va = 0
                         while va < args.len():
                             if va > 0:
-                                out = out + ", "
-                            out = out + "." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                                ev_out = ev_out + ", "
+                            ev_out = ev_out + "." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
                             va += 1
-                        out = out + "}"
-                    out = out + "}"
+                        ev_out = ev_out + "}"
+                    ev_out = ev_out + "}"
                 else:
                     # Flat layout: payload fields are direct struct members.
                     int va = 0
                     while va < args.len():
-                        out = out + ", ." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
+                        ev_out = ev_out + ", ." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, &val_types, &sn, &m)
                         va += 1
-            out = out + "};"
-            return out
+            ev_out = ev_out + "};"
+            return ev_out
     int ai = 0
     while ai < args.len():
         if ai > 0:
