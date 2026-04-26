@@ -2514,18 +2514,37 @@ int lookup_ctor_field_type(String enum_name, String variant_name, int field_idx,
         # Use the pre-existing I64 fallback until we can mirror Pass 3's
         # try-each-split approach here.
         return I64_TYPE
-    if not gmod.type_infos.contains(enum_name):
-        return I64_TYPE
-    GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
-    int vi = 0
-    while vi < ti.variants.len():
-        GirEnumVariantInfo v = ti.variants.get(vi).unwrap()
-        if v.name == variant_name:
-            if field_idx < v.fields.len():
-                GirFieldInfo f = v.fields.get(field_idx).unwrap()
-                return resolve_field_gir_type(f.type_name, &gmod)
-            return I64_TYPE
-        vi += 1
+    # Prefer parallel ti_vals (Dict[String, _] state-loss workaround) —
+    # without this, `gmod.type_infos.contains(enum_name)` silently misses
+    # at stage-1 runtime and we fall back to I64_TYPE for every match-arm
+    # binding. The bound local inherits I64, and downstream field access
+    # cascades into "base type 'int64_t'" errors.
+    int tii = type_info_index(&gmod, enum_name)
+    String found_field_type = ""
+    if tii >= 0:
+        GirTypeInfo ti_p = gmod.type_info_vals.get(tii).unwrap()
+        int vi_p = 0
+        while vi_p < ti_p.variants.len():
+            GirEnumVariantInfo v_p = ti_p.variants.get(vi_p).unwrap()
+            if v_p.name == variant_name:
+                if field_idx < v_p.fields.len():
+                    GirFieldInfo f_p = v_p.fields.get(field_idx).unwrap()
+                    found_field_type = f_p.type_name.clone()
+                break
+            vi_p += 1
+    if found_field_type == "" and gmod.type_infos.contains(enum_name):
+        GirTypeInfo ti = gmod.type_infos.get(enum_name).unwrap()
+        int vi = 0
+        while vi < ti.variants.len():
+            GirEnumVariantInfo v = ti.variants.get(vi).unwrap()
+            if v.name == variant_name:
+                if field_idx < v.fields.len():
+                    GirFieldInfo f = v.fields.get(field_idx).unwrap()
+                    found_field_type = f.type_name.clone()
+                break
+            vi += 1
+    if found_field_type != "":
+        return resolve_field_gir_type(found_field_type, &gmod)
     return I64_TYPE
 
 void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm] arms, GirModule &gmod, bool is_main):
