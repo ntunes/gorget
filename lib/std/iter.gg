@@ -223,6 +223,25 @@ trait Iterator[T]:
     EnumerateIter[Self, T] enumerate(self):
         return EnumerateIter[Self, T](self, 0)
 
+# ── Iterable[T] trait ─────────────────────────────────────────
+#
+# Capability trait for "this type can be iterated non-consumingly."
+# `iter(&self)` returns a concrete `Iterator[T]` that walks the
+# elements without disturbing the source. Standard collections
+# (Vector / Set / Dict) all impl this. User types impl by providing
+# any iterator state machine equipped with `Iterator[T]`.
+#
+# The compiler pre-registers `Iterable` as a builtin placeholder
+# (mirrors `Iterator`'s setup) so existing `equip X with Iterable[T]:`
+# blocks parse before this user-space declaration loads. When this
+# declaration is processed it shadows the placeholder.
+#
+# `for x in v` desugars to name-based dispatch on `iter()` — the
+# trait provides the contract and enables `[Iterable T]` bounds, but
+# the for-loop fast path doesn't go through trait-vtable lookup.
+trait Iterable[T]:
+    Iterator[T] iter(&self)
+
 struct VectorIter[T]:
     Vector[T] source
     int idx
@@ -235,9 +254,11 @@ equip [T] VectorIter[T] with Iterator[T]:
         self.idx = self.idx + 1
         return self.source.get(cur)
 
-equip [T] Vector[T]:
-    VectorIter[T] iter(self):
+equip [T] Vector[T] with Iterable[T]:
+    VectorIter[T] iter(&self):
         return VectorIter[T](self, 0)
+
+equip [T] Vector[T]:
 
     # ── User-space convenience wrappers ────────────────────────
     #
@@ -708,10 +729,11 @@ equip [T] SetIter[T] with Iterator[T]:
         self.cursor = self.cursor + 1
         return Some(!out)
 
-equip [T] Set[T]:
+equip [T] Set[T] with Iterable[T]:
     SetIter[T] iter(&self):
         return SetIter[T](self, 0)
 
+equip [T] Set[T]:
     void each[F](&self, F f):
         self.iter().for_each[F](f)
 
@@ -773,7 +795,7 @@ equip [K, V] DictIter[K, V] with Iterator[(K, V)]:
         self.cursor = self.cursor + 1
         return Some((!k, !v))
 
-equip [K, V] Dict[K, V]:
+equip [K, V] Dict[K, V] with Iterable[(K, V)]:
     DictIter[K, V] iter(&self):
         return DictIter[K, V](self, 0)
 

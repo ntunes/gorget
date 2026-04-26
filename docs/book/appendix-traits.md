@@ -201,13 +201,21 @@ trait Iterator[T]:
 The core iteration protocol. Returns `Some(value)` for each element, `None`
 when exhausted. Takes `&self` (mutable borrow) to advance internal state.
 
-### iter() — name-based iteration
+### Iterable[T]
+
+```gorget
+trait Iterable[T]:
+    Iterator[T] iter(&self)
+```
 
 `for x in collection` calls `collection.iter()` to get an `Iterator[T]`,
-then calls `next()` repeatedly. The convention is name-based — any type
-with an `iter()` method that returns something equipped with
-`Iterator[T]` can drive a for-loop. `Vector[T]`, `Set[T]`, `Dict[K, V]`,
-and the lazy adapter chain (`TakeIter`, `MapIter`, …) all participate.
+then calls `next()` repeatedly. Dispatch is name-based — the for-loop
+fast path doesn't go through trait-vtable lookup, so chains compose at
+monomorphisation without virtual dispatch. The trait provides the
+contract for `[Iterable T]` generic bounds and documents what `iter()`
+returns. `Vector[T]`, `Set[T]`, `Dict[K, V]`, and every lazy adapter
+(`TakeIter`, `MapIter`, …) implement `Iterator[T]` (which is itself
+walkable in a for-loop without going through Iterable).
 
 > Types that implement `Iterator[T]` directly (no separate iterator
 > struct) can also be used in a `for`-loop — the compiler treats the

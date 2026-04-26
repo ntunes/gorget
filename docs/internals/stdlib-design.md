@@ -109,11 +109,13 @@ trait Hasher:
 
 ```gorget
 trait Iterable[T]:
-    # Non-consuming iteration. Default; `for x in v` desugars to this.
-    # The returned iterator type is concrete (monomorphized per Self),
-    # not a trait object — see §4.1.
-    type Iter: Iterator[T &]
-    Self::Iter iter(&self)
+    # Non-consuming iteration. `for x in v` desugars to name-based
+    # dispatch on `iter()`; the trait provides the contract and
+    # enables `[Iterable T]` generic bounds. The returned iterator
+    # type is concrete (monomorphized per Self), not a trait object
+    # — see §4.1. Real declaration ships in `lib/std/iter.gg`;
+    # equipped by Vector / Set / Dict.
+    Iterator[T] iter(&self)
 
 trait Drainable[T]:
     # Consuming iteration. Source is moved into the iterator and the
