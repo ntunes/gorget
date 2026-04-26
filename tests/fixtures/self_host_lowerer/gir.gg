@@ -195,6 +195,12 @@ struct GirModule:
     # is used in a field access.
     Vector[String] fn_sig_keys
     Vector[int] fn_sig_vals
+    # Parallel storage for type_subs — same workaround. Without this,
+    # generic type-param substitutions (R → File for `reader_drain[R]`)
+    # silently miss → method call dispatches to `R__read` which is
+    # undefined at link time.
+    Vector[String] type_sub_keys
+    Vector[int] type_sub_vals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -377,6 +383,42 @@ void fn_sig_register(GirModule &gmod, String name, int ret_tid):
         i += 1
     gmod.fn_sig_keys.push(name.clone())
     gmod.fn_sig_vals.push(ret_tid)
+
+# Parallel-Vector accessors for type_subs.
+bool type_sub_contains(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.type_sub_keys.len():
+        String k = gmod.type_sub_keys.get(i).unwrap()
+        if k == name:
+            return true
+        i += 1
+    return false
+
+int type_sub_lookup(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.type_sub_keys.len():
+        String k = gmod.type_sub_keys.get(i).unwrap()
+        if k == name:
+            return gmod.type_sub_vals.get(i).unwrap()
+        i += 1
+    return -1
+
+void type_sub_register(GirModule &gmod, String name, int tid):
+    int i = 0
+    while i < gmod.type_sub_keys.len():
+        String k = gmod.type_sub_keys.get(i).unwrap()
+        if k == name:
+            gmod.type_sub_vals.set(i, tid)
+            return
+        i += 1
+    gmod.type_sub_keys.push(name.clone())
+    gmod.type_sub_vals.push(tid)
+
+void type_sub_clear(GirModule &gmod):
+    Vector[String] empty_k = []
+    Vector[int] empty_v = []
+    gmod.type_sub_keys = !empty_k
+    gmod.type_sub_vals = !empty_v
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []

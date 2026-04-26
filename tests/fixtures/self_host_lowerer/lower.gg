@@ -309,12 +309,16 @@ String prim_to_c_name(String name):
 String type_to_c_name(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            # Check type substitutions for mangling
+            # Check type substitutions for mangling — parallel first.
+            if type_sub_contains(&gmod, name):
+                return type_id_to_name(type_sub_lookup(&gmod, name), &gmod)
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return prim_to_c_name(name)
         case TNamed(name, targs):
-            # Check type substitutions for mangling
+            # Check type substitutions for mangling — parallel first.
+            if type_sub_contains(&gmod, name):
+                return type_id_to_name(type_sub_lookup(&gmod, name), &gmod)
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return mangle_type_name(name, targs, &gmod)
@@ -325,7 +329,9 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            # Check type substitutions (generic monomorphization)
+            # Check type substitutions (generic monomorphization) — parallel first.
+            if type_sub_contains(&gmod, name):
+                return type_sub_lookup(&gmod, name)
             if gmod.type_subs.contains(name):
                 return gmod.type_subs.get(name).unwrap()
             match name:
@@ -342,7 +348,9 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                 else:
                     pass
         case TNamed(name, targs):
-            # Check type substitutions (generic monomorphization)
+            # Check type substitutions (generic monomorphization) — parallel first.
+            if type_sub_contains(&gmod, name):
+                return type_sub_lookup(&gmod, name)
             if gmod.type_subs.contains(name):
                 return gmod.type_subs.get(name).unwrap()
             # Resolve type aliases (meta type = ...)
@@ -3654,19 +3662,26 @@ String compute_mangled_name(Vector[SpannedType] targs, String base_name):
         ti += 1
     return mangled
 
-# Set up type substitutions for a generic instance
+# Set up type substitutions for a generic instance. Mirror Dict puts
+# into parallel Vectors to dodge the Dict[String, _] state-loss bug —
+# without this, `R`/`W` type-param substitutions silently miss in
+# stage-1 runtime and method dispatch emits `R__read` / `W__write`
+# undefined refs.
 void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[SpannedType] type_args):
     gmod.type_subs = {}
+    type_sub_clear(&gmod)
     int i = 0
     while i < type_params.len() and i < type_args.len():
         String param_name = type_params.get(i).unwrap()
         SpannedType arg_type = type_args.get(i).unwrap()
         int tid = map_ast_type(arg_type, &gmod)
         gmod.type_subs.put(param_name, tid)
+        type_sub_register(&gmod, param_name, tid)
         i += 1
 
 void clear_type_subs(GirModule &gmod):
     gmod.type_subs = {}
+    type_sub_clear(&gmod)
 
 # Lower a monomorphized instance of a generic function
 void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String] type_params, Vector[SpannedType] type_args, GirModule &gmod):
@@ -4401,7 +4416,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         call_redirect_keys.push(cr_k.clone())
         call_redirect_vals.push(call_redirects.get(cr_k).unwrap().clone())
         cr_i += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init)
+    Vector[String] type_sub_keys_init = []
+    Vector[int] type_sub_vals_init = []
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -4563,6 +4580,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             GenericInstance tinst = generic_instances.get(tfix_i).unwrap()
             String tfix_key = tinst.base_name.clone()
             int tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
+            if tfix_idx < 0 and call_redirect_contains(&gmod, tinst.base_name):
+                tfix_key = call_redirect_lookup(&gmod, tinst.base_name)
+                tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
             if tfix_idx < 0 and gmod.call_redirects.contains(tinst.base_name):
                 tfix_key = gmod.call_redirects.get(tinst.base_name).unwrap()
                 tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
@@ -4978,9 +4998,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     int mi = 0
     while mi < generic_instances.len():
         GenericInstance inst = generic_instances.get(mi).unwrap()
-        # Look up template by base name, or by call-redirected (mangled) name
+        # Look up template by base name, or by call-redirected (mangled) name.
+        # Prefer parallel call_redirects to dodge Dict[String, _] state-loss.
         String fn_key = inst.base_name.clone()
         int fn_idx = keys_index_of(&fn_template_keys, fn_key)
+        if fn_idx < 0 and call_redirect_contains(&gmod, inst.base_name):
+            fn_key = call_redirect_lookup(&gmod, inst.base_name)
+            fn_idx = keys_index_of(&fn_template_keys, fn_key)
         if fn_idx < 0 and gmod.call_redirects.contains(inst.base_name):
             fn_key = gmod.call_redirects.get(inst.base_name).unwrap()
             fn_idx = keys_index_of(&fn_template_keys, fn_key)
