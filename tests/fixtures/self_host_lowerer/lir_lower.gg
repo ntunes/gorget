@@ -26,18 +26,50 @@ from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
+# ── Type-info key helper ────────────────────────────────────
+# `gmod.type_infos.keys()` returns DUPLICATE keys at stage-1 runtime
+# (Dict[String, _] state-loss bug). Use the parallel `type_info_keys`
+# Vector populated alongside the Dict in lower.gg. Falls back to the
+# Dict if the parallel vector hasn't been populated.
+Vector[String] type_info_keys_safe(GirModule &gmod):
+    Vector[String] out = []
+    if gmod.type_info_keys.len() > 0:
+        int i = 0
+        while i < gmod.type_info_keys.len():
+            out.push(gmod.type_info_keys.get(i).unwrap().clone())
+            i += 1
+        return out
+    return gmod.type_infos.keys()
+
 # ── Struct Registry ─────────────────────────────────────────
+# Parallel-Vector backing for the same Dict[String, _] state-loss reason
+# as gmod.named_keys / type_info_keys. The Dict version misses lookups
+# at stage-1 runtime → duplicate `m.structs` entries → "redefinition"
+# C errors in stage-2.
 
 struct StructRegistry:
-    Dict[String, int] name_to_id
+    Vector[String] keys
+    Vector[int] vals
 
 int sr_lookup(StructRegistry &sr, String name):
-    if sr.name_to_id.contains(name):
-        return sr.name_to_id.get(name).unwrap()
+    int i = 0
+    while i < sr.keys.len():
+        String k = sr.keys.get(i).unwrap()
+        if k == name:
+            return sr.vals.get(i).unwrap()
+        i += 1
     return -1
 
 int sr_register(StructRegistry &sr, String name, int id):
-    sr.name_to_id.put(name, id)
+    int i = 0
+    while i < sr.keys.len():
+        String k = sr.keys.get(i).unwrap()
+        if k == name:
+            sr.vals.set(i, id)
+            return id
+        i += 1
+    sr.keys.push(name.clone())
+    sr.vals.push(id)
     return id
 
 # ── Builtin struct definitions ──────────────────────────────
@@ -367,7 +399,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
     # Collect enum variant names to skip them in Pass 1 — they should be
     # represented as their parent enum, not as their own standalone struct.
     Dict[String, bool] enum_variant_names = {}
-    Vector[String] ti_all_keys = gmod.type_infos.keys()
+    Vector[String] ti_all_keys = type_info_keys_safe(&gmod)
     int tiek = 0
     while tiek < ti_all_keys.len():
         String tname_k = ti_all_keys.get(tiek).unwrap()
@@ -429,8 +461,12 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 pass
         ti += 1
 
-    # Pass 1b: Ensure all types from type_infos have LIR struct entries
-    Vector[String] ti_keys = gmod.type_infos.keys()
+    # Pass 1b: Ensure all types from type_infos have LIR struct entries.
+    # Use the parallel `type_info_keys` (via type_info_keys_safe) — the
+    # Dict.keys() at stage-1 runtime returns DUPLICATE keys due to the
+    # Dict[String, _] state-loss bug, registering each struct twice in
+    # `m.structs` → "redefinition of struct" cc errors in stage-2.
+    Vector[String] ti_keys = type_info_keys_safe(&gmod)
     int tki_pre = 0
     while tki_pre < ti_keys.len():
         String tname = ti_keys.get(tki_pre).unwrap()
@@ -479,7 +515,10 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             pcv_i += 1
         pc_i += 1
 
-    # Pass 2: Fill in struct/enum fields from GIR type info
+    # Pass 2: Fill in struct/enum fields from GIR type info.
+    # Use parallel ti_vals — Dict.contains() at stage-1 runtime returns
+    # false for valid keys, causing Pass 2 to skip filling the struct →
+    # placeholder stays as `char __pad` → "incomplete type" cc errors.
     int tki = 0
     while tki < ti_keys.len():
         String tname = ti_keys.get(tki).unwrap()
@@ -487,7 +526,17 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         if sid < 0:
             tki += 1
             continue
-        GirTypeInfo tinfo = gmod.type_infos.get(tname).unwrap()
+        int tii = type_info_index(&gmod, tname)
+        bool have_via_parallel = tii >= 0
+        bool have_via_dict = gmod.type_infos.contains(tname)
+        if not have_via_parallel and not have_via_dict:
+            tki += 1
+            continue
+        GirTypeInfo tinfo = GirTypeInfo("", [], [], false)
+        if have_via_dict:
+            tinfo = gmod.type_infos.get(tname).unwrap()
+        else:
+            tinfo = gmod.type_info_vals.get(tii).unwrap()
         LirStructDef sdef = m.structs.get(sid).unwrap()
         # Only fill if placeholder (empty fields)
         if sdef.fields.len() > 0:
@@ -2585,7 +2634,7 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types):
 # Populate drop/clone metadata on the LirModule from GIR type info.
 void populate_drop_metadata(LirModule &m, GirModule &gmod):
     # Pass 1: Struct field drops
-    Vector[String] type_keys = gmod.type_infos.keys()
+    Vector[String] type_keys = type_info_keys_safe(&gmod)
     int ki = 0
     while ki < type_keys.len():
         String type_name = type_keys.get(ki).unwrap()
@@ -2671,7 +2720,9 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
 
 LirModule lower_gir_to_lir(GirModule &gmod):
     LirModule m = new_lir_module()
-    StructRegistry sr = StructRegistry({})
+    Vector[String] sr_keys = []
+    Vector[int] sr_vals = []
+    StructRegistry sr = StructRegistry(!sr_keys, !sr_vals)
 
     # Copy imported-type flags from GirModule (loader stores imported struct
     # and enum names with "__imported_type__NAME" keys). Used downstream to
@@ -2688,7 +2739,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 
     # Populate enum variant → parent enum map for codegen rewriting of
     # `Variant(args)` calls into inline struct initializers.
-    Vector[String] ti_keys_v = gmod.type_infos.keys()
+    Vector[String] ti_keys_v = type_info_keys_safe(&gmod)
     int tivi = 0
     while tivi < ti_keys_v.len():
         String tname_v = ti_keys_v.get(tivi).unwrap()

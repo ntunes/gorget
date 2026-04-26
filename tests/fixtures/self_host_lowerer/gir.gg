@@ -184,6 +184,11 @@ struct GirModule:
     # downstream method dispatch on the wrongly-typed receiver fails.
     Vector[String] type_info_keys
     Vector[GirTypeInfo] type_info_vals
+    # Parallel storage for call_redirects — same workaround. Without this,
+    # `extern foo() = "bar"` symbol redirects silently miss at stage-1
+    # runtime and the call emits with empty fname (`); ` orphan).
+    Vector[String] call_redirect_keys
+    Vector[String] call_redirect_vals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -317,6 +322,25 @@ void type_info_register(GirModule &gmod, String name, GirTypeInfo info):
         gmod.type_info_vals.push(info)
     else:
         gmod.type_info_vals.set(idx, info)
+
+# Parallel-Vector accessors for call_redirects.
+bool call_redirect_contains(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.call_redirect_keys.len():
+        String k = gmod.call_redirect_keys.get(i).unwrap()
+        if k == name:
+            return true
+        i += 1
+    return false
+
+String call_redirect_lookup(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.call_redirect_keys.len():
+        String k = gmod.call_redirect_keys.get(i).unwrap()
+        if k == name:
+            return gmod.call_redirect_vals.get(i).unwrap().clone()
+        i += 1
+    return ""
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
