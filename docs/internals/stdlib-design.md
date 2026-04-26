@@ -63,7 +63,7 @@ Two naming patterns for two kinds of traits:
 
 | Kind | Suffix | Test | Examples |
 |------|--------|------|----------|
-| **Capability** — a property of a type that has other purposes | `-able` / `-ible` | "this type **is** X" | Equatable, Comparable, Hashable, Displayable, **Debuggable**, Cloneable, Iterable, IntoIterable, Serializable |
+| **Capability** — a property of a type that has other purposes | `-able` / `-ible` | "this type **is** X" | Equatable, Comparable, Hashable, Displayable, **Debuggable**, Cloneable, Iterable, Drainable, Serializable |
 | **Role** — the primary purpose of a type | `-er` / `-or` | "this type **is a** X" | Iterator, Writer, Reader, Hasher, Formatter, Handler |
 | **Operator / conversion** | bare verb/noun | standard math/conversion | Add, Sub, From, Into, Index, Default |
 | **Domain** | bare noun | natural concept name | Shape, Collection |
@@ -115,10 +115,12 @@ trait Iterable[T]:
     type Iter: Iterator[T &]
     Self::Iter iter(&self)
 
-trait IntoIterable[T]:
-    # Consuming iteration. Source is moved into the iterator.
-    type IntoIter: Iterator[T !]
-    Self::IntoIter into_iter(!self)
+trait Drainable[T]:
+    # Consuming iteration. Source is moved into the iterator and the
+    # caller can no longer use it after `drain()` returns. "Drain" is
+    # canonical collection-API vocabulary for "iterate by emptying."
+    type DrainIter: Iterator[T !]
+    Self::DrainIter drain(!self)
 
 trait Equatable:
     bool eq(self, Self other)
@@ -129,14 +131,10 @@ trait Comparable:
 trait Hashable:
     # State-based hashing: composes — struct impls forward field hashes
     # into the same Hasher without re-inventing combine logic.
-    #
-    # v1 ships a single concrete `FxHasher` and the Hashable signature
-    # names it directly (`void hash(self, FxHasher &h)`). Generalizing
-    # to `void hash[H: Hasher](self, H &h)` is blocked on method-level
-    # generic dispatch through trait methods — tracked in TODO.md.
-    # Swapping in a different Hasher works today via subclass-by-field
-    # composition (wrap FxHasher) until the generic path lands.
-    void hash(self, FxHasher &h)
+    # Generic over the Hasher implementation; the consumer picks the
+    # algorithm (FxHash for in-process, SipHash for DoS-resistance,
+    # …). `std.hash` ships `FxHasher` as the default.
+    void hash[Hasher H](self, H &h)
 
 trait Displayable:
     # User-facing representation. Hand-written, not derived.
@@ -154,11 +152,11 @@ trait Default:
     Self default()
 ```
 
-### Relationship: Iterable vs IntoIterable vs Iterator
+### Relationship: Iterable vs Drainable vs Iterator
 
 - **Iterable** — can produce many iterators; source survives. `v.iter()`
   yields `T &` (mut borrow). This is what `for x in v` desugars to.
-- **IntoIterable** — single consuming iteration; source is moved. `v.into_iter()`
+- **Drainable** — single consuming iteration; source is moved. `v.drain()`
   yields `T !` (owned). Use when you want to transfer elements into a new
   collection without cloning.
 - **Iterator** — cursor state, generic over what it yields. A single
@@ -167,7 +165,7 @@ trait Default:
 
 ### Concrete Return, Not Trait Object
 
-`iter()` and `into_iter()` return a **concrete type** (specific to the collection
+`iter()` and `drain()` return a **concrete type** (specific to the collection
 and any adapter chain), not a trait object. This matters:
 
 - `.iter().filter(f).map(g).take(10).collect()` must monomorphize so closures
@@ -182,7 +180,7 @@ abbreviation may follow once the system is in place.
 ## 4. Iterator: The M+N Payoff
 
 All higher-order operations are defined **once** on `Iterator[T]` via equip.
-Any type that implements `Iterable` or `IntoIterable` gets them all for free.
+Any type that implements `Iterable` or `Drainable` gets them all for free.
 
 ### 4.1 Lazy by Default (No Eager Transition)
 
@@ -212,7 +210,7 @@ what each element yields. Gorget supports two tiers:
 | Instantiation | Yields | Source after | Typical producer |
 |---------------|--------|--------------|------------------|
 | `Iterator[T &]` | mutable borrow | alive | `Iterable.iter()` |
-| `Iterator[T !]` | owned move | consumed | `IntoIterable.into_iter()` |
+| `Iterator[T !]` | owned move | consumed | `Drainable.drain()` |
 
 One trait, two instantiations. HOFs (`map`, `filter`, `fold`, …) are defined
 once on `Iterator[T]` and work for both — closures receive whatever `T`
@@ -228,13 +226,13 @@ process(names)                      # still alive
 
 # Consuming iteration — move elements out, `names` is gone:
 Set[String] unique = Set[String]()
-for name in !names.into_iter():     # yields String ! (move)
+for name in names.drain():          # yields String ! (move)
     unique.add(!name)               # transfer ownership, no clone
-# `names` is moved; using it again is a compile error
+# `names` is moved (drain consumed it); using it again is a compile error
 
 # Functional chain — whole pipeline monomorphizes:
 Vector[int] lens = names.iter().map((s &): s.len()).collect()
-Set[String] set = names.into_iter().collect()
+Set[String] set = names.drain().collect()
 ```
 
 **The read-only / const-borrow tier (`Iterator[T]` with bare `T`) is
@@ -336,7 +334,7 @@ See §10 for the full plan. Summary:
    type-argument positions (`Iterator[T &]`).
 2. **Phase 2b:** Compiler support for concrete iterator return types
    (monomorphized adapter chains).
-3. **Phase 2c:** Define `Iterator`/`Iterable`/`IntoIterable` traits and all
+3. **Phase 2c:** Define `Iterator`/`Iterable`/`Drainable` traits and all
    equip methods listed above — **lazy from day one**.
 4. **Phase 2d:** Vector/Dict/Set convenience wrappers (`v.map(f)` ≡
    `v.iter().map(f).collect()`).
@@ -425,7 +423,7 @@ common case; the narrow waist sits underneath.
 | `rstrip()` | `trim_right()` — renamed for clarity |
 | `char_at()` | `byte_at()` — was deprecated |
 
-**String implements:** `Iterable[String]` (iterate codepoints), `IntoIterable[String]`, `Writer` (append bytes to buffer), `Displayable` (identity), `Debuggable` (quoted + escaped), `Equatable`, `Comparable`, `Hashable`, `Cloneable`, `Default`.
+**String implements:** `Iterable[String]` (iterate codepoints), `Drainable[String]`, `Writer` (append bytes to buffer), `Displayable` (identity), `Debuggable` (quoted + escaped), `Equatable`, `Comparable`, `Hashable`, `Cloneable`, `Default`.
 
 ### Vector[T]
 
@@ -494,7 +492,7 @@ common case; the narrow waist sits underneath.
 | `zip(other)` | `iter().zip(other).collect()` | Pair elements |
 | `enumerate()` | `iter().enumerate().collect()` | Add indices |
 
-**Vector implements:** `Iterable[T]`, `IntoIterable[T]`, `Equatable` (where `T: Equatable`), `Cloneable` (where `T: Cloneable`), `Default`, `Displayable` (where `T: Displayable`), `Debuggable` (where `T: Debuggable`), `Measurable`.
+**Vector implements:** `Iterable[T]`, `Drainable[T]`, `Equatable` (where `T: Equatable`), `Cloneable` (where `T: Cloneable`), `Default`, `Displayable` (where `T: Displayable`), `Debuggable` (where `T: Debuggable`), `Measurable`.
 
 ### Dict[K, V]
 
@@ -531,7 +529,7 @@ common case; the narrow waist sits underneath.
 **From Iterator:** `filter`, `fold`, `map_values`, `map_keys` via
 `iter().method()` patterns.
 
-**Dict implements:** `Iterable[(K, V)]`, `IntoIterable[(K, V)]`, `Equatable` (where `K, V: Equatable`), `Cloneable` (where `K, V: Cloneable`), `Default`, `Debuggable` (where `K, V: Debuggable`), `Measurable`. Requires `K: Hashable + Equatable`.
+**Dict implements:** `Iterable[(K, V)]`, `Drainable[(K, V)]`, `Equatable` (where `K, V: Equatable`), `Cloneable` (where `K, V: Cloneable`), `Default`, `Debuggable` (where `K, V: Debuggable`), `Measurable`. Requires `K: Hashable + Equatable`.
 
 ### Set[T]
 
@@ -558,7 +556,7 @@ common case; the narrow waist sits underneath.
 | `len()` | `() -> int` | Element count |
 | `is_empty()` | `() -> bool` | len() == 0 |
 
-**Set implements:** `Iterable[T]`, `IntoIterable[T]`, `Equatable`, `Cloneable` (where `T: Cloneable`), `Default`, `Debuggable` (where `T: Debuggable`), `Measurable`. Requires `T: Hashable + Equatable`.
+**Set implements:** `Iterable[T]`, `Drainable[T]`, `Equatable`, `Cloneable` (where `T: Cloneable`), `Default`, `Debuggable` (where `T: Debuggable`), `Measurable`. Requires `T: Hashable + Equatable`.
 
 ### Option[T]
 
@@ -942,7 +940,7 @@ work:
 6. Minor: `windows(n)` / `chunks(n)` on Vector (eager Vector[Vector[T]]
    version; lazy Iterator version lands in Phase 2).
 
-### Phase 2: Iterator, Iterable, IntoIterable (depends on type-system work)
+### Phase 2: Iterator, Iterable, Drainable (depends on type-system work)
 
 This phase has **real type-system prerequisites** — see §4.2, §4.3, and §3.
 
@@ -1143,7 +1141,7 @@ feature itemised below the checklist.
 | Dict-flavoured convenience wrappers — **Vector wrappers shipped 2026-04-21** (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter`). **Set wrappers also ship today** (`s.each` / `s.for_each` / `s.any` / `s.all` / `s.find` / `s.find_index` / `s.fold`) — same shape as Vector, delegating through `s.iter()` which now returns the lazy `SetIter[T]` (item 8). **Dict wrappers still deferred** — design hold, not a compiler limitation. The existing builtin `Dict.any(K, V)` / `.all(K, V)` / `.each(K, V)` / `.fold(A, K, V)` methods take key and value as TWO separate closure args; iterator wrappers would take a single `(K, V)` tuple arg. Picking either shape breaks the other set of callers. Users who want tuple semantics today write it explicitly (`d.iter().any(p)` / `d.iter().fold(0, f)`); the public-API decision can wait for a deliberate breaking-change pass. `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 2) | Dict tuple-vs-2-args API decision | `docs/internals/method-level-inference.md` |
 | Comparable-bounded defaults (`min` / `max` / `sum` / `product` / `join` / `contains` as Iterator defaults) | per-method trait-bound declarations (e.g. `where T: Comparable`) + bulk-emission skip logic for impls that fail the bound; without this, default-method emission specialises Iterator[T] for self-host driver Ts that don't satisfy `<` / `+` / `.display()` etc. and emits broken codegen — verified by self_host_bootstrap regression on 2026-04-20 | _to be written_ |
 | Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) — **all three targets shipped 2026-04-22/23**. Vector (`Vector[T] v = it.collect()`): default-method sig registration in `register_trait_equip_sigs` + demand-gated bulk emission produce a concrete `X__collect` returning `Vector[T]` per iterator impl. Set (`Set[T] s = it.collect()`): Pass 2.6 AST rewrite (`apply_collect_target_rewrites` in `src/semantic/typecheck.rs`) swaps `.collect()` → `.to_set()` when the VarDecl's declared type is `Set[_]`, routing through a new `Iterator[T]::to_set(&self)` trait default. Dict (`Dict[K, V] d = pairs.collect()`): same rewrite splices K/V from the LHS into the method's generic args and swaps to `.to_dict[K, V]()`, routing through a new `Iterator[T]::to_dict[K, V](&self)` trait default that `.put(x.0, x.1)`s tuple elements from the iterator. Non-tuple `T`s fail at mono emission since the body reaches for `x.0`/`x.1` — users who try `Dict[K, V] = non_pairs.iter().collect()` get a compile error. Fixtures: `tests/fixtures/iter_collect_set.gg`, `iter_collect_dict.gg`. Still deferred (low priority): turbofish form `it.collect[Set[int]]()` would require `.collect()` itself to become method-generic; today explicit turbofish routes through `.to_set[T]()` / `.to_dict[K, V]()` directly. | — | — |
-| Auto-import std.iter via the loader — **SHIPPED 2026-04-23** (commit a5b3ba7a). `v.iter().map(f).filter(p).collect()` in a scratch file compiles and runs without any `from std.iter import ...` boilerplate. The heuristic fires when the entry module references `Iterator`/`Iterable`/`IntoIterable`/adapter-struct names or calls `.iter()` anywhere, subject to shadowing (e.g. `vector_iter_userdef.gg` defines its own `VectorIter`) and existing-import checks. Turn-on required two prerequisites landed in the same commit: (1) trait-T binding in per-call-site mono (`try_register_method_instance` + `lower_method_instance` push trait-generic-name → substituted-trait-arg BEFORE Self + impl subs so trait-body refs win when names collide, e.g. `equip CounterIter with Iterator[int]:`'s inherited `fold[A, F]` specialises correctly); (2) non-generic-equip registration in `equip_templates` when the trait has defaults OR is an iterator-protocol name, so chain inference via `infer_expr_ast_type` can resolve `Counter(0, 5).iter()` → `CounterIter`. Fixture migrations: `iterator_adapters.gg` + `linked_list.gg` + `examples/iterator_demo.gg` + `examples/linked_list.gg` now call `.collect()` explicitly where they previously relied on the eager `try_lower_iterator_adapter` shortcut (that path stays as a fallback when the trait default isn't in scope). | — | — |
+| Auto-import std.iter via the loader — **SHIPPED 2026-04-23** (commit a5b3ba7a). `v.iter().map(f).filter(p).collect()` in a scratch file compiles and runs without any `from std.iter import ...` boilerplate. The heuristic fires when the entry module references `Iterator`/`Iterable`/`Drainable`/adapter-struct names or calls `.iter()` anywhere, subject to shadowing (e.g. `vector_iter_userdef.gg` defines its own `VectorIter`) and existing-import checks. Turn-on required two prerequisites landed in the same commit: (1) trait-T binding in per-call-site mono (`try_register_method_instance` + `lower_method_instance` push trait-generic-name → substituted-trait-arg BEFORE Self + impl subs so trait-body refs win when names collide, e.g. `equip CounterIter with Iterator[int]:`'s inherited `fold[A, F]` specialises correctly); (2) non-generic-equip registration in `equip_templates` when the trait has defaults OR is an iterator-protocol name, so chain inference via `infer_expr_ast_type` can resolve `Counter(0, 5).iter()` → `CounterIter`. Fixture migrations: `iterator_adapters.gg` + `linked_list.gg` + `examples/iterator_demo.gg` + `examples/linked_list.gg` now call `.collect()` explicitly where they previously relied on the eager `try_lower_iterator_adapter` shortcut (that path stays as a fallback when the trait default isn't in scope). | — | — |
 
 Vector's `swap_remove` / `retain` / `fill` / `swap` method-level
 bindings and the `lazy_windows` / `lazy_chunks` rename to drop the
