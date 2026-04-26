@@ -4846,12 +4846,47 @@ fn emit_inst(
             // Look up the extern declaration
             let ext = module.externs.iter().find(|e| e.name == *name);
             if let Some(ext) = ext {
-                // CStr return ABI: function returns const char*, wrap to GorgetString
+                // CStr return ABI: function returns const char*. Two consumer
+                // patterns coexist in our LIR:
+                //   • "Implicit-String": LIR feeds the result straight into a
+                //     `slot_store s_str, v` (treats it as a wrapped GorgetString,
+                //     e.g. `String b = path_basename(p)`). Here we MUST wrap at
+                //     the call site, otherwise the slot_store memcpys 8 bytes
+                //     of cstr ptr into a 32-byte struct slot.
+                //   • "Explicit-cstr": LIR null-checks the raw cstr (`cmp.ne v, null`)
+                //     and explicitly wraps via `gorget_str_from_cstr(v)` in the
+                //     non-null branch (the lifts.rs nullable-cstr → Option/Result
+                //     path). Here we must NOT wrap, otherwise `%v` is the alloca
+                //     pointer (never null) and the cmp always picks the wrong
+                //     branch, plus the LIR's explicit wrap reads the alloca's
+                //     bytes as a cstr → garbage error message.
+                //
+                // Disambiguate by looking ahead at how `dst` is consumed:
                 if ext.return_abi == crate::ir::abi::AbiKind::CStr {
                     if let Some(d) = dst {
                         let uid = *trap_counter;
                         *trap_counter += 1;
                         let pfx = format!("cstr_ret.{block_id}.{uid}");
+                        // Lookahead: is `d` consumed by `cmp.ne d, null` or
+                        // `gorget_str_from_cstr(d)` anywhere in the function?
+                        // If so, downstream code expects the raw cstr.
+                        let consumed_as_cstr = func.blocks.iter().any(|b| {
+                            b.insts.iter().any(|i| match i {
+                                Inst::Cmp { lhs, rhs, op: CmpOp::Eq | CmpOp::Ne, .. } => {
+                                    let other = if lhs.0 == d.0 { Some(*rhs) }
+                                                else if rhs.0 == d.0 { Some(*lhs) }
+                                                else { None };
+                                    other.map_or(false, |o| {
+                                        b.insts.iter().any(|j| matches!(j, Inst::NullPtr { dst } if dst.0 == o.0))
+                                            || func.blocks.iter().any(|b2| b2.insts.iter().any(|j| matches!(j, Inst::NullPtr { dst } if dst.0 == o.0)))
+                                    })
+                                }
+                                Inst::CallExtern { name: n, args: a, .. } => {
+                                    n == "gorget_str_from_cstr" && a.iter().any(|x| x.0 == d.0)
+                                }
+                                _ => false,
+                            })
+                        });
                         // Build args — CStr params need .data extraction from GorgetString
                         let mut spill_lines2 = Vec::new();
                         let arg_strs2: Vec<String> = args.iter().enumerate().map(|(i, a)| {
@@ -4877,11 +4912,15 @@ fn emit_inst(
                             }
                         }).collect();
                         for s in &spill_lines2 { writeln!(out, "{s}").unwrap(); }
-                        // Call → returns const char*
-                        writeln!(out, "  %{pfx}.raw = call ptr @{}({})", name, arg_strs2.join(", ")).unwrap();
-                        // Wrap const char* into GorgetString via gorget_str_from_cstr (sret)
-                        writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
-                        writeln!(out, "  call void @gorget_str_from_cstr(ptr sret(%GorgetString) %v{}, ptr %{pfx}.raw)", d.0).unwrap();
+                        if consumed_as_cstr {
+                            // Bind %v{d} to the raw cstr ptr — caller does its own null-check / explicit wrap.
+                            writeln!(out, "  %v{} = call ptr @{}({})", d.0, name, arg_strs2.join(", ")).unwrap();
+                        } else {
+                            // Implicit-String consumer — wrap to GorgetString via sret alloca.
+                            writeln!(out, "  %{pfx}.raw = call ptr @{}({})", name, arg_strs2.join(", ")).unwrap();
+                            writeln!(out, "  %v{} = alloca %GorgetString", d.0).unwrap();
+                            writeln!(out, "  call void @gorget_str_from_cstr(ptr sret(%GorgetString) %v{}, ptr %{pfx}.raw)", d.0).unwrap();
+                        }
                     }
                     return;
                 }
