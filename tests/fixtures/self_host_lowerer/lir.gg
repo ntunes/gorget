@@ -435,6 +435,15 @@ struct LirModule:
     # Downstream: TkEof() constructor needs tag=63 (its enum ordinal), not
     # the 9 that the struct-field-scan heuristic produced.
     Dict[String, int] enum_variant_tag
+    # Parallel-Vector mirrors of the two Dicts above. Same Dict[String, _]
+    # state-loss workaround as gir.gg — without these, stage-1 runtime
+    # silently misses on `enum_variant_parent.contains("TkEof")` etc.
+    # and the generic call path emits `TkEof(...)` as an undefined ref
+    # instead of inlining as `(__gg_Token){.tag=63}`.
+    Vector[String] evp_keys
+    Vector[String] evp_vals
+    Vector[String] evt_keys
+    Vector[int] evt_vals
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -462,6 +471,46 @@ int lir_mod_add_struct(LirModule &m, LirStructDef sdef):
     m.structs.push(sdef)
     return id
 
+# Parallel-Vector accessors for enum_variant_parent / _tag.
+# Same Dict[String, _] state-loss workaround pattern.
+bool evp_contains(LirModule &m, String name):
+    int i = 0
+    while i < m.evp_keys.len():
+        if m.evp_keys.get(i).unwrap() == name:
+            return true
+        i += 1
+    return false
+
+String evp_lookup(LirModule &m, String name):
+    # Last-write-wins to match Dict.put semantics — when a variant name
+    # like "Other" is shared by multiple enums (IoError.Other and
+    # ParseError.Other), Dict overwrites and we want the same.
+    String result = ""
+    int i = 0
+    while i < m.evp_keys.len():
+        if m.evp_keys.get(i).unwrap() == name:
+            result = m.evp_vals.get(i).unwrap().clone()
+        i += 1
+    return result
+
+bool evt_contains(LirModule &m, String name):
+    int i = 0
+    while i < m.evt_keys.len():
+        if m.evt_keys.get(i).unwrap() == name:
+            return true
+        i += 1
+    return false
+
+int evt_lookup(LirModule &m, String name):
+    # Last-write-wins to match Dict.put semantics.
+    int result = -1
+    int i = 0
+    while i < m.evt_keys.len():
+        if m.evt_keys.get(i).unwrap() == name:
+            result = m.evt_vals.get(i).unwrap()
+        i += 1
+    return result
+
 int lir_mod_add_global(LirModule &m, LirGlobal g):
     int id = m.globals.len()
     m.globals.push(g)
@@ -488,4 +537,8 @@ LirModule new_lir_module():
     Dict[String, bool] imported_t = {}
     Dict[String, String] evp = {}
     Dict[String, int] evt = {}
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt)
+    Vector[String] evp_keys = []
+    Vector[String] evp_vals = []
+    Vector[String] evt_keys = []
+    Vector[int] evt_vals = []
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, !evp_keys, !evp_vals, !evt_keys, !evt_vals)

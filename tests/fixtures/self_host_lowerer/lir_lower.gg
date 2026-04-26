@@ -1905,7 +1905,7 @@ bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand]
     # Enums + enum variants have different init semantics; skip them.
     if sdef.enum_kind != EK_NOT_ENUM:
         return false
-    if m.enum_variant_parent.contains(func_name):
+    if evp_contains(&m, func_name) or m.enum_variant_parent.contains(func_name):
         return false
     # Require positional ctor — arg count must match field count exactly.
     # A mismatch usually means this is a method call that happens to share
@@ -2749,12 +2749,16 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             while vi_v < tinfo_v.variants.len():
                 GirEnumVariantInfo v_v = tinfo_v.variants.get(vi_v).unwrap()
                 m.enum_variant_parent.put(v_v.name, tname_v)
+                m.evp_keys.push(v_v.name.clone())
+                m.evp_vals.push(tname_v.clone())
                 # The variant's ordinal position in the source enum declaration
                 # IS its runtime tag. The codegen's struct-field-scan heuristic
                 # (emit_call_extern) gets this wrong for unit variants, because
                 # unit variants contribute no payload fields. Record the right
                 # tag here so callers can look it up.
                 m.enum_variant_tag.put(v_v.name, vi_v)
+                m.evt_keys.push(v_v.name.clone())
+                m.evt_vals.push(vi_v)
                 vi_v += 1
         tivi += 1
 

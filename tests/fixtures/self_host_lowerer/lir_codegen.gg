@@ -1095,6 +1095,12 @@ bool runtime_arg_needs_addr(String name, int arg_idx):
         return true
     if name == "gorget_file_read_bytes_buf" and arg_idx == 1:
         return true
+    # File close/flush take GorgetFile* — self-host emits the file
+    # value by-value, so wrap with `&` to recover the pointer.
+    if name == "gorget_file_close" and arg_idx == 0:
+        return true
+    if name == "gorget_file_flush" and arg_idx == 0:
+        return true
     # In-place String append — arg 0 is the buffer (StrBuf*) which the
     # runtime mutates. Self-host's caller often holds the local by value,
     # so wrap with `&` here.
@@ -1628,8 +1634,12 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
         case ICallExtern(dst, name, args_ce, _, _):
             if dst >= 0:
                 # Enum variant constructor: returns parent enum struct.
-                if m.enum_variant_parent.contains(name):
-                    String parent = m.enum_variant_parent.get(name).unwrap()
+                if evp_contains(&m, name) or m.enum_variant_parent.contains(name):
+                    String parent = ""
+                    if evp_contains(&m, name):
+                        parent = evp_lookup(&m, name)
+                    else:
+                        parent = m.enum_variant_parent.get(name).unwrap()
                     int psid = find_struct_type(parent, &m)
                     if psid >= LT_STRUCT_BASE:
                         return psid
@@ -1638,7 +1648,12 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                     int uix = name.index_of("__").unwrap()
                     String eparent = name.slice(0, uix)
                     String evariant = name.slice(uix + 2, name.len())
-                    if m.enum_variant_parent.contains(evariant) and m.enum_variant_parent.get(evariant).unwrap() == eparent:
+                    bool match_p = false
+                    if evp_contains(&m, evariant) and evp_lookup(&m, evariant) == eparent:
+                        match_p = true
+                    elif m.enum_variant_parent.contains(evariant) and m.enum_variant_parent.get(evariant).unwrap() == eparent:
+                        match_p = true
+                    if match_p:
                         int psid_q = find_struct_type(eparent, &m)
                         if psid_q >= LT_STRUCT_BASE:
                             return psid_q
@@ -2420,7 +2435,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                 LirFunction callee = m.functions.get(fid).unwrap()
                 # If this is actually an enum variant constructor, route
                 # through emit_call_extern which handles inline struct init.
-                if m.enum_variant_parent.contains(callee.name):
+                if evp_contains(&m, callee.name) or m.enum_variant_parent.contains(callee.name):
                     return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
                 if callee.name == "Box" or callee.name.starts_with("Box__"):
@@ -3281,15 +3296,21 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         int underscore_idx = name.index_of("__").unwrap()
         String maybe_parent = name.slice(0, underscore_idx)
         String maybe_variant = name.slice(underscore_idx + 2, name.len())
-        if m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent:
+        if (evp_contains(&m, maybe_variant) and evp_lookup(&m, maybe_variant) == maybe_parent) or (m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent):
             ev_name = maybe_variant
 
     # Enum variant constructor: `VariantName(x)` → inline struct init for
     # the parent enum (no C function exists for variants). For 0-arg
     # variants, emits just the tag. For 1+-arg variants, initializes the
-    # variant's payload fields.
-    if m.enum_variant_parent.contains(ev_name):
-        String parent_name = m.enum_variant_parent.get(ev_name).unwrap()
+    # variant's payload fields. Prefer parallel-vector lookup — Dict
+    # state-loss otherwise misses TkEof / TSelf / etc. and emits them as
+    # undefined-symbol calls instead of inline struct literals.
+    if evp_contains(&m, ev_name) or m.enum_variant_parent.contains(ev_name):
+        String parent_name = ""
+        if evp_contains(&m, ev_name):
+            parent_name = evp_lookup(&m, ev_name)
+        else:
+            parent_name = m.enum_variant_parent.get(ev_name).unwrap()
         int parent_sid = find_struct_type(parent_name, &m)
         if parent_sid >= LT_STRUCT_BASE:
             int parent_idx = parent_sid - LT_STRUCT_BASE
@@ -3303,7 +3324,9 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             # got tag = seen_variants.len() (6) instead of their real
             # ordinal (63) — and match-ing TkEof at runtime never hit.
             int variant_tag = -1
-            if m.enum_variant_tag.contains(ev_name):
+            if evt_contains(&m, ev_name):
+                variant_tag = evt_lookup(&m, ev_name)
+            elif m.enum_variant_tag.contains(ev_name):
                 variant_tag = m.enum_variant_tag.get(ev_name).unwrap()
             # Fallback: old heuristic for any variants the map missed.
             if variant_tag < 0:
