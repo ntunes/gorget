@@ -90,5 +90,5 @@ equip FxHasher with Hasher:
 
 int hash_of[Hashable T](T v):
     FxHasher h = FxHasher(0)
-    v.hash(&h)
+    v.hash[FxHasher](&h)
     return h.finish()

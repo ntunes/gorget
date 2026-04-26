@@ -411,7 +411,7 @@ fn generate_struct_hashable(type_name: &str, gs: &str, fields: &[(&str, &str)]) 
 
     let gp = equip_generic_prefix(gs);
     format!(
-        "equip {gp}{type_name}{gs} with Hashable:\n    void hash(self, FxHasher &h):\n{body}\n"
+        "equip {gp}{type_name}{gs} with Hashable:\n    void hash[Hasher H](self, H &h):\n{body}\n"
     )
 }
 
@@ -1126,7 +1126,7 @@ fn generate_enum_hashable(type_name: &str, gs: &str, e: &EnumDef) -> String {
 
     format!(
         "equip {gp}{type_name}{gs} with Hashable:\n\
-         \x20   void hash(self, FxHasher &h):\n\
+         \x20   void hash[Hasher H](self, H &h):\n\
          \x20       match self:\n\
          {arms}"
     )
@@ -1375,7 +1375,7 @@ void main():
     fn test_struct_hashable() {
         let src = generate_struct_hashable("Point", "", &[("x", "float"), ("y", "float")]);
         assert!(src.contains("equip Point with Hashable"));
-        assert!(src.contains("void hash(self, FxHasher &h)"));
+        assert!(src.contains("void hash[Hasher H](self, H &h)"));
         assert!(src.contains("self.x.hash(&h)"));
         assert!(src.contains("self.y.hash(&h)"));
     }

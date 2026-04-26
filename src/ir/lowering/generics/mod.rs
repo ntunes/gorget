@@ -798,6 +798,18 @@ impl GenericCollector {
                     let prev = self.current_generic_params.take();
                     let substituted = substitute_function_body(&template, &subs);
                     self.scan_function(&substituted);
+                    // Also re-walk for method-call discovery so nested method-
+                    // generic calls register their instances. Without this, a
+                    // body like `apply[Hashable T, Hasher H](T v, H &h):
+                    // v.hash[H](&h)` discovers `v.hash[H]` against the
+                    // abstract T (no equip template), comes up empty, and the
+                    // call site falls through to the trait vtable forwarder
+                    // which has an empty body for method-generic methods. The
+                    // post-substitution rescan with concrete T=Point catches
+                    // `v.hash[MyHasher]` against the Point equip block.
+                    let mut env = LocalTypeEnv::default();
+                    populate_env_from_params(&mut env, &substituted.params);
+                    self.walk_fn_body_for_method_calls(&substituted.body, &mut env);
                     self.current_generic_params = prev;
                 }
                 TemplateKind::Struct | TemplateKind::Enum => {

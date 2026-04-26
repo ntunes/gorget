@@ -52,16 +52,23 @@ Enables `<`, `>`, `<=`, `>=` operators. Returns `-1`, `0`, or `1`.
 
 ```gorget
 trait Hashable:
-    void hash(self, FxHasher &h)
+    void hash[Hasher H](self, H &h)
 ```
 
 Required for use as `Dict` keys or `Set` elements. Hashable is
-state-based: an implementation forwards each field into the caller's
-`FxHasher` rather than producing a standalone `int`. Struct
-implementations compose automatically — `self.x.hash(&h);
-self.y.hash(&h)` — with no combine logic to maintain. For one-shot
-callers (e.g. asserting two values hash equally in a test), use
-`hash_of[T](v)` from `std.hash`.
+state-based and generic over the `Hasher`: an implementation forwards
+each field into the caller's `H` rather than producing a standalone
+`int`. Struct implementations compose automatically — `self.x.hash(&h);
+self.y.hash(&h)` — with no combine logic to maintain, and the choice
+of hashing algorithm lives at the consumer. `std.hash` ships
+`FxHasher` as the default; for one-shot callers, `hash_of[T](v)`
+uses it directly. To pick a different Hasher, write:
+
+```gorget
+SipHasher h = SipHasher.new(key)
+v.hash[SipHasher](&h)
+int hv = h.finish()
+```
 
 ### Hasher
 
@@ -73,10 +80,11 @@ trait Hasher:
     int finish(self)
 ```
 
-Accumulates hash state. `std.hash` ships one concrete implementation,
-`FxHasher`, which uses a simple multiplicative mix. The `Hashable`
-trait's signature names `FxHasher` directly — every `Hashable` impl
-in the current language version targets `FxHasher`.
+Accumulates hash state. `std.hash` ships `FxHasher` as the default
+state machine — a simple multiplicative mix suitable for in-process
+keyed collections. Other `Hasher` implementations slot in
+transparently because `Hashable.hash` is generic over the Hasher; a
+user-defined `SipHasher` works the same way.
 
 ### Ordinal
 

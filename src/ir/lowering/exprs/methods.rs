@@ -410,13 +410,31 @@ pub(super) fn lower_method_call(
             || recv_type_unwrapped == U16_TYPE || recv_type_unwrapped == U8_TYPE;
         let is_string = ctx.type_mapper.is_string_type(recv_type_unwrapped);
         if is_int_like || recv_type_unwrapped == BOOL_TYPE || is_string {
-            // FxHasher__write_int takes (void* h, int64_t v) — first arg is
-            // a pointer ABI param. Lowering args[0] directly is fine since
-            // it's already borrowed with `&h` at the call site.
+            // The hasher arg's type drives which `Hasher` impl's `write_int` /
+            // `write_string` to call. Static dispatch — H is concrete at mono
+            // time. Try the inherent form `H__write_int` first, then fall
+            // back to the trait forwarder `Hasher_for_H__write_int` for
+            // user-defined Hashers that only provide the `equip H with
+            // Hasher:` block (no inherent equip).
             let h = lower_call_arg(ctx, builder, &args[0], None, "FxHasher__write_int", 0);
+            let hasher_type_name = infer_type_name_from_operand_full(ctx, &h, builder)
+                .unwrap_or_else(|| "FxHasher".to_string());
+            let resolve_fn = |op: &str| -> String {
+                let inherent = format!("{hasher_type_name}__{op}");
+                if ctx.fn_sigs.contains_key(&inherent) {
+                    inherent
+                } else {
+                    let suffix = format!("_for_{hasher_type_name}__{op}");
+                    ctx.fn_sigs.keys()
+                        .find(|k| k.ends_with(&suffix))
+                        .cloned()
+                        .unwrap_or(inherent)
+                }
+            };
+            let write_int_fn = resolve_fn("write_int");
+            let write_string_fn = resolve_fn("write_string");
             // If the receiver arrived as Ptr(T) (generic-param pointer ABI),
-            // dereference it before passing to the FxHasher method. This
-            // keeps the call flat: FxHasher__write_int((void*)h, int64_t v).
+            // dereference it before passing to the Hasher method.
             let recv_was_ptr = matches!(
                 ctx.type_registry.get(recv_type),
                 Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
@@ -432,15 +450,15 @@ pub(super) fn lower_method_call(
                 recv
             };
             if is_string {
-                builder.call_void("FxHasher__write_string", vec![h, deref_recv]);
+                builder.call_void(&write_string_fn, vec![h, deref_recv]);
             } else if recv_type_unwrapped == BOOL_TYPE {
                 let cast = builder.cast(I64_TYPE, deref_recv);
-                builder.call_void("FxHasher__write_int", vec![h, FunctionBuilder::copy(cast)]);
+                builder.call_void(&write_int_fn, vec![h, FunctionBuilder::copy(cast)]);
             } else if recv_type_unwrapped == I64_TYPE {
-                builder.call_void("FxHasher__write_int", vec![h, deref_recv]);
+                builder.call_void(&write_int_fn, vec![h, deref_recv]);
             } else {
                 let cast = builder.cast(I64_TYPE, deref_recv);
-                builder.call_void("FxHasher__write_int", vec![h, FunctionBuilder::copy(cast)]);
+                builder.call_void(&write_int_fn, vec![h, FunctionBuilder::copy(cast)]);
             }
             return Operand::Constant(Constant::Unit);
         }
@@ -1291,12 +1309,28 @@ pub(super) fn lower_method_call(
         // `v.iter().map[int, int(int)](f)` targets a dedicated mangled symbol
         // whose body was produced by `lower_method_instance`. The fully-qualified
         // mangled symbol appends each method-level type arg's mangled form.
+        //
+        // When the call site lives inside a generic body whose own type params
+        // are substituted (e.g. `apply_hash[Hashable T, Hasher H]` → mono'd with
+        // `T=Point, H=MyHasher`), the targ AST nodes still spell out "H"; we
+        // substitute through `generic_param_ast_types` before mangling so the
+        // dispatch finds `Point__hash__MyHasher` rather than `Point__hash__H`.
         let mangled = if let Some(targs) = method_generic_args {
             if !targs.is_empty() {
                 let mut sym = format!("{type_name}__{effective_method}");
                 for t in targs {
+                    let resolved = if let crate::parser::ast::Type::Named { name, generic_args } = &t.node {
+                        if generic_args.is_empty() {
+                            ctx.generics.generic_param_ast_types.get(&name.node).cloned()
+                                .unwrap_or_else(|| t.node.clone())
+                        } else {
+                            t.node.clone()
+                        }
+                    } else {
+                        t.node.clone()
+                    };
                     sym.push_str("__");
-                    sym.push_str(&crate::ir::lowering::types::mangle_type_for_name(&t.node));
+                    sym.push_str(&crate::ir::lowering::types::mangle_type_for_name(&resolved));
                 }
                 if ctx.fn_sigs.contains_key(&sym) {
                     sym

@@ -1,10 +1,10 @@
-from std.hash import FxHasher, hash_of
+from std.hash import FxHasher, Hasher, hash_of
 
 struct Key:
     int id
 
 equip Key with Hashable:
-    void hash(self, FxHasher &h):
+    void hash[Hasher H](self, H &h):
         h.write_int(self.id *% 31)
 
 int compute_hash[Hashable T](T val):

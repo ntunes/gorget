@@ -1226,12 +1226,9 @@ demand, not shipped speculatively.
   SSL-flush override later but TCP writes go straight to the kernel
   send buffer so the default is correct today.
 
-### Phase 4: Concurrency-model enforcement — **MOSTLY DONE**
+### Phase 4: Concurrency-model enforcement — **DONE 2026-04-26**
 
-Three of four items fully shipped; the Hashable migration's
-state-based shape is in place, but the consumer-chooses-Hasher
-capability the design promises is not — `Hashable` still names
-`FxHasher` directly in its signature.
+All four items shipped; fixtures wired and green.
 
 1. ✅ **Type-checker pass rejects `&` captures across `spawn`**.
    `check_spawn_args` (in `src/semantic/safety/helpers.rs`) checks
@@ -1256,38 +1253,47 @@ capability the design promises is not — `Hashable` still names
    `spawn_coroutine_*`) all use `shared` for cross-task mutable
    state or pass owned values through. Migration was effectively
    a no-op because the enforcement landed alongside the fixtures.
-4. ⚠️ **Hashable migration — state-based shape SHIPPED, generic
-   Hasher dispatch NOT shipped**. What landed:
-   - `Hasher` trait declared in `lib/std/hash.gg`
-     (`write_int` / `write_bytes` / `write_string` / `finish`).
-   - `FxHasher` ships as the one concrete implementation.
-   - The `Hashable` builtin sig in `src/semantic/traits.rs:529`
-     was migrated from the broken old `int hash(self)` to
-     `void hash(self, FxHasher &h)`.
-   - `@derive(Hashable)` emits field-by-field forwarding into the
-     passed `FxHasher`.
-   - One-shot convenience `int hash_of[Hashable T](T v)` in
-     `lib/std/hash.gg` replaces old `.hash()` callers.
-   - Dict / Set internals call `gorget_map_hash_*` runtime helpers
-     that route through `FxHasher__write_int` / `_string` /
-     `_bytes`.
-   - Fixtures: `derive_hashable.gg`, `dict_user_key_hashable.gg`,
-     `set_user_key_hashable.gg`, `trait_bound_transitive.gg`.
-
-   What is missing: the design (§3) specifies that `Hashable`
-   should be **generic over the Hasher** —
-   `void hash[H: Hasher](self, H &h)` — so the consumer picks the
-   algorithm (FxHash for in-process, SipHash for DoS-resistance,
-   etc.). What ships hardcodes `FxHasher` in every `Hashable`
-   signature, so today's `Hashable` is effectively `FxHashable`. A
-   user defining `MySipHasher` cannot plug it in without rewriting
-   every `hash` impl in their codebase. The blocker is method-level
-   generic dispatch through trait methods, which the compiler
-   doesn't yet support — see TODO.md.
-
-Status (2026-04-25): items 1–3 closed; item 4 scaffolded but the
-consumer-chooses-Hasher capability is the missing piece of this
-phase.
+4. ✅ **Hashable migration to `void hash[Hasher H](self, H &h)`**.
+   `lib/std/hash.gg` defines the `Hasher` trait
+   (`write_int` / `write_bytes` / `write_string` / `finish`) and
+   `FxHasher` as the default state machine. The `Hashable` builtin
+   sig in `src/semantic/traits.rs:529` requires
+   `void hash[Hasher H](self, H &h)` — generic over the Hasher
+   implementation. `@derive(Hashable)` emits the generic body so
+   field-by-field forwarding (`self.x.hash(&h)`) routes to whatever
+   `H` the caller picked. The one-shot `int hash_of[Hashable T](T v)`
+   uses `FxHasher` as the default; user code that wants a different
+   Hasher writes its own
+   `int my_hash[Hashable T](T v): MyHasher h = MyHasher(0); v.hash[MyHasher](&h); return h.finish()`.
+   Dict / Set internals route through `FxHasher` for now (the runtime
+   `gorget_map_hash_*` helpers are FxHasher-typed). Three compiler
+   fixes were needed to unlock the generic form:
+   - **Bound-method-generic body dispatch**. Per-call-site
+     monomorphization of free functions like
+     `apply_hash[Hashable T, Hasher H](T v, H &h): v.hash[H](&h)`
+     never re-discovered method-call instances after substitution.
+     Added a `walk_fn_body_for_method_calls` pass at the end of
+     `discover_transitive`'s Function arm so the substituted body
+     registers `Point__hash__MyHasher` as a method instance.
+   - **Targ name substitution at call-site mangling**. The dispatch
+     in `lower_method_call` mangled the call's targ AST as-is —
+     `v.hash[H](&h)` produced `Point__hash__H` instead of
+     `Point__hash__MyHasher` because the `H` AST node wasn't
+     resolved through `generic_param_ast_types`. Added explicit
+     substitution at the dispatch's targ-mangling step.
+   - **Generic primitive-hash dispatch**. The IR-side fast path for
+     `x.hash(&h)` on int/bool/String hardcoded `FxHasher__write_int`
+     / `FxHasher__write_string`. Replaced with a runtime lookup of
+     the hasher arg's actual type — falls back to
+     `Hasher_for_<H>__write_int` when the user-defined Hasher only
+     provides the `equip H with Hasher:` block. Verified with a
+     fixture using both FxHasher and a user-defined `DjbHasher` on
+     the same `@derive(Hashable)` struct.
+   - Existing `Hashable` impls (e.g. `trait_bound_transitive.gg`)
+     migrated to the generic shape via codemod-shaped find+replace.
+   Fixtures: `derive_hashable.gg`, `dict_user_key_hashable.gg`,
+   `set_user_key_hashable.gg`, `trait_bound_transitive.gg`. Status:
+   **closed 2026-04-26**. Phase 4 fully done.
 
 ### Phase 5: Documentation — **DONE 2026-04-25**
 

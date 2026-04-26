@@ -522,10 +522,12 @@ fn register_builtin_traits(
             });
             m
         }),
-        // Hashable: void hash(self, FxHasher &h) — state-based hashing.
-        // The `FxHasher &h` param is erased to `error_id` so validation
-        // skips the type check (we don't have the FxHasher TypeId at
-        // built-in-registration time; it comes from std.hash).
+        // Hashable: void hash[Hasher H](self, H &h) — state-based hashing,
+        // generic over the Hasher implementation. The `H &h` param is
+        // erased to `error_id` because (a) H is a method-level generic
+        // resolved at the call site, and (b) the FxHasher TypeId isn't
+        // available at built-in-registration time; impl validation
+        // accepts both forms via shape matching.
         ("Hashable", {
             let mut m = FxHashMap::default();
             m.insert("hash".into(), FunctionSig {
