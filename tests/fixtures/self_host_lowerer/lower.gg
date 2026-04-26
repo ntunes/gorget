@@ -441,6 +441,10 @@ String type_id_to_name(int tid, GirModule &gmod):
         match gt:
             case GtNamed(name):
                 return name
+            case GtPtr(inner):
+                return type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                return type_id_to_name(inner, &gmod)
             else:
                 pass
     return "int64_t"
@@ -1417,7 +1421,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # gives the real return type for equip-block methods. Fall back
             # to the name-based heuristic if no signature is recorded.
             int ret_tid = I64_TYPE
-            if gmod.fn_sigs.contains(full_name):
+            if fn_sig_contains(&gmod, full_name):
+                ret_tid = fn_sig_lookup(&gmod, full_name)
+            elif gmod.fn_sigs.contains(full_name):
                 ret_tid = gmod.fn_sigs.get(full_name).unwrap()
             else:
                 ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
@@ -1493,6 +1499,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     field_args.push(OpMove(base))
                 field_args.push(OpConstI64(found_fi))
                 gmod.fn_sigs.put(field_fn, field_type)
+                fn_sig_register(&gmod, field_fn, field_type)
                 emit(&ctx, GICallExtern(fdst, field_fn, field_args))
                 return fdst
             # HARD BUG: unknown field access fell through to I64/0
@@ -1612,6 +1619,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int cdst = add_local(&ctx, closure_tid, NO_NAME)
             Vector[Operand] make_args = []
             gmod.fn_sigs.put(make_fn, closure_tid)
+            fn_sig_register(&gmod, make_fn, closure_tid)
             emit(&ctx, GICallExtern(cdst, make_fn, make_args))
             return cdst
         case EAs(inner_box, _):
@@ -4153,8 +4161,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         hmi += 1
 
-    # Pre-scan function signatures for call resolution
+    # Pre-scan function signatures for call resolution. Mirror Dict
+    # writes into parallel Vectors to dodge the Dict[String, _]
+    # state-loss bug — without this, method-call return-type lookups
+    # silently miss → ret_tid = I64_TYPE → "base type 'int64_t'" cascades.
     Dict[String, int] fn_sigs = {}
+    Vector[String] fn_sig_keys_init = []
+    Vector[int] fn_sig_vals_init = []
     int ii = 0
     while ii < m.items.len():
         Item item = m.items.get(ii).unwrap()
@@ -4184,6 +4197,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         else:
                             pass
                 fn_sigs.put(fdef.name, rt)
+                fn_sig_keys_init.push(fdef.name.clone())
+                fn_sig_vals_init.push(rt)
             else:
                 pass
         ii = ii + 1
@@ -4361,7 +4376,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         call_redirect_keys.push(cr_k.clone())
         call_redirect_vals.push(call_redirects.get(cr_k).unwrap().clone())
         cr_i += 1
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -4391,6 +4406,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 case None:
                                     pass
                             gmod.fn_sigs.put(rs_fdef.name, rs_rt)
+                            fn_sig_register(&gmod, rs_fdef.name, rs_rt)
                         else:
                             pass
             else:
@@ -4576,6 +4592,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
                     if ret_tid >= 0:
                         gmod.fn_sigs.put(fsdef.name.clone(), ret_tid)
+                        fn_sig_register(&gmod, fsdef.name, ret_tid)
             case IEquip(ieqblk):
                 # Register equip-block methods as TypeName__method in fn_sigs.
                 # Only for non-generic equip blocks on concrete types.
@@ -4596,7 +4613,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             if em.type_params.len() == 0:
                                 int em_ret = map_fn_return_type(em.return_type, &gmod)
                                 if em_ret >= 0:
-                                    gmod.fn_sigs.put(target_name + "__" + em.name, em_ret)
+                                    String em_full = target_name + "__" + em.name
+                                    gmod.fn_sigs.put(em_full.clone(), em_ret)
+                                    fn_sig_register(&gmod, em_full, em_ret)
                             emi += 1
             else:
                 pass
@@ -4620,6 +4639,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             clear_type_subs(&gmod)
             # Monomorphized generics use bare names (no module prefix)
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
+            fn_sig_register(&gmod, inst.mangled_name, rt)
         si += 1
 
     # Build trait lookup map for default method generation

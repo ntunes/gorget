@@ -189,6 +189,12 @@ struct GirModule:
     # runtime and the call emits with empty fname (`); ` orphan).
     Vector[String] call_redirect_keys
     Vector[String] call_redirect_vals
+    # Parallel storage for fn_sigs — same workaround. Without this,
+    # method-call return-type lookups silently miss → ret_tid = I64_TYPE,
+    # which cascades into "base type 'int64_t'" errors when the result
+    # is used in a field access.
+    Vector[String] fn_sig_keys
+    Vector[int] fn_sig_vals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -341,6 +347,36 @@ String call_redirect_lookup(GirModule &gmod, String name):
             return gmod.call_redirect_vals.get(i).unwrap().clone()
         i += 1
     return ""
+
+# Parallel-Vector accessors for fn_sigs.
+bool fn_sig_contains(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.fn_sig_keys.len():
+        String k = gmod.fn_sig_keys.get(i).unwrap()
+        if k == name:
+            return true
+        i += 1
+    return false
+
+int fn_sig_lookup(GirModule &gmod, String name):
+    int i = 0
+    while i < gmod.fn_sig_keys.len():
+        String k = gmod.fn_sig_keys.get(i).unwrap()
+        if k == name:
+            return gmod.fn_sig_vals.get(i).unwrap()
+        i += 1
+    return I64_TYPE
+
+void fn_sig_register(GirModule &gmod, String name, int ret_tid):
+    int i = 0
+    while i < gmod.fn_sig_keys.len():
+        String k = gmod.fn_sig_keys.get(i).unwrap()
+        if k == name:
+            gmod.fn_sig_vals.set(i, ret_tid)
+            return
+        i += 1
+    gmod.fn_sig_keys.push(name.clone())
+    gmod.fn_sig_vals.push(ret_tid)
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
