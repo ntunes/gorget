@@ -481,29 +481,72 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
         if incomplete_phis.len() > prev_phi_count:
             changed = true
 
-    # Build target_bb → [slots in param order]
+    # Build target_bb → [slots in param order]. CRITICAL: iterate
+    # pending_phi_bbs / pending_phis in insertion order, NOT
+    # incomplete_phis.keys() — Dict.keys() iteration order at stage-1
+    # runtime doesn't match the order params were registered (also a
+    # Dict[String/int, _] state-loss artefact). Mismatched order →
+    # block-param assignments swap their args at the call site, e.g.
+    # `bp16 = *(bool*)__v15; bp17 = __v5;` instead of
+    # `bp16 = __v5; bp17 = __v15;`.
     Dict[int, Vector[int]] target_slots = {}
-    Vector[int] phi_keys2 = incomplete_phis.keys()
-    int k2 = 0
-    while k2 < phi_keys2.len():
-        int key = phi_keys2.get(k2).unwrap()
-        int target_bb = key / 100000
-        int slot = key - target_bb * 100000
-        if target_slots.contains(target_bb):
-            Vector[int] slots = target_slots.get(target_bb).unwrap()
-            slots.push(slot)
-            target_slots.put(target_bb, slots)
-        else:
-            Vector[int] slots = [slot]
-            target_slots.put(target_bb, slots)
-        k2 += 1
+    Vector[Vector[int]] target_slots_parallel = []
+    Vector[int] target_slots_keys = []
+    int pp_i = 0
+    while pp_i < pending_phi_bbs.len():
+        int target_bb = pending_phi_bbs.get(pp_i).unwrap()
+        int slot = -1
+        # Recover slot from incomplete_phis: scan its keys (the actual
+        # value at pending_phis[pp_i] is a SSA value id, not a slot).
+        Vector[int] all_phi_keys = incomplete_phis.keys()
+        int akpi = 0
+        while akpi < all_phi_keys.len():
+            int test_key = all_phi_keys.get(akpi).unwrap()
+            int test_target_bb = test_key / 100000
+            int test_slot = test_key - test_target_bb * 100000
+            if test_target_bb == target_bb and incomplete_phis.get(test_key).unwrap() == pending_phis.get(pp_i).unwrap():
+                slot = test_slot
+                break
+            akpi += 1
+        if slot >= 0:
+            int found_idx = -1
+            int tk_i = 0
+            while tk_i < target_slots_keys.len():
+                if target_slots_keys.get(tk_i).unwrap() == target_bb:
+                    found_idx = tk_i
+                    break
+                tk_i += 1
+            if found_idx < 0:
+                target_slots_keys.push(target_bb)
+                Vector[int] new_slots = [slot]
+                target_slots_parallel.push(!new_slots)
+            else:
+                Vector[int] existing = target_slots_parallel.get(found_idx).unwrap()
+                existing.push(slot)
+                target_slots_parallel.set(found_idx, !existing)
+        pp_i += 1
+    # Mirror into Dict for the existing reader code below.
+    int rs_i = 0
+    while rs_i < target_slots_keys.len():
+        int rs_bb = target_slots_keys.get(rs_i).unwrap()
+        Vector[int] rs_slots = target_slots_parallel.get(rs_i).unwrap()
+        # Clone the inner vector so we don't share heap with the parallel one.
+        Vector[int] rs_clone = []
+        int rsc_i = 0
+        while rsc_i < rs_slots.len():
+            rs_clone.push(rs_slots.get(rsc_i).unwrap())
+            rsc_i += 1
+        target_slots.put(rs_bb, !rs_clone)
+        rs_i += 1
 
-    # For each predecessor→target edge, collect args in param order
-    Vector[int] tbb_keys = target_slots.keys()
+    # For each predecessor→target edge, collect args in param order.
+    # Iterate the parallel target_slots_keys directly — Dict.keys() at
+    # stage-1 runtime returns keys in non-insertion order, which causes
+    # arg-list scrambling (see comment above).
     int ti = 0
-    while ti < tbb_keys.len():
-        int target_bb = tbb_keys.get(ti).unwrap()
-        Vector[int] slots = target_slots.get(target_bb).unwrap()
+    while ti < target_slots_keys.len():
+        int target_bb = target_slots_keys.get(ti).unwrap()
+        Vector[int] slots = target_slots_parallel.get(ti).unwrap()
         Vector[int] bb_preds = preds.get(target_bb).unwrap()
         int pi = 0
         while pi < bb_preds.len():
