@@ -753,7 +753,11 @@ String emit_box_allocators(LirModule &m, Vector[String] &sn):
 # and emit one static inline helper per unique suffix. Uses a simple scan
 # (String doesn't have index_of_from, so we slice+index_of per step).
 String emit_box_allocators_scan(String &body):
-    Dict[String, bool] seen = {}
+    # Use parallel Vector instead of Dict[String, bool] — Dict.contains
+    # silently misses on stage-1 → if it always returns true (false negative
+    # inverted), we never emit any allocator. Either way, the parallel
+    # form sidesteps the bug.
+    Vector[String] seen = []
     String out = ""
     String prefix = "__gorget_box_alloc_"
     int plen = prefix.len()
@@ -780,11 +784,72 @@ String emit_box_allocators_scan(String &body):
         if end >= blen:
             break
         String suffix = body.slice(start, end)
-        if not seen.contains(suffix):
-            seen.put(suffix, true)
+        bool already_seen = false
+        int si = 0
+        while si < seen.len():
+            if seen.get(si).unwrap() == suffix:
+                already_seen = true
+                break
+            si += 1
+        if not already_seen:
+            seen.push(suffix.clone())
             String c_ty = box_alloc_c_type(suffix)
             out = out + "static inline void* " + prefix + suffix + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
         pos = end + 1
+    if out != "":
+        out = out + "\n"
+    return out
+
+# LIR-based scanner for box allocators. Walks every ICallExtern and
+# ICall instruction across all functions, collecting unique Box__*
+# constructor names. The codegen rewrites `Box__T(x)` →
+# `__gorget_box_alloc_T(x)`, so we scan for the pre-rewrite name.
+# Robust against the body-string scan failing under stage-1's String
+# slicing on large inputs.
+String emit_box_allocators_from_lir(LirModule &m):
+    Vector[String] seen = []
+    String out = ""
+    String emit_prefix = "__gorget_box_alloc_"
+    String box_prefix = "Box__"
+    int box_plen = box_prefix.len()
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            LirBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                String inst_name = ""
+                match inst:
+                    case ICallExtern(_, name, _, _, _):
+                        inst_name = name
+                    case ICall(_, fid, _):
+                        if fid >= 0 and fid < m.functions.len():
+                            inst_name = m.functions.get(fid).unwrap().name
+                    else:
+                        pass
+                String suffix = ""
+                if inst_name.starts_with(box_prefix) and inst_name.len() > box_plen:
+                    suffix = inst_name.slice(box_plen, inst_name.len())
+                elif inst_name.starts_with(emit_prefix) and inst_name.len() > emit_prefix.len():
+                    suffix = inst_name.slice(emit_prefix.len(), inst_name.len())
+                if suffix.len() > 0:
+                    bool already = false
+                    int si = 0
+                    while si < seen.len():
+                        if seen.get(si).unwrap() == suffix:
+                            already = true
+                            break
+                        si += 1
+                    if not already:
+                        seen.push(suffix.clone())
+                        String c_ty = box_alloc_c_type(suffix)
+                        out = out + "static inline void* " + emit_prefix + suffix + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
+                ii += 1
+            bi += 1
+        fi += 1
     if out != "":
         out = out + "\n"
     return out
@@ -4319,9 +4384,12 @@ String generate_c(LirModule &m):
         fi += 1
     body = body_buf.s
 
-    # Box allocator helpers: scan body for `__gorget_box_alloc_<SUFFIX>(`
-    # occurrences and emit one static inline helper per unique suffix.
-    out = out + emit_box_allocators_scan(&body)
+    # Box allocator helpers: scan ICallExtern/ICall instructions directly
+    # for Box__T references. Originally scanned the emitted body string,
+    # but stage-1's runtime `body.slice()` / `index_of` mishandles 9MB
+    # strings, leaving the box allocators undefined at link time. The
+    # LIR-based scan is robust regardless.
+    out = out + emit_box_allocators_from_lir(&m)
 
     out = out + body
     return out
