@@ -1256,7 +1256,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # or int.parse(s)). Route to TypeName__method with no self argument.
             match (*recv_box).expr:
                 case EIdentifier(ident_name):
-                    bool is_type = gmod.type_infos.contains(ident_name)
+                    # Prefer parallel type_info storage — Dict.contains
+                    # silently misses on stage-1 (`ScopeTable` etc.) and
+                    # we'd fall through to method-call-on-int64 path,
+                    # producing `int64_t__new_scope_table` undefined refs.
+                    bool is_type = type_info_contains(&gmod, ident_name) or gmod.type_infos.contains(ident_name)
                     # Also treat primitive type names as types.
                     if not is_type:
                         if ident_name == "int" or ident_name == "float" or ident_name == "bool":
@@ -1287,10 +1291,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             type_prefix = "GorgetString"
                         String static_name = type_prefix + "__" + mname
                         int static_ret = I64_TYPE
-                        if gmod.fn_sigs.contains(static_name):
+                        if fn_sig_contains(&gmod, static_name):
+                            static_ret = fn_sig_lookup(&gmod, static_name)
+                        elif gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
-                            if gmod.type_infos.contains(ident_name):
+                            if type_info_contains(&gmod, ident_name) or gmod.type_infos.contains(ident_name):
                                 static_ret = lookup_or_register_named(&gmod, ident_name)
                             else:
                                 # int.default() → int, float.default() → double, etc.
@@ -1891,7 +1897,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 ret_type = lookup_or_register_named(&gmod, call_name)
         # Monomorphized user-struct constructors (e.g. Wrapper__int64_t) —
         # detect via type_infos lookup even if name contains "__".
-        if ret_type == I64_TYPE and gmod.type_infos.contains(call_name):
+        if ret_type == I64_TYPE and (type_info_contains(&gmod, call_name) or gmod.type_infos.contains(call_name)):
             ret_type = lookup_or_register_named(&gmod, call_name)
         # Template-name constructor: Wrapper__int64_t has template Wrapper
         # in type_infos. Route to the monomorphized named type.
