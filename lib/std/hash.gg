@@ -6,13 +6,15 @@
 #
 # `Hasher` is the role trait (write typed chunks of state, produce a
 # final int). `Hashable` is the capability trait implemented by any
-# type that can feed itself into a Hasher.
+# type that can feed itself into a Hasher; its `hash` method is
+# generic over the Hasher (`void hash[Hasher H](self, H &h)`), so
+# the consumer picks the algorithm at the call site.
 #
-# v1 ships a single concrete `FxHasher` — the Hashable trait signature
-# names `FxHasher` directly rather than a generic `H: Hasher` bound so
-# we keep things monomorphic without tripping method-level-generic
-# dispatch, which isn't yet wired through. When that path is fixed,
-# the signature generalizes without breaking callers.
+# `FxHasher` ships as the default — fast multiplicative mix, fine
+# for in-process keyed collections. User-defined Hashers slot in by
+# implementing the `Hasher` trait; `Hashable` impls keep working
+# unchanged because they only call `h.write_int(...)` / etc., which
+# dispatches through the concrete `H` chosen at the call site.
 
 # ── Hasher trait ──────────────────────────────────────────────
 
