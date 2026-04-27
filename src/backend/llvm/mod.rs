@@ -4142,11 +4142,28 @@ fn emit_inst(
                         "or" => {
                             // or(self, other): if self is Some/Ok, return self; else return other.
                             // args[0] = self ptr, args[1] = other ptr/value
+                            //
+                            // When the user writes `x.or(None)`, the LIR represents the second
+                            // argument as a raw null Ptr (no Option-typed slot is allocated).
+                            // Without special-casing, the `else` branch would memcpy from NULL
+                            // and segfault. Detect it and materialize a None Option in a fresh
+                            // alloca so the select+memcpy below stays uniform.
+                            let arg1_is_null = args.len() > 1 && func.blocks.iter().any(|b| {
+                                b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == args[1].0))
+                            });
+                            if arg1_is_null {
+                                writeln!(out, "  %{pfx}.none_alloca = alloca i8, i64 {result_size}").unwrap();
+                                writeln!(out, "  call void @llvm.memset.p0.i64(ptr %{pfx}.none_alloca, i8 0, i64 {result_size}, i1 false)").unwrap();
+                                writeln!(out, "  %{pfx}.none_tagp = getelementptr i8, ptr %{pfx}.none_alloca, i32 0").unwrap();
+                                writeln!(out, "  store i32 1, ptr %{pfx}.none_tagp ; None").unwrap();
+                            }
                             writeln!(out, "  %{pfx}.tagp = getelementptr i8, ptr %v{}, i32 0", args[0].0).unwrap();
                             writeln!(out, "  %{pfx}.tag = load i32, ptr %{pfx}.tagp").unwrap();
                             writeln!(out, "  %{pfx}.is_some = icmp eq i32 %{pfx}.tag, 0").unwrap();
                             // Select source: if Some → self, else → other
-                            let other_ptr = if args.len() > 1 {
+                            let other_ptr = if arg1_is_null {
+                                format!("%{pfx}.none_alloca")
+                            } else if args.len() > 1 {
                                 format!("%v{}", args[1].0)
                             } else {
                                 format!("%v{}", args[0].0) // shouldn't happen
