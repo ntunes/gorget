@@ -1058,6 +1058,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // Views (cap=0) are struct-copied (zero alloc); owned strings (cap>0) are deep-cloned.
     // Mirrors the C backend's Copy-semantic SlotStore path at src/backend/c_lir/mod.rs.
     writeln!(out, "declare void @gorget_string_copy_cow(ptr sret(%GorgetString), ptr)").unwrap();
+    // gorget_channel_recv_timeout: used by the Channel__T__recv_timeout intercept
+    // in emit_inst (inlines the Option-wrapping). Declare once here unconditionally
+    // — if the call site isn't reached the dead declaration is harmless.
+    if !module.externs.iter().any(|e| e.name == "gorget_channel_recv_timeout") {
+        writeln!(out, "declare i32 @gorget_channel_recv_timeout(ptr, ptr, i64)").unwrap();
+    }
     // Runtime constructors — used for static global initialization
     // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs
     // or already declared above in hof_decls.
@@ -2054,6 +2060,10 @@ fn emit_function(
                         let is_str_push = name == "gorget_str_push" || name == "gorget_str_push_line";
                         let is_str_clear = name == "gorget_str_clear";
                         let is_str_push_line_direct = name == "gorget_string_push_line";
+                        // Channel__T__recv_timeout intercept emits some/none/done branches.
+                        // MUST mirror the counter bump in this pre-pass.
+                        let is_recv_timeout_inline = name.starts_with("Channel__")
+                            && name.ends_with("__recv_timeout") && args.len() >= 2 && dst.is_some();
 
                         // Detect Vector HOF calls that create inline loops (labels).
                         // All core HOFs (each/any/all/map/filter/fold/reduce/
@@ -2116,6 +2126,10 @@ fn emit_function(
                         else if is_str_clear {
                             // gorget_str_clear emits a conditional branch → changes exit label
                             label = format!("scl.done.{counter}");
+                            counter += 1;
+                        }
+                        else if is_recv_timeout_inline {
+                            label = format!("recvtmo.{bid}.{counter}.done");
                             counter += 1;
                         }
                         else if is_map_get && dst.is_some() { counter += 1; }
@@ -3772,6 +3786,68 @@ fn emit_inst(
             }
 
             // ── Collection void* return dereference ──
+            // ── Channel__T__recv_timeout → Option wrapping ──
+            // The C runtime `gorget_channel_recv_timeout(GorgetChannel*, void* out, int64_t)`
+            // returns `int` (1 = received, 0 = timeout) and writes the value through `out`.
+            // The Gorget signature wraps that into Option[T]. The auto-generated
+            // `Channel__T__recv_timeout` helper in helpers.rs returns the bare T (loses
+            // the timeout signal), which mismatches what the LIR call site (and integer
+            // calling convention) expects when its declared return type is the 16-byte
+            // Option struct. C backend intercepts at emit_call_extern.rs and inlines;
+            // mirror that here.
+            if name.starts_with("Channel__") && name.ends_with("__recv_timeout") && args.len() >= 2 {
+                if let Some(d) = dst {
+                    let uid = *trap_counter; *trap_counter += 1;
+                    let pfx = format!("recvtmo.{block_id}.{uid}");
+                    // Locate the Option struct type from the destination slot or val_types.
+                    let opt_sid = func.blocks.iter().flat_map(|b| b.insts.iter()).find_map(|i| {
+                        if let Inst::SlotStore { slot, value, .. } = i {
+                            if value.0 == d.0 {
+                                if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
+                                    if module.structs.get(sid.0 as usize)
+                                        .map_or(false, |s| s.name.starts_with("Option__"))
+                                    {
+                                        return Some(*sid);
+                                    }
+                                }
+                            }
+                        }
+                        None
+                    });
+                    if let Some(sid) = opt_sid {
+                        let opt_def = &module.structs[sid.0 as usize];
+                        let opt_ty = format!("%{}", snames.get(&sid.0).cloned().unwrap_or_else(|| opt_def.name.clone()));
+                        let payload_ty = opt_def.fields.get(1).map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
+                        let payload_llvm = llvm_type_full(&payload_ty, snames);
+                        let payload_off = lir_payload_offset(&payload_ty);
+                        let opt_size = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
+                        // alloca for Option result + scratch for the value
+                        writeln!(out, "  %v{} = alloca {opt_ty}", d.0).unwrap();
+                        writeln!(out, "  call ptr @memset(ptr %v{}, i32 0, i64 {opt_size})", d.0).unwrap();
+                        writeln!(out, "  %{pfx}.val = alloca {payload_llvm}").unwrap();
+                        // Channel arg: deref the channel handle pointer to get GorgetChannel*
+                        writeln!(out, "  %{pfx}.ch = load ptr, ptr %v{}", args[0].0).unwrap();
+                        writeln!(out, "  %{pfx}.rc = call i32 @gorget_channel_recv_timeout(ptr %{pfx}.ch, ptr %{pfx}.val, i64 %v{})", args[1].0).unwrap();
+                        writeln!(out, "  %{pfx}.ok = icmp ne i32 %{pfx}.rc, 0").unwrap();
+                        writeln!(out, "  br i1 %{pfx}.ok, label %{pfx}.some, label %{pfx}.none").unwrap();
+                        writeln!(out, "{pfx}.some:").unwrap();
+                        writeln!(out, "  store i32 0, ptr %v{}", d.0).unwrap();
+                        writeln!(out, "  %{pfx}.payp = getelementptr i8, ptr %v{}, i64 {payload_off}", d.0).unwrap();
+                        let payload_size = sizeof_lir_type(&payload_ty, &module.structs, snames);
+                        writeln!(out, "  call ptr @memcpy(ptr %{pfx}.payp, ptr %{pfx}.val, i64 {payload_size})").unwrap();
+                        writeln!(out, "  br label %{pfx}.done").unwrap();
+                        writeln!(out, "{pfx}.none:").unwrap();
+                        writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
+                        writeln!(out, "  br label %{pfx}.done").unwrap();
+                        writeln!(out, "{pfx}.done:").unwrap();
+                        *current_label = format!("{pfx}.done");
+                        // Ensure gorget_channel_recv_timeout is declared
+                        writeln!(out, "; gorget_channel_recv_timeout is declared via runtime").unwrap();
+                        return;
+                    }
+                }
+            }
+
             // ── Box__T__get → dereference void* to the boxed value ──
             if name.contains("__get") && name.starts_with("Box__") && !args.is_empty() {
                 if let Some(d) = dst {
