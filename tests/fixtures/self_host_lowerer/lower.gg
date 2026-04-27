@@ -5054,8 +5054,16 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     else:
                         pass
                 if is_generic_equip and eq_type_name.len() > 0 and not local_struct_names.contains(eq_type_name):
-                    # Imported generic type: emit template (e.g., Heap__T__push)
-                    lower_equip_block(eqblk, &gmod)
+                    # Imported generic type: SKIP template emission. Rust gg
+                    # elides un-monomorphized generic templates entirely
+                    # (mod.rs:525, 1130 — `continue; // Generic functions
+                    # handled via monomorphization`); only mono'd instances
+                    # reach the lowerer. Templates lowered with bare-T
+                    # bodies produce `[bug] EIdentifier: unknown identifier
+                    # 'T'` (and same for K/V) — ~58 occurrences across
+                    # SetIter/DictIter/etc. The mono'd-equip emission below
+                    # (line ~5285) handles the actual call sites.
+                    pass
                 if is_generic_equip and eq_type_name.len() > 0 and local_struct_names.contains(eq_type_name):
                     # Local generic equip: Rust emits templates ONLY when:
                     #   (a) single type param, no explicit (non-derive) trait, AND
