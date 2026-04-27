@@ -1152,7 +1152,7 @@ feature itemised below the checklist.
 | Item | Blocked on | Plan doc |
 |---|---|---|
 | Dict-flavoured convenience wrappers — **Vector wrappers shipped 2026-04-21** (`v.each`, `v.for_each`, `v.any`, `v.all`, `v.find`, `v.find_index`, `v.fold`, `v.map`, `v.filter`). **Set wrappers also ship today** (`s.each` / `s.for_each` / `s.any` / `s.all` / `s.find` / `s.find_index` / `s.fold`) — same shape as Vector, delegating through `s.iter()` which now returns the lazy `SetIter[T]` (item 8). **Dict wrappers still deferred** — design hold, not a compiler limitation. The existing builtin `Dict.any(K, V)` / `.all(K, V)` / `.each(K, V)` / `.fold(A, K, V)` methods take key and value as TWO separate closure args; iterator wrappers would take a single `(K, V)` tuple arg. Picking either shape breaks the other set of callers. Users who want tuple semantics today write it explicitly (`d.iter().any(p)` / `d.iter().fold(0, f)`); the public-API decision can wait for a deliberate breaking-change pass. `v.count(p)` / `v.reduce(f)` skipped (different sig from Iterator counterpart). `to_set()` / `to_dict()` drop blocked on inferred `collect()` (row 2) | Dict tuple-vs-2-args API decision | `docs/internals/method-level-inference.md` |
-| Bound-needing defaults (`min` / `max` / `contains` / `sum` / `product`) — **ALL FIVE SHIPPED 2026-04-27**. `min`/`max` use `<` / `>`, `contains` uses `==`, `sum` uses `T.default()` + `+`, `product` uses `T.one()` + `*` — all directly on abstract `T`. The demand-gate (`all_return_nominals_registered`) only emits each per-impl monomorphisation when a call site actually reaches for it; Iterator implementors with non-Comparable / non-Equatable / non-Numeric T's never have these specialised. The previously-feared self-host bootstrap regression (2026-04-20) no longer reproduces — `lowerer_comparison` improves +2 fixtures (814→816). The `T.default()` / `T.one()` blocker that initially kept `sum`/`product` deferred was fixed at the same time: in `lower_unregistered_trait_equip_methods` (and `emit_default_methods_from_trait` for trait-info-registered traits) we now bind `generic_type_params` (Self + trait T) for the trait-default body's lowering duration with a save/restore guard, so static factory calls on type-variable receivers (`T.default()` / `T.one()`) resolve through `lower_method_call`'s static path instead of falling back to the `Constant::I64(0)` placeholder and producing the bogus `int64_t__default(int64_t)` sig collision. Also widened the prelude fn_sigs registration to all sized-int / sized-float `__default` / `__one` (previously only int64_t / double / bool were registered), so `T = uint8` etc. don't hit the I64 ret-type fallback. Fixture: `tests/fixtures/stdlib_iter_more_terminals.gg` (sum=60, product=24, empty_sum=0, empty_product=1). `join` default still deferred (Displayable threading through abstract `T`). | — | — |
+| Bound-needing defaults (`min` / `max` / `contains` / `sum` / `product` / `join`) — **ALL SIX SHIPPED 2026-04-27**. `min`/`max` use `<` / `>`, `contains` uses `==`, `sum` uses `T.default()` + `+`, `product` uses `T.one()` + `*`, `join` uses `x.display()` + `out.push(...)` — all directly on abstract `T`. The demand-gate (`all_return_nominals_registered`) only emits each per-impl monomorphisation when a call site actually reaches for it; Iterator implementors whose `T` doesn't satisfy the bound never have these specialised. `lowerer_comparison` improves +2 fixtures (814→816). Key enabler: in `lower_unregistered_trait_equip_methods` (and `emit_default_methods_from_trait`) we bind `generic_type_params` (Self + trait T) for the trait-default body's lowering duration with a save/restore guard. This lets `lower_method_call` resolve both static factories (`T.default()` / `T.one()` → primitive prelude fn_sigs) AND instance method dispatch (`x.display()` → trait-method-instance discovery) on abstract `T` through the same path. The bonus piece for `join` — typecheck and method-instance discovery already had the machinery; only the IR-side body lowering needed the binding. Also widened the prelude fn_sigs to register `__default` / `__one` for all sized integers and `float`. Fixture: `tests/fixtures/stdlib_iter_more_terminals.gg` (sum=60, product=24, empty_sum=0, empty_product=1, joined=[2, 3, 4], empty_joined=[]). | — | — |
 | Single inferred `collect()` (drop `to_set()` / `to_dict()` from the surface) — **all three targets shipped 2026-04-22/23**. Vector (`Vector[T] v = it.collect()`): default-method sig registration in `register_trait_equip_sigs` + demand-gated bulk emission produce a concrete `X__collect` returning `Vector[T]` per iterator impl. Set (`Set[T] s = it.collect()`): Pass 2.6 AST rewrite (`apply_collect_target_rewrites` in `src/semantic/typecheck.rs`) swaps `.collect()` → `.to_set()` when the VarDecl's declared type is `Set[_]`, routing through a new `Iterator[T]::to_set(&self)` trait default. Dict (`Dict[K, V] d = pairs.collect()`): same rewrite splices K/V from the LHS into the method's generic args and swaps to `.to_dict[K, V]()`, routing through a new `Iterator[T]::to_dict[K, V](&self)` trait default that `.put(x.0, x.1)`s tuple elements from the iterator. Non-tuple `T`s fail at mono emission since the body reaches for `x.0`/`x.1` — users who try `Dict[K, V] = non_pairs.iter().collect()` get a compile error. Fixtures: `tests/fixtures/iter_collect_set.gg`, `iter_collect_dict.gg`. Still deferred (low priority): turbofish form `it.collect[Set[int]]()` would require `.collect()` itself to become method-generic; today explicit turbofish routes through `.to_set[T]()` / `.to_dict[K, V]()` directly. | — | — |
 | Auto-import std.iter via the loader — **SHIPPED 2026-04-23** (commit a5b3ba7a). `v.iter().map(f).filter(p).collect()` in a scratch file compiles and runs without any `from std.iter import ...` boilerplate. The heuristic fires when the entry module references `Iterator`/`Iterable`/`Drainable`/adapter-struct names or calls `.iter()` anywhere, subject to shadowing (e.g. `vector_iter_userdef.gg` defines its own `VectorIter`) and existing-import checks. Turn-on required two prerequisites landed in the same commit: (1) trait-T binding in per-call-site mono (`try_register_method_instance` + `lower_method_instance` push trait-generic-name → substituted-trait-arg BEFORE Self + impl subs so trait-body refs win when names collide, e.g. `equip CounterIter with Iterator[int]:`'s inherited `fold[A, F]` specialises correctly); (2) non-generic-equip registration in `equip_templates` when the trait has defaults OR is an iterator-protocol name, so chain inference via `infer_expr_ast_type` can resolve `Counter(0, 5).iter()` → `CounterIter`. Fixture migrations: `iterator_adapters.gg` + `linked_list.gg` + `examples/iterator_demo.gg` + `examples/linked_list.gg` now call `.collect()` explicitly where they previously relied on the eager `try_lower_iterator_adapter` shortcut (that path stays as a fallback when the trait default isn't in scope). | — | — |
 
@@ -1164,24 +1164,32 @@ inferred `collect()` row above (eager `.windows` wants
 `iter().windows(n).collect()`). Sequencing: inferred collect →
 Vector wrappers → rename.
 
-**Bound-needing terminals — current status:**
+**Bound-needing terminals — ALL SHIPPED 2026-04-27.**
 
-- `min` / `max` / `contains` / `sum` / `product` — **SHIPPED as
-  `Iterator[T]` defaults 2026-04-27**. Demand-gate prevents
-  emission for non-Comparable / non-Equatable / non-Numeric T's.
-  Method form is canonical:
-  `v.iter().min()` / `.max()` / `.contains(x)` / `.sum()` /
-  `.product()`. `sum`/`product` use `T.default()` (additive identity
-  = 0) and `T.one()` (multiplicative identity = 1) as the
-  accumulator seed; both factories are user-space static methods
-  declared on the primitives in `std.prelude`.
-- `join` — still a free function (`join_iter[Iter, Displayable T]`).
-  Displayable.display() dispatch through abstract `T` not yet
-  threaded through default-method emission.
-- Free-function variants (`min_iter` / `max_iter` / `sum_iter` /
-  `product_iter`) retained as a working alternative for callers
-  using the explicit form. Int-specific fallbacks (`min_iter` /
-  `max_iter` taking `Iterator[int]`) are still in std.iter.
+`min` / `max` / `contains` / `sum` / `product` / `join` all live
+as `Iterator[T]` defaults. The demand-gate
+(`all_return_nominals_registered`) prevents emission for impls
+whose `T` doesn't satisfy the operator/method requirements
+(non-Comparable / non-Equatable / non-Numeric / non-Displayable).
+Method form is canonical:
+
+- `v.iter().min()` / `.max()` — Comparable bound (`<`, `>`).
+- `v.iter().contains(x)` — Equatable bound (`==`).
+- `v.iter().sum()` — Numeric bound (`T.default()` + `+`).
+- `v.iter().product()` — Numeric bound (`T.one()` + `*`).
+- `v.iter().join(sep)` — Displayable bound (`x.display()`).
+
+The trait-default body lowering binds `generic_type_params`
+(Self + trait T) for the body's duration, so static factory
+calls (`T.default()` / `T.one()`) and trait-method dispatch
+(`x.display()`) on abstract `T` resolve through the same
+mono path the rest of the body uses.
+
+Free-function variants (`min_iter` / `max_iter` / `sum_iter` /
+`product_iter` / `join_iter`) retained as a working alternative
+for callers using the explicit form (e.g. inside fixtures that
+turn off auto-import). Int-specific fallbacks (`min_iter` /
+`max_iter` taking `Iterator[int]`) still in std.iter.
 
 The unbound counterparts (`collect_vec`, `count_iter`, `fold_iter`,
 `any_iter`, `all_iter`, `find_iter`, `find_index_iter`, `last_iter`,

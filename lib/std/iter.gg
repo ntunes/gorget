@@ -240,6 +240,16 @@ trait Iterator[T]:
                 return true
         return false
 
+    String join(&self, String sep):
+        String out = ""
+        bool first = true
+        for x in self:
+            if not first:
+                out.push(sep.clone())
+            out.push(x.display())
+            first = false
+        return !out
+
     # NOTE: trait-bounded defaults — most are now shipped above.
     # `join` (Displayable-based) remains as a free function in
     # `std.iter` because the trait-default path doesn't yet thread

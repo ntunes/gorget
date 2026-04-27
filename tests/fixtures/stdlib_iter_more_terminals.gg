@@ -142,4 +142,11 @@ int main():
     int empty_product = empty.iter().product()
     print(f"empty_product={empty_product}")
 
+    # join — Displayable-bounded default. `int` has Displayable
+    # via the prelude derive.
+    String joined = small.iter().join(", ")
+    print(f"joined=[{joined}]")
+    String empty_joined = empty.iter().join("|")
+    print(f"empty_joined=[{empty_joined}]")
+
     return 0
