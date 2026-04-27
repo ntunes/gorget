@@ -10,6 +10,7 @@ from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal
 from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop, TypeDropInfo, FieldInit
@@ -2079,6 +2080,16 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 blk.insts.push(ISub(dst, lir_ty, lhs, rhs, OVF_WRAP))
             elif op == OP_MUL_WRAP:
                 blk.insts.push(IMul(dst, lir_ty, lhs, rhs, OVF_WRAP))
+            elif op == OP_BITAND:
+                blk.insts.push(IBitAnd(dst, lir_ty, lhs, rhs))
+            elif op == OP_BITOR:
+                blk.insts.push(IBitOr(dst, lir_ty, lhs, rhs))
+            elif op == OP_BITXOR:
+                blk.insts.push(IBitXor(dst, lir_ty, lhs, rhs))
+            elif op == OP_SHL:
+                blk.insts.push(IShl(dst, lir_ty, lhs, rhs))
+            elif op == OP_SHR:
+                blk.insts.push(IShr(dst, lir_ty, lhs, rhs))
             elif op == OP_DIV:
                 blk.insts.push(IDiv(dst, lir_ty, lhs, rhs))
             elif op == OP_REM:

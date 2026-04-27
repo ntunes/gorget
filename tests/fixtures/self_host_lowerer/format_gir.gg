@@ -8,6 +8,7 @@ from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 
@@ -110,6 +111,16 @@ String binop_name(int op):
         return "sub_wrap"
     if op == OP_MUL_WRAP:
         return "mul_wrap"
+    if op == OP_BITAND:
+        return "bitand"
+    if op == OP_BITOR:
+        return "bitor"
+    if op == OP_BITXOR:
+        return "bitxor"
+    if op == OP_SHL:
+        return "shl"
+    if op == OP_SHR:
+        return "shr"
     return "?op" + int_to_str(op)
 
 String unop_name(int op):

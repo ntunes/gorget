@@ -12,6 +12,7 @@ from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumV
 from gir import BOOL_TYPE, I32_TYPE, I64_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import init_type_table, register_type, lookup_or_register_named, register_ptr
@@ -964,6 +965,16 @@ int map_binop(String op):
             return OP_SUB_WRAP
         case "*%":
             return OP_MUL_WRAP
+        case "&":
+            return OP_BITAND
+        case "|":
+            return OP_BITOR
+        case "^":
+            return OP_BITXOR
+        case "<<":
+            return OP_SHL
+        case ">>":
+            return OP_SHR
         else:
             # HARD BUG: returning OP_ADD for an unrecognised operator
             # silently mis-compiles it as addition. Emit a diagnostic

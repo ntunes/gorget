@@ -69,6 +69,14 @@ const int OP_ADD_WRAP = 6
 const int OP_SUB_WRAP = 7
 const int OP_MUL_WRAP = 8
 
+# Bitwise — `&` / `|` / `^` / `<<` / `>>`. Lower to the matching
+# `IBitAnd` / `IBitOr` / `IBitXor` / `IShl` / `IShr` LIR inst.
+const int OP_BITAND = 9
+const int OP_BITOR = 10
+const int OP_BITXOR = 11
+const int OP_SHL = 12
+const int OP_SHR = 13
+
 const int CMP_EQ = 0
 const int CMP_NE = 1
 const int CMP_LT = 2
