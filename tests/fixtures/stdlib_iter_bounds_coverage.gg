@@ -1,0 +1,233 @@
+# Comprehensive coverage for the bound-needing `Iterator[T]` defaults
+# (`min` / `max` / `contains` / `sum` / `product` / `join`) across:
+#   1. Multiple T types (int, float, String) — exercises the demand-
+#      gate's per-impl monomorphisation across primitive Ts.
+#   2. A custom Iterator implementor (`Counter`/`CounterIter`) — proves
+#      the defaults aren't wired only to `VectorIter[int]`.
+#   3. Adapter chains (`filter` / `map` / `take`) ahead of bound-needing
+#      terminals — proves the bounds work through `FilterIter[Iter, T,
+#      F]`, `MapIter[Iter, T, U, F]`, `TakeIter[Iter, T]`.
+#   4. Generic functions taking `Iterator[T]` / `Iterable[T]` — proves
+#      the bound terminals lower cleanly when the receiver is the
+#      abstract trait param.
+
+from std.collections import Vector
+from std.iter import VectorIter
+
+# ── Section 2: Custom Iterator implementor ──────────────────
+# `equip CounterIter with Iterator[int]:` inherits all defaults
+# including the bound-needing ones. Each per-impl mono is demand-
+# driven by call site, so unused defaults never emit.
+
+struct Counter:
+    int start
+    int max
+
+struct CounterIter:
+    int current
+    int max
+
+equip CounterIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current >= self.max:
+            return None
+        int val = self.current
+        self.current = self.current + 1
+        return Some(val)
+
+equip Counter with Iterable[int]:
+    CounterIter iter(&self):
+        return CounterIter(self.start, self.max)
+
+# ── Section 4: Generic bound-needing functions ──────────────
+# Generic `Iterable[T]` / `Iterator[T]` bounds carry through to
+# any per-method bound the body uses. Demand-gate ensures we only
+# specialise these for Ts that satisfy the body's internal needs.
+
+int sum_iterable[Iterable[int] I](I col):
+    return col.iter().sum()
+
+int contains_via[Iterable[int] I](I col, int target):
+    if col.iter().contains(target):
+        return 1
+    return 0
+
+# Iterator-bounded — accepts any Iterator[int], not just Iterable.
+# Useful for plumbing that already produced an iterator (e.g.
+# `it = v.iter().filter(p)`) and wants to thread a bound terminal.
+int max_iter_direct[Iterator[int] I](I !iter):
+    Option[int] result = iter.max()
+    match result:
+        case Some(n):
+            return n
+        case None:
+            return -1
+
+# ── main ────────────────────────────────────────────────────
+
+bool gt_two(int x):
+    return x > 2
+
+int double(int x):
+    return x * 2
+
+bool float_gt_one(float x):
+    return x > 1.0
+
+int main():
+    # ── Section 1a: Vector[int] (already covered in
+    # stdlib_iter_more_terminals.gg, kept here as a sanity check
+    # that the new fixture compiles same with the existing path).
+    Vector[int] vi = Vector[int]()
+    vi.push(3)
+    vi.push(1)
+    vi.push(4)
+    vi.push(1)
+    vi.push(5)
+    Option[int] vi_min = vi.iter().min()
+    Option[int] vi_max = vi.iter().max()
+    int vi_sum = vi.iter().sum()
+    int vi_product = vi.iter().product()
+    bool vi_has1 = vi.iter().contains(1)
+    bool vi_has9 = vi.iter().contains(9)
+    String vi_joined = vi.iter().join(",")
+    match vi_min:
+        case Some(n):
+            print(f"vi_min={n}")
+        case None:
+            print("vi_min=none")
+    match vi_max:
+        case Some(n):
+            print(f"vi_max={n}")
+        case None:
+            print("vi_max=none")
+    print(f"vi_sum={vi_sum}")
+    print(f"vi_product={vi_product}")
+    print(f"vi_has1={vi_has1}")
+    print(f"vi_has9={vi_has9}")
+    print(f"vi_joined=[{vi_joined}]")
+
+    # ── Section 1b: Vector[float] — exercises sum/product/min/max
+    # with the F64 prelude bindings (`double__default` /
+    # `double__one`). join uses `float.display()`.
+    Vector[float] vf = Vector[float]()
+    vf.push(1.5)
+    vf.push(2.5)
+    vf.push(0.5)
+    Option[float] vf_min = vf.iter().min()
+    Option[float] vf_max = vf.iter().max()
+    float vf_sum = vf.iter().sum()
+    float vf_product = vf.iter().product()
+    match vf_min:
+        case Some(f):
+            print(f"vf_min={f}")
+        case None:
+            print("vf_min=none")
+    match vf_max:
+        case Some(f):
+            print(f"vf_max={f}")
+        case None:
+            print("vf_max=none")
+    print(f"vf_sum={vf_sum}")
+    print(f"vf_product={vf_product}")
+
+    # ── Section 1c: Vector[String] — min/max/contains/join.
+    # `sum`/`product` deliberately not exercised: String has no
+    # `.default()` / `.one()` factory so the demand-gate skips
+    # Iterator__String__sum / __product emission. That's correct
+    # behaviour — try-it-and-see for the user, not a fixture
+    # invariant we want to lock in.
+    Vector[String] vs = Vector[String]()
+    vs.push("banana")
+    vs.push("apple")
+    vs.push("cherry")
+    Option[String] vs_min = vs.iter().min()
+    Option[String] vs_max = vs.iter().max()
+    bool vs_has_apple = vs.iter().contains("apple")
+    bool vs_has_pear = vs.iter().contains("pear")
+    String vs_joined = vs.iter().join(", ")
+    match vs_min:
+        case Some(s):
+            print(f"vs_min={s}")
+        case None:
+            print("vs_min=none")
+    match vs_max:
+        case Some(s):
+            print(f"vs_max={s}")
+        case None:
+            print("vs_max=none")
+    print(f"vs_has_apple={vs_has_apple}")
+    print(f"vs_has_pear={vs_has_pear}")
+    print(f"vs_joined=[{vs_joined}]")
+
+    # ── Section 2: Custom Iterator impl ─────────────────────
+    # `Counter(0, 5)` yields [0, 1, 2, 3, 4]. Exercises the
+    # CounterIter__sum / __min / __contains / __join symbols
+    # the bulk-default emission path produces for non-generic
+    # equips with traits (lower_unregistered_trait_equip_methods).
+    Counter c1 = Counter(0, 5)
+    int c1_sum = c1.iter().sum()
+    print(f"c1_sum={c1_sum}")
+
+    Counter c2 = Counter(2, 5)
+    Option[int] c2_min = c2.iter().min()
+    match c2_min:
+        case Some(n):
+            print(f"c2_min={n}")
+        case None:
+            print("c2_min=none")
+
+    Counter c3 = Counter(0, 4)
+    bool c3_has2 = c3.iter().contains(2)
+    bool c3_has9 = c3.iter().contains(9)
+    print(f"c3_has2={c3_has2}")
+    print(f"c3_has9={c3_has9}")
+
+    Counter c4 = Counter(1, 4)
+    String c4_joined = c4.iter().join("|")
+    print(f"c4_joined=[{c4_joined}]")
+
+    # ── Section 3: Adapter-chain bound terminals ─────────────
+    # Demand-gate has to thread through the wrapper's T to reach
+    # the bound terminal. `v.iter().filter(p)` produces
+    # `FilterIter[VectorIter[int], int, bool(int)]`; calling
+    # .sum() on that requires the Iterator default mono to
+    # specialise FilterIter for T=int.
+    Vector[int] big = Vector[int]()
+    big.push(1)
+    big.push(2)
+    big.push(3)
+    big.push(4)
+    big.push(5)
+    int filtered_sum = big.iter().filter(gt_two).sum()
+    print(f"filtered_sum={filtered_sum}")
+
+    int mapped_product = big.iter().take(3).map(double).product()
+    print(f"mapped_product={mapped_product}")
+
+    Option[int] take_min = big.iter().take(3).min()
+    match take_min:
+        case Some(n):
+            print(f"take_min={n}")
+        case None:
+            print("take_min=none")
+
+    String filtered_join = big.iter().filter(gt_two).join("-")
+    print(f"filtered_join=[{filtered_join}]")
+
+    # ── Section 4: Generic-bound functions ───────────────────
+    int g_sum_v = sum_iterable[Vector[int]](vi)
+    print(f"g_sum_v={g_sum_v}")
+    int g_sum_c = sum_iterable[Counter](c1)
+    print(f"g_sum_c={g_sum_c}")
+
+    int g_has = contains_via[Vector[int]](vi, 4)
+    print(f"g_has=4:{g_has}")
+    int g_has_no = contains_via[Vector[int]](vi, 99)
+    print(f"g_has=99:{g_has_no}")
+
+    # Iterator-bounded function: pass a VectorIter directly.
+    int g_max_direct = max_iter_direct[VectorIter[int]](!big.iter())
+    print(f"g_max_direct={g_max_direct}")
+
+    return 0

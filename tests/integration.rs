@@ -2233,6 +2233,14 @@ fn stdlib_iter_more_terminals() {
 }
 
 #[test]
+fn stdlib_iter_bounds_coverage() {
+    run_gg(
+        "stdlib_iter_bounds_coverage.gg",
+        "vi_min=1\nvi_max=5\nvi_sum=14\nvi_product=60\nvi_has1=true\nvi_has9=false\nvi_joined=[3,1,4,1,5]\nvf_min=0.500000\nvf_max=2.500000\nvf_sum=4.500000\nvf_product=1.875000\nvs_min=apple\nvs_max=cherry\nvs_has_apple=true\nvs_has_pear=false\nvs_joined=[banana, apple, cherry]\nc1_sum=10\nc2_min=2\nc3_has2=true\nc3_has9=false\nc4_joined=[1|2|3]\nfiltered_sum=12\nmapped_product=48\ntake_min=1\nfiltered_join=[3-4-5]\ng_sum_v=14\ng_sum_c=10\ng_has=4:1\ng_has=99:0\ng_max_direct=5",
+    );
+}
+
+#[test]
 fn stdlib_udp_typed() {
     run_gg(
         "stdlib_udp_typed.gg",
