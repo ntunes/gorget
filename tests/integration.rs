@@ -2228,7 +2228,7 @@ fn stdlib_iter_join() {
 fn stdlib_iter_more_terminals() {
     run_gg(
         "stdlib_iter_more_terminals.gg",
-        "idx_even=0\nidx_big=none\nlast=14\nempty_last=none\nnth2=12\nnth0=10\nnth99=none\nnth_neg=none",
+        "idx_even=0\nidx_big=none\nlast=14\nempty_last=none\nnth2=12\nnth0=10\nnth99=none\nnth_neg=none\nmin=10\nmax=14\nempty_min=none\nhas12=true\nhas99=false",
     );
 }
 

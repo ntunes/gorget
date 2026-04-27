@@ -3,6 +3,15 @@
 # Replaces the previous `_iter` free-function calls; the free fns
 # `find_index_iter` / `last_iter` / `nth_iter` were retired in the
 # Phase 2c convenience-wrapper migration.
+#
+# Also covers the bound-needing terminals `min` / `max` / `contains`
+# — shipped as default methods on `Iterator[T]`. The demand-gate
+# (`all_return_nominals_registered`) only emits each per-impl
+# monomorphisation when a call site actually reaches for it, so
+# Iterator implementors with non-Comparable / non-Equatable T's
+# never have these specialised. `sum` / `product` / `join` remain
+# as free functions in `std.iter` for separate compiler reasons —
+# see iter.gg and stdlib-design.md §10.
 
 from std.iter import VectorIter
 from std.collections import Vector
@@ -82,5 +91,35 @@ int main():
             print(f"nth_neg={x}")
         case None:
             print("nth_neg=none")
+
+    # min — Comparable-bounded default. Returns smallest int.
+    Option[int] lo = v.iter().min()
+    match lo:
+        case Some(x):
+            print(f"min={x}")
+        case None:
+            print("min=none")
+
+    # max — Comparable-bounded default. Returns largest int.
+    Option[int] hi = v.iter().max()
+    match hi:
+        case Some(x):
+            print(f"max={x}")
+        case None:
+            print("max=none")
+
+    # min on empty — None.
+    Option[int] empty_min = empty.iter().min()
+    match empty_min:
+        case Some(x):
+            print(f"empty_min={x}")
+        case None:
+            print("empty_min=none")
+
+    # contains — Equatable-bounded default. Hit and miss.
+    bool has12 = v.iter().contains(12)
+    bool has99 = v.iter().contains(99)
+    print(f"has12={has12}")
+    print(f"has99={has99}")
 
     return 0

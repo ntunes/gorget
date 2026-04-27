@@ -172,10 +172,66 @@ trait Iterator[T]:
             acc = f(acc, x)
         return acc
 
-    # NOTE: trait-bounded defaults (`min` / `max` / `sum` / `product`
-    # / `join` / `contains`) are deferred. Each requires an operator
-    # (`<` / `>` / `+` / `*` / `==`) or trait method (`.display()`)
-    # on the abstract `T`, which triggers self-host bootstrap
+    # ── Bound-needing aggregation terminals ──────────────────
+    #
+    # These defaults use operators on the abstract `T` (`<`, `>`,
+    # `+`, `*`, `==`). The demand-gate (`all_return_nominals_
+    # registered`) only emits each per-impl monomorphisation when
+    # a call site actually reaches for it — Iterator implementors
+    # with non-Comparable / non-Numeric / non-Equatable T's never
+    # have these specialised, so the body's operators don't need
+    # to resolve. The previous `[deferred until per-method trait
+    # bounds]` caveat no longer applies — verified self-host
+    # bootstrap green on 2026-04-27.
+    #
+    # `min` / `max` need `<` / `>` on T (Comparable).
+    # `sum` / `product` need `+` / `*` and `T.default()` (Numeric).
+    # `contains` needs `==` on T (Equatable).
+
+    Option[T] min(&self):
+        Option[T] best = None
+        for x in self:
+            match best:
+                case None:
+                    best = Some(x)
+                case Some(prev):
+                    if x < prev:
+                        best = Some(x)
+        return !best
+
+    Option[T] max(&self):
+        Option[T] best = None
+        for x in self:
+            match best:
+                case None:
+                    best = Some(x)
+                case Some(prev):
+                    if x > prev:
+                        best = Some(x)
+        return !best
+
+    # `sum` / `product` stay as free functions in `std.iter`.
+    # A default-method body `T acc = T.default(); for x in self:
+    # acc = acc + x` triggers a sig conflict in
+    # `register_method_instance_sigs` for some fixtures (the
+    # `T.default()` static call gets misregistered as
+    # `<T>__default(<T>)` taking self). `sum_iter[Iter] iter(int)`
+    # / `product_iter[Iter] iter(int)` carry the int constraint
+    # explicitly and don't trip that path.
+
+    bool contains(&self, T target):
+        for x in self:
+            if x == target:
+                return true
+        return false
+
+    # NOTE: trait-bounded defaults — most are now shipped above.
+    # `join` (Displayable-based) remains as a free function in
+    # `std.iter` because the trait-default path doesn't yet thread
+    # the Displayable.display() method dispatch into the body's
+    # `acc.push(x.display())` call when T is abstract. The
+    # `join_iter[Iter, Displayable T]` free function carries the
+    # bound explicitly and works today.
     # regressions: the stage-0 driver monomorphises Iterator[T] for
     # T's that don't satisfy the implicit bound and emits broken
     # codegen. The free-function variants in std.iter
