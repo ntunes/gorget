@@ -11497,7 +11497,6 @@ fn self_host_bootstrap() {
 // from Phase 1-4 which only guarantee "stage-1 links." Tracked in
 // TODO.md. Unignore once stage-1 runs on hello.gg end to end.
 #[test]
-#[ignore]
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap_fixed_point() {
     let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
@@ -11561,23 +11560,68 @@ fn self_host_bootstrap_fixed_point() {
         String::from_utf8_lossy(&stage2_out.stderr),
     );
     let stage2_body = String::from_utf8_lossy(&stage2_out.stdout).to_string();
-    std::fs::write(&stage2_c, &stage2_body).expect("failed to write stage2.c");
+    std::fs::write(&stage2_c, format!("{runtime_preamble}\n{stage2_body}"))
+        .expect("failed to write stage2.c");
+
+    // Compile stage-2 binary.
+    let stage2_bin = tmp_dir.join("self_host_stage2");
+    let cc2_out = Command::new("cc")
+        .arg("-O0")
+        .arg("-w")
+        .arg("-o")
+        .arg(&stage2_bin)
+        .arg(&stage2_c)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("failed to spawn cc for stage-2");
+    assert!(
+        cc2_out.status.success(),
+        "stage-2 cc failed: stderr={}",
+        String::from_utf8_lossy(&cc2_out.stderr),
+    );
+
+    // Stage 2 → stage 3 body C. Same arguments — this is the true
+    // fixed-point check: stage-2 emits the same bytes as stage-1
+    // (which is what stage-2 was compiled from).
+    let stage3_out = run_with_deadline(
+        Command::new(&stage2_bin)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_bootstrap_fixed_point stage2 → stage3.c",
+        Duration::from_secs(300),
+    );
+    assert!(
+        stage3_out.status.success(),
+        "stage-2 binary failed: stderr={}",
+        String::from_utf8_lossy(&stage3_out.stderr),
+    );
+    let stage3_body = String::from_utf8_lossy(&stage3_out.stdout).to_string();
 
     // Cleanup stage-0 artifacts regardless of the comparison outcome.
     let _ = std::fs::remove_file(&driver_c);
     let _ = std::fs::remove_file(&driver_exe);
 
-    // Byte-for-byte fixed-point assertion.
-    if stage1_body != stage2_body {
+    // Byte-for-byte fixed-point assertion: stage-1's emission of itself
+    // (stage2_body) must equal stage-2's emission of itself (stage3_body).
+    // Note: stage1_body (stage-0's emission) may legitimately differ
+    // from stage2_body because stage-0 is Rust's `gg` compiler with
+    // slightly different codegen than the self-host. The true fixed
+    // point is `stage2 == stage3`.
+    if stage2_body != stage3_body {
+        let stage3_c = tmp_dir.join("self_host_stage3.c");
+        std::fs::write(&stage3_c, format!("{runtime_preamble}\n{stage3_body}"))
+            .expect("failed to write stage3.c");
         panic!(
             "self-host is not a fixed point.\n\
-             stage1.c preserved at {}\n\
              stage2.c preserved at {}\n\
+             stage3.c preserved at {}\n\
              (use `diff {} {}` to inspect)",
-            stage1_c.display(),
             stage2_c.display(),
-            stage1_c.display(),
+            stage3_c.display(),
             stage2_c.display(),
+            stage3_c.display(),
         );
     }
 
@@ -11585,6 +11629,7 @@ fn self_host_bootstrap_fixed_point() {
     let _ = std::fs::remove_file(&stage1_c);
     let _ = std::fs::remove_file(&stage1_bin);
     let _ = std::fs::remove_file(&stage2_c);
+    let _ = std::fs::remove_file(&stage2_bin);
 }
 
 // Numeric trait integration tests
