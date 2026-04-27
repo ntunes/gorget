@@ -958,11 +958,179 @@ String emit_string_lits(Vector[StringLitEntry] &entries):
 
 # ── Function forward declarations ──────────────────────────
 
+# ── Reachability / DCE ─────────────────────────────────────
+#
+# Skip emitting functions unreachable from main / closure roots /
+# drop fns. Mirrors `src/lir/optimize.rs::eliminate_dead_functions`'s
+# root set; runs at emit time so the LIR module is left untouched
+# (call-site fids stay stable). Without this, the self-host emits
+# every imported function whether or not it's called — `closure_float_ret.gg`
+# pulls in 155 fns from `xtd.dataframe` even when the user only needs
+# Vector[float], inflating the C output by ~120 fns vs Rust gg.
+
+# Compute reachable function set. Returns Vector[bool] indexed by fid.
+# `reachable[fid] == true` iff fid is reachable from a root via ICall /
+# ICallExtern (by name) / IClosurePack chains.
+Vector[bool] compute_reachable_fns(LirModule &m):
+    int n = m.functions.len()
+    Vector[bool] reachable = []
+    int ri = 0
+    while ri < n:
+        reachable.push(false)
+        ri += 1
+    if n == 0:
+        return reachable
+
+    # Build name → fid table for resolving ICallExtern targets that
+    # land on user fns (the self-host emits Trait_for_T__method as a
+    # CallExtern by name — they'd otherwise get DCE'd).
+    Vector[String] name_keys = []
+    Vector[int] name_fids = []
+    int ni = 0
+    while ni < n:
+        name_keys.push(m.functions.get(ni).unwrap().name.clone())
+        name_fids.push(ni)
+        ni += 1
+
+    Vector[int] worklist = []
+
+    # Seed roots: main, test/bench/suite entry points, every fn whose
+    # name contains "__call" (closure dispatch entry points referenced
+    # only via fn pointers in GorgetClosure.fn_ptr).
+    int fi = 0
+    while fi < n:
+        String name = m.functions.get(fi).unwrap().name
+        bool is_root = false
+        if name == "main":
+            is_root = true
+        elif name.starts_with("__test"):
+            is_root = true
+        elif name.starts_with("__bench_"):
+            is_root = true
+        elif name.starts_with("__suite_"):
+            is_root = true
+        elif name.contains("__call"):
+            is_root = true
+        if is_root:
+            reachable.set(fi, true)
+            worklist.push(fi)
+        fi += 1
+
+    # Type-drop user-fn references: emit_struct_drops walks
+    # m.recursive_drop_structs and m.recursive_drop_enums and emits
+    # T__drop / T__clone helpers; those are called from generated
+    # destructor sites that aren't visible in the LIR call graph.
+    # Treat any fn with a name matching a drop-table key (T__drop /
+    # T__clone) as a root.
+    Vector[String] drop_keys = m.recursive_drop_structs.keys()
+    int dk = 0
+    while dk < drop_keys.len():
+        String dn = drop_keys.get(dk).unwrap() + "__drop"
+        String cn = drop_keys.get(dk).unwrap() + "__clone"
+        int dfi = 0
+        while dfi < n:
+            String fname_d = m.functions.get(dfi).unwrap().name
+            if (fname_d == dn or fname_d == cn) and not reachable.get(dfi).unwrap():
+                reachable.set(dfi, true)
+                worklist.push(dfi)
+            dfi += 1
+        dk += 1
+    Vector[String] drop_e_keys = m.recursive_drop_enums.keys()
+    int dek = 0
+    while dek < drop_e_keys.len():
+        String den = drop_e_keys.get(dek).unwrap() + "__drop"
+        String cen = drop_e_keys.get(dek).unwrap() + "__clone"
+        int dei = 0
+        while dei < n:
+            String fname_e = m.functions.get(dei).unwrap().name
+            if (fname_e == den or fname_e == cen) and not reachable.get(dei).unwrap():
+                reachable.set(dei, true)
+                worklist.push(dei)
+            dei += 1
+        dek += 1
+
+    # Transitive closure: walk reachable functions, follow ICall fids
+    # and ICallExtern names.
+    int wi = 0
+    while wi < worklist.len():
+        int cur = worklist.get(wi).unwrap()
+        wi += 1
+        if cur < 0 or cur >= n:
+            continue
+        LirFunction cur_func = m.functions.get(cur).unwrap()
+        int bi = 0
+        while bi < cur_func.blocks.len():
+            LirBlock blk = cur_func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                LirInst inst = blk.insts.get(ii).unwrap()
+                int target_fid = -1
+                String target_name = ""
+                String target_orig = ""
+                match inst:
+                    case ICall(_, callee_fid, _):
+                        target_fid = callee_fid
+                    case ICallExtern(_, callee_name, _, callee_orig, _):
+                        target_name = callee_name
+                        target_orig = callee_orig
+                    case IClosurePack(_, _, cf, _):
+                        target_fid = cf
+                    else:
+                        pass
+                if target_fid >= 0 and target_fid < n:
+                    if not reachable.get(target_fid).unwrap():
+                        reachable.set(target_fid, true)
+                        worklist.push(target_fid)
+                # Look up both the post-mapping name and the original
+                # GIR name — call_redirects / map_runtime_name route a
+                # bare method name to the runtime form, so the LIR's
+                # `name` may differ from the function-definition name
+                # (Rust DCE applies the same dual-lookup; src/lir/optimize.rs).
+                if target_name.len() > 0:
+                    int nki = 0
+                    while nki < name_keys.len():
+                        String cand = name_keys.get(nki).unwrap()
+                        bool is_match = cand == target_name
+                        # Trait-dispatch routing: a call site `Type__method`
+                        # may resolve at link time to `Trait_for_Type__method`.
+                        # Self-host emits the bare form at LIR but the function
+                        # is registered under the trait-prefixed form. Match
+                        # any `*_for_Type__method` ending.
+                        if not is_match and cand.contains("_for_") and cand.ends_with("_for_" + target_name):
+                            is_match = true
+                        if is_match:
+                            int hit_fid = name_fids.get(nki).unwrap()
+                            if not reachable.get(hit_fid).unwrap():
+                                reachable.set(hit_fid, true)
+                                worklist.push(hit_fid)
+                        nki += 1
+                if target_orig.len() > 0 and target_orig != target_name:
+                    int nki2 = 0
+                    while nki2 < name_keys.len():
+                        String cand2 = name_keys.get(nki2).unwrap()
+                        bool is_match2 = cand2 == target_orig
+                        if not is_match2 and cand2.contains("_for_") and cand2.ends_with("_for_" + target_orig):
+                            is_match2 = true
+                        if is_match2:
+                            int hit_fid2 = name_fids.get(nki2).unwrap()
+                            if not reachable.get(hit_fid2).unwrap():
+                                reachable.set(hit_fid2, true)
+                                worklist.push(hit_fid2)
+                        nki2 += 1
+                ii += 1
+            bi += 1
+
+    return reachable
+
 String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
+    Vector[bool] reachable_fwd = compute_reachable_fns(&m)
     StrBuf buf = sb_new()
     int i = 0
     while i < m.functions.len():
         LirFunction func = m.functions.get(i).unwrap()
+        if not reachable_fwd.get(i).unwrap():
+            i += 1
+            continue
         if func.name == "main":
             sb_push(&buf, "int main(int argc, char** argv);\n")
             i += 1
@@ -4403,10 +4571,14 @@ String generate_c(LirModule &m):
     # the latter is O(N) per concat, O(N²) overall. For 600+ functions
     # producing a few MB total, the naive concat OOM-kills stage-1.
     # Mirrors src/backend/c_lir/mod.rs:`out: &mut String`.
+    Vector[bool] reachable_body = compute_reachable_fns(&m)
     StrBuf body_buf = StrBuf(body)
     sb_push(&body_buf, "// ── Function Definitions ──\n")
     int fi = 0
     while fi < m.functions.len():
+        if not reachable_body.get(fi).unwrap():
+            fi += 1
+            continue
         LirFunction func = m.functions.get(fi).unwrap()
         sb_push(&body_buf, emit_function(&func, &m, &sn, &slit_map))
         sb_push(&body_buf, "\n")
