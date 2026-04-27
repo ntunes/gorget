@@ -1374,7 +1374,22 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Static method call: receiver is a TYPE name (e.g. Point.default()
             # or int.parse(s)). Route to TypeName__method with no self argument.
             match (*recv_box).expr:
-                case EIdentifier(ident_name):
+                case EIdentifier(ident_name_raw):
+                    # Generic type-param substitution. In monomorphized
+                    # bodies like `equip [T] SetIter[T] with Iterator[T]:
+                    # Option[T] next(...): T out = T.default()`, the `T`
+                    # of `T.default()` is a type-parameter name. After
+                    # `setup_type_subs(T → int)`, look it up before the
+                    # is_type check so `T.default()` dispatches to
+                    # `int64_t__default()` rather than falling through to
+                    # the EIdentifier-on-`T` value path (which has no
+                    # binding and emits a [bug] placeholder).
+                    String ident_name = ident_name_raw
+                    if gmod.type_subs.contains(ident_name):
+                        int sub_tid = gmod.type_subs.get(ident_name).unwrap()
+                        String sub_name = type_id_to_name(sub_tid, &gmod)
+                        if sub_name.len() > 0:
+                            ident_name = sub_name
                     # Prefer parallel type_info storage — Dict.contains
                     # silently misses on stage-1 (`ScopeTable` etc.) and
                     # we'd fall through to method-call-on-int64 path,
@@ -1391,6 +1406,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif ident_name == "uint8" or ident_name == "uint16" or ident_name == "uint32" or ident_name == "uint64":
                             is_type = true
                         elif ident_name == "float32" or ident_name == "float64":
+                            is_type = true
+                        # C-level primitive names — these arrive after
+                        # `gmod.type_subs` substitution where `T → int64_t`
+                        # (the C type name, not the Gorget surface `int`).
+                        elif ident_name == "int64_t" or ident_name == "int32_t" or ident_name == "int16_t" or ident_name == "int8_t":
+                            is_type = true
+                        elif ident_name == "uint64_t" or ident_name == "uint32_t" or ident_name == "uint16_t" or ident_name == "uint8_t":
+                            is_type = true
+                        elif ident_name == "double" or ident_name == "GorgetString":
                             is_type = true
                     if is_type:
                         Vector[Operand] static_args = []
