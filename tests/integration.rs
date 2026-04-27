@@ -11332,6 +11332,163 @@ fn lowerer_comparison() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// C Emission Comparison
+// ═══════════════════════════════════════════════════════════════
+//
+// Per-fixture comparison of Rust gg's `--emit-c-lir` against the
+// self-host driver's `--lir-c` output. Counts user-defined function
+// bodies (`fn(...) {` lines after the `// ── Function Definitions ──`
+// section marker) in each side and reports match/mismatch + crashes.
+//
+// Diagnostic: always passes. Use the eprintln output to track
+// self-host coverage of the Rust frontend's behaviour.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn c_emit_comparison() {
+    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let gg_exe = manifest_dir.join("target/release/gg");
+
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    fn user_fn_count(c_text: &str) -> usize {
+        // Look for the "Function Definitions" section marker — both Rust
+        // and self-host emit it. After that line, count function bodies
+        // (lines that start with a non-space identifier and end with `) {`).
+        let mut in_user_section = false;
+        let mut n = 0;
+        for line in c_text.lines() {
+            if !in_user_section {
+                if line.contains("Function Definitions") {
+                    in_user_section = true;
+                }
+                continue;
+            }
+            // Match function-body openings: `int main(int argc, char** argv) {`,
+            // `void Type__method(...) {`, etc. Skip indented continuations.
+            let bytes = line.as_bytes();
+            if bytes.is_empty() {
+                continue;
+            }
+            let first = bytes[0];
+            if !(first.is_ascii_alphabetic() || first == b'_') {
+                continue;
+            }
+            if line.ends_with(") {") {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    let mut matched = 0;
+    let mut rust_only = 0;       // Rust emits, self-host crashes/empty
+    let mut mismatched: Vec<(String, usize, usize)> = Vec::new();
+    let mut self_host_crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_crashes = 0;
+    let mut total = 0;
+
+    for fixture in &fixtures {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+        total += 1;
+
+        let rust_out = run_with_timeout(
+            Command::new(&gg_exe)
+                .arg("build")
+                .arg("--emit-c-lir")
+                .arg(fixture),
+            &fname,
+        );
+        if !rust_out.status.success() {
+            rust_crashes += 1;
+            continue;
+        }
+        let rust_c = String::from_utf8_lossy(&rust_out.stdout);
+        let rust_n = user_fn_count(&rust_c);
+
+        let gorget_out = run_with_timeout(
+            Command::new(&driver_exe)
+                .arg(fixture)
+                .arg(&lib_dir)
+                .arg("--lir-c"),
+            &fname,
+        );
+        if !gorget_out.status.success() {
+            let stderr = String::from_utf8_lossy(&gorget_out.stderr);
+            let first_line = stderr.lines().next().unwrap_or("(no stderr)").to_string();
+            self_host_crashes.push((fname.clone(), first_line));
+            continue;
+        }
+        let gorget_c = String::from_utf8_lossy(&gorget_out.stdout);
+        let gorget_n = user_fn_count(&gorget_c);
+
+        if gorget_n == 0 && rust_n > 0 {
+            rust_only += 1;
+        } else if rust_n == gorget_n {
+            matched += 1;
+        } else {
+            mismatched.push((fname, rust_n, gorget_n));
+        }
+    }
+
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    eprintln!("\n================================");
+    eprintln!("C Emission Comparison (user-fn count)");
+    eprintln!("================================");
+    eprintln!(
+        "Total: {total}, Matched: {matched}, Rust-only (self-host empty): {rust_only}, \
+         Mismatched: {}, Self-host crashes: {}, Rust crashes: {}",
+        mismatched.len(),
+        self_host_crashes.len(),
+        rust_crashes,
+    );
+    let processable = total - rust_crashes;
+    if processable > 0 {
+        eprintln!(
+            "Match rate (excl. Rust crashes): {matched}/{processable} ({:.1}%)",
+            matched as f64 / processable as f64 * 100.0
+        );
+    }
+
+    if !self_host_crashes.is_empty() {
+        eprintln!("\nSELF-HOST CRASHES ({}):", self_host_crashes.len());
+        for (name, msg) in self_host_crashes.iter().take(20) {
+            let trimmed = if msg.len() > 100 { &msg[..100] } else { msg };
+            eprintln!("  {name}: {trimmed}");
+        }
+        if self_host_crashes.len() > 20 {
+            eprintln!("  ... and {} more", self_host_crashes.len() - 20);
+        }
+    }
+
+    if !mismatched.is_empty() {
+        eprintln!("\nMISMATCHED ({}):", mismatched.len());
+        for (name, rust_n, gorget_n) in mismatched.iter().take(30) {
+            let arrow = if gorget_n > rust_n { "+" } else { "-" };
+            eprintln!(
+                "  {name}: rust={rust_n} gorget={gorget_n} ({arrow}{})",
+                rust_n.abs_diff(*gorget_n)
+            );
+        }
+        if mismatched.len() > 30 {
+            eprintln!("  ... and {} more", mismatched.len() - 30);
+        }
+    }
+
+    eprintln!("\n================================\n");
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Self-host Bootstrap
 // ═══════════════════════════════════════════════════════════════
 //
