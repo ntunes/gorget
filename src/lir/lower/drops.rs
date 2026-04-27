@@ -218,17 +218,24 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                     }
-                    // Then free the allocation.
-                    // Load as Ptr (not the struct type) so the LLVM backend emits
-                    // `load ptr` (yielding the heap pointer) instead of GEP (which
-                    // would give the slot's stack address). Box is typedef'd as void*.
+                    // Then free the allocation through the per-type
+                    // `__gorget_box_free_<inner>` helper so the tracking
+                    // allocator sees the dealloc. Raw `free(p)` would
+                    // unbalance `total_allocs` vs `total_frees` and trip
+                    // `--clone-stats` leak-counter false positives. The
+                    // helper itself is emitted in
+                    // `src/backend/c_lir/emit_types.rs:emit_runtime_helpers`
+                    // alongside the matching `__gorget_box_alloc_<inner>`.
                     let val = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
                         dst: val, slot, ty: LirType::Ptr,
                     });
+                    let free_fn = inner_name
+                        .map(|inner| format!("__gorget_box_free_{inner}"))
+                        .unwrap_or_else(|| "free".to_string());
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None,
-                        name: "free".to_string(),
+                        name: free_fn,
                         args: vec![val],
                         original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });

@@ -2271,6 +2271,17 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     for (name, param_ty) in &box_allocs {
         writeln!(out, "static inline void* {name}({param_ty} val) {{ __gorget_box_alloc_count++; {param_ty}* p = ({param_ty}*)GORGET_ALLOC(sizeof({param_ty})); *p = val; return (void*)p; }}").unwrap();
     }
+    // Emit parallel `__gorget_box_free_<inner>` helpers that go through
+    // `GORGET_FREE` so the tracking allocator sees the dealloc — raw
+    // `free()` would unbalance `total_allocs` vs `total_frees` and look
+    // like a leak in `--clone-stats`. Box's drop emission in
+    // `src/lir/lower/drops.rs` calls these instead of `free` directly.
+    for (name, param_ty) in &box_allocs {
+        // alloc name shape: __gorget_box_alloc_<inner>; free is the
+        // mirror with `_alloc_` → `_free_`.
+        let free_name = name.replacen("_alloc_", "_free_", 1);
+        writeln!(out, "static inline void {free_name}(void* p) {{ if (p) GORGET_FREE(p, sizeof({param_ty})); }}").unwrap();
+    }
     if !box_allocs.is_empty() {
         writeln!(out).unwrap();
     }
