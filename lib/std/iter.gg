@@ -250,12 +250,9 @@ trait Iterable[T]:
 # Iteration order matches `iter()` — same elements, same order, but
 # yielded by move instead of by borrow.
 #
-# `Vector[T]` ships an O(n²) `remove(0)`-based impl as the v1
-# baseline (correct + insertion-ordered, but the per-step shift
-# makes it expensive for large vectors — a tombstone-walk variant
-# is the obvious follow-up). `Set[T]` / `Dict[K, V]` drain
-# implementations defer until a `gorget_map_drain_entry` runtime
-# helper lands.
+# `Vector[T]` ships an O(n) reverse + pop impl. `Set[T]` / `Dict[K,
+# V]` drain implementations defer until a `gorget_map_drain_entry`
+# runtime helper lands.
 trait Drainable[T]:
     Iterator[T] drain(!self)
 
@@ -280,10 +277,20 @@ struct VectorDrain[T]:
 
 equip [T] VectorDrain[T] with Iterator[T]:
     Option[T] next(&self):
-        return self.source.remove(0)
+        # `pop()` is O(1); `drain()` reversed the source first, so
+        # popping the tail yields elements in insertion order. Any
+        # elements remaining when the drain iterator drops get
+        # freed via Vector's normal element-drop pass.
+        return self.source.pop()
 
 equip [T] Vector[T] with Drainable[T]:
     VectorDrain[T] drain(!self):
+        # Total cost: O(n) reverse + O(n) pops = O(n) drain.
+        # Without the reverse, `pop()` would yield in LIFO order;
+        # the reverse pre-flip lets us reuse the O(1) pop primitive
+        # while preserving insertion order for the iterator's
+        # consumer.
+        self.reverse()
         return VectorDrain[T](self)
 
 equip [T] Vector[T]:

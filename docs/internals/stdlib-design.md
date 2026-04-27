@@ -126,12 +126,12 @@ trait Drainable[T]:
     # (collections), implementors opt in independently.
     #
     # **Status (2026-04-27):** trait declared in `lib/std/iter.gg`,
-    # `Vector[T]` equipped via O(n²) `remove(0)` baseline impl.
-    # `Set[T]` / `Dict[K, V]` drain not yet shipped — they need a
+    # `Vector[T]` equipped via O(n) reverse + pop. `Set[T]` /
+    # `Dict[K, V]` drain not yet shipped — they need a
     # `gorget_map_drain_entry` runtime helper or tombstone-walk
-    # machinery to get O(n) cost. Today users wanting drain on
-    # those collections call `.iter().clone_each()` or build their
-    # own drain iterator over the underlying GorgetMap bucket array.
+    # machinery. Today users wanting drain on those collections
+    # call `.iter().clone_each()` or build their own drain iterator
+    # over the underlying GorgetMap bucket array.
     type DrainIter: Iterator[T !]
     Self::DrainIter drain(!self)
 
