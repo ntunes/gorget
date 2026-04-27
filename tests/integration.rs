@@ -11356,7 +11356,7 @@ fn c_emit_comparison() {
     let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let gg_exe = manifest_dir.join("target/release/gg");
+    let gg_exe = manifest_dir.join("target/debug/gg");
 
     let fixtures_dir = manifest_dir.join("tests/fixtures");
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
