@@ -2,7 +2,7 @@
 
 ## High
 
-
+- **Flaky test: `vector_task_get`** — fixture spawns 3 async increments against a shared `int counter` via `&counter` and asserts the final count is 3. The increments race without synchronization, so the post-await count is 1/2/3 randomly across runs. Caught during the 2026-04-27 self-host `remove` work (Monitor reported "expected 3, got 2"; manual rerun gave 1/3/3/1/3). Either fix the test (atomic counter, or thread-local accumulator + final reduce) or move it to a `#[ignore]`'d slot until the spawn ABI gives us happens-before across `await()`. [added: 2026-04-27]
 
 - **SECURITY: match-expression drops Some-arm value in assignment** (audit 2026-04-24). `int more = match o: case Some(n): f(n); else: 0` — the Some arm's computed value (from `f(n)`) is never merged into `more`'s slot; `more` always equals the else-arm value. Trace of `sum(1→2→3)` over `Option[Box[List]]` returns 1 instead of 6. Generated C: bb_some computes `__v45 = f(n); goto exit` but the exit block unconditionally assigns the literal else-arm value to the match-result slot — the Some arm's result is never stored. Silent wrong-result bug (not memory-unsafe). Fixture `attack_81_self_referential_struct.gg` (security_known_unsafe SilentlyProduces). Likely lives in match-expression result-slot handling in IR lowering. [added: 2026-04-24]
 

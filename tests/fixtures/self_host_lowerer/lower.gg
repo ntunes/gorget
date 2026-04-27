@@ -680,9 +680,46 @@ int gmod_next_closure_id(GirModule &gmod):
     return cid
 
 int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
-    # Void-returning methods
-    if method == "push" or method == "set" or method == "put" or method == "remove":
+    # Void-returning methods. `Vector[T].remove(idx)` was previously
+    # treated as void, but actually returns `Option[T]` — the void
+    # classification left bindings in `T x = v.remove(i).unwrap()`
+    # typed unit, cascading every `x.field` into
+    # `EFieldAccess: unknown field on base type 'unit'`. Vector.remove
+    # is now routed through the receiver-aware path (~line 752).
+    # Dict/Set.remove stay here because the underlying runtime
+    # (`gorget_map_remove` / `gorget_set_remove`) returns bool — the
+    # surface API spec says `Option[V]` / bool but no caller in the
+    # self-host codebase binds the result, so void is the safe gate.
+    if method == "push" or method == "set" or method == "put":
         return UNIT_TYPE
+    # `remove` is dispatched receiver-aware below for Vector/Deque,
+    # but stays void for Dict/Set (their runtime returns bool — the
+    # call sites in self-host all discard the result).
+    if method == "remove":
+        String recv_n = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int recv_t = ctx.locals.get(recv).unwrap().type_id
+            if recv_t >= 0 and recv_t < gmod.type_table.len():
+                GirType gt0 = gmod.type_table.get(recv_t).unwrap()
+                match gt0:
+                    case GtPtr(inner):
+                        recv_t = inner
+                    case GtMutPtr(inner):
+                        recv_t = inner
+                    else:
+                        pass
+            if recv_t >= 0 and recv_t < gmod.type_table.len():
+                GirType gt = gmod.type_table.get(recv_t).unwrap()
+                match gt:
+                    case GtNamed(rname):
+                        recv_n = rname
+                    else:
+                        pass
+        if recv_n.starts_with("Dict__") or recv_n.starts_with("HashMap__"):
+            return UNIT_TYPE
+        if recv_n.starts_with("Set__") or recv_n.starts_with("HashSet__"):
+            return UNIT_TYPE
+        # Vector/Deque/etc. — fall through to receiver-aware path below.
     if method == "clear" or method == "insert" or method == "extend" or method == "reverse":
         return UNIT_TYPE
     if method == "sort" or method == "swap":
@@ -748,8 +785,14 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # Hash/count
     if method == "hash" or method == "count" or method == "index_of":
         return I64_TYPE
-    # get/unwrap/pop/last/first: return the element type inferred from receiver
-    if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first":
+    # get/unwrap/pop/last/first/remove: return the element type
+    # inferred from receiver. `remove` returns `Option[T]` (Vector) or
+    # `Option[V]` (Dict) — treat its result as the inner T like `pop`,
+    # since the LIR-level Option wrapper gets unwrapped at the next
+    # `.unwrap()` and downstream code sees the bare element type.
+    # (Set.remove returns bool; the receiver-aware path overshoots
+    # there, but Set.remove is rare in self-host today.)
+    if method == "get" or method == "unwrap" or method == "pop" or method == "last" or method == "first" or method == "remove":
         String recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():
             int recv_tid = ctx.locals.get(recv).unwrap().type_id
