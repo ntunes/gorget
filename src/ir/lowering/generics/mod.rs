@@ -1783,7 +1783,8 @@ impl GenericCollector {
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
         fn_param_abis: &mut FxHashMap<String, Vec<super::context::ParamABI>>,
     ) {
-        self.register_equip_sigs_with_defaults(mapper, registry, fn_sigs, fn_param_abis, None);
+        let mut throwaway = FxHashMap::default();
+        self.register_equip_sigs_with_defaults(mapper, registry, fn_sigs, fn_param_abis, &mut throwaway, None);
     }
 
     /// Register monomorphized equip method signatures, including default trait methods.
@@ -1798,6 +1799,7 @@ impl GenericCollector {
         registry: &mut TypeRegistry,
         fn_sigs: &mut FxHashMap<String, (Vec<TypeId>, TypeId)>,
         fn_param_abis: &mut FxHashMap<String, Vec<super::context::ParamABI>>,
+        fn_param_ownerships: &mut FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
         ast_module: Option<&crate::parser::ast::Module>,
     ) {
         use crate::parser::ast::{Item, Ownership, TraitItem, FunctionBody};
@@ -1863,8 +1865,24 @@ impl GenericCollector {
                                 _ => super::context::ParamABI::ByValue,
                             });
                         }
+                        // Param ownerships including self (for !-self MoveZero
+                        // at the call site — see lower_method_call's
+                        // `has_consuming_self`).
+                        let mut method_ownerships: Vec<crate::parser::ast::Ownership> = Vec::new();
+                        if has_self {
+                            method_ownerships.push(method.node.params.first()
+                                .map(|p| p.node.ownership)
+                                .unwrap_or(crate::parser::ast::Ownership::Borrow));
+                        }
+                        for p in &method.node.params {
+                            if p.node.name.node == "self" {
+                                continue;
+                            }
+                            method_ownerships.push(p.node.ownership);
+                        }
                         fn_sigs.insert(method_mangled.clone(), (param_types, ret_type));
-                        fn_param_abis.insert(method_mangled, abis);
+                        fn_param_abis.insert(method_mangled.clone(), abis);
+                        fn_param_ownerships.insert(method_mangled, method_ownerships);
                         implemented.push(method.node.name.node.clone());
                     }
                     // Also register signatures for default trait methods
@@ -1964,8 +1982,17 @@ impl GenericCollector {
                                                         _ => super::context::ParamABI::ByValue,
                                                     });
                                                 }
+                                                let mut default_ownerships: Vec<Ownership> = Vec::new();
+                                                if dm.params.first().map(|p| p.node.name.node == "self").unwrap_or(false) {
+                                                    default_ownerships.push(dm.params[0].node.ownership);
+                                                }
+                                                for p in &dm.params {
+                                                    if p.node.name.node == "self" { continue; }
+                                                    default_ownerships.push(p.node.ownership);
+                                                }
                                                 fn_sigs.insert(m_mangled.clone(), (param_types, ret_type));
-                                                fn_param_abis.insert(m_mangled, abis);
+                                                fn_param_abis.insert(m_mangled.clone(), abis);
+                                                fn_param_ownerships.insert(m_mangled, default_ownerships);
                                             }
                                         }
                                     }

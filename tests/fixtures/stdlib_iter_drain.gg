@@ -22,14 +22,15 @@ int main():
         uniq.add(s)
     print(uniq.len())                           # 3 (alpha dedup'd)
 
-    # `[Drainable[T] G]` generic bound — same shape as the Iterable
-    # bound; verified to enforce the Drainable contract.
+    # `[Drainable[T] G]` generic bound. Drain consumes the source, so
+    # the generic param must take `!g` and the call site must pass
+    # `!nums` to thread the move semantics through.
     Vector[int] nums = [5, 7, 9]
-    print(sum_drain[Vector[int]](nums))         # 21
+    print(sum_drain[Vector[int]](!nums))        # 21
 
     return 0
 
-int sum_drain[Drainable[int] G](G g):
+int sum_drain[Drainable[int] G](G !g):
     int s = 0
     for x in g.drain():
         s = s + x

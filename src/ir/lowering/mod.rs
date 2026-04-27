@@ -997,7 +997,8 @@ pub fn lower_module(
 
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
-        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_abis, Some(ast_module));
+        &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_abis,
+        &mut ctx.fn_param_ownerships, Some(ast_module));
 
     // Register signatures for per-call-site method instances (method-level-generic
     // equip methods). Each one becomes a free-function-shaped symbol in fn_sigs,

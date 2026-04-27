@@ -281,25 +281,20 @@ equip [T] VectorDrain[T] with Iterator[T]:
         # popping the tail yields elements in insertion order.
         return self.source.pop()
 
+equip [T] VectorDrain[T] with Drop:
+    void drop(!self):
+        self.source.reverse()
+
 equip [T] Vector[T] with Drainable[T]:
     VectorDrain[T] drain(!self):
         # Total cost: O(n) reverse + O(n) pops = O(n) drain.
         # Without the reverse, `pop()` would yield in LIFO order;
         # the reverse pre-flip lets us reuse the O(1) pop primitive
         # while preserving insertion order for the iterator's
-        # consumer.
-        #
-        # **Caveat — partial-break drop order.** If the caller
-        # breaks early, unconsumed elements remain in the iterator's
-        # internal buffer in REVERSE-insertion order (the pre-flip
-        # is still in effect). When the iterator drops, those
-        # elements get freed in reverse order. Visible only for
-        # element types with observable custom-Drop side effects;
-        # ordinary cleanup is order-independent. The proper fix
-        # (a `equip [T] VectorDrain[T] with Drop:` that reverses
-        # back) is blocked on a pre-existing custom-Drop-vs-resource
-        # -field interaction (`drop_raii.gg` exhibits the same leak
-        # pattern at trunk) — see TODO.
+        # consumer. The custom Drop on VectorDrain reverses the
+        # remaining buffer back if the caller breaks early, so
+        # unconsumed elements drop in insertion order — matching
+        # what `iter()` would have yielded.
         self.reverse()
         return VectorDrain[T](!self)
 
