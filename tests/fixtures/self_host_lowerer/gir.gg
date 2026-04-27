@@ -215,6 +215,18 @@ struct GirModule:
     # undefined at link time.
     Vector[String] type_sub_keys
     Vector[int] type_sub_vals
+    # Float constants — separate from `const_keys`/`const_vals` (which
+    # store int64). Module-level `float EPSILON = 0.000001` etc. lands
+    # here so `EIdentifier(EPSILON)` can inline an `OpConstF64(value)`
+    # rather than emitting a `[bug] EIdentifier: unknown identifier
+    # 'EPSILON'` placeholder. Mirrors Rust gg's unified
+    # `module_constants: FxHashMap<String, Constant>` which stores
+    # both `Constant::I64` and `Constant::F64` in one table.
+    # Placed at the END of the struct to keep existing field offsets
+    # stable — prepending shifts every later field's offset and
+    # cascades into bootstrap-fixed-point failures.
+    Vector[String] float_const_keys
+    Vector[float] float_const_vals
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -252,6 +264,40 @@ void const_put(GirModule &gmod, String name, int val):
     if not found:
         gmod.const_keys.push(name.clone())
         gmod.const_vals.push(val)
+
+# float_const accessors (parallel-Vector form, like const_*).
+bool float_const_contains(GirModule &gmod, String name):
+    bool found = false
+    int i = 0
+    while i < gmod.float_const_keys.len():
+        String k = gmod.float_const_keys.get(i).unwrap()
+        if k == name:
+            found = true
+        i += 1
+    return found
+
+float float_const_lookup(GirModule &gmod, String name):
+    float result = 0.0
+    int i = 0
+    while i < gmod.float_const_keys.len():
+        String k = gmod.float_const_keys.get(i).unwrap()
+        if k == name:
+            result = gmod.float_const_vals.get(i).unwrap()
+        i += 1
+    return result
+
+void float_const_put(GirModule &gmod, String name, float val):
+    bool found = false
+    int i = 0
+    while i < gmod.float_const_keys.len():
+        String k = gmod.float_const_keys.get(i).unwrap()
+        if k == name:
+            gmod.float_const_vals.set(i, val)
+            found = true
+        i += 1
+    if not found:
+        gmod.float_const_keys.push(name.clone())
+        gmod.float_const_vals.push(val)
 
 # none_decls accessors.
 bool none_contains(GirModule &gmod, String name):

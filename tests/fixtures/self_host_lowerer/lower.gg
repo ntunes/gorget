@@ -615,6 +615,43 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
 # the self-host's parser.gg actually uses in KW_* / PREC_* decls.
 # Returns None for unsupported shapes — the const is dropped silently
 # and the identifier reference later falls back to OpConstI64(0).
+# Float-constant evaluator. Mirrors `eval_const_int_expr` but for
+# `float EPSILON = 0.000001` etc. — module-level float consts that
+# the int-evaluator can't represent. Used by the IConstDecl /
+# IStaticDecl handlers to populate `gmod.float_const_keys/vals`,
+# which `EIdentifier` then consults before the [bug] fallback.
+# Helper extracted from `lower_expr`'s EIdentifier arm — keeps that
+# function's already-massive stack frame from growing further.
+# Returns the new local id on hit (>= 0); -1 on miss.
+int lower_float_const_ident(LowerCtx &ctx, GirModule &gmod, String name):
+    if not float_const_contains(&gmod, name):
+        return -1
+    int fdst = add_local(&ctx, F64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(fdst, OpConstF64(float_const_lookup(&gmod, name))))
+    return fdst
+
+Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
+    match spe.expr:
+        case EFloatLiteral(v):
+            return Some(v)
+        case EIdentifier(name):
+            if float_const_contains(&gmod, name):
+                return Some(float_const_lookup(&gmod, name))
+            return None
+        case EUnaryOp(op, inner_box):
+            Option[float] iv = eval_const_float_expr(*inner_box, &gmod)
+            match iv:
+                case Some(ia):
+                    if op == "-":
+                        return Some(0.0 - ia)
+                    if op == "+":
+                        return Some(ia)
+                    return None
+                case None:
+                    return None
+        else:
+            return None
+
 Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:
         case EIntLiteral(v):
@@ -1144,6 +1181,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int cdst = add_local(&ctx, I64_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
+            # Module-level float constants — `float EPSILON = 0.000001`
+            # in lib/xtd/math3d.gg etc. Mirrors Rust's unified
+            # `module_constants` table where float consts inline as
+            # `Operand::Constant(Constant::F64(value))` rather than
+            # falling through to the unknown-identifier `[bug]`. The
+            # check / emission lives in a helper to avoid growing
+            # `lower_expr`'s stack frame — that frame is already
+            # ~148 KB (see assembly), and recursion through deeply
+            # nested expressions hits ~50 levels on `driver.gg`,
+            # putting us right at the 8 MB stack limit. Adding even
+            # a couple of locals to `lower_expr` overflows.
+            int fdst_or_neg = lower_float_const_ident(&ctx, &gmod, name)
+            if fdst_or_neg >= 0:
+                return fdst_or_neg
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.
@@ -4668,6 +4719,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         tfi += 1
     Vector[String] const_keys = []
     Vector[int] const_vals = []
+    Vector[String] float_const_keys = []
+    Vector[float] float_const_vals = []
     Vector[String] none_keys = []
     # Mirror call_redirects into parallel Vectors so stage-1's lookups
     # don't silently miss the symbol-redirect mapping.
@@ -4684,7 +4737,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         cr_i += 1
     Vector[String] type_sub_keys_init = []
     Vector[int] type_sub_vals_init = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init, !float_const_keys, !float_const_vals)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -4743,20 +4796,34 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     case Some(cv):
                         const_put(&gmod, cd_name, cv)
                     case None:
-                        pass
+                        # Float fallback: `const float EPSILON = 0.000001`
+                        # lands here when int eval fails.
+                        Option[float] cd_feval = eval_const_float_expr(cd_val, &gmod)
+                        match cd_feval:
+                            case Some(cfv):
+                                float_const_put(&gmod, cd_name, cfv)
+                            case None:
+                                pass
             case IStaticDecl(_, sd_name, sd_val):
                 Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
                 match sd_eval:
                     case Some(sv):
                         const_put(&gmod, sd_name, sv)
                     case None:
-                        # Recognise `Option[T] X = None` so EIdentifier can
-                        # emit OpConstUnit() instead of the int-0 fallback.
-                        match sd_val.expr:
-                            case ENoneLiteral():
-                                none_mark(&gmod, sd_name)
-                            else:
-                                pass
+                        # Float fallback: `float EPSILON = 0.000001`
+                        # at module scope (e.g., lib/xtd/math3d.gg).
+                        Option[float] sd_feval = eval_const_float_expr(sd_val, &gmod)
+                        match sd_feval:
+                            case Some(sfv):
+                                float_const_put(&gmod, sd_name, sfv)
+                            case None:
+                                # Recognise `Option[T] X = None` so EIdentifier can
+                                # emit OpConstUnit() instead of the int-0 fallback.
+                                match sd_val.expr:
+                                    case ENoneLiteral():
+                                        none_mark(&gmod, sd_name)
+                                    else:
+                                        pass
             else:
                 pass
         cdi += 1
