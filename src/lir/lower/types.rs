@@ -289,7 +289,13 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         // Crypto.
         "CipherContext" => 8,
         "BigNum" | "RSAKey" => 8,
-        "Ed25519KeyPair" | "X25519KeyPair" => 64,
+        // GorgetEd25519KeyPair / GorgetX25519KeyPair are each `{ EVP_PKEY* pkey }`
+        // in c_runtime.rs — single pointer, 8 bytes. The previous 64-byte size
+        // here misled is_small_aggregate into thinking they were big enough to
+        // require sret return ABI; the actual runtime returns them in x0
+        // (≤16-byte pass-through). Mismatch caused SEGV on x25519_keygen and
+        // friends under --backend=llvm.
+        "Ed25519KeyPair" | "X25519KeyPair" => 8,
         // SDL.
         "SDLWindow" | "SDLRenderer" | "SDLTexture" | "SDLFont" | "SDLEvent" => 8,
         // Audio.
