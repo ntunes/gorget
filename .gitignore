@@ -23,3 +23,7 @@ fuzz/artifacts/
 fuzz/corpus/
 fuzz/target/
 _test_output*
+
+# Process core dumps
+core
+core.*
