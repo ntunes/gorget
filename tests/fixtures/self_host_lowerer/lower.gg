@@ -1416,6 +1416,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             is_type = true
                         elif ident_name == "double" or ident_name == "GorgetString":
                             is_type = true
+                        # Generic prelude types — `Box.new(x)` /
+                        # `Heap.new()` etc. show up as static-method
+                        # calls in surface syntax. The unparameterised
+                        # name isn't in `type_infos` (only mono'd
+                        # `Box__T` is), so it'd fall through to the
+                        # bare-EIdentifier path and emit `[bug]`.
+                        elif ident_name == "Box" or ident_name == "Heap":
+                            is_type = true
+                        elif ident_name == "Vector" or ident_name == "Deque":
+                            is_type = true
+                        elif ident_name == "Dict" or ident_name == "HashMap":
+                            is_type = true
+                        elif ident_name == "Set" or ident_name == "HashSet":
+                            is_type = true
+                        elif ident_name == "Channel" or ident_name == "Shared" or ident_name == "Weak":
+                            is_type = true
+                        elif ident_name == "Option" or ident_name == "Result":
+                            is_type = true
                     if is_type:
                         Vector[Operand] static_args = []
                         int smi = 0
