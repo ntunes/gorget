@@ -576,7 +576,7 @@ static void gorget_tracking_destroy(GorgetTrackingAllocator* t) {
     if (!t) return;
     if (t->current_bytes > 0) {
         fprintf(stderr, "gorget: warning: TrackingAllocator destroyed with %lld bytes still allocated "
-                "(%lld allocs, %lld frees)\\n",
+                "(%lld allocs, %lld frees)\n",
                 (long long)t->current_bytes, (long long)t->alloc_count, (long long)t->free_count);
     }
     GorgetAllocator* pa = t->inner;
