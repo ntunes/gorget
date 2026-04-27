@@ -62,6 +62,12 @@ const int OP_MUL = 2
 const int OP_DIV = 3
 const int OP_REM = 4
 const int OP_MOD = 5
+# Wrapping arithmetic — `+%` / `-%` / `*%` in source. Lower to LIR
+# with `OVF_WRAP` so the C codegen emits plain `+` / `-` / `*` rather
+# than the trapping `__builtin_*_overflow` form.
+const int OP_ADD_WRAP = 6
+const int OP_SUB_WRAP = 7
+const int OP_MUL_WRAP = 8
 
 const int CMP_EQ = 0
 const int CMP_NE = 1
