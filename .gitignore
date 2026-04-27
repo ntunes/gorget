@@ -27,3 +27,7 @@ _test_output*
 # Process core dumps
 core
 core.*
+
+# Profiler outputs
+callgrind.out.*
+perf.data*
