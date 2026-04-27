@@ -950,6 +950,51 @@ pub fn lower_module(
         }
     }
 
+    // Generic `equip [T] X[T] with Drop:` — upgrade Drop metadata on every
+    // monomorphized instance of X. The non-generic Drop scan early in
+    // lower_module (line ~230) only handles concrete types because mono'd
+    // instances aren't yet registered there. By this point all mono'd
+    // structs/enums are in the type_registry, so we can iterate the
+    // matching instances and apply Resource + Custom("<Mangled>__drop")
+    // metadata per instance. The actual `<Mangled>__drop` body gets
+    // emitted later by `lower_generic_equip_methods_with_defaults` walking
+    // the same equip block — this just makes sure the metadata points at
+    // it so the auto-drop machinery dispatches correctly.
+    for item in &ast_module.items {
+        if let Item::Equip(equip) = &item.node {
+            let trait_name_str = match equip.trait_.as_ref().map(|t| &t.trait_name.node) {
+                Some(ast::Type::Named { name, .. }) => name.node.as_str(),
+                _ => continue,
+            };
+            if trait_name_str != "Drop" {
+                continue;
+            }
+            // Generic if the equip carries generic params or the equipped type
+            // has unresolved generic args.
+            let is_generic = equip.generic_params.as_ref().map_or(false, |gp| !gp.node.params.is_empty())
+                || matches!(&equip.type_.node, ast::Type::Named { generic_args, .. } if !generic_args.is_empty());
+            if !is_generic {
+                continue;
+            }
+            let base_name = match &equip.type_.node {
+                ast::Type::Named { name, .. } => name.node.clone(),
+                _ => continue,
+            };
+            let prefix = format!("{base_name}__");
+            let matching: Vec<String> = ctx.type_registry
+                .all_type_def_names()
+                .filter(|n| n.starts_with(&prefix))
+                .cloned()
+                .collect();
+            for mangled in matching {
+                if let Some(td) = ctx.type_registry.get_type_def_mut(&mangled) {
+                    td.metadata.copy_semantics = CopySemantics::Resource;
+                    td.metadata.drop_strategy = DropStrategy::Custom(format!("{mangled}__drop"));
+                }
+            }
+        }
+    }
+
     // Register monomorphized equip method signatures (including default trait methods)
     generic_collector.register_equip_sigs_with_defaults(
         &mut ctx.type_mapper, &mut ctx.type_registry, &mut ctx.fn_sigs, &mut ctx.fn_param_abis, Some(ast_module));

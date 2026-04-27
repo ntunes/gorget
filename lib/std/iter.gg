@@ -289,22 +289,17 @@ equip [T] Vector[T] with Drainable[T]:
         # while preserving insertion order for the iterator's
         # consumer.
         #
-        # **Caveat — partial-drain drop order.** If the caller
-        # `break`s out of the loop early, the unconsumed elements
-        # in the drain iterator's internal buffer are in
-        # REVERSE-insertion order (the pre-flip is still in
-        # effect). When the iterator drops, the auto-derived
-        # field drop on `source` fires in storage order, so any
-        # custom Drop side effects on the element type observe
-        # reverse-of-insertion order rather than the insertion
-        # order they'd see from `iter()`. The proper fix (a custom
-        # `equip [T] VectorDrain[T] with Drop:` that reverses the
-        # remaining buffer back) is blocked on the compiler not
-        # yet propagating Drop-equip upgrades through generic
-        # struct monomorphisation — see TODO. In practice this
-        # only matters for element types with observable Drop
-        # side effects; stdlib types (String, Vector, …) have
-        # order-independent cleanup.
+        # **Caveat — partial-break drop order.** If the caller
+        # breaks early, unconsumed elements remain in the iterator's
+        # internal buffer in REVERSE-insertion order (the pre-flip
+        # is still in effect). When the iterator drops, those
+        # elements get freed in reverse order. Visible only for
+        # element types with observable custom-Drop side effects;
+        # ordinary cleanup is order-independent. The proper fix
+        # (a `equip [T] VectorDrain[T] with Drop:` that reverses
+        # back) hits a separate gap with custom Drop on generic
+        # structs containing resource-typed fields — tracked in
+        # TODO.
         self.reverse()
         return VectorDrain[T](self)
 
