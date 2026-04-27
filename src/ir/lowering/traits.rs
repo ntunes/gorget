@@ -692,6 +692,21 @@ fn emit_default_methods_from_trait(
             let substituted_method = generics::substitute_function_body_pub(
                 default_method, &self_subs,
             );
+            // Bind `generic_type_params` (Self + trait T) for the body's
+            // duration so static factory calls on type-variable receivers
+            // — e.g. `T acc = T.default()` inside a `sum` default — resolve
+            // through `lower_method_call`'s static path. Without this the
+            // receiver `T` stays as `Identifier("T")`, falls out of the
+            // primitive/named-type checks, and gets lowered as a value
+            // expression that produces a bogus `int64_t__default(int64_t)`
+            // sig collision with the prelude's no-arg static inline.
+            // Snapshot + restore to avoid leaking state into siblings.
+            let saved_gtp = ctx.generics.generic_type_params.clone();
+            let saved_gpa = ctx.generics.generic_param_ast_types.clone();
+            let saved_tns = ctx.generics.type_name_subs.clone();
+            let saved_gfs = ctx.generics.generic_fragment_subs.clone();
+            super::functions::build_generic_type_params(ctx, &self_subs);
+            super::functions::build_type_name_subs(ctx, &self_subs);
             if let Some(vtable_method) = vtable_info.methods.iter().find(|m| m.name == *method_name) {
                 let trait_name = &trait_def.name.node;
                 let mangled = format!("{trait_name}_for_{type_name}__{method_name}");
@@ -705,6 +720,10 @@ fn emit_default_methods_from_trait(
                     ctx, module, &substituted_method, type_name, equipped_type,
                 );
             }
+            ctx.generics.generic_type_params = saved_gtp;
+            ctx.generics.generic_param_ast_types = saved_gpa;
+            ctx.generics.type_name_subs = saved_tns;
+            ctx.generics.generic_fragment_subs = saved_gfs;
         }
     }
 }
@@ -1343,6 +1362,23 @@ pub fn lower_unregistered_trait_equip_methods(
                         let has_self = substituted_method.params.first()
                             .map(|p| p.node.name.node == "self")
                             .unwrap_or(false);
+                        // Bind `generic_type_params` (Self + trait T) for the
+                        // body's duration so static factory calls on type-
+                        // variable receivers — e.g. `T acc = T.default()`
+                        // inside a `sum` default — resolve through
+                        // `lower_method_call`'s static path. Without this the
+                        // receiver `T` stays as `Identifier("T")`, falls out
+                        // of every check, and gets lowered as the `0`
+                        // constant placeholder, producing a bogus
+                        // `int64_t__default(int64_t)` call that conflicts
+                        // with the prelude's no-arg static inline. Snapshot
+                        // + restore to avoid leaking state into siblings.
+                        let saved_gtp = ctx.generics.generic_type_params.clone();
+                        let saved_gpa = ctx.generics.generic_param_ast_types.clone();
+                        let saved_tns = ctx.generics.type_name_subs.clone();
+                        let saved_gfs = ctx.generics.generic_fragment_subs.clone();
+                        super::functions::build_generic_type_params(ctx, &self_subs);
+                        super::functions::build_type_name_subs(ctx, &self_subs);
                         if has_self {
                             super::functions::lower_equip_method(
                                 ctx, module, &substituted_method, &type_name, &equip.type_.node,
@@ -1353,6 +1389,10 @@ pub fn lower_unregistered_trait_equip_methods(
                             );
                             lower_static_trait_method(ctx, module, &substituted_method, &mangled);
                         }
+                        ctx.generics.generic_type_params = saved_gtp;
+                        ctx.generics.generic_param_ast_types = saved_gpa;
+                        ctx.generics.type_name_subs = saved_tns;
+                        ctx.generics.generic_fragment_subs = saved_gfs;
                     }
                 }
             }

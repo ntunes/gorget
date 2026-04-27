@@ -4,14 +4,16 @@
 # `find_index_iter` / `last_iter` / `nth_iter` were retired in the
 # Phase 2c convenience-wrapper migration.
 #
-# Also covers the bound-needing terminals `min` / `max` / `contains`
-# — shipped as default methods on `Iterator[T]`. The demand-gate
-# (`all_return_nominals_registered`) only emits each per-impl
-# monomorphisation when a call site actually reaches for it, so
-# Iterator implementors with non-Comparable / non-Equatable T's
-# never have these specialised. `sum` / `product` / `join` remain
-# as free functions in `std.iter` for separate compiler reasons —
-# see iter.gg and stdlib-design.md §10.
+# Also covers the bound-needing terminals `min` / `max` / `sum` /
+# `product` / `contains` — all shipped as default methods on
+# `Iterator[T]`. The demand-gate (`all_return_nominals_registered`)
+# only emits each per-impl monomorphisation when a call site
+# actually reaches for it, so Iterator implementors with non-
+# Comparable / non-Numeric / non-Equatable T's never have these
+# specialised. `join` remains as a free function in `std.iter`
+# for a separate reason — Displayable.display() dispatch through
+# abstract `T` not yet threaded through default-method emission.
+# See iter.gg and stdlib-design.md §10.
 
 from std.iter import VectorIter
 from std.collections import Vector
@@ -121,5 +123,23 @@ int main():
     bool has99 = v.iter().contains(99)
     print(f"has12={has12}")
     print(f"has99={has99}")
+
+    # sum — Numeric-bounded default. T.default() is the additive
+    # identity (0 for int).
+    int total = v.iter().sum()
+    print(f"sum={total}")
+    int empty_sum = empty.iter().sum()
+    print(f"empty_sum={empty_sum}")
+
+    # product — Numeric-bounded default. T.one() is the
+    # multiplicative identity (1 for int).
+    Vector[int] small = Vector[int]()
+    small.push(2)
+    small.push(3)
+    small.push(4)
+    int prod = small.iter().product()
+    print(f"product={prod}")
+    int empty_product = empty.iter().product()
+    print(f"empty_product={empty_product}")
 
     return 0

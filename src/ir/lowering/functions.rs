@@ -1856,7 +1856,7 @@ fn extract_callable_return_type_bounded(
 /// For each type parameter (e.g., T), maps it to the concrete TypeId
 /// (e.g., I64_TYPE for int). This enables `map_type_with_subs` to resolve
 /// bare type parameters in variable declarations inside generic bodies.
-fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
+pub(super) fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
     ctx.generics.generic_type_params.clear();
     ctx.generics.generic_param_ast_types.clear();
     for (param_name, concrete_ty) in subs {
@@ -1871,7 +1871,7 @@ fn build_generic_type_params(ctx: &mut LoweringContext, subs: &[(String, Type)])
 /// For each registered type name that contains a type parameter placeholder
 /// (e.g., `Container__T`), computes the concrete mangled name (e.g.,
 /// `Container__int64_t`) and stores the mapping in ctx.generics.type_name_subs.
-fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
+pub(super) fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, Type)]) {
     ctx.generics.type_name_subs.clear();
 
     // Build a map of param-mangled-fragment → concrete-mangled-fragment.

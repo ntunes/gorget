@@ -1568,6 +1568,29 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     ctx.fn_sigs.insert("double__one".to_string(), (vec![], F64_TYPE));
     ctx.fn_sigs.insert("bool__parse".to_string(), (vec![owned_string_type], opt_bool_type));
     ctx.fn_sigs.insert("bool__default".to_string(), (vec![], BOOL_TYPE));
+    // Sized integer __default and __one — match the C runtime's
+    // `static inline TYPE TYPE__default(void)` / `__one(void)` decls
+    // emitted in `emit_types.rs`. Without these registrations,
+    // `T.default()` / `T.one()` calls in monomorphised generic
+    // bodies (e.g. `Iterator[T]::sum` / `::product` defaults
+    // specialised for `T = uint8`) bypass the static-method path
+    // (fn_sig miss → I64 return-type fallback), producing a forward
+    // decl `int64_t uint8_t__default(void)` that conflicts with the
+    // C runtime's `uint8_t uint8_t__default(void)` definition.
+    for (gg_name, c_name, type_id) in [
+        ("int8",   "int8_t",   I8_TYPE),
+        ("int16",  "int16_t",  I16_TYPE),
+        ("int32",  "int32_t",  I32_TYPE),
+        ("uint8",  "uint8_t",  U8_TYPE),
+        ("uint16", "uint16_t", U16_TYPE),
+        ("uint32", "uint32_t", U32_TYPE),
+        ("uint64", "uint64_t", U64_TYPE),
+        ("float32", "float",   F32_TYPE),
+    ] {
+        let _ = gg_name;
+        ctx.fn_sigs.insert(format!("{c_name}__default"), (vec![], type_id));
+        ctx.fn_sigs.insert(format!("{c_name}__one"), (vec![], type_id));
+    }
 }
 
 /// Scan AST for hot-reload directives and configure module runtime metadata.

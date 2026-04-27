@@ -210,14 +210,29 @@ trait Iterator[T]:
                         best = Some(x)
         return !best
 
-    # `sum` / `product` stay as free functions in `std.iter`.
-    # A default-method body `T acc = T.default(); for x in self:
-    # acc = acc + x` triggers a sig conflict in
-    # `register_method_instance_sigs` for some fixtures (the
-    # `T.default()` static call gets misregistered as
-    # `<T>__default(<T>)` taking self). `sum_iter[Iter] iter(int)`
-    # / `product_iter[Iter] iter(int)` carry the int constraint
-    # explicitly and don't trip that path.
+    # `sum` uses `T.default()` (additive identity) and `+`.
+    # `product` uses `T.one()` (multiplicative identity) and `*`.
+    # Both rely on the user-space static methods declared on the
+    # primitive types in std.prelude (`int.default()`, `int.one()`,
+    # `float.default()`, `float.one()`). The demand-gate prevents
+    # emission for impls whose T doesn't satisfy the operator/factory
+    # requirements; for impls that DO satisfy, the body lowers
+    # correctly via `lower_method_call`'s static path provided
+    # `generic_type_params` carries the trait's `T → impl_arg`
+    # binding (see `lower_unregistered_trait_equip_methods` /
+    # `emit_default_methods_from_trait`).
+
+    T sum(&self):
+        T acc = T.default()
+        for x in self:
+            acc = acc + x
+        return acc
+
+    T product(&self):
+        T acc = T.one()
+        for x in self:
+            acc = acc * x
+        return acc
 
     bool contains(&self, T target):
         for x in self:
