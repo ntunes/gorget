@@ -338,6 +338,27 @@ String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fie
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
+# Emit the per-field Hashable body line. For primitive field types we
+# specialise to a direct `h.write_X(self.field)` — the generic
+# `self.field.hash(&h)` form lowers to `int64_t__hash` (or
+# `bool__hash` etc.) which has no runtime symbol; the resulting C link-
+# fails. Mirrors Rust's primitive-aware derive.
+String hashable_field_line(String access, String ftype):
+    if ftype == "int" or ftype == "int64_t" or ftype == "int32_t" or ftype == "int16_t" or ftype == "int8_t":
+        return "        h.write_int(" + access + ")\n"
+    if ftype == "uint64_t" or ftype == "uint32_t" or ftype == "uint16_t" or ftype == "uint8_t":
+        return "        h.write_int(" + access + " as int)\n"
+    if ftype == "byte":
+        return "        h.write_int(" + access + " as int)\n"
+    if ftype == "bool":
+        return "        h.write_int(" + access + " as int)\n"
+    if ftype == "String":
+        return "        h.write_string(" + access + ")\n"
+    if ftype == "char":
+        return "        h.write_int(" + access + " as int)\n"
+    # Non-primitive: route through the type's own Hashable impl.
+    return "        " + access + ".hash(&h)\n"
+
 String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    void hash(self, FxHasher &h):\n"
@@ -347,7 +368,8 @@ String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fiel
         int i = 0
         while i < fields.len():
             Param f = fields.get(i).unwrap()
-            src = src + "        self." + f.param_name + ".hash(&h)\n"
+            String ftype = format_ast_type(f.param_type)
+            src = src + hashable_field_line("self." + f.param_name, ftype)
             i = i + 1
     return src
 
@@ -568,7 +590,12 @@ String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] 
         src = src + "                h.write_int(" + int_to_str(vi) + ")\n"
         int hi = 0
         while hi < fc:
-            src = src + "                a" + int_to_str(hi) + ".hash(&h)\n"
+            String ftype = format_ast_type(v.fields.get(hi).unwrap())
+            String access = "a" + int_to_str(hi)
+            # Same primitive-vs-non-primitive split as the struct case;
+            # match arm bodies sit at 16-space indent while
+            # `hashable_field_line` returns 8 — pad with 8 more.
+            src = src + "        " + hashable_field_line(access, ftype)
             hi = hi + 1
         vi = vi + 1
     return src
