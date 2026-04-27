@@ -1026,90 +1026,11 @@ Vector[bool] compute_reachable_fns(LirModule &m):
     # constructors, extract the user-struct key type, and seed
     # `T__hash` / `T__eq` / `Hashable_for_T__hash` /
     # `Equatable_for_T__eq` as DCE roots.
-    Vector[String] hashable_keys = []
-    int hki_fi = 0
-    while hki_fi < n:
-        LirFunction hki_func = m.functions.get(hki_fi).unwrap()
-        int hki_bi = 0
-        while hki_bi < hki_func.blocks.len():
-            LirBlock hki_blk = hki_func.blocks.get(hki_bi).unwrap()
-            int hki_ii = 0
-            while hki_ii < hki_blk.insts.len():
-                LirInst hki_inst = hki_blk.insts.get(hki_ii).unwrap()
-                String orig_name = ""
-                match hki_inst:
-                    case ICallExtern(_, _, _, oname, _):
-                        orig_name = oname
-                    else:
-                        pass
-                if orig_name.len() > 0:
-                    String prefix = ""
-                    bool is_set = false
-                    if orig_name.starts_with("Dict__"):
-                        prefix = "Dict__"
-                    elif orig_name.starts_with("HashMap__"):
-                        prefix = "HashMap__"
-                    elif orig_name.starts_with("Set__"):
-                        prefix = "Set__"
-                        is_set = true
-                    elif orig_name.starts_with("HashSet__"):
-                        prefix = "HashSet__"
-                        is_set = true
-                    if prefix.len() > 0:
-                        String rest = orig_name.slice(prefix.len(), orig_name.len())
-                        # Only constructors register hashable keys —
-                        # skip method calls (`Dict__K__V__put` etc.).
-                        bool is_ctor = rest.ends_with("__new") or rest.ends_with("__new_str") or rest.ends_with("__with_capacity")
-                        if is_ctor:
-                            # Strip the trailing method suffix.
-                            String body_str = rest
-                            if rest.ends_with("__new_str"):
-                                body_str = rest.slice(0, rest.len() - 9)
-                            elif rest.ends_with("__new"):
-                                body_str = rest.slice(0, rest.len() - 5)
-                            elif rest.ends_with("__with_capacity"):
-                                body_str = rest.slice(0, rest.len() - 15)
-                            # For Dict/HashMap, take everything before the
-                            # first `__` as the key type. For Set/HashSet,
-                            # the whole body is the key.
-                            String key_ty = ""
-                            if is_set:
-                                key_ty = body_str
-                            else:
-                                int sep_i = 0
-                                while sep_i + 1 < body_str.byte_len():
-                                    if body_str.byte_at(sep_i) == 0x5F and body_str.byte_at(sep_i + 1) == 0x5F:
-                                        key_ty = body_str.slice(0, sep_i)
-                                        break
-                                    sep_i += 1
-                            # Skip primitives / runtime types.
-                            bool is_prim = false
-                            if key_ty == "int64_t" or key_ty == "int32_t" or key_ty == "int16_t" or key_ty == "int8_t":
-                                is_prim = true
-                            elif key_ty == "uint64_t" or key_ty == "uint32_t" or key_ty == "uint16_t" or key_ty == "uint8_t":
-                                is_prim = true
-                            elif key_ty == "double" or key_ty == "float" or key_ty == "bool":
-                                is_prim = true
-                            elif key_ty == "GorgetString" or key_ty == "Str" or key_ty == "void":
-                                is_prim = true
-                            elif key_ty == "T" or key_ty == "K" or key_ty == "V":
-                                is_prim = true
-                            elif key_ty.contains("__"):
-                                # Compound (e.g. Vector__byte) — skip.
-                                is_prim = true
-                            if not is_prim and key_ty.len() > 0:
-                                bool already_hk = false
-                                int hki = 0
-                                while hki < hashable_keys.len():
-                                    if hashable_keys.get(hki).unwrap() == key_ty:
-                                        already_hk = true
-                                        break
-                                    hki += 1
-                                if not already_hk:
-                                    hashable_keys.push(key_ty.clone())
-                hki_ii += 1
-            hki_bi += 1
-        hki_fi += 1
+    # Use the shared helper for ctor detection — gates by the post-mapped
+    # runtime name (`gorget_dict_new` etc.) so we don't accidentally seed
+    # roots from method calls (`Dict__K__V__put`) which share the
+    # `Dict__` prefix.
+    Vector[String] hashable_keys = collect_hashable_key_types(&m)
     int hk_i = 0
     while hk_i < hashable_keys.len():
         String key_ty = hashable_keys.get(hk_i).unwrap()
@@ -1232,6 +1153,217 @@ Vector[bool] compute_reachable_fns(LirModule &m):
             bi += 1
 
     return reachable
+
+# ── Hashable-key bridges & dict-ctor wiring ─────────────────
+#
+# `Dict[UserStruct, V]` / `Set[UserStruct]` use a runtime hash-bucket
+# protocol where the user's `T__hash` / `T__eq` are dispatched via
+# function pointers stored on the GorgetMap struct (`hash_fn` / `eq_fn`).
+# The runtime can't see them as ordinary calls, so the C backend
+# generates two glue layers:
+#
+#   1. `static uint64_t __gorget_ktable_hash__T(const void* __kp)` and
+#      `static bool __gorget_ktable_eq__T(const void*, const void*)` —
+#      adapter shims with the runtime's expected ABI that internally
+#      call the user's `T__hash` / `T__eq` (or the trait-prefixed
+#      `Hashable_for_T__hash` / `Equatable_for_T__eq` form).
+#   2. After every Dict/Set ctor call, append `dst.hash_fn = ...;`
+#      `dst.eq_fn = ...;` (and `dst.key_drop = ...;` `dst.key_clone = ...;`
+#      when the key type holds resource fields).
+#
+# Without these the runtime falls back to byte-FNV / memcmp, which is
+# wrong whenever the user customised hash/eq (e.g. case-insensitive
+# String key, semantic equality across pointer-equal payloads, etc.).
+# Mirrors `src/backend/c_lir/mod.rs::emit_hashable_key_bridges` and the
+# wiring block in `c_lir/emit_call_extern.rs`.
+
+bool is_primitive_hashable_key(String key_ty):
+    if key_ty == "int64_t" or key_ty == "int32_t" or key_ty == "int16_t" or key_ty == "int8_t":
+        return true
+    if key_ty == "uint64_t" or key_ty == "uint32_t" or key_ty == "uint16_t" or key_ty == "uint8_t":
+        return true
+    if key_ty == "double" or key_ty == "float" or key_ty == "bool":
+        return true
+    if key_ty == "GorgetString" or key_ty == "Str" or key_ty == "void":
+        return true
+    if key_ty == "T" or key_ty == "K" or key_ty == "V":
+        return true
+    if key_ty.contains("__"):
+        return true
+    return false
+
+bool is_runtime_dict_or_set_ctor(String mapped_name):
+    if mapped_name == "gorget_dict_new" or mapped_name == "gorget_dict_new_str":
+        return true
+    if mapped_name == "gorget_map_new" or mapped_name == "gorget_map_new_str":
+        return true
+    if mapped_name == "gorget_set_new" or mapped_name == "gorget_set_new_str":
+        return true
+    if mapped_name == "gorget_ordered_set_new" or mapped_name == "gorget_ordered_set_new_str":
+        return true
+    if mapped_name == "gorget_set_with_capacity":
+        return true
+    return false
+
+# Extract the key type from a Dict/Set/HashMap/HashSet ctor's original
+# name. Caller must have already verified `mapped_name` is a runtime
+# constructor (via `is_runtime_dict_or_set_ctor`) — that gate is what
+# distinguishes ctors from method calls (`Dict__K__V__put` etc.). The
+# original name itself can be either bare (`Dict__K__V`) or method-
+# suffixed (`Dict__K__V__new` / `Dict__K__V__with_capacity`); both are
+# accepted because Gorget's surface syntax `Dict[K,V]()` lowers to the
+# bare form while explicit `.new()` / `.with_capacity()` calls keep the
+# suffix. Returns "" for primitive / monomorphized-scalar keys (those
+# get the runtime's byte-FNV / memcmp fallback for free).
+String extract_user_hashable_key(String orig_name):
+    String prefix = ""
+    bool is_set = false
+    if orig_name.starts_with("Dict__"):
+        prefix = "Dict__"
+    elif orig_name.starts_with("HashMap__"):
+        prefix = "HashMap__"
+    elif orig_name.starts_with("Set__"):
+        prefix = "Set__"
+        is_set = true
+    elif orig_name.starts_with("HashSet__"):
+        prefix = "HashSet__"
+        is_set = true
+    if prefix.len() == 0:
+        return ""
+    String rest = orig_name.slice(prefix.len(), orig_name.len())
+    String body_str = rest
+    if rest.ends_with("__new_str"):
+        body_str = rest.slice(0, rest.len() - 9)
+    elif rest.ends_with("__new"):
+        body_str = rest.slice(0, rest.len() - 5)
+    elif rest.ends_with("__with_capacity"):
+        body_str = rest.slice(0, rest.len() - 15)
+    String key_ty = ""
+    if is_set:
+        key_ty = body_str
+    else:
+        int sep_i = 0
+        while sep_i + 1 < body_str.byte_len():
+            if body_str.byte_at(sep_i) == 0x5F and body_str.byte_at(sep_i + 1) == 0x5F:
+                key_ty = body_str.slice(0, sep_i)
+                break
+            sep_i += 1
+    if key_ty.len() == 0:
+        return ""
+    if is_primitive_hashable_key(key_ty):
+        return ""
+    return key_ty
+
+# Resolve T__hash / T__eq fn names. Returns Vector with [hash, eq] when
+# both are present in the module (either bare `T__method` form or
+# trait-prefixed `Hashable_for_T__hash` / `Equatable_for_T__eq`), else
+# empty.
+Vector[String] hashable_key_fn_names(LirModule &m, String type_c):
+    String hash_direct = type_c + "__hash"
+    String eq_direct = type_c + "__eq"
+    String hash_trait = "Hashable_for_" + type_c + "__hash"
+    String eq_trait = "Equatable_for_" + type_c + "__eq"
+    String hash_name = ""
+    String eq_name = ""
+    int fi = 0
+    while fi < m.functions.len():
+        String fname = m.functions.get(fi).unwrap().name
+        if hash_name == "":
+            if fname == hash_direct or fname == hash_trait:
+                hash_name = fname.clone()
+        if eq_name == "":
+            if fname == eq_direct or fname == eq_trait:
+                eq_name = fname.clone()
+        if hash_name.len() > 0 and eq_name.len() > 0:
+            break
+        fi += 1
+    Vector[String] result = []
+    if hash_name.len() == 0 or eq_name.len() == 0:
+        return result
+    result.push(hash_name)
+    result.push(eq_name)
+    return result
+
+# Walk LIR and collect every user-struct key used in a Dict/Set ctor.
+Vector[String] collect_hashable_key_types(LirModule &m):
+    Vector[String] keys = []
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction f = m.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < f.blocks.len():
+            LirBlock b = f.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < b.insts.len():
+                LirInst inst = b.insts.get(ii).unwrap()
+                String mapped_name = ""
+                String orig_name = ""
+                match inst:
+                    case ICallExtern(_, mname, _, oname, _):
+                        mapped_name = mname
+                        orig_name = oname
+                    else:
+                        pass
+                if is_runtime_dict_or_set_ctor(mapped_name) and orig_name.len() > 0:
+                    String key_ty = extract_user_hashable_key(orig_name)
+                    if key_ty.len() > 0:
+                        bool already = false
+                        int hki = 0
+                        while hki < keys.len():
+                            if keys.get(hki).unwrap() == key_ty:
+                                already = true
+                                break
+                            hki += 1
+                        if not already:
+                            keys.push(key_ty.clone())
+                ii += 1
+            bi += 1
+        fi += 1
+    return keys
+
+# Emit the per-key static bridges. Only emits bridges for keys whose
+# T__hash / T__eq are actually resolvable in the module — keys without
+# a Hashable+Equatable impl get omitted (the runtime falls back to
+# byte-FNV / memcmp for those, which is the only sensible default).
+String emit_hashable_key_bridges(LirModule &m):
+    Vector[String] keys = collect_hashable_key_types(&m)
+    String out = ""
+    int ki = 0
+    while ki < keys.len():
+        String ty = keys.get(ki).unwrap()
+        Vector[String] names = hashable_key_fn_names(&m, ty)
+        if names.len() == 2:
+            String hn = names.get(0).unwrap()
+            String en = names.get(1).unwrap()
+            out = out + "static uint64_t __gorget_ktable_hash__" + ty + "(const void* __kp) { int64_t __h_state = 0; " + hn + "(__kp, &__h_state); return (uint64_t)__h_state; }\n"
+            out = out + "static bool __gorget_ktable_eq__" + ty + "(const void* __a, const void* __b) { return " + en + "(__a, __b); }\n"
+        ki += 1
+    return out
+
+# Emit the per-call wiring after a Dict/Set/HashMap/HashSet ctor. Both
+# the post-mapped runtime name (`gorget_dict_new` etc.) and the pre-
+# mapped original (`Dict__K__V`) are required: the mapped name gates
+# whether this call is a constructor at all (vs. `__put` / `__contains`
+# which share the `Dict__` prefix), and the original supplies the key
+# type after `map_mono_to_runtime` collapsed it away.
+String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, LirModule &m):
+    if dst < 0 or original_name.len() == 0:
+        return ""
+    if not is_runtime_dict_or_set_ctor(mapped_name):
+        return ""
+    String key_ty = extract_user_hashable_key(original_name)
+    if key_ty.len() == 0:
+        return ""
+    Vector[String] names = hashable_key_fn_names(&m, key_ty)
+    if names.len() < 2:
+        return ""
+    String dv = v(dst)
+    String w = " " + dv + ".hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__" + key_ty + ";"
+    w = w + " " + dv + ".eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__" + key_ty + ";"
+    if m.recursive_drop_structs.contains(key_ty) or m.recursive_drop_enums.contains(key_ty):
+        w = w + " " + dv + ".key_drop = (__gorget_drop_fn)" + key_ty + "__drop;"
+        w = w + " " + dv + ".key_clone = (__gorget_drop_fn)" + key_ty + "__clone_inplace;"
+    return w
 
 String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
     Vector[bool] reachable_fwd = compute_reachable_fns(&m)
@@ -2835,7 +2967,14 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             return "/* unknown call */;"
 
         case ICallExtern(dst, name, args, original_name, arg_abis):
-            return emit_call_extern_with(dst, name, &args, &sn, &val_types, &m, func.return_type)
+            String ce_call = emit_call_extern_with(dst, name, &args, &sn, &val_types, &m, func.return_type)
+            # Append per-call ctor wiring for `Dict[UserStruct, V]` /
+            # `Set[UserStruct]` so user hash/eq are dispatched via the
+            # bridge fn pointers rather than byte-FNV / memcmp. The
+            # mapped `name` gates ctor-vs-method; `original_name` carries
+            # the unmangled key type.
+            String ce_wiring = emit_dict_ctor_wiring(dst, name, original_name, &m)
+            return ce_call + ce_wiring
 
         case ICallPtr(dst, callee, args):
             String out = ""
@@ -4663,6 +4802,12 @@ String generate_c(LirModule &m):
 
     # Function forward declarations
     out = out + emit_func_forward_decls(&m, &sn)
+
+    # Hashable-key bridges. Must come AFTER forward decls (the bridges
+    # call `T__hash` / `T__eq`) and BEFORE function bodies that
+    # reference `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` via
+    # ctor wiring.
+    out = out + emit_hashable_key_bridges(&m)
 
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(&m)
