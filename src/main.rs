@@ -1034,24 +1034,7 @@ fn compile_llvm_pipeline(
         || lir_module.externs.iter().any(|e| e.name.contains("gorget_bytes")) {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
-    // SQLite: gorget_sqlite_* wrappers + amalgamation. Mirrors the
-    // c_lir::emit_runtime_modules conditional (emit_types.rs:2116). Without
-    // this the LLVM build emits CallExterns for gorget_sqlite_changes /
-    // gorget_sqlite_errmsg / gorget_sqlite_bind_int that resolve to no
-    // symbol at link time.
-    if lir_module.externs.iter().any(|e| e.name.starts_with("gorget_sqlite_") || e.name == "sqlite_open") {
-        runtime_src.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
-        runtime_src.push_str("#define HAVE_MREMAP 0\n");
-        runtime_src.push_str("#pragma GCC diagnostic push\n");
-        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
-        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
-        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
-        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
-        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
-        runtime_src.push_str(c_runtime::SQLITE_AMALGAMATION);
-        runtime_src.push_str("\n#pragma GCC diagnostic pop\n");
-        runtime_src.push_str(c_runtime::SQLITE_GORGET_WRAPPERS);
-    }
+    let needs_sqlite = lir_module.externs.iter().any(|e| e.name.starts_with("gorget_sqlite_") || e.name == "sqlite_open");
     // Test/bench modules need the alloc report runtime for panic handler globals.
     if lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty() {
         runtime_src.push_str(c_runtime::RUNTIME_ALLOC_REPORT);
@@ -1066,13 +1049,41 @@ fn compile_llvm_pipeline(
     // Make static functions non-static so they're visible for linking.
     // Keep _Thread_local statics (GCC requires TLS variables to be static at function scope).
     // Must happen AFTER wrapper append so wrapper functions are also de-staticified.
-    let runtime_src = runtime_src
+    let mut runtime_src = runtime_src
         .replace("static inline ", "")
         .replace("static _Thread_local", "_Thread_local_KEEP")
         .replace("static __thread", "__thread_KEEP")
         .replace("static ", "")
         .replace("_Thread_local_KEEP", "static _Thread_local")
         .replace("__thread_KEEP", "static __thread");
+
+    // SQLite goes in AFTER the strip-static transform: the amalgamation
+    // declares thousands of `static` functions and globals (mutex tables,
+    // page-cache vtables, virtual filesystem registries) whose one-time-init
+    // semantics rely on file-local linkage. Stripping `static` makes them
+    // colide across translation units (when llc + cc share an exe) and, more
+    // damagingly, leaves the mutex vtable NULL and crashes inside
+    // sqlite3MutexInit on the first sqlite3_open(). The gorget wrappers
+    // (gorget_sqlite_open / _exec / _bind_int / etc.) DO need their `static`
+    // dropped so the LLVM-emitted .o can call them — strip just that block
+    // before emitting it, then leave the amalgamation untouched.
+    if needs_sqlite {
+        runtime_src.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
+        runtime_src.push_str("#define HAVE_MREMAP 0\n");
+        runtime_src.push_str("#pragma GCC diagnostic push\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
+        runtime_src.push_str(c_runtime::SQLITE_AMALGAMATION);
+        runtime_src.push_str("\n#pragma GCC diagnostic pop\n");
+        // Wrappers: need globally visible names. The block uses
+        // `static <ret> gorget_sqlite_*(...)` exclusively, no `static
+        // inline`, no `static _Thread_local`, no `static __thread`.
+        let wrappers = c_runtime::SQLITE_GORGET_WRAPPERS.replace("static ", "");
+        runtime_src.push_str(&wrappers);
+    }
 
     if let Err(e) = fs::write(&runtime_c_path, &runtime_src) {
         return Err(format!("Error writing runtime C: {e}"));
@@ -1147,9 +1158,8 @@ fn compile_llvm_pipeline(
     if concat_source.contains("xtd.regex") || has_extern("pcre2_") || has_extern("gorget_regex_") {
         add_regex_flags(&mut link_cmd, true);
     }
-    if has_extern("gorget_sqlite") {
-        link_cmd.arg("-lsqlite3");
-    }
+    // gorget_sqlite_* now resolves through the embedded amalgamation
+    // (compiled as __gorget_sqlite.o above). No -lsqlite3 needed.
 
     let status = link_cmd.status();
     match status {
