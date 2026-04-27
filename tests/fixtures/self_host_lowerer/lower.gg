@@ -1044,6 +1044,22 @@ int map_compound_binop(String op):
             return OP_DIV
         case "%=":
             return OP_REM
+        case "+%=":
+            return OP_ADD_WRAP
+        case "-%=":
+            return OP_SUB_WRAP
+        case "*%=":
+            return OP_MUL_WRAP
+        case "&=":
+            return OP_BITAND
+        case "|=":
+            return OP_BITOR
+        case "^=":
+            return OP_BITXOR
+        case "<<=":
+            return OP_SHL
+        case ">>=":
+            return OP_SHR
         else:
             # Defensive: the parser should always emit the compound
             # spelling for SCompoundAssign. Falling back to the bare-op
@@ -1175,6 +1191,21 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 set_terminator(&ctx, GTJump(merge_bb))
                 switch_to(&ctx, merge_bb)
                 return result_local
+            # `x in collection` membership operator → `collection.contains(x)`.
+            # Lower as a Type__contains call on the rhs (the collection)
+            # rather than letting it fall through to `map_binop("in")`
+            # which would silently mis-compile as `x + collection`.
+            # Handles Vector / Set / Dict / String — all expose `contains`
+            # in the runtime via collection_runtime_name → gorget_*_contains.
+            if op == "in":
+                int in_lhs = lower_expr(&ctx, *lhs_box, &gmod)
+                int in_rhs = lower_expr(&ctx, *rhs_box, &gmod)
+                String coll_tname = local_type_name(in_rhs, &ctx, &gmod)
+                String contains_method = coll_tname + "__contains"
+                Vector[Operand] in_args = [OpMove(in_rhs), OpCopy(in_lhs)]
+                int in_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
+                return in_dst
             int lhs = lower_expr(&ctx, *lhs_box, &gmod)
             int rhs = lower_expr(&ctx, *rhs_box, &gmod)
             if is_comparison(op):
