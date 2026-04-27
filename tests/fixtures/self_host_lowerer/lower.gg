@@ -167,6 +167,25 @@ String stmt_kind(Stmt s):
             return "SMatch"
     return "?unknown_stmt?"
 
+# In-place insertion sort for Vector[String]. Used to stabilize Dict
+# iteration order across stages (the self-host's Dict.keys() returns
+# keys in hash-positional order which differs between runs).
+void sort_strings_in_place_l(Vector[String] &v):
+    int n = v.len()
+    int i = 1
+    while i < n:
+        String key = v.get(i).unwrap().clone()
+        int j = i - 1
+        while j >= 0:
+            String jv = v.get(j).unwrap()
+            if jv > key:
+                v.set(j + 1, jv.clone())
+                j -= 1
+            else:
+                break
+        v.set(j + 1, key)
+        i += 1
+
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name))
@@ -4434,14 +4453,16 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Vector[String] none_keys = []
     # Mirror call_redirects into parallel Vectors so stage-1's lookups
     # don't silently miss the symbol-redirect mapping.
+    # Read the parallel call_redirect storage from the Module — built
+    # by load_imports alongside the Dict, but with deterministic
+    # last-write-wins semantics (the Dict at stage-1 runtime flips
+    # which sibling-module's `get_item_at` wins between runs).
     Vector[String] call_redirect_keys = []
     Vector[String] call_redirect_vals = []
-    Vector[String] cr_keys_src = call_redirects.keys()
     int cr_i = 0
-    while cr_i < cr_keys_src.len():
-        String cr_k = cr_keys_src.get(cr_i).unwrap()
-        call_redirect_keys.push(cr_k.clone())
-        call_redirect_vals.push(call_redirects.get(cr_k).unwrap().clone())
+    while cr_i < m.cr_keys.len():
+        call_redirect_keys.push(m.cr_keys.get(cr_i).unwrap().clone())
+        call_redirect_vals.push(m.cr_vals.get(cr_i).unwrap().clone())
         cr_i += 1
     Vector[String] type_sub_keys_init = []
     Vector[int] type_sub_vals_init = []

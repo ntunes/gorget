@@ -54,6 +54,21 @@ bool loaded_contains(Vector[String] v, String s):
         i += 1
     return false
 
+# Last-write-wins put into the Module's parallel cr_keys/cr_vals.
+# Mirrors Dict.put semantics deterministically — used alongside the
+# Dict puts in load_imports so the lowerer can read this state without
+# relying on the Dict's hash-positional iteration order at stage-1
+# runtime.
+void cr_put_module(Module &m, String key, String val):
+    int i = 0
+    while i < m.cr_keys.len():
+        if m.cr_keys.get(i).unwrap() == key:
+            m.cr_vals.set(i, val.clone())
+            return
+        i += 1
+    m.cr_keys.push(key.clone())
+    m.cr_vals.push(val.clone())
+
 # ── Import loading ───────────────────────────────────────
 
 Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns):
@@ -119,6 +134,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                     match alias_sx.expr:
                                         case EStringLiteral(alias_val, _):
                                             call_redirects.put(fdef.name.clone(), alias_val.clone())
+                                            cr_put_module(&m, fdef.name, alias_val)
                                         else:
                                             pass
                                 case SReturn(alias_ret_opt):
@@ -127,6 +143,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                             match alias_ret_expr.expr:
                                                 case EStringLiteral(alias_val2, _):
                                                     call_redirects.put(fdef.name.clone(), alias_val2.clone())
+                                                    cr_put_module(&m, fdef.name, alias_val2)
                                                 else:
                                                     pass
                                         case None:
@@ -178,6 +195,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             String bare_name = fdef.name.clone()
                             String mangled = mod_prefix + bare_name
                             call_redirects.put(bare_name, mangled.clone())
+                            cr_put_module(&m, bare_name, mangled)
                             imported_fns.put(mangled.clone(), true)
                             # Create a renamed copy
                             FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type)
@@ -286,6 +304,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                         match ext_sx.expr:
                                             case EStringLiteral(ext_val, _):
                                                 call_redirects.put(ext_fd.name.clone(), ext_val.clone())
+                                                cr_put_module(&m, ext_fd.name, ext_val)
                                             else:
                                                 pass
                                     case SReturn(ext_ret_opt):
@@ -294,6 +313,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                                 match ext_ret_expr.expr:
                                                     case EStringLiteral(ext_val2, _):
                                                         call_redirects.put(ext_fd.name.clone(), ext_val2.clone())
+                                                        cr_put_module(&m, ext_fd.name, ext_val2)
                                                     else:
                                                         pass
                                             case None:

@@ -223,3 +223,10 @@ struct SelectArm:
 
 struct Module:
     Vector[Item] items
+    # Parallel call-redirect storage populated by load_imports — read by
+    # lower_module to dodge Dict[String, _] state-loss / non-determinism
+    # at stage-1 runtime. Without these, sibling functions in different
+    # imports (e.g. resolve.get_item_at and typecheck.get_item_at) get
+    # mapped non-deterministically and stage-N's emission ≠ stage-(N+1)'s.
+    Vector[String] cr_keys
+    Vector[String] cr_vals

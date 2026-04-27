@@ -3895,10 +3895,35 @@ String field_access(String sdef_name, String field_name, LirModule &m, Vector[St
         return "self->" + c_field_name(field_name)
     return "dst." + c_field_name(field_name)
 
+# Sort a Vector[String] in place using simple insertion sort. Used
+# to stabilize Dict.keys() iteration order — the self-host's Dict
+# returns keys in hash-positional order, which differs across
+# stage-N runs and breaks bootstrap fixed-point convergence.
+void sort_strings_in_place(Vector[String] &v):
+    int n = v.len()
+    int i = 1
+    while i < n:
+        String key = v.get(i).unwrap().clone()
+        int j = i - 1
+        while j >= 0:
+            String jv = v.get(j).unwrap()
+            if jv > key:
+                v.set(j + 1, jv.clone())
+                j -= 1
+            else:
+                break
+        v.set(j + 1, key)
+        i += 1
+
 # Emit struct drop functions from recursive_drop_structs metadata.
 String emit_struct_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
+    # Sort keys alphabetically — Dict.keys() iteration order is
+    # non-deterministic (depends on hash positions), which makes
+    # stage-N's emit non-byte-equal to stage-(N+1)'s. Sort here so
+    # the bootstrap fixed point can converge.
+    sort_strings_in_place(&keys)
     # Forward declarations first — drop functions may call each other for
     # nested structs (Outer.drop calls Inner.drop). Without fwd decls, C
     # infers implicit int return and later static definition conflicts.
@@ -3942,6 +3967,7 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
 String emit_struct_clones(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
+    sort_strings_in_place(&keys)
     # Forward declarations to prevent implicit-decl conflicts.
     int kf = 0
     while kf < keys.len():
@@ -3991,6 +4017,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
 String emit_enum_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
+    sort_strings_in_place(&keys)
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
@@ -4056,6 +4083,7 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
 String emit_enum_clones(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
+    sort_strings_in_place(&keys)
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
@@ -4115,6 +4143,7 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
 String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.type_drop_fns.keys()
+    sort_strings_in_place(&keys)
     int ki = 0
     while ki < keys.len():
         String type_name = keys.get(ki).unwrap()
