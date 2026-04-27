@@ -121,6 +121,16 @@ trait Drainable[T]:
     # Consuming iteration. Source is moved into the iterator and the
     # caller can no longer use it after `drain()` returns. "Drain" is
     # canonical collection-API vocabulary for "iterate by emptying."
+    # Sibling to Iterable (not extends): some types support drain
+    # but not borrow-iterate (one-shot streams), some support both
+    # (collections), implementors opt in independently.
+    #
+    # **Status (2026-04-26):** trait declared in `lib/std/iter.gg`,
+    # not yet equipped on Vector / Set / Dict. Inline `for x in
+    # v.drain():` trips a typecheck/discovery gap where the drain
+    # iterator's return type isn't propagated to the call site
+    # without an explicit type ascription. Lifting that gap is the
+    # blocker for shipping `equip Vector[T] with Drainable[T]:`.
     type DrainIter: Iterator[T !]
     Self::DrainIter drain(!self)
 

@@ -242,6 +242,24 @@ trait Iterator[T]:
 trait Iterable[T]:
     Iterator[T] iter(&self)
 
+# ── Drainable[T] trait — declared but unequipped ─────────────
+#
+# Sibling capability trait for "this type can be consumed by
+# iteration." `drain(!self)` moves the source into the iterator and
+# yields owned elements; the source is gone after `drain()` returns.
+# Iteration order would match `iter()` — same elements, same order,
+# but yielded by move instead of by borrow.
+#
+# **No implementations ship yet** — equipping Vector with Drainable
+# trips a typecheck/discovery gap where inline calls like
+# `for x in v.drain():` fail to register the drain iterator's return
+# type. Callers can manually construct iterator state machines via
+# `for x in MyDrainIter(...):`. Built-in collection drain impls land
+# when the discovery walker propagates user-equip method return
+# types for builtin generic types (Vector / Set / Dict).
+trait Drainable[T]:
+    Iterator[T] drain(!self)
+
 struct VectorIter[T]:
     Vector[T] source
     int idx

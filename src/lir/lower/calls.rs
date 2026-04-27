@@ -618,7 +618,11 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             "filter" | "map" | "flat_map" | "fold" | "reduce" | "any" | "all"
             | "each" | "find" | "find_index" | "sorted_by" | "sort_by"
             | "sorted_by_key" | "sort_by_key"
-            | "count" => return None,
+            | "count"
+            // `iter` is user-space now (Iterable trait in
+            // lib/std/iter.gg) — thin wrapper that constructs a
+            // VectorIter; no runtime function.
+            | "iter" => return None,
             // `windows` / `chunks` route to generic runtime stubs that
             // use the source array's `elem_size` field — one stub covers
             // every element type, no per-type variants needed.
