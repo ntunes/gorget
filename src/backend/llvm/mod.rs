@@ -1770,9 +1770,22 @@ fn emit_function(
     str_globals: &mut StrGlobals,
 ) {
     let ret = llvm_type_full(&func.return_type, snames);
+    // Spawn wrappers are called from the C-emitted runtime (`__spawn_run_*`).
+    // The C compiler follows AArch64 PCS rule B.4 and passes >16-byte composites
+    // via a hidden pointer in the next NGRN register; the callee dereferences it.
+    // LLVM's default for `(%Struct %arg)` instead splits the struct across up to
+    // 8 i64 registers (its own non-PCS ABI), and `byval` puts the data on caller's
+    // stack — neither matches GCC. Declaring such params as plain `ptr` matches
+    // PCS exactly: caller passes a pointer, callee derefs through it.
+    let is_spawn_wrapper = func.name.starts_with("__spawn_method_wrap_")
+        || func.name.starts_with("__spawn_thread_wrap_")
+        || func.name.starts_with("__shared_token_");
     let params: Vec<String> = func.params.iter().enumerate()
         .map(|(i, p)| {
             let ty = if *p == LirType::Void { "ptr".to_string() } else { llvm_type_full(p, snames) };
+            if is_spawn_wrapper && p.is_aggregate() && !is_small_aggregate(p, &module.structs) {
+                return format!("ptr %p{i}");
+            }
             format!("{ty} %p{i}")
         })
         .collect();
@@ -2535,9 +2548,20 @@ fn emit_inst(
                     writeln!(out, "  %v{} = add i1 0, %p{index}", dst.0).unwrap();
                 }
                 LirType::Struct(_) => {
-                    // Aggregate passed by value — not typical, just forward
-                    writeln!(out, "  %v{} = alloca {lty}", dst.0).unwrap();
-                    writeln!(out, "  store {lty} %p{index}, ptr %v{}", dst.0).unwrap();
+                    // For spawn wrappers we declared the param as `ptr byval(%S)`
+                    // (PCS-compliant ABI for >16-byte composites called from the
+                    // C runtime). The IR-level type is then ptr — alias instead
+                    // of attempting `store %S, ptr` which would be ill-typed.
+                    let is_spawn_wrapper_fn = func.name.starts_with("__spawn_method_wrap_")
+                        || func.name.starts_with("__spawn_thread_wrap_")
+                        || func.name.starts_with("__shared_token_");
+                    let large_agg = ty.is_aggregate() && !is_small_aggregate(ty, &module.structs);
+                    if is_spawn_wrapper_fn && large_agg {
+                        writeln!(out, "  %v{} = bitcast ptr %p{index} to ptr", dst.0).unwrap();
+                    } else {
+                        writeln!(out, "  %v{} = alloca {lty}", dst.0).unwrap();
+                        writeln!(out, "  store {lty} %p{index}, ptr %v{}", dst.0).unwrap();
+                    }
                 }
                 LirType::Void => {
                     // Void param (closure env) — treat as ptr
