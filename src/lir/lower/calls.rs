@@ -136,6 +136,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
     use AbiKind::*;
     let str_ty = || sr.lookup("GorgetString").map(LirType::Struct).unwrap_or(LirType::Ptr);
     let arr_ty = || sr.lookup("GorgetArray").map(LirType::Struct).unwrap_or(LirType::Ptr);
+    let regex_ty = || sr.lookup("Regex").map(LirType::Struct).unwrap_or(LirType::Ptr);
+    let match_ty = || sr.lookup("Match").or_else(|| sr.lookup("RegexMatch")).map(LirType::Struct).unwrap_or(LirType::Ptr);
     let s = str_ty;
     let g = str_ty;
 
@@ -451,15 +453,22 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
 
         // Bytes (Vector[uint8]) operations
         // Regex — several functions take const char* subject/pattern strings
-        "gorget_regex_compile" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![CStr, CStr]),
+        // gorget_regex_compile returns GorgetRegex by value (16-byte struct: pcre2_code* + const char*).
+        // Declaring the return as `Ptr` reads only the first 8 bytes of the return register pair → SEGV
+        // when downstream code tries to extract the second pointer field. Use the Regex struct type so
+        // both backends generate the correct two-register return ABI (AArch64) / sret (large ABI).
+        "gorget_regex_compile" => sig(vec![LirType::Ptr, LirType::Ptr], regex_ty(), vec![CStr, CStr]),
+        // gorget_regex_find / find_at / fullmatch return GorgetRegexMatch (56-byte struct) by value.
+        // Declaring return as `Ptr` reads only x0 (likely garbage) — must use the actual struct
+        // type so the LLVM caller emits sret (>16 bytes → memory return ABI on AArch64).
         "gorget_regex_find" | "gorget_regex_find_at" => {
-            sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, CStr, Scalar])
+            sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], match_ty(), vec![Ptr, CStr, Scalar])
         }
         "gorget_regex_is_match" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Bool, vec![Ptr, CStr]),
         "gorget_regex_find_all" => sig(vec![LirType::Ptr, LirType::Ptr], arr_ty(), vec![Ptr, CStr]),
         "gorget_regex_replace" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::Ptr], s(), vec![Ptr, CStr, CStr]),
         "gorget_regex_split" => sig(vec![LirType::Ptr, LirType::Ptr, LirType::I64], arr_ty(), vec![Ptr, CStr, Scalar]),
-        "gorget_regex_fullmatch" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Ptr, vec![Ptr, CStr]),
+        "gorget_regex_fullmatch" => sig(vec![LirType::Ptr, LirType::Ptr], match_ty(), vec![Ptr, CStr]),
 
         // gorget_bytes_from_str/hex(const char*) — may receive Str reference
         "gorget_bytes_from_str" | "gorget_bytes_from_hex" => sig(vec![LirType::Ptr], arr_ty(), vec![CStr]),

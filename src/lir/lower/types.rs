@@ -304,6 +304,42 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
     Some(sz)
 }
 
+/// Field layout for opaque runtime structs that the backends need to *return
+/// or pass by value at ABI boundaries*. When a struct is just memcpy'd around
+/// as a blob the opaque `[N x i8]` layout works, but as soon as it crosses a
+/// C calling-convention boundary (return value, by-value param) the LLVM
+/// backend has to declare it with the actual field types — otherwise AArch64's
+/// `[N x i8]` HFA-disqualification path takes over and the function gets
+/// returned via sret/memory instead of register pairs, mismatching the C
+/// runtime's actual ABI.
+///
+/// Returns `None` for structs that are only ever passed by pointer (most of
+/// them) — those keep their `[N x i8]` opaque layout. Returns `Some(fields)`
+/// for structs that are returned/passed by value (e.g. Regex from
+/// `gorget_regex_compile`).
+///
+/// Keep this in sync with the runtime's actual C struct definitions.
+pub fn opaque_runtime_layout(name: &str) -> Option<Vec<LirType>> {
+    match name {
+        // GorgetRegex = { pcre2_code* code, const char* pattern_str }.
+        // Returned by value from gorget_regex_compile; AArch64 ABI passes
+        // it through (x0, x1) when the LLVM type matches `{ ptr, ptr }`.
+        "Regex" => Some(vec![LirType::Ptr, LirType::Ptr]),
+        // GorgetRegexMatch = 7 × 8 bytes = 56 bytes:
+        //   { const char* text, int64_t start, int64_t end_pos,
+        //     const char** groups, int64_t group_count,
+        //     const char** group_names, int64_t names_len }
+        // Returned by value from gorget_regex_find / find_at / fullmatch.
+        // Too big for register pairs — needs sret, but LLVM still has to
+        // know the field shape so memcpy / GEP arithmetic stays correct.
+        "Match" | "RegexMatch" => Some(vec![
+            LirType::Ptr, LirType::I64, LirType::I64,
+            LirType::Ptr, LirType::I64, LirType::Ptr, LirType::I64,
+        ]),
+        _ => None,
+    }
+}
+
 /// Returns true if a struct type is small enough to be returned / passed
 /// in registers (≤16 bytes on aarch64, ≤8 bytes on x86-64). Used by both
 /// backends to decide sret vs direct-return and, via the `ByValue` ABI

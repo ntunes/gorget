@@ -808,7 +808,14 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
         } else if def.fields.is_empty() {
             // Known opaque types whose C runtime layout is fixed. The shared
             // table lives in src/lir/lower/types.rs so all backends agree.
-            if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(name) {
+            if let Some(layout) = crate::lir::lower::types::opaque_runtime_layout(name) {
+                // Structs that cross C ABI boundaries by value need their real
+                // field types declared so AArch64's HFA / register-return rules
+                // fire correctly (vs. the `[N x i8]` opaque-blob layout, which
+                // forces sret/memory return and mismatches the C runtime ABI).
+                let parts: Vec<String> = layout.iter().map(|t| llvm_type_full(t, snames)).collect();
+                writeln!(out, "%{name} = type {{ {} }}", parts.join(", ")).unwrap();
+            } else if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(name) {
                 // Specific layouts whose internal shape matters for GEP emission.
                 if name.starts_with("Task__") {
                     writeln!(out, "%{name} = type {{ ptr, ptr }}").unwrap();
@@ -4815,7 +4822,11 @@ fn emit_inst(
                     _ => name.as_str(),
                 }
             } else { name.as_str() };
-            // gorget_regex_find_at is a C macro alias for gorget_regex_find
+            // gorget_regex_find_at is a C macro alias for gorget_regex_find.
+            // Look up the extern under the ORIGINAL name (find_at) so the lookup
+            // hits the LIR's registered ABI/return-type, then emit the call
+            // with the renamed (find) symbol.
+            let lookup_name: &str = name;
             let name: &str = if name == "gorget_regex_find_at" { "gorget_regex_find" } else { name };
 
             // gorget_str_cmp: C returns int (32-bit). On aarch64, 'mov w0, -1' zero-extends
@@ -4836,8 +4847,9 @@ fn emit_inst(
                 return;
             }
 
-            // Look up the extern declaration
-            let ext = module.externs.iter().find(|e| e.name == *name);
+            // Look up the extern declaration (use the original LIR name, before
+            // any C-symbol rename above — externs are registered under the LIR name).
+            let ext = module.externs.iter().find(|e| e.name == lookup_name);
             if let Some(ext) = ext {
                 // CStr return ABI: function returns const char*. Two consumer
                 // patterns coexist in our LIR:
