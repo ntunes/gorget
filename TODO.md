@@ -2,8 +2,6 @@
 
 ## High
 
-- **Self-host `hash_of[T]` skips the `T.hash(&h)` call** (audit 2026-04-25). `hash_of[Named]` lowers to a body that builds an `FxHasher` and calls `FxHasher__finish(&h)` directly, skipping the `v.hash[FxHasher](&h)` step. The generic body in `lib/std/hash.gg` reads `v.hash[FxHasher](&h); return h.finish()`; self-host's monomorphization drops the first call (likely a method-level generic-args resolution gap — Rust mangles to `Named__hash__FxHasher`, self-host emits no call at all). Effect: `hash_of[T]` always returns the FxHasher seed (0). Doesn't affect `Dict[UserStruct, V]` membership directly (that goes through the per-call bridges + wiring) — only matters if user code calls `hash_of[T]` to compute a standalone digest. Bridges/wiring landed today in `tests/fixtures/self_host_lowerer/lir_codegen.gg`; this gap is the remaining piece. [added: 2026-04-25]
-
 
 
 - **SECURITY: match-expression drops Some-arm value in assignment** (audit 2026-04-24). `int more = match o: case Some(n): f(n); else: 0` — the Some arm's computed value (from `f(n)`) is never merged into `more`'s slot; `more` always equals the else-arm value. Trace of `sum(1→2→3)` over `Option[Box[List]]` returns 1 instead of 6. Generated C: bb_some computes `__v45 = f(n); goto exit` but the exit block unconditionally assigns the literal else-arm value to the match-result slot — the Some arm's result is never stored. Silent wrong-result bug (not memory-unsafe). Fixture `attack_81_self_referential_struct.gg` (security_known_unsafe SilentlyProduces). Likely lives in match-expression result-slot handling in IR lowering. [added: 2026-04-24]
