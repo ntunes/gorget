@@ -1764,14 +1764,27 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
             is_dict_lit = true
         else:
             return
-    if not gmod.type_infos.contains(ctor_name):
+    # Look up the ctor's field type. Prefer parallel ti_vals — Dict
+    # state-loss otherwise leaves Vector fields without an elem-size
+    # hint, so `GirModule([], ...)` allocates `gmod.functions` with
+    # elem_size=8 and subsequent pushes truncate every GirFunction
+    # to the first 8 bytes. Avoid value-copying GirTypeInfo (its
+    # nested Vectors don't survive a shallow clone in stage-1).
+    String fty_name = ""
+    int cti_idx = type_info_index(&gmod, ctor_name)
+    if cti_idx >= 0:
+        bool ctih_is_enum = gmod.type_info_vals.get(cti_idx).unwrap().is_enum
+        if not ctih_is_enum and ai < gmod.type_info_vals.get(cti_idx).unwrap().fields.len():
+            fty_name = gmod.type_info_vals.get(cti_idx).unwrap().fields.get(ai).unwrap().type_name.clone()
+    if fty_name == "" and gmod.type_infos.contains(ctor_name):
+        GirTypeInfo cti_info = gmod.type_infos.get(ctor_name).unwrap()
+        if cti_info.is_enum:
+            return
+        if ai >= cti_info.fields.len():
+            return
+        fty_name = cti_info.fields.get(ai).unwrap().type_name.clone()
+    if fty_name == "":
         return
-    GirTypeInfo cti_info = gmod.type_infos.get(ctor_name).unwrap()
-    if cti_info.is_enum:
-        return
-    if ai >= cti_info.fields.len():
-        return
-    String fty_name = cti_info.fields.get(ai).unwrap().type_name
     if is_arr_lit:
         if fty_name.starts_with("Vector__"):
             # `.slice(...)` returns a view (cap=0) into fty_name's buffer;
