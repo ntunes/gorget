@@ -1373,7 +1373,52 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EMethodCall(recv_box, mname, margs, _):
             # Static method call: receiver is a TYPE name (e.g. Point.default()
             # or int.parse(s)). Route to TypeName__method with no self argument.
+            #
+            # Parameterised-type receiver: `Heap[int].new()` /
+            # `SparseSet[int].new()` parse as EMethodCall on EIndex, NOT
+            # EIdentifier. Detect that pattern and rewrite the receiver
+            # as if it were `Heap__int64_t.new()` — the static-method
+            # path below will then dispatch to `Heap__int64_t__new()`.
+            # Without this, the lowerer would walk into EIndex and
+            # lower `Heap` as a bare value identifier, emitting [bug].
+            SpannedExpr recv_for_match = *recv_box
             match (*recv_box).expr:
+                case EIndex(eix_base_box, eix_idx_box):
+                    String eix_base_name = ""
+                    String eix_idx_name = ""
+                    match (*eix_base_box).expr:
+                        case EIdentifier(b):
+                            eix_base_name = b
+                        else:
+                            pass
+                    match (*eix_idx_box).expr:
+                        case EIdentifier(i):
+                            eix_idx_name = i
+                        else:
+                            pass
+                    if eix_base_name.len() > 0 and eix_idx_name.len() > 0:
+                        # Substitute through `gmod.type_subs` (T → int64_t).
+                        if gmod.type_subs.contains(eix_idx_name):
+                            int sub_tid = gmod.type_subs.get(eix_idx_name).unwrap()
+                            String sub_name = type_id_to_name(sub_tid, &gmod)
+                            if sub_name.len() > 0:
+                                eix_idx_name = sub_name
+                        # Map surface type names to their C-level form
+                        # so the mangled mono name matches what's
+                        # registered in `type_infos`.
+                        if eix_idx_name == "int":
+                            eix_idx_name = "int64_t"
+                        elif eix_idx_name == "float":
+                            eix_idx_name = "double"
+                        elif eix_idx_name == "String":
+                            eix_idx_name = "GorgetString"
+                        String mono_name = eix_base_name + "__" + eix_idx_name
+                        # Synthesise an EIdentifier-shaped receiver so
+                        # the existing static-method path picks it up.
+                        recv_for_match = SpannedExpr(EIdentifier(mono_name), (*recv_box).span)
+                else:
+                    pass
+            match recv_for_match.expr:
                 case EIdentifier(ident_name_raw):
                     # Generic type-param substitution. In monomorphized
                     # bodies like `equip [T] SetIter[T] with Iterator[T]:
@@ -1433,6 +1478,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif ident_name == "Channel" or ident_name == "Shared" or ident_name == "Weak":
                             is_type = true
                         elif ident_name == "Option" or ident_name == "Result":
+                            is_type = true
+                        # Monomorphized generic types — `Container__Foo`,
+                        # `Heap__int64_t`, `SparseSet__int64_t`, etc. arrive
+                        # here after the EIndex rewrite above. They may not
+                        # be in `type_infos` yet (registration happens lazily
+                        # during lowering, sometimes after the call site),
+                        # but a `__` separator in an identifier is reliable
+                        # signal it's a mangled type — Gorget's surface
+                        # syntax doesn't allow identifiers to contain `__`.
+                        elif ident_name.contains("__"):
                             is_type = true
                     if is_type:
                         Vector[Operand] static_args = []
