@@ -3180,9 +3180,31 @@ equip Parser:
         Option[String] via_field = None
         if self.check_kw(KW_WITH):
             self.advance()
-            # Parse trait name as a type, then convert to string
-            SpannedType trait_type = self.parse_type()
-            String tn = type_to_name(trait_type)
+            # Special-case prelude-variant keywords used as trait names
+            # (e.g. `equip IoError with Error:`). These tokens lex as
+            # keywords, not identifiers, so the generic parse_type path
+            # falls through to its `expected type` fallback and returns
+            # TPrimitive("void"); the resulting trait_name "void"
+            # mangles methods as `void_for_TYPE__method` instead of
+            # `Error_for_TYPE__method`. Detect the keyword form here.
+            String tn = ""
+            int with_kw_tag = self.peek_kw()
+            if with_kw_tag == KW_ERROR:
+                tn = "Error"
+                self.advance()
+            elif with_kw_tag == KW_OK:
+                tn = "Ok"
+                self.advance()
+            elif with_kw_tag == KW_SOME:
+                tn = "Some"
+                self.advance()
+            elif with_kw_tag == KW_NONE:
+                tn = "None"
+                self.advance()
+            else:
+                # Parse trait name as a type, then convert to string
+                SpannedType trait_type = self.parse_type()
+                tn = type_to_name(trait_type)
             Option[String] some_tn = Some(tn)
             trait_name = !some_tn
             # Capture optional 'via field_name' delegation
