@@ -1034,6 +1034,24 @@ fn compile_llvm_pipeline(
         || lir_module.externs.iter().any(|e| e.name.contains("gorget_bytes")) {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
+    // SQLite: gorget_sqlite_* wrappers + amalgamation. Mirrors the
+    // c_lir::emit_runtime_modules conditional (emit_types.rs:2116). Without
+    // this the LLVM build emits CallExterns for gorget_sqlite_changes /
+    // gorget_sqlite_errmsg / gorget_sqlite_bind_int that resolve to no
+    // symbol at link time.
+    if lir_module.externs.iter().any(|e| e.name.starts_with("gorget_sqlite_") || e.name == "sqlite_open") {
+        runtime_src.push_str("\n#define SQLITE_MAX_MMAP_SIZE 0\n");
+        runtime_src.push_str("#define HAVE_MREMAP 0\n");
+        runtime_src.push_str("#pragma GCC diagnostic push\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-parameter\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-variable\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wunused-function\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wimplicit-fallthrough\"\n");
+        runtime_src.push_str("#pragma GCC diagnostic ignored \"-Wpedantic\"\n");
+        runtime_src.push_str(c_runtime::SQLITE_AMALGAMATION);
+        runtime_src.push_str("\n#pragma GCC diagnostic pop\n");
+        runtime_src.push_str(c_runtime::SQLITE_GORGET_WRAPPERS);
+    }
     // Test/bench modules need the alloc report runtime for panic handler globals.
     if lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty() {
         runtime_src.push_str(c_runtime::RUNTIME_ALLOC_REPORT);
