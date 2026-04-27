@@ -242,21 +242,20 @@ trait Iterator[T]:
 trait Iterable[T]:
     Iterator[T] iter(&self)
 
-# ── Drainable[T] trait — declared but unequipped ─────────────
+# ── Drainable[T] trait ────────────────────────────────────────
 #
 # Sibling capability trait for "this type can be consumed by
 # iteration." `drain(!self)` moves the source into the iterator and
 # yields owned elements; the source is gone after `drain()` returns.
-# Iteration order would match `iter()` — same elements, same order,
-# but yielded by move instead of by borrow.
+# Iteration order matches `iter()` — same elements, same order, but
+# yielded by move instead of by borrow.
 #
-# **No implementations ship yet** — equipping Vector with Drainable
-# trips a typecheck/discovery gap where inline calls like
-# `for x in v.drain():` fail to register the drain iterator's return
-# type. Callers can manually construct iterator state machines via
-# `for x in MyDrainIter(...):`. Built-in collection drain impls land
-# when the discovery walker propagates user-equip method return
-# types for builtin generic types (Vector / Set / Dict).
+# `Vector[T]` ships an O(n²) `remove(0)`-based impl as the v1
+# baseline (correct + insertion-ordered, but the per-step shift
+# makes it expensive for large vectors — a tombstone-walk variant
+# is the obvious follow-up). `Set[T]` / `Dict[K, V]` drain
+# implementations defer until a `gorget_map_drain_entry` runtime
+# helper lands.
 trait Drainable[T]:
     Iterator[T] drain(!self)
 
@@ -275,6 +274,17 @@ equip [T] VectorIter[T] with Iterator[T]:
 equip [T] Vector[T] with Iterable[T]:
     VectorIter[T] iter(&self):
         return VectorIter[T](self, 0)
+
+struct VectorDrain[T]:
+    Vector[T] source
+
+equip [T] VectorDrain[T] with Iterator[T]:
+    Option[T] next(&self):
+        return self.source.remove(0)
+
+equip [T] Vector[T] with Drainable[T]:
+    VectorDrain[T] drain(!self):
+        return VectorDrain[T](self)
 
 equip [T] Vector[T]:
 

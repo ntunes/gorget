@@ -2201,6 +2201,14 @@ fn stdlib_iter_dict() {
 }
 
 #[test]
+fn stdlib_iter_drain() {
+    run_gg(
+        "stdlib_iter_drain.gg",
+        "100\n3\n21",
+    );
+}
+
+#[test]
 fn stdlib_iter_terminals() {
     run_gg(
         "stdlib_iter_terminals.gg",

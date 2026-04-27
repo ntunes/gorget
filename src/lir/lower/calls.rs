@@ -619,10 +619,10 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             | "each" | "find" | "find_index" | "sorted_by" | "sort_by"
             | "sorted_by_key" | "sort_by_key"
             | "count"
-            // `iter` is user-space now (Iterable trait in
-            // lib/std/iter.gg) — thin wrapper that constructs a
-            // VectorIter; no runtime function.
-            | "iter" => return None,
+            // `iter` and `drain` are user-space (Iterable / Drainable
+            // trait equips in lib/std/iter.gg) — thin wrappers that
+            // construct an iterator state machine; no runtime fn.
+            | "iter" | "drain" => return None,
             // `windows` / `chunks` route to generic runtime stubs that
             // use the source array's `elem_size` field — one stub covers
             // every element type, no per-type variants needed.

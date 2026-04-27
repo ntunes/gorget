@@ -1,0 +1,36 @@
+# `Drainable[T]` for `Vector[T]` — `v.drain()` consumes the vector and
+# yields owned elements in insertion order.
+#
+# Use case: transferring contents into another collection without
+# per-element clones. Without Drainable, the canonical pattern was
+# `for s in v.iter(): other.add(s.clone())` — drain elides every clone.
+# Source is unusable after drain returns.
+
+int main():
+    # Basic int drain — order matches iter()
+    Vector[int] v = [10, 20, 30, 40]
+    int total = 0
+    for x in v.drain():
+        total = total + x
+    print(total)                                # 100
+
+    # Resource-element drain — String elements move into a Set without
+    # cloning. Bare `add(s)` auto-moves at the consuming arg position.
+    Vector[String] words = ["alpha", "beta", "gamma", "alpha"]
+    Set[String] uniq = Set[String]()
+    for s in words.drain():
+        uniq.add(s)
+    print(uniq.len())                           # 3 (alpha dedup'd)
+
+    # `[Drainable[T] G]` generic bound — same shape as the Iterable
+    # bound; verified to enforce the Drainable contract.
+    Vector[int] nums = [5, 7, 9]
+    print(sum_drain[Vector[int]](nums))         # 21
+
+    return 0
+
+int sum_drain[Drainable[int] G](G g):
+    int s = 0
+    for x in g.drain():
+        s = s + x
+    return s

@@ -180,11 +180,11 @@ fn module_imports_std_iter(module: &Module) -> bool {
 /// like `count`/`collect`/`take`/…) live in `std.iter`. Modules that
 /// `equip X with Iterator[T]:` or call `.iter()` need those defaults.
 const STD_ITER_NAMES: &[&str] = &[
-    "Iterator", "Iterable", "IntoIterable",
-    "VectorIter", "TakeIter", "SkipIter", "ChainIter",
+    "Iterator", "Iterable", "IntoIterable", "Drainable",
+    "VectorIter", "VectorDrain", "TakeIter", "SkipIter", "ChainIter",
     "MapIter", "FilterIter", "TakeWhileIter", "DropWhileIter",
     "FilterMapIter", "InspectIter", "EnumerateIter", "ZipIter",
-    "WindowsIter", "ChunksIter",
+    "WindowsIter", "ChunksIter", "DictIter", "SetIter",
     "sum_iter", "product_iter", "min_iter", "max_iter",
     "join_iter", "set_iter",
 ];
@@ -310,7 +310,9 @@ fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
     match &expr.node {
         Expr::Identifier(n) => STD_ITER_NAMES.contains(&n.as_str()),
         Expr::MethodCall { receiver, method, args, .. } => {
-            if method.node == "iter" { return true; }
+            // `.iter()` triggers loading std.iter (Iterable trait + adapters).
+            // `.drain()` does the same (Drainable trait + drain iterators).
+            if method.node == "iter" || method.node == "drain" { return true; }
             if expr_mentions_iter(receiver) { return true; }
             args.iter().any(|a| expr_mentions_iter(&a.node.value))
         }
