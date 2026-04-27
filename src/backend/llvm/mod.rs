@@ -1239,10 +1239,21 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             writeln!(out, "declare void @__gorget_file_read_all_r(ptr sret({ret_ty}), {param_ty})").unwrap();
             continue; // Do NOT emit the direct gorget_file_read_all declaration
         }
-        let params: Vec<String> = ext.params.iter()
-            .map(|p| {
+        let params: Vec<String> = ext.params.iter().enumerate()
+            .map(|(i, p)| {
                 // Void params are invalid in LLVM — replace with ptr (typically closure env)
                 if *p == LirType::Void { return "ptr".to_string(); }
+                // Honor AbiKind::Ptr from the extern declaration (set by the
+                // GIR lowerer when the Gorget extern uses `T*` pointer
+                // syntax). The LIR keeps the type as the inner struct (for
+                // type-system consistency), but the actual C ABI takes a
+                // pointer-to-struct. Without this override the LLVM declares
+                // the param as `%Struct` by-value while the runtime expects
+                // `ptr`, mismatching x0 register layout on the call.
+                let param_abi = ext.param_abis.get(i).copied().unwrap_or_default();
+                if param_abi == crate::ir::abi::AbiKind::Ptr && p.is_aggregate() {
+                    return "ptr".to_string();
+                }
                 // Aggregate params: small structs (≤16 bytes) pass in registers (aarch64 ABI),
                 // large structs (>16 bytes) pass by indirect reference (ptr).
                 if p.is_aggregate() {
@@ -5103,6 +5114,14 @@ fn emit_inst(
                         let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
                         spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{})", a.0));
                         format!("ptr %{cstr_name}")
+                    } else if param_abi == crate::ir::abi::AbiKind::Ptr && expects_agg && is_ptr {
+                        // The extern declares the param as a pointer (`T*` in
+                        // Gorget extern syntax). LIR keeps the type as the
+                        // inner struct, but the call site must pass `ptr`
+                        // unchanged — caller's slot already has the struct
+                        // bytes there, ptr is the correct ABI for the
+                        // runtime fn that takes `T*`.
+                        format!("ptr %v{}", a.0)
                     } else if expects_small_agg && is_ptr {
                         // Small aggregate (≤16 bytes): load from ptr and pass by value
                         let agg_ty = llvm_type_full(expected_ty.unwrap(), snames);
