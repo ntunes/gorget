@@ -278,9 +278,7 @@ struct VectorDrain[T]:
 equip [T] VectorDrain[T] with Iterator[T]:
     Option[T] next(&self):
         # `pop()` is O(1); `drain()` reversed the source first, so
-        # popping the tail yields elements in insertion order. Any
-        # elements remaining when the drain iterator drops get
-        # freed via Vector's normal element-drop pass.
+        # popping the tail yields elements in insertion order.
         return self.source.pop()
 
 equip [T] Vector[T] with Drainable[T]:
@@ -290,6 +288,23 @@ equip [T] Vector[T] with Drainable[T]:
         # the reverse pre-flip lets us reuse the O(1) pop primitive
         # while preserving insertion order for the iterator's
         # consumer.
+        #
+        # **Caveat — partial-drain drop order.** If the caller
+        # `break`s out of the loop early, the unconsumed elements
+        # in the drain iterator's internal buffer are in
+        # REVERSE-insertion order (the pre-flip is still in
+        # effect). When the iterator drops, the auto-derived
+        # field drop on `source` fires in storage order, so any
+        # custom Drop side effects on the element type observe
+        # reverse-of-insertion order rather than the insertion
+        # order they'd see from `iter()`. The proper fix (a custom
+        # `equip [T] VectorDrain[T] with Drop:` that reverses the
+        # remaining buffer back) is blocked on the compiler not
+        # yet propagating Drop-equip upgrades through generic
+        # struct monomorphisation — see TODO. In practice this
+        # only matters for element types with observable Drop
+        # side effects; stdlib types (String, Vector, …) have
+        # order-independent cleanup.
         self.reverse()
         return VectorDrain[T](self)
 
