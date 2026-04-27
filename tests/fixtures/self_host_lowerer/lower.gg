@@ -1651,7 +1651,21 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dsrc_tid = ctx.locals.get(dsrc).unwrap().type_id
             String dsrc_tname = type_id_to_name(dsrc_tid, &gmod)
             if dsrc_tname.starts_with("Box__"):
-                String d_inner_name = dsrc_tname.substring(5, dsrc_tname.len())
+                # Build the inner name byte-by-byte instead of using
+                # `.substring()` / `.byte_slice()`. Stage-1 self-host's
+                # runtime returns empty for `dsrc_tname.substring(5,
+                # dsrc_tname.len())` even though dsrc_tname is the
+                # full "Box__SpannedExpr" string and `.starts_with`
+                # returned true on it. Likely a view-aliasing
+                # interaction with the slice helpers. The byte loop
+                # is reliable and only runs once per EDeref.
+                int d_blen = dsrc_tname.byte_len()
+                String d_inner_name = ""
+                int dni_i = 5
+                while dni_i < d_blen:
+                    int b_dni = dsrc_tname.byte_at(dni_i)
+                    d_inner_name = d_inner_name + chr(b_dni)
+                    dni_i += 1
                 int d_inner_tid = resolve_field_gir_type(d_inner_name, &gmod)
                 int ddst = add_local(&ctx, d_inner_tid, NO_NAME)
                 emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
