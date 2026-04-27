@@ -237,11 +237,30 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
                int64_t __h_state = 0; \
                {hash_name}(__kp, &__h_state); \
                return (uint64_t)__h_state; }}").unwrap();
-        // The Equatable impl's bool eq(self, Self other) takes self by value
-        // through an inout pointer — deref the raw bytes on both sides.
-        writeln!(out,
-            "static bool __gorget_ktable_eq__{ty}(const void* __a, const void* __b) {{ \
-               return {eq_name}(__a, __b); }}").unwrap();
+        // `bool eq(self, Self other)` lowers in two distinct shapes
+        // depending on whether `Self` carries resource fields:
+        //   - POD (no resource fields):       Type__eq(*Self, Self)        — second by value
+        //   - Resource (String / Vector / …): Type__eq(*Self, *Self)       — second by pointer
+        // The bridge's caller hands us two `const void*`. For the POD
+        // shape we deref `__b` to recover the value; for the resource
+        // shape we pass `__b` straight through. Inspect the actual
+        // LIR signature to pick. The C struct name follows the
+        // `build_struct_names` convention: `__gg_{ty}` for user types.
+        let eq_fn = module.functions.iter().find(|f| f.name == eq_name);
+        let other_is_ptr = match eq_fn.and_then(|f| f.params.get(1)) {
+            Some(t) => matches!(t, crate::lir::LirType::Ptr | crate::lir::LirType::PtrTo(_)),
+            None => false,
+        };
+        if other_is_ptr {
+            writeln!(out,
+                "static bool __gorget_ktable_eq__{ty}(const void* __a, const void* __b) {{ \
+                   return {eq_name}(__a, __b); }}").unwrap();
+        } else {
+            let c_struct = format!("__gg_{ty}");
+            writeln!(out,
+                "static bool __gorget_ktable_eq__{ty}(const void* __a, const void* __b) {{ \
+                   return {eq_name}(__a, *(const {c_struct}*)__b); }}").unwrap();
+        }
     }
     writeln!(out).unwrap();
 }
