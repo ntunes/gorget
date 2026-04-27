@@ -5065,13 +5065,25 @@ fn emit_inst(
                         Some(LirType::PtrTo(sid)) if snames.get(&sid.0).map_or(false, |n| n == "GorgetString") => {
                             true
                         }
+                        Some(LirType::Ptr) => true, // raw ptr to a Str struct (e.g. address_of strlit)
                         _ => false,
                     };
 
                     let expects_small_agg = expected_ty.map_or(false, |t| {
                         t.is_aggregate() && is_small_aggregate(t, &module.structs)
                     });
-                    if expects_small_agg && is_ptr {
+                    // CStr param ABI takes precedence over the aggregate-passing
+                    // branches: even though the LIR declares the param as a Str
+                    // struct, the runtime expects `const char*`. The
+                    // `expects_agg && is_ptr` arm would otherwise just pass the
+                    // 32-byte struct address through, and the runtime would
+                    // read the {data, cap, len, alloc} header as if it were the
+                    // C string content — garbled output for write_stdin etc.
+                    if is_str_to_cstr {
+                        let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
+                        spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{})", a.0));
+                        format!("ptr %{cstr_name}")
+                    } else if expects_small_agg && is_ptr {
                         // Small aggregate (≤16 bytes): load from ptr and pass by value
                         let agg_ty = llvm_type_full(expected_ty.unwrap(), snames);
                         let load_name = format!("aggload.{block_id}.{ext_uid}.{i}");
@@ -5080,12 +5092,6 @@ fn emit_inst(
                     } else if expects_agg && is_ptr {
                         // Large aggregate (>16 bytes): pass pointer (indirect C ABI).
                         format!("ptr %v{}", a.0)
-                    } else if is_str_to_cstr {
-                        // GorgetString → const char*: use gorget_str_to_cstr for null-termination safety.
-                        // View strings (cap==0) may not be null-terminated at the correct position.
-                        let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
-                        spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{})", a.0));
-                        format!("ptr %{cstr_name}")
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
                         let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames);
