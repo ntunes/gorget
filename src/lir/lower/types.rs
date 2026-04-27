@@ -277,7 +277,11 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         "UdpPacket" => 104,// {GorgetArray data, UdpAddr sender} = 64 + 40
         "File" | "GorgetFile" => 16,
         "Process" => 48,   // {pid, stdin/out/err fds, status, owned}
-        "ExecResult" => 48, // {int status, Vector[uint8] stdout, stderr}
+        // ExecResult mirrors c_runtime.rs `{ Str output, Str errors, int64_t exit_code }`
+        // and the Gorget `struct ExecResult { String output; String errors; int exit_code }`.
+        // 32 + 32 + 8 = 72 bytes. Previous 48 here truncated the memcpy back from
+        // process_read_all's sret buffer, leaving exit_code uninitialized.
+        "ExecResult" => 72,
         // Regex — see c_runtime.rs GorgetRegexMatch.
         "Regex" => 16,       // {pcre2_code*, const char* pattern}
         "Match" | "RegexMatch" => 56, // {text, start, end, groups, count, names, names_len}
