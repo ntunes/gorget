@@ -1016,6 +1016,117 @@ Vector[bool] compute_reachable_fns(LirModule &m):
             worklist.push(fi)
         fi += 1
 
+    # Hashable-key roots: Dict[UserStruct, V] / Set[UserStruct] uses a
+    # runtime hash-bucket bridge (`__gorget_ktable_hash__T(void*)` /
+    # `__gorget_ktable_eq__T`) that calls `T__hash` / `T__eq` via fn
+    # pointer. The call isn't visible in the LIR call graph, so DCE
+    # would strip the impl methods and the bridge would link-fail.
+    # Mirror Rust's `find_hashable_key_types` from
+    # `src/lir/optimize.rs:254` — scan ICallExtern for Dict / Set
+    # constructors, extract the user-struct key type, and seed
+    # `T__hash` / `T__eq` / `Hashable_for_T__hash` /
+    # `Equatable_for_T__eq` as DCE roots.
+    Vector[String] hashable_keys = []
+    int hki_fi = 0
+    while hki_fi < n:
+        LirFunction hki_func = m.functions.get(hki_fi).unwrap()
+        int hki_bi = 0
+        while hki_bi < hki_func.blocks.len():
+            LirBlock hki_blk = hki_func.blocks.get(hki_bi).unwrap()
+            int hki_ii = 0
+            while hki_ii < hki_blk.insts.len():
+                LirInst hki_inst = hki_blk.insts.get(hki_ii).unwrap()
+                String orig_name = ""
+                match hki_inst:
+                    case ICallExtern(_, _, _, oname, _):
+                        orig_name = oname
+                    else:
+                        pass
+                if orig_name.len() > 0:
+                    String prefix = ""
+                    bool is_set = false
+                    if orig_name.starts_with("Dict__"):
+                        prefix = "Dict__"
+                    elif orig_name.starts_with("HashMap__"):
+                        prefix = "HashMap__"
+                    elif orig_name.starts_with("Set__"):
+                        prefix = "Set__"
+                        is_set = true
+                    elif orig_name.starts_with("HashSet__"):
+                        prefix = "HashSet__"
+                        is_set = true
+                    if prefix.len() > 0:
+                        String rest = orig_name.slice(prefix.len(), orig_name.len())
+                        # Only constructors register hashable keys —
+                        # skip method calls (`Dict__K__V__put` etc.).
+                        bool is_ctor = rest.ends_with("__new") or rest.ends_with("__new_str") or rest.ends_with("__with_capacity")
+                        if is_ctor:
+                            # Strip the trailing method suffix.
+                            String body_str = rest
+                            if rest.ends_with("__new_str"):
+                                body_str = rest.slice(0, rest.len() - 9)
+                            elif rest.ends_with("__new"):
+                                body_str = rest.slice(0, rest.len() - 5)
+                            elif rest.ends_with("__with_capacity"):
+                                body_str = rest.slice(0, rest.len() - 15)
+                            # For Dict/HashMap, take everything before the
+                            # first `__` as the key type. For Set/HashSet,
+                            # the whole body is the key.
+                            String key_ty = ""
+                            if is_set:
+                                key_ty = body_str
+                            else:
+                                int sep_i = 0
+                                while sep_i + 1 < body_str.byte_len():
+                                    if body_str.byte_at(sep_i) == 0x5F and body_str.byte_at(sep_i + 1) == 0x5F:
+                                        key_ty = body_str.slice(0, sep_i)
+                                        break
+                                    sep_i += 1
+                            # Skip primitives / runtime types.
+                            bool is_prim = false
+                            if key_ty == "int64_t" or key_ty == "int32_t" or key_ty == "int16_t" or key_ty == "int8_t":
+                                is_prim = true
+                            elif key_ty == "uint64_t" or key_ty == "uint32_t" or key_ty == "uint16_t" or key_ty == "uint8_t":
+                                is_prim = true
+                            elif key_ty == "double" or key_ty == "float" or key_ty == "bool":
+                                is_prim = true
+                            elif key_ty == "GorgetString" or key_ty == "Str" or key_ty == "void":
+                                is_prim = true
+                            elif key_ty == "T" or key_ty == "K" or key_ty == "V":
+                                is_prim = true
+                            elif key_ty.contains("__"):
+                                # Compound (e.g. Vector__byte) — skip.
+                                is_prim = true
+                            if not is_prim and key_ty.len() > 0:
+                                bool already_hk = false
+                                int hki = 0
+                                while hki < hashable_keys.len():
+                                    if hashable_keys.get(hki).unwrap() == key_ty:
+                                        already_hk = true
+                                        break
+                                    hki += 1
+                                if not already_hk:
+                                    hashable_keys.push(key_ty.clone())
+                hki_ii += 1
+            hki_bi += 1
+        hki_fi += 1
+    int hk_i = 0
+    while hk_i < hashable_keys.len():
+        String key_ty = hashable_keys.get(hk_i).unwrap()
+        # Match T__hash, T__eq, Hashable_for_T__hash, Equatable_for_T__eq.
+        String h1 = key_ty + "__hash"
+        String h2 = key_ty + "__eq"
+        String h3 = "Hashable_for_" + key_ty + "__hash"
+        String h4 = "Equatable_for_" + key_ty + "__eq"
+        int hf = 0
+        while hf < n:
+            String fname_h = m.functions.get(hf).unwrap().name
+            if (fname_h == h1 or fname_h == h2 or fname_h == h3 or fname_h == h4) and not reachable.get(hf).unwrap():
+                reachable.set(hf, true)
+                worklist.push(hf)
+            hf += 1
+        hk_i += 1
+
     # Type-drop user-fn references: emit_struct_drops walks
     # m.recursive_drop_structs and m.recursive_drop_enums and emits
     # T__drop / T__clone helpers; those are called from generated
