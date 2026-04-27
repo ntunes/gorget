@@ -2874,14 +2874,28 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             if self_ownership == 1 or self_ownership == 2:
                 self_tid = register_type(&gmod, GtMutPtr(target_tid))
             # Explicit trait impls use *unit self (Rust convention)
+            int concrete_self_tid = self_tid
             if is_explicit_trait:
                 if self_ownership == 1 or self_ownership == 2:
                     self_tid = register_type(&gmod, GtMutPtr(UNIT_TYPE))
                 else:
                     self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
-            int self_lid = add_local(&ctx, self_tid, Some("self"))
-            nl_put(&ctx, "self", self_lid)
+            int self_lid = add_local(&ctx, self_tid, Some("self_void"))
+            # For explicit trait impls the param type is `*unit` so
+            # `self.field` accesses don't see the concrete struct
+            # layout — without recovering the concrete pointer we
+            # emit `((unit*)_v0)->state` which fails. Mirror Rust's
+            # ptr_cast pattern: alias `self` to a fresh local of the
+            # concrete pointer type and bind the name table entry to
+            # the alias. The cast happens at C codegen via implicit
+            # pointer-pointer assignment.
+            if is_explicit_trait:
+                int concrete_self_lid = add_local(&ctx, concrete_self_tid, Some("self"))
+                emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid)))
+                nl_put(&ctx, "self", concrete_self_lid)
+            else:
+                nl_put(&ctx, "self", self_lid)
 
         # _2.._N = explicit params (skip self — already added above)
         int pi = 0
