@@ -2870,6 +2870,16 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                 pass
 
         Vector[int] param_types = []
+        # For explicit trait impls (`equip X with T:`) the param type is
+        # `*unit` (Rust vtable convention). Field access on `self`
+        # then fails because `unit` has no fields — we recover the
+        # concrete pointer type via a copy-aliased local. Defer the
+        # alias addition until after the rest of the params so the
+        # `local_to_slot[pci+1]` param→slot mapping in lir_lower
+        # stays correct (params at locals 1..N).
+        bool needs_concrete_self_alias = false
+        int concrete_self_tid_saved = UNIT_TYPE
+        int self_lid_saved = -1
         if has_self:
             # _1 = self — determine pointer type from ownership
             # self (bare) → *T, &self → *mut T, !self → *mut T
@@ -2889,18 +2899,12 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
                     self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
             int self_lid = add_local(&ctx, self_tid, Some("self_void"))
-            # For explicit trait impls the param type is `*unit` so
-            # `self.field` accesses don't see the concrete struct
-            # layout — without recovering the concrete pointer we
-            # emit `((unit*)_v0)->state` which fails. Mirror Rust's
-            # ptr_cast pattern: alias `self` to a fresh local of the
-            # concrete pointer type and bind the name table entry to
-            # the alias. The cast happens at C codegen via implicit
-            # pointer-pointer assignment.
             if is_explicit_trait:
-                int concrete_self_lid = add_local(&ctx, concrete_self_tid, Some("self"))
-                emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid)))
-                nl_put(&ctx, "self", concrete_self_lid)
+                # Defer alias creation; bind `self` to the alias once
+                # all params have been added.
+                needs_concrete_self_alias = true
+                concrete_self_tid_saved = concrete_self_tid
+                self_lid_saved = self_lid
             else:
                 nl_put(&ctx, "self", self_lid)
 
@@ -2927,6 +2931,17 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             int plid = add_local(&ctx, pt, Some(p.param_name.clone()))
             nl_put(&ctx, p.param_name, plid)
             pi += 1
+
+        # Add the explicit-trait `self` concrete-cast alias here, AFTER
+        # all params, so locals 1..N are pure params (lir_lower's
+        # `local_to_slot[pci+1]` param→slot mapping requires this).
+        # The alias's GIAssign goes into the entry block before any
+        # body statements, so `self.field` accesses in the body see
+        # the cast pointer.
+        if needs_concrete_self_alias:
+            int concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
+            emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
+            nl_put(&ctx, "self", concrete_self_lid)
 
         # Lower body
         lower_stmts(&ctx, mdef.body, &gmod, is_main)
