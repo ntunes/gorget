@@ -297,11 +297,11 @@ equip [T] Vector[T] with Drainable[T]:
         # element types with observable custom-Drop side effects;
         # ordinary cleanup is order-independent. The proper fix
         # (a `equip [T] VectorDrain[T] with Drop:` that reverses
-        # back) hits a separate gap with custom Drop on generic
-        # structs containing resource-typed fields — tracked in
-        # TODO.
+        # back) is blocked on a pre-existing custom-Drop-vs-resource
+        # -field interaction (`drop_raii.gg` exhibits the same leak
+        # pattern at trunk) — see TODO.
         self.reverse()
-        return VectorDrain[T](self)
+        return VectorDrain[T](!self)
 
 equip [T] Vector[T]:
 

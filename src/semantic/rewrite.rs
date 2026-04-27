@@ -450,8 +450,23 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
                         } else {
                             unreachable!()
                         };
+                        // CallArg.ownership carries `!arg` / `&arg` info that
+                        // disappears when we drop to bare `Spanned<Expr>` for
+                        // StructLiteral. Preserve `!` by wrapping the value
+                        // in `Expr::Move` so downstream lowering (struct field
+                        // ownership boundary) can see the explicit move
+                        // intent and skip the implicit clone.
                         let bare_args: Vec<Spanned<Expr>> = args.into_iter()
-                            .map(|a| a.node.value)
+                            .map(|a| {
+                                let span = a.span;
+                                let value = a.node.value;
+                                match a.node.ownership {
+                                    crate::parser::ast::Ownership::Move => {
+                                        Spanned::new(Expr::Move { expr: Box::new(value) }, span)
+                                    }
+                                    _ => value,
+                                }
+                            })
                             .collect();
                         expr.node = Expr::StructLiteral {
                             name: Spanned::new(name_str, callee.span),

@@ -1530,6 +1530,31 @@ fn lower_struct_literal(
         if field_is_ptr {
             continue;
         }
+        // Explicit move (`!arg`) at field position: caller transferred
+        // ownership. If the lowered operand is a Ptr-typed temp (e.g. self
+        // is `!self` lowered to a MutPtr at the body level), deref to get
+        // the pointee value and store that into the field. Skip the clone
+        // — the source's MoveZero (already scheduled by `Expr::Move`)
+        // ensures no double-drop.
+        if matches!(args.get(i).map(|a| &a.node), Some(Expr::Move { .. })) {
+            let move_info = match &*op {
+                Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                    let local_type = builder.local_type(place.local);
+                    match ctx.type_registry.get(local_type) {
+                        Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => {
+                            Some((place.clone(), *inner))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            if let Some((place, pointee_ty)) = move_info {
+                let loaded = builder.load_ref(place, pointee_ty);
+                *op = FunctionBuilder::copy(loaded);
+                continue;
+            }
+        }
         let span = args.get(i).map(|a| a.span).unwrap_or(crate::span::Span { start: 0, end: 0 });
         *op = ctx.ensure_owned_at_boundary(
             builder, std::mem::replace(op, Operand::Constant(Constant::Unit)),
