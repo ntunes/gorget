@@ -1005,6 +1005,20 @@ pub(super) fn collection_runtime_type(name: &str) -> Option<&'static str> {
         // Result/Option are real structs with fields — don't alias.
         return None;
     }
+    if name.starts_with("Task__") {
+        // Each `Task__<T>` registers in GIR as an empty-fields struct
+        // (`TypeDefKind::Struct(StructDef { fields: vec![] })`). At LIR
+        // lowering time, lookups for that name miss the LIR struct
+        // registry and `map_gir_type` falls to `LirType::Ptr`, which
+        // makes spawn externs declare an 8-byte ptr return instead of
+        // the 16-byte TaskHandle struct the C runtime actually returns.
+        // The C backend hides this via per-call coercion; the LLVM
+        // backend then loads the .__drop field from `(spawn_return_ptr) + 8`,
+        // reading off the end of the .__task pointer's referent. Aliasing
+        // every Task__<T> to the LIR-level TaskHandle (`{task_ptr, drop_fn}`)
+        // pins the ABI to the right 16-byte shape across both backends.
+        return Some("TaskHandle");
+    }
     None
 }
 
