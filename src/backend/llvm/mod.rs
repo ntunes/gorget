@@ -5419,18 +5419,21 @@ fn emit_inst(
                 // `Inst::Load { ty: aggregate }` aliases the elem pointer
                 // (LLVM keeps aggregates as ptrs). The closure's __call body
                 // still declares `param: %Struct` — passing `ptr` here is an
-                // ABI mismatch. Promote `Scalar` → load-and-pass-by-value
-                // when val_ty is PtrTo(non-resource aggregate), matching the
-                // ByValue branch's behavior.
+                // ABI mismatch.
+                //
+                // The closure-emit path always declares aggregate params as
+                // struct-by-value (LIR func.params carries the LIR `Struct`
+                // type), regardless of whether the struct contains resources.
+                // The call site must therefore load + pass by value to match,
+                // even for resource-containing aggregates like `Result[int,
+                // String]`. The comment elsewhere about "resource aggregates
+                // travel by pointer" applies to bare-fn callees and
+                // `__adapt_*` shims, not to `__Closure_N__call` bodies.
                 let by_value_sid = if matches!(abi,
                     crate::ir::abi::AbiKind::ByValue | crate::ir::abi::AbiKind::Scalar)
                 {
                     match vt {
-                        Some(LirType::PtrTo(sid))
-                            if !crate::backend::c_lir::helpers::struct_contains_resource(*sid, module) =>
-                        {
-                            Some(*sid)
-                        }
+                        Some(LirType::PtrTo(sid)) => Some(*sid),
                         _ => None,
                     }
                 } else {
