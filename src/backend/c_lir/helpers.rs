@@ -341,7 +341,7 @@ pub(super) fn find_struct_cname_by_orig(module: &LirModule, orig_name: &str, sn:
 }
 
 /// Check if a Box type is a trait object box (has a corresponding _TraitObj struct).
-pub(super) fn is_trait_box(module: &LirModule, box_type: &str) -> bool {
+pub fn is_trait_box(module: &LirModule, box_type: &str) -> bool {
     let trait_name = box_type.strip_prefix("Box__").unwrap_or(box_type);
     let traitobj_name = format!("{trait_name}_TraitObj");
     module.structs.iter().any(|d| d.name == traitobj_name)
