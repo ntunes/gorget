@@ -11,14 +11,14 @@
 # `WindowsIter[Iter, T]`, `ChunksIter[Iter, T]` — each is a
 # state-machine struct, no trait-object dispatch.
 #
-# Eager terminals (`count` / `collect` / `last` / `nth` / `any[F]` /
-# `all[F]` / `find[F]` / `find_index[F]` / `for_each[F]` /
-# `fold[A, F]`) live as default-method bodies on the `Iterator[T]`
-# trait — every adapter that `equip`s the trait inherits them.
-# Bound-needing terminals stay as free functions until per-method
-# trait bounds land: `sum_iter[Iter]` / `product_iter[Iter]` (int),
-# `min_iter[Iter]` / `max_iter[Iter]` (int), `join_iter[Iter,
-# Displayable T]`. Set iteration is spelled `s.iter()` via the
+# Eager terminals — unbound (`count` / `collect` / `last` / `nth` /
+# `any[F]` / `all[F]` / `find[F]` / `find_index[F]` / `for_each[F]`
+# / `fold[A, F]`) and bound-needing (`min` / `max` / `contains` /
+# `sum` / `product` / `join`) — all live as default-method bodies
+# on the `Iterator[T]` trait. Every adapter that `equip`s the trait
+# inherits them; the demand-gate ensures bound-needing defaults
+# only emit for impls whose `T` satisfies the operator/method
+# requirements. Set iteration is spelled `s.iter()` via the
 # `equip [T] Set[T]:` block below.
 #
 # Adapter-method sugar: `.take(n)` / `.skip(n)` / `.chain(other)` /
@@ -250,21 +250,10 @@ trait Iterator[T]:
             first = false
         return !out
 
-    # NOTE: trait-bounded defaults — most are now shipped above.
-    # `join` (Displayable-based) remains as a free function in
-    # `std.iter` because the trait-default path doesn't yet thread
-    # the Displayable.display() method dispatch into the body's
-    # `acc.push(x.display())` call when T is abstract. The
-    # `join_iter[Iter, Displayable T]` free function carries the
-    # bound explicitly and works today.
-    # regressions: the stage-0 driver monomorphises Iterator[T] for
-    # T's that don't satisfy the implicit bound and emits broken
-    # codegen. The free-function variants in std.iter
-    # (`min_iter` / `max_iter` / `sum_iter` / `product_iter` /
-    # `join_iter`) carry the bound explicitly via `T: Bound` and
-    # don't trigger the regression. Promotion to defaults waits on
-    # cleaner trait-bound declarations (e.g. `where T: Comparable`
-    # on a per-method basis) — see TODO Phase 2c.
+    # All bound-needing terminals (`min` / `max` / `contains` / `sum`
+    # / `product` / `join`) ship as defaults above. The demand-gate
+    # (`all_return_nominals_registered`) prevents emission for impls
+    # whose `T` doesn't satisfy the operator/method requirements.
 
     # Lazy adapter constructors — defaults on Iterator[T]. Every
     # implementor (VectorIter, TakeIter, FilterIter, …) inherits the
@@ -760,58 +749,15 @@ equip [Iter, T] ChunksIter[Iter, T] with Iterator[Vector[T]]:
             return None
         return Some(!chunk)
 
-# ── Terminals (free functions) ───────────────────────────────
-#
-# Bound-needing terminals stay as free functions until per-method
-# trait bounds land — promotion to Iterator[T] defaults would
-# specialise the trait for Ts that don't satisfy `<` / `+` /
-# `.display()` etc. and emit broken codegen (verified by self-host
-# bootstrap regression on 2026-04-20).
-#
-# The unbound counterparts (`collect_vec`, `count_iter`, `fold_iter`,
-# `any_iter`, `all_iter`, `find_iter`, `find_index_iter`, `last_iter`,
-# `nth_iter`, `for_each_iter`) were retired in the Phase 2c
-# convenience-wrapper migration — callers use the method form
-# (`v.iter().method()` or `v.method()` via the Vector wrappers).
-
-# Sum all elements of an int-iterator.
-int sum_iter[Iter](Iter iter):
-    int acc = 0
-    for x in iter:
-        acc = acc + x
-    return acc
-
-# Product of int elements. Identity is 1 — an empty iterator returns 1.
-int product_iter[Iter](Iter iter):
-    int acc = 1
-    for x in iter:
-        acc = acc * x
-    return acc
-
-# Minimum of an int-iterator. Returns None for an empty iterator; the
-# caller decides whether "no elements" is an error.
-Option[int] min_iter[Iter](Iter iter):
-    Option[int] out = None
-    for x in iter:
-        match out:
-            case None:
-                out = Some(x)
-            case Some(prev):
-                if x < prev:
-                    out = Some(x)
-    return !out
-
-# Maximum of an int-iterator.
-Option[int] max_iter[Iter](Iter iter):
-    Option[int] out = None
-    for x in iter:
-        match out:
-            case None:
-                out = Some(x)
-            case Some(prev):
-                if x > prev:
-                    out = Some(x)
-    return !out
+# Every terminal lives as a default-method body on `Iterator[T]`
+# above. The unbound counterparts (`collect_vec`, `count_iter`,
+# `fold_iter`, `any_iter`, `all_iter`, `find_iter`,
+# `find_index_iter`, `last_iter`, `nth_iter`, `for_each_iter`) were
+# retired in the Phase 2c convenience-wrapper migration. The
+# bound-needing aggregations (`sum_iter` / `product_iter` /
+# `min_iter` / `max_iter` / `join_iter`) were retired 2026-04-27
+# once the matching defaults shipped. Method form is canonical:
+# `v.iter().method()` or `v.method()` via the Vector wrappers.
 
 # ── Set iteration ────────────────────────────────────────────
 #
@@ -919,21 +865,4 @@ equip [K, V] DictIter[K, V] with Iterator[(K, V)]:
 equip [K, V] Dict[K, V] with Iterable[(K, V)]:
     DictIter[K, V] iter(&self):
         return DictIter[K, V](self, 0)
-
-# Textual join — render each element through `Displayable.display()`
-# and concatenate with `sep` between. Routing through the trait
-# instead of `int_to_str` sidesteps the cross-crate monomorphization
-# that previously force-materialized `VectorIter[uint8]` everywhere.
-# Displacement of `String.join(vec)` — callers that currently
-# materialize a Vector just to join can now go straight from the
-# iterator: `join_iter[VectorIter[int], int](v.iter(), ", ")`.
-String join_iter[Iter, Displayable T](Iter iter, String sep):
-    String out = ""
-    bool first = true
-    for x in iter:
-        if not first:
-            out.push(sep.clone())
-        out.push(x.display())
-        first = false
-    return !out
 

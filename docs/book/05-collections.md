@@ -241,17 +241,18 @@ bool has_big   = v.iter().any((x): x > 100)
 Option[int] hit = v.iter().find((x): x > 25)         # Some(30)
 ```
 
-Bound-needing terminals (`min`, `max`, `sum`, `product`, `join`) ship
-as free functions in `std.iter` until per-method trait bounds land:
+Bound-needing terminals (`min`, `max`, `contains`, `sum`, `product`,
+`join`) all ship as `Iterator[T]` defaults too. The compiler's
+demand-gate only specialises each terminal for `T`s that satisfy
+its bound (Comparable / Equatable / Numeric / Displayable):
 
 ```gorget
-from std.iter import sum_iter, product_iter, min_iter, max_iter, join_iter
-
-int total       = sum_iter[VectorIter[int]](v.iter())     # 150
-int prod        = product_iter[VectorIter[int]](v.iter()) # element product
-Option[int] lo  = min_iter[VectorIter[int]](v.iter())     # Some(10)
-Option[int] hi  = max_iter[VectorIter[int]](v.iter())     # Some(50)
-String csv      = join_iter[VectorIter[int], int](v.iter(), ", ")
+int total       = v.iter().sum()              # 150
+int prod        = v.iter().product()          # element product
+Option[int] lo  = v.iter().min()              # Some(10)
+Option[int] hi  = v.iter().max()              # Some(50)
+bool has50      = v.iter().contains(50)       # true
+String csv      = v.iter().join(", ")         # "10, 20, 30, 40, 50"
 ```
 
 `collect()` infers its target from the LHS binding type — Vector, Set,

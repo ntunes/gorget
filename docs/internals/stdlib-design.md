@@ -419,10 +419,11 @@ Bounds state at the collection type, not on each method.
 `clear`, `capacity`.
 
 **Note on `join`:** both forms coexist. `"-".join(vec)` is the Python-
-shaped script ergonomic (stays); `join_iter[Iter, Displayable T]
-(iter, "-")` in `std.iter` is the narrow-waist primitive for
-iterator chains with transform-then-join, filter-then-join, or
-non-string element types (routes through `Displayable.display()`).
+shaped script ergonomic (stays); `iter.join("-")` (a default on
+`Iterator[T]` since 2026-04-27, Displayable-bounded) is the
+narrow-waist primitive for iterator chains with transform-then-
+join, filter-then-join, or non-string element types (routes
+through `Displayable.display()`).
 Same rationale as `std.fs.read_file` / `write_file` vs the
 Writer/Reader primitives: keep the ergonomic shortcut for the
 common case; the narrow waist sits underneath.
@@ -939,9 +940,10 @@ work:
 2. Add `Debuggable` trait + `@derive(Debug)` — @derive machinery already
    handles 10 struct + 6 enum traits; Debug is a mechanical addition.
 3. ~~Drop `String.join(vec)` from the recommended surface~~ — **revised
-   2026-04-19**: keep it. `join_iter[Iter, Displayable T](iter, sep)`
-   ships in `std.iter` for iterator-chain callers, but `",".join(v)`
-   stays as a Python-style script ergonomic. Rationale parallels
+   2026-04-19**: keep it. `iter.join(sep)` (Iterator[T] default since
+   2026-04-27, Displayable-bounded) is the narrow-waist primitive for
+   iterator-chain callers, but `",".join(v)` stays as a Python-style
+   script ergonomic. Rationale parallels
    `std.fs.read_file` / `write_file`: a convenient shortcut for the
    common case is worth the surface-area cost when the narrow-waist
    primitive exists alongside. Deprecating would punish every
@@ -1186,10 +1188,9 @@ calls (`T.default()` / `T.one()`) and trait-method dispatch
 mono path the rest of the body uses.
 
 Free-function variants (`min_iter` / `max_iter` / `sum_iter` /
-`product_iter` / `join_iter`) retained as a working alternative
-for callers using the explicit form (e.g. inside fixtures that
-turn off auto-import). Int-specific fallbacks (`min_iter` /
-`max_iter` taking `Iterator[int]`) still in std.iter.
+`product_iter` / `join_iter`) were retired 2026-04-27 once the
+trait defaults shipped — they had become pure aliases. Method
+form is canonical.
 
 The unbound counterparts (`collect_vec`, `count_iter`, `fold_iter`,
 `any_iter`, `all_iter`, `find_iter`, `find_index_iter`, `last_iter`,
@@ -1373,7 +1374,7 @@ All four items shipped; fixtures wired and green.
 | `char_at()` removed | 1 ✓ | Low — was deprecated | Use `byte_at()` or `substring()` |
 | `Dict.remove` returns `Option[V]` | 1 ✓ | Medium | Code expecting `bool` needs update |
 | `find()` on String restored | 1 ✓ | None | New unified search with parameters |
-| `String.join(vec)` kept (2026-04-19 revision) | 1.5 ✓ | None | Iterator alternative `join_iter[Iter, Displayable T](iter, sep)` added; both coexist |
+| `String.join(vec)` kept (2026-04-19 revision) | 1.5 ✓ | None | Iterator-form `iter.join(sep)` (Iterator[T] default since 2026-04-27) added; both coexist |
 | `Hashable: int hash(self)` → `void hash(Hasher &h)` | 4 | **High** | `@derive(Hashable)` works unchanged; hand-written impls need rewrite |
 | `Writer.write` returns `Result[int, IoError]` | 3 | Medium | `Writer` was not yet shipped; only internal implementors affected |
 | `Reader.read` is byte-shaped | 3 | Medium | Same — `Reader` was not yet shipped |

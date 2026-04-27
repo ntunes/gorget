@@ -1,7 +1,9 @@
-# Exercise `join_iter` — the Displayable-based textual join terminal
-# in std.iter. Displaces the legacy `String.join(vec)` pattern.
+# Exercise the `.join(sep)` Displayable-bounded terminal on
+# `Iterator[T]`. Displaces the legacy `String.join(vec)` pattern;
+# the previous `join_iter[Iter, Displayable T]` free function was
+# eliminated as a pure alias once the trait default shipped
+# (2026-04-27).
 
-from std.iter import join_iter
 from std.collections import Vector
 
 int main():
@@ -11,18 +13,18 @@ int main():
     nums.push(2)
     nums.push(3)
     nums.push(42)
-    String a = join_iter[VectorIter[int], int](nums.iter(), ", ")
+    String a = nums.iter().join(", ")
     print(a)
 
     # Single element — no separator emitted.
     Vector[int] one = Vector[int]()
     one.push(7)
-    String b = join_iter[VectorIter[int], int](one.iter(), "|")
+    String b = one.iter().join("|")
     print(b)
 
     # Empty iterator — empty string.
     Vector[int] empty = Vector[int]()
-    String c = join_iter[VectorIter[int], int](empty.iter(), "-")
+    String c = empty.iter().join("-")
     print(f"[{c}]")
 
     # String iterator is deferred — VectorIter[String] trips the Ptr-
@@ -36,7 +38,7 @@ int main():
     big.push(30)
     big.push(40)
     big.push(50)
-    String e = join_iter[TakeIter[VectorIter[int], int], int](big.iter().take(3), "+")
+    String e = big.iter().take(3).join("+")
     print(e)
 
     return 0

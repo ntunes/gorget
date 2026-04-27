@@ -1,8 +1,5 @@
 # std.iter — MapIter / FilterIter via the `.collect()` terminal +
-# `.any()` / `.all()` short-circuiting terminals on the iterator
-# itself. `sum_iter` keeps its free-function form (bound-needing,
-# stays free until per-method bounds land — see stdlib-design.md
-# §10 row 3).
+# `.any()` / `.all()` / `.sum()` terminals on the iterator itself.
 #
 # Constructs adapters directly (MapIter[T, U, F] / FilterIter[T, F])
 # because the wrapper-style sugar (`v.iter().map[U,F](f)`) is
@@ -11,7 +8,7 @@
 # terminal" path.
 
 from std.collections import Vector
-from std.iter import VectorIter, MapIter, FilterIter, sum_iter
+from std.iter import VectorIter, MapIter, FilterIter
 
 int doubled(int x):
     return x * 2
@@ -36,8 +33,8 @@ int main():
     Vector[int] f = fi.collect()
     print(f.len())
 
-    # sum (terminal) — bound-needing, free function.
-    print(sum_iter[VectorIter[int]](v.iter()))
+    # sum — bound-needing default on Iterator[T].
+    print(v.iter().sum())
 
     # any / all via method form (short-circuiting terminals).
     print(v.iter().any(is_big))

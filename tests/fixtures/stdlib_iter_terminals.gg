@@ -2,14 +2,12 @@
 # body methods on `Iterator[T]`). Replaces the previous `find_iter` /
 # `for_each_iter` / `any_iter` / `all_iter` / `count_iter` /
 # `fold_iter` free-function calls — those were retired in the Phase
-# 2c convenience-wrapper migration.
-#
-# Bound-needing terminals (`product_iter` / `min_iter` / `max_iter`
-# / `sum_iter`) keep their free-function form for now — promotion to
-# Iterator defaults blocks on per-method trait bounds (see
-# stdlib-design.md §10 row 3).
+# 2c convenience-wrapper migration. Bound-needing terminals
+# (`product` / `min` / `max` / `sum`) shipped as `Iterator[T]`
+# defaults 2026-04-27 too — the previous free-fn variants
+# (`product_iter` / `min_iter` / `max_iter` / `sum_iter`) were
+# eliminated as pure aliases.
 
-from std.iter import product_iter, min_iter, max_iter, sum_iter
 from std.collections import Vector
 
 bool is_even(int x):
@@ -62,41 +60,41 @@ int main():
     print("each:")
     v.iter().for_each(print_int)
 
-    # product_iter — bound-needing, stays as a free function.
+    # product — bound-needing default on Iterator[T].
     Vector[int] pv = Vector[int]()
     pv.push(2)
     pv.push(3)
     pv.push(5)
     pv.push(7)
-    int prod = product_iter[VectorIter[int]](pv.iter())
+    int prod = pv.iter().product()
     print(f"product={prod}")
 
-    int empty_prod = product_iter[VectorIter[int]](empty.iter())
+    int empty_prod = empty.iter().product()
     print(f"empty_product={empty_prod}")
 
-    # min_iter / max_iter — bound-needing, stay as free functions.
-    Option[int] lo = min_iter[VectorIter[int]](v.iter())
+    # min / max — bound-needing defaults on Iterator[T].
+    Option[int] lo = v.iter().min()
     match lo:
         case Some(n):
             print(f"min={n}")
         case None:
             print("min=none")
 
-    Option[int] hi = max_iter[VectorIter[int]](v.iter())
+    Option[int] hi = v.iter().max()
     match hi:
         case Some(n):
             print(f"max={n}")
         case None:
             print("max=none")
 
-    Option[int] empty_min = min_iter[VectorIter[int]](empty.iter())
+    Option[int] empty_min = empty.iter().min()
     match empty_min:
         case Some(n):
             print(f"empty_min={n}")
         case None:
             print("empty_min=none")
 
-    # any / all / count via method form; sum_iter stays a free fn.
+    # any / all / count / sum / fold via method form.
     # NOTE: bind to locals first — f-string interpolation re-parses
     # the segment text at IR-lowering time, bypassing the typecheck-
     # side AST rewriter that syncs inferred method-targs into the AST.
@@ -106,7 +104,7 @@ int main():
     bool all_gt5 = v.iter().all(gt_five)
     int count_v = v.iter().count()
     int fold_v = v.iter().fold(0, add)
-    int sum_v = sum_iter[VectorIter[int]](v.iter())
+    int sum_v = v.iter().sum()
     print(f"any_gt5={any_gt5}")
     print(f"all_gt5={all_gt5}")
     print(f"count={count_v}")

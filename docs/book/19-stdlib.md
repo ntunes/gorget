@@ -371,10 +371,12 @@ Adapters: `TakeIter[Iter, T]`, `SkipIter[Iter, T]`,
 iterator type so chains compose at monomorphisation without
 virtual dispatch.
 
-Free-function terminals for cases that need explicit bounds:
-`sum_iter[Iter]`, `product_iter[Iter]`, `min_iter[Iter]`,
-`max_iter[Iter]` (all int), and `join_iter[Iter, Displayable T]`.
-Called as `sum_iter[VectorIter[int]](v.iter())`.
+Bound-needing terminals (`min` / `max` / `contains` / `sum` /
+`product` / `join`) ship as `Iterator[T]` defaults — the compiler
+demand-gates emission so each only specialises for `T`s that
+satisfy the bound (Comparable / Equatable / Numeric / Displayable).
+Called as `v.iter().sum()` / `.min()` / `.contains(x)` /
+`.join(", ")` etc.
 
 `Dict.keys()` / `.values()` / `.items()` still return eager
 `Vector[K]` / `Vector[V]` / `Vector[(K, V)]` for callers that want
