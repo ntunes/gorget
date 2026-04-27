@@ -4,7 +4,13 @@ struct Arena:
     int _handle
 
 struct ArenaCheckpoint:
-    int _handle
+    # Mirrors GorgetArenaCheckpoint in c_runtime.rs:
+    #   { GorgetArenaBlock* block, size_t used }
+    # Two pointer-sized fields = 16 bytes total. Without both fields the
+    # LLVM backend reads/passes only 8 bytes through the by-value
+    # calling convention, dropping `used` and corrupting arena_restore.
+    int _block
+    int _used
 
 equip Arena:
     extern int bytes_used() = "gorget_arena_bytes_used"
