@@ -5407,7 +5407,18 @@ fn emit_inst(
             for (ai, a) in args.iter().enumerate() {
                 let vt = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let abi = arg_abis.get(ai).copied().unwrap_or_default();
-                let by_value_sid = if abi == crate::ir::abi::AbiKind::ByValue {
+                // BIR's expand_filter / each / map / fold emit `arg_abis = Scalar`
+                // when the closure declared the param as a struct-by-value
+                // (`AbiKind::ByValue` from abi_from_param_ty), then BIR's
+                // `Inst::Load { ty: aggregate }` aliases the elem pointer
+                // (LLVM keeps aggregates as ptrs). The closure's __call body
+                // still declares `param: %Struct` — passing `ptr` here is an
+                // ABI mismatch. Promote `Scalar` → load-and-pass-by-value
+                // when val_ty is PtrTo(non-resource aggregate), matching the
+                // ByValue branch's behavior.
+                let by_value_sid = if matches!(abi,
+                    crate::ir::abi::AbiKind::ByValue | crate::ir::abi::AbiKind::Scalar)
+                {
                     match vt {
                         Some(LirType::PtrTo(sid))
                             if !crate::backend::c_lir::helpers::struct_contains_resource(*sid, module) =>
