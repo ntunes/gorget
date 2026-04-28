@@ -84,6 +84,21 @@ pub(super) fn lower_match_stmt(
                 ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
             }
         }
+        // Borrow-derived scrutinee: when scrut_op reads a place that
+        // chains through a ref-typed local (e.g. `match item.item_type`
+        // where `item` came from `.get(i).unwrap()` and is a `Ref<T>`),
+        // the scrut_local's variant payload still aliases the borrowed
+        // memory. Marking scrut_local as ref opts pattern extraction
+        // into the Ptr-binding path (see Pattern::Constructor and
+        // Pattern::DotShorthand below) so resource fields bind as
+        // `Ptr<T>` borrows instead of being moved-and-zeroed through
+        // the borrow. Without this, a `case .Variant(field):` body
+        // that runs across multiple frames clears the source on the
+        // first frame and reads empty data thereafter — surfaced
+        // 2026-04-28 as gorget-arena's invisible menu labels.
+        if !place.projections.is_empty() && ctx.is_ref_local(place.local) {
+            ctx.set_ref(scrut_local);
+        }
     }
 
     let merge_bb = builder.new_block();
@@ -460,11 +475,13 @@ pub fn emit_pattern_bindings(
                 return;
             };
 
-            // Is the scrutinee a Ptr (borrowed)?
+            // Is the scrutinee a Ptr (borrowed)? Also true for borrow-derived
+            // scrutinees (set by lower_match_stmt when scrut_op chained through
+            // a ref-typed local — see comment on `set_ref(scrut_local)` there).
             let scrut_is_ptr = matches!(
                 ctx.type_registry.get(scrut_type),
                 Some(GirType::Ptr(_) | GirType::MutPtr(_))
-            );
+            ) || ctx.is_ref_local(scrut_local);
 
             for (i, field_pat) in fields.iter().enumerate() {
                 // Determine the field type from the enum variant definition
@@ -615,8 +632,23 @@ pub fn emit_pattern_bindings(
             let enum_name = if let Some(en) = enum_name { en } else { return; };
             let variant_name = variant.node.clone();
 
+            // Mirror Constructor handler: when scrutinee is a Ptr (borrowed),
+            // resource-type variant fields should bind as Ptr<T> references
+            // into the enum's storage rather than shallow-copy values.
+            // Without this, `enum_field_load_move`'s post-extract zero would
+            // write through the borrow back into the original (e.g.
+            // `menu.items[i].variant.Button.label` cleared after the first
+            // match in gorget-arena's draw_menu, surfaced 2026-04-28).
+            // `is_ref_local` covers borrow-derived scrutinees whose type is
+            // not itself a Ptr (e.g. `match item.item_type` — see
+            // `lower_match_stmt`'s ref-propagation block).
+            let scrut_is_ptr = matches!(
+                ctx.type_registry.get(scrut_type),
+                Some(GirType::Ptr(_) | GirType::MutPtr(_))
+            ) || ctx.is_ref_local(scrut_local);
+
             for (i, field_pat) in fields.iter().enumerate() {
-                let field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
+                let mut field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
                         if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
                             v.fields.get(i).map(|f| f.type_id).unwrap_or(I64_TYPE)
@@ -624,12 +656,25 @@ pub fn emit_pattern_bindings(
                     } else { I64_TYPE }
                 } else { I64_TYPE };
 
+                if scrut_is_ptr && ctx.type_registry.is_resource_type(field_type) {
+                    let is_box = ctx.type_registry.type_name(field_type)
+                        .map_or(false, |n| n.starts_with("Box__"));
+                    if !is_box {
+                        field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
+                    }
+                }
+
                 let dst = builder.enum_field_load_move(
                     Place::local(scrut_local),
                     variant_name.clone(),
                     i as u32,
                     field_type,
                 );
+
+                if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
+                    ctx.set_ref(dst);
+                }
+
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
             }
         }
