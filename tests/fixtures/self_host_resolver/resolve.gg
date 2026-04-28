@@ -150,6 +150,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()
     trait_names.push("Displayable")
+    trait_names.push("Debuggable")
     trait_names.push("Equatable")
     trait_names.push("Cloneable")
     trait_names.push("Hashable")
@@ -199,6 +200,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     col_names.push("Mutex")
     col_names.push("Guard")
     col_names.push("TaskGroup")
+    col_names.push("FxHasher")
     int ci = 0
     while ci < col_names.len():
         String cname = get_str_at(col_names, ci)

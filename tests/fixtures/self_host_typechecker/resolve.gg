@@ -160,7 +160,6 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("Cloneable")
     trait_names.push("Hashable")
     trait_names.push("Hasher")
-    trait_names.push("Ordinal")
     trait_names.push("Drop")
     trait_names.push("Iterator")
     trait_names.push("Iterable")
@@ -206,6 +205,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     col_names.push("Mutex")
     col_names.push("Guard")
     col_names.push("TaskGroup")
+    col_names.push("FxHasher")
     int ci = 0
     while ci < col_names.len():
         String cname = get_str_at(col_names, ci)
