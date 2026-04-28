@@ -526,6 +526,20 @@ impl<'a> FuncLowering<'a> {
                         let zero_val = self.emit_i64_const(bb, 0);
                         lir_args.push(zero_val);
                     }
+                    // Same VoidElem-driven wrap as the CallExtern path above —
+                    // monomorphized collection methods like
+                    // `Vector__Callable__push` land here (not via func_index)
+                    // and get rewritten to `gorget_array_push` etc. Look up
+                    // the resolved runtime name's ABI tags and wrap any closure
+                    // arg whose param is `VoidElem` (attack_82). Picking by
+                    // ABI rather than by callee name means new runtimes that
+                    // adopt `VoidElem` participate automatically.
+                    let abis = runtime_extern_sig(&emit_name, self.struct_reg)
+                        .map(|s| s.param_abis)
+                        .unwrap_or_default();
+                    if !abis.is_empty() {
+                        self.wrap_closure_args_at_void_elem(args, &mut lir_args, &abis, bb);
+                    }
                     // Delegate to the shared extern-call emitter (same logic as CallExtern).
                     if !len_handled {
                         bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
@@ -579,7 +593,7 @@ impl<'a> FuncLowering<'a> {
                 let is_printf_like = emit_name == "printf" || emit_name == "fprintf_stderr"
                     || emit_name == "gorget_string_format" || emit_name == "gorget_string_format_alloc"
                     || emit_name == "snprintf" || emit_name == "sprintf";
-                let lir_args: Vec<ValueId> = if is_printf_like {
+                let mut lir_args: Vec<ValueId> = if is_printf_like {
                     // For printf, expand Str-typed args into (int)len, data pairs.
                     self.lower_printf_args(args, bb)
                 } else {
@@ -612,6 +626,30 @@ impl<'a> FuncLowering<'a> {
                     }).collect()
                     }
                 };
+                // Closure→callable wrapping for extern calls too — without this,
+                // `Vector[Callable].push(closure_literal)` lowers to
+                // `gorget_array_push(&__Closure_N_env)` and the runtime memcpys
+                // sizeof(GorgetClosure)=16 bytes from a smaller env struct,
+                // leaving the closure's env pointer uninitialized
+                // (attack_82_vector_of_closures.gg). Skip for printf-like to
+                // preserve their custom Str→(len, data) expansion.
+                // Closure→callable wrapping at extern positions tagged
+                // `AbiKind::VoidElem` (collection element pointer — push, set,
+                // put, add, insert, send). The runtime memcpys `elem_size`
+                // bytes from the arg pointer into the slot, so for
+                // `Vector[Callable].push(closure)` the arg must already point
+                // at a packed `GorgetClosure` (16 bytes), not the source
+                // `__Closure_N` env struct (attack_82). Other ABIs (struct,
+                // scalar, etc.) leave the arg untouched, so combinators like
+                // `Result.map_err` still receive the closure as a struct value.
+                if !is_printf_like {
+                    let abis = runtime_extern_sig(&emit_name, self.struct_reg)
+                        .map(|s| s.param_abis)
+                        .unwrap_or_default();
+                    if !abis.is_empty() {
+                        self.wrap_closure_args_at_void_elem(args, &mut lir_args, &abis, bb);
+                    }
+                }
                 bb = self.emit_extern_call(func, &emit_name, dst, args, lir_args, bb);
                 }
             }

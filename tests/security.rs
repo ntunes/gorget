@@ -909,21 +909,25 @@ fn sec_81_match_expr_some_arm_dropped() {
 }
 
 #[test]
-fn sec_82_vector_of_closures_segv() {
-    // BUG: Vector[Callable[...]].get().unwrap().clone() SEGVs. The
-    // generated Option[Callable] struct defines Some_0 as int64_t,
-    // but a Callable (= GorgetClosure) is 16 bytes (fn_ptr + env).
-    // When extracted, the code reads fn_ptr as an int64 and then
-    // memcpy's 16 bytes from (void*)fn_ptr — dereferences a code
-    // pointer, reading from executable memory. Then invokes through
-    // garbage fn_ptr → SIGSEGV.
-    security_known_unsafe(
+fn sec_82_vector_of_closures() {
+    // Fixed 2026-04-28. Three independent bugs all had to land for
+    // `Vector[Callable]` to work:
+    //  1. `infer_collection_element_type` resolves `Vector__Callable__…`
+    //     to `FnPtr` so `gorget_array_new` is created with elem_size = 16
+    //     (sizeof(GorgetClosure)) instead of 8.
+    //  2. The LIR `Callable__…` Named type maps to `GorgetClosure`
+    //     (16-byte struct), so `LoadRef` through the borrow returns the
+    //     full closure value, not just the first 8 bytes.
+    //  3. The CallExtern dispatch (used for `Vector__Callable__push`)
+    //     runs `wrap_closure_call_args`, packing each closure literal
+    //     into a `GorgetClosure` with a heap-alloc'd env before the
+    //     runtime memcpys 16 bytes into the array slot.
+    // Without (1) the array slot is too small; without (2) `.clone()`
+    // on `Ref[Callable]` reinterprets fn_ptr as a memory address;
+    // without (3) the slot's env is uninitialized after push.
+    security_safe(
         "attack_82_vector_of_closures",
-        KnownBug::SanitizerTrips,
-        "Option[Callable] payload field typed int64_t, but Callable \
-         is 16 bytes (GorgetClosure). v.get().unwrap().clone() reads \
-         only 8 bytes, then misinterprets fn_ptr as a pointer to the \
-         closure struct → SEGV reading code memory.",
+        "11\n102\n1000",
     );
 }
 

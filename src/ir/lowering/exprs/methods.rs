@@ -1288,7 +1288,31 @@ pub(super) fn lower_method_call(
                 let dst = ctx.call_tracked(builder, "gorget_string_clone_to_owned", vec![ptr_arg], owned_type);
                 return FunctionBuilder::copy(dst);
             }
-            // Non-resource type: .clone() is a trivial copy (no deep clone needed)
+            // Non-resource type: .clone() is a trivial copy (no deep clone needed).
+            // But if recv is a borrow (Ptr/MutPtr) — e.g. `Ref[Callable].clone()`
+            // after `Vector[Callable].get(i).unwrap()` — we must dereference to
+            // materialize the value into a fresh local of the pointee type.
+            // Otherwise downstream codegen sees a Ptr-typed value flowing into a
+            // wider value-typed slot (e.g. 16-byte GorgetClosure) and emits a
+            // broken double-deref: it reads 8 bytes through the pointer and
+            // uses *those bytes* as a memcpy source address — for a closure
+            // that means dereffing fn_ptr as memory → SEGV
+            // (attack_82_vector_of_closures.gg).
+            if let Operand::Copy(p) | Operand::Move(p) = &recv {
+                if p.projections.is_empty() {
+                    let lid = p.local.0 as usize;
+                    if lid < builder.locals.len() {
+                        let tid = builder.locals[lid].type_id;
+                        if matches!(
+                            ctx.type_registry.get(tid),
+                            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                        ) {
+                            let derefed = builder.load_ref(p.clone(), recv_type_id);
+                            return FunctionBuilder::copy(derefed);
+                        }
+                    }
+                }
+            }
             return recv;
         }
 
@@ -2729,6 +2753,22 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
     if let Some(GirType::Named(name)) = ctx.type_registry.get(collection_type).cloned() {
         // Vector__T → look up T as a type
         if let Some(elem_name) = name.strip_prefix("Vector__") {
+            // Callable element types → FnPtr TypeId so sizeof(elem) lowers to
+            // sizeof(GorgetClosure) = 16. Otherwise the unrecognized
+            // `Callable__…` name falls through to I64 (8 bytes) and
+            // gorget_array_new is created with the wrong elem_size — push
+            // writes only the first 8 bytes of the closure into the slot,
+            // leaving env uninitialized and causing SIGSEGV/SIGBUS when the
+            // closure is read back and called (attack_82).
+            if elem_name.starts_with("Callable__")
+                || elem_name.starts_with("MutCallable__")
+                || elem_name.starts_with("ConsumeCallable__")
+            {
+                return ctx.type_registry.insert(GirType::FnPtr {
+                    params: vec![],
+                    return_type: I64_TYPE,
+                });
+            }
             let elem_name = elem_name.to_string();
             return resolve_type_name_to_id(ctx, &elem_name);
         }
@@ -2868,6 +2908,7 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
                 || name.starts_with("HashSet__")
                 || name.starts_with("Task__") || name.starts_with("Tuple__")
                 || name.starts_with("Channel__")
+                || name.starts_with("Callable__")
             {
                 let type_id = ctx.type_registry.insert(GirType::Named(name.to_string()));
                 ctx.type_mapper.register_named(name.to_string(), type_id);

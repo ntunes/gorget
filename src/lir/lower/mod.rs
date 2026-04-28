@@ -1045,6 +1045,12 @@ pub(super) fn collection_runtime_type(name: &str) -> Option<&'static str> {
     if name.starts_with("Set__") || name.starts_with("GorgetSet__") {
         return Some("GorgetSet");
     }
+    if name.starts_with("Callable__")
+        || name.starts_with("MutCallable__")
+        || name.starts_with("ConsumeCallable__")
+    {
+        return Some("GorgetClosure");
+    }
     if name.starts_with("Result__") || name.starts_with("Option__") {
         // Result/Option are real structs with fields — don't alias.
         return None;

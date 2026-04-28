@@ -1308,6 +1308,146 @@ impl<'a> FuncLowering<'a> {
         true
     }
 
+    /// Wrap closure args only at parameter positions that take an element by
+    /// pointer (`AbiKind::VoidElem` — collection storage like `gorget_array_push`,
+    /// `gorget_map_put`). The runtime memcpys `elem_size` bytes from the arg
+    /// pointer into the slot, so for `Vector[Callable].push(closure)` the arg
+    /// must already point at a packed `GorgetClosure` (16 bytes) rather than
+    /// the source `__Closure_N` env struct. Other ABIs (struct-by-value,
+    /// scalar, etc.) leave the arg untouched — combinators like `Result.map_err`
+    /// take the closure as a struct value through their lowered wrapper, and
+    /// wrapping there would replace the struct with a pointer and break the
+    /// call.
+    ///
+    /// Picking the wrap site by parameter ABI rather than callee name avoids a
+    /// brittle allow-list of "is this a collection-storage method"; new
+    /// runtimes that adopt the `VoidElem` ABI participate automatically.
+    pub(super) fn wrap_closure_args_at_void_elem(
+        &mut self,
+        gir_args: &[Operand],
+        lir_args: &mut [ValueId],
+        param_abis: &[crate::ir::abi::AbiKind],
+        bb: BlockId,
+    ) {
+        use crate::ir::abi::AbiKind;
+        for (i, abi) in param_abis.iter().enumerate() {
+            if i >= gir_args.len() || i >= lir_args.len() { break; }
+            if !matches!(abi, AbiKind::VoidElem) { continue; }
+            self.wrap_single_closure_arg(i, &gir_args[i], lir_args, bb);
+        }
+    }
+
+    /// Wrap one argument if it's a closure (`__Closure_N` local or `FuncRef`).
+    /// No-op otherwise. Shared between the all-args wrapper used for user
+    /// function calls and the ABI-filtered wrapper used for extern calls.
+    pub(super) fn wrap_single_closure_arg(
+        &mut self,
+        i: usize,
+        gir_arg: &Operand,
+        lir_args: &mut [ValueId],
+        bb: BlockId,
+    ) {
+        use crate::lir::lower::types::c_sizeof_lir_type;
+
+        // Case 1: FuncRef constant → bare function ref, env = NULL.
+        if let Operand::Constant(Constant::FuncRef(name)) = gir_arg {
+            if let Some(&func_id) = self.func_index.get(name) {
+                let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
+                    Some(sid) => sid,
+                    None => return,
+                };
+                let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
+                let null_env = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_env });
+                self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+                    slot: tmp_slot,
+                    env_ptr: null_env,
+                    call_func: func_id,
+                    needs_adapter: true,
+                });
+                let addr = self.lir_func.next_value();
+                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                    dst: addr,
+                    slot: tmp_slot,
+                });
+                lir_args[i] = addr;
+                return;
+            }
+        }
+
+        // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
+        let closure_name = match gir_arg {
+            Operand::Copy(place) | Operand::Move(place) => {
+                if !place.projections.is_empty() { return; }
+                let src_idx = place.local.0 as usize;
+                if src_idx >= self.gir_func.locals.len() { return; }
+                let gir_ty = self.gir_func.locals[src_idx].type_id;
+                match self.gir_types.get(gir_ty) {
+                    Some(ir::types::GirType::Named(name)) if name.starts_with("__Closure_") =>
+                        name.clone(),
+                    _ => return,
+                }
+            }
+            _ => return,
+        };
+
+        let call_fn_name = format!("{closure_name}__call");
+        let call_func = match self.func_index.get(&call_fn_name) {
+            Some(&fid) => fid,
+            None => return,
+        };
+
+        let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
+            Some(sid) => sid,
+            None => return,
+        };
+        let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
+
+        let src_place = match gir_arg {
+            Operand::Copy(place) | Operand::Move(place) => place,
+            _ => unreachable!(),
+        };
+        let src_slot = self.local_to_slot[src_place.local.0 as usize];
+        let src_ty = self.lir_func.slots[src_slot.0 as usize].ty.clone();
+        let env_size = c_sizeof_lir_type(&src_ty, self.module_structs);
+
+        let size_val = self.emit_i64_const(bb, env_size as i64);
+        let heap_ptr = self.lir_func.next_value();
+        self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
+        let malloc_abis = self.lookup_arg_abis("malloc");
+        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            dst: Some(heap_ptr),
+            name: "malloc".to_string(),
+            args: vec![size_val],
+            original_name: None,
+            arg_abis: malloc_abis,
+        });
+
+        let src_addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            dst: src_addr,
+            slot: src_slot,
+        });
+        self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
+            dst_ptr: heap_ptr,
+            src_ptr: src_addr,
+            size: size_val,
+        });
+
+        self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+            slot: tmp_slot,
+            env_ptr: heap_ptr,
+            call_func,
+            needs_adapter: false,
+        });
+        let addr = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            dst: addr,
+            slot: tmp_slot,
+        });
+        lir_args[i] = addr;
+    }
+
     /// Wrap closure/function-ref arguments at call sites into GorgetClosure slots.
     ///
     /// For each argument that is a `__Closure_N` struct or a `FuncRef` constant,
@@ -1320,112 +1460,9 @@ impl<'a> FuncLowering<'a> {
         lir_args: &mut [ValueId],
         bb: BlockId,
     ) {
-        use crate::lir::lower::types::c_sizeof_lir_type;
-
         for (i, gir_arg) in gir_args.iter().enumerate() {
             if i >= lir_args.len() { break; }
-
-            // Case 1: FuncRef constant → bare function ref, env = NULL.
-            if let Operand::Constant(Constant::FuncRef(name)) = gir_arg {
-                if let Some(&func_id) = self.func_index.get(name) {
-                    let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
-                        Some(sid) => sid,
-                        None => continue,
-                    };
-                    let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
-                    let null_env = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_env });
-                    self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
-                        slot: tmp_slot,
-                        env_ptr: null_env,
-                        call_func: func_id,
-                        needs_adapter: true,
-                    });
-                    let addr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                        dst: addr,
-                        slot: tmp_slot,
-                    });
-                    lir_args[i] = addr;
-                    continue;
-                }
-            }
-
-            // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
-            let closure_name = match gir_arg {
-                Operand::Copy(place) | Operand::Move(place) => {
-                    if !place.projections.is_empty() { continue; }
-                    let src_idx = place.local.0 as usize;
-                    if src_idx >= self.gir_func.locals.len() { continue; }
-                    let gir_ty = self.gir_func.locals[src_idx].type_id;
-                    match self.gir_types.get(gir_ty) {
-                        Some(ir::types::GirType::Named(name)) if name.starts_with("__Closure_") =>
-                            name.clone(),
-                        _ => continue,
-                    }
-                }
-                _ => continue,
-            };
-
-            let call_fn_name = format!("{closure_name}__call");
-            let call_func = match self.func_index.get(&call_fn_name) {
-                Some(&fid) => fid,
-                None => continue,
-            };
-
-            let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
-                Some(sid) => sid,
-                None => continue,
-            };
-            let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
-
-            // Get the source closure slot and its size for heap allocation.
-            let src_place = match gir_arg {
-                Operand::Copy(place) | Operand::Move(place) => place,
-                _ => unreachable!(),
-            };
-            let src_slot = self.local_to_slot[src_place.local.0 as usize];
-            let src_ty = self.lir_func.slots[src_slot.0 as usize].ty.clone();
-            let env_size = c_sizeof_lir_type(&src_ty, self.module_structs);
-
-            // Emit: env_ptr = malloc(env_size)
-            let size_val = self.emit_i64_const(bb, env_size as i64);
-            let heap_ptr = self.lir_func.next_value();
-            self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
-            let malloc_abis = self.lookup_arg_abis("malloc");
-            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
-                dst: Some(heap_ptr),
-                name: "malloc".to_string(),
-                args: vec![size_val],
-                original_name: None,
-                arg_abis: malloc_abis,
-            });
-
-            // Emit: memcpy(env_ptr, &src_slot, env_size)
-            let src_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                dst: src_addr,
-                slot: src_slot,
-            });
-            self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
-                dst_ptr: heap_ptr,
-                src_ptr: src_addr,
-                size: size_val,
-            });
-
-            // Emit: ClosurePack + SlotAddr
-            self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
-                slot: tmp_slot,
-                env_ptr: heap_ptr,
-                call_func,
-                needs_adapter: false,
-            });
-            let addr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                dst: addr,
-                slot: tmp_slot,
-            });
-            lir_args[i] = addr;
+            self.wrap_single_closure_arg(i, gir_arg, lir_args, bb);
         }
     }
 }
