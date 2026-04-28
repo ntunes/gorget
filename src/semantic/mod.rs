@@ -239,7 +239,7 @@ pub fn analyze_with_source_dir(
     derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions, inferred_method_targs) = typecheck::check_module(
+    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = typecheck::check_module(
         module,
         &mut scopes,
         &mut types,
@@ -261,6 +261,14 @@ pub fn analyze_with_source_dir(
     // explicit `[T1, T2]` args. See docs/internals/method-level-inference.md.
     if !inferred_method_targs.is_empty() {
         typecheck::apply_inferred_method_targs(module, &inferred_method_targs);
+    }
+    // Pass 4.5b: Same sync but for *generic free-function* calls — patches
+    // `Expr::Call.generic_args` from typecheck's per-call-site
+    // fresh-instantiation. Without this, IR-lowering's monomorphisation has
+    // no concrete targs to mangle a symbol from and link-fails with
+    // `undefined reference to <fn>`.
+    if !inferred_call_targs.is_empty() {
+        typecheck::apply_inferred_call_targs(module, &inferred_call_targs);
     }
 
     // Populate struct/enum field types on DefInfo for is_copy_type.

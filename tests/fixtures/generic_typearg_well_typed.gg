@@ -1,12 +1,7 @@
 # Companion to the *_mismatch_error fixtures: well-typed forms of the same
 # patterns must continue to compile and run correctly. Guards against an
-# overzealous fix that rejects valid generic instantiations.
-#
-# Uses explicit type-arg syntax (`fn[T](...)`) — that's the form that's
-# stable through IR-lowering's monomorphisation today. Inferred-arg form
-# is supported by the typechecker but doesn't always reach the lowering
-# pass with concrete instantiation info; users who hit that boundary
-# should pass type args explicitly.
+# overzealous fix that rejects valid generic instantiations, AND verifies
+# that BOTH explicit-targs and inferred-targs forms reach codegen and run.
 
 enum AppError:
     NotFound
@@ -31,18 +26,18 @@ Pair[A, B] make_pair[A, B](A a, B b):
     return Pair[A, B](a, b)
 
 void main():
-    # Result[int, AppError] flows through correctly.
-    Result[int, AppError] r = passthrough[int, AppError](producer())
+    # Result[int, AppError] — inferred from arg + LHS context.
+    Result[int, AppError] r = passthrough(producer())
     match r:
         case Ok(v):
             print(f"ok: {v}")
         case Error(_e):
             print("err")
 
-    # Vector[int] both sides match.
-    Vector[int] v = wrap_one[int](42)
+    # Vector[int] — inferred from arg.
+    Vector[int] v = wrap_one(42)
     print(v.len())
 
-    # Pair[int, String] both sides match.
-    Pair[int, String] p = make_pair[int, String](1, "hello")
+    # Pair[int, String] — inferred from args.
+    Pair[int, String] p = make_pair(1, "hello")
     print(f"{p.first}:{p.second}")
