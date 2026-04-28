@@ -4077,6 +4077,22 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     if func.name == "main":
         sb_push(&buf, "int main(int argc, char** argv) {\n")
         sb_push(&buf, "    gorget_init_args(argc, argv);\n")
+        # Module-level statics with runtime-call init — `stdout` /
+        # `stderr` / `stdin` from lib/std/io.gg etc. The global is
+        # declared zero-initialized by `emit_globals`; the actual
+        # call (e.g. `gorget_stdout_handle()`) runs once at program
+        # entry. Mirrors Rust gg's
+        # `src/backend/c_lir/mod.rs:1582-1593`.
+        int gri = 0
+        while gri < m.globals.len():
+            LirGlobal gr_g = m.globals.get(gri).unwrap()
+            if gr_g.init_kind == GINIT_RUNTIME_CALL:
+                sb_push(&buf, "    __lir_g")
+                sb_push(&buf, int_to_str(gri))
+                sb_push(&buf, " = ")
+                sb_push(&buf, gr_g.init_expr)
+                sb_push(&buf, ";\n")
+            gri += 1
     else:
         String ret = c_type_name(func.return_type, &sn)
         sb_push(&buf, ret)

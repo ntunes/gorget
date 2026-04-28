@@ -227,6 +227,22 @@ struct GirModule:
     # cascades into bootstrap-fixed-point failures.
     Vector[String] float_const_keys
     Vector[float] float_const_vals
+    # Module-level statics with a runtime-call initializer —
+    # `public static File stdout = _stdout_handle()` etc. in lib/std/io.gg.
+    # Mirrors Rust gg's `LoweringContext::global_names` + `module.globals:
+    # Vec<Global>` (`src/ir/lowering/mod.rs:1074-1111`). The init is a
+    # zero-arg function call mapped to a C-runtime symbol; `EIdentifier`
+    # references resolve through `__global_ref__<name>` in lir_lower
+    # against a parallel name→gid map populated by `lir_mod_add_global`.
+    # Placed at the END of the struct to keep existing field offsets stable.
+    Vector[String] static_keys
+    # C expression to use for the global's initializer (e.g.,
+    # "gorget_stdout_handle()"). Currently always a zero-arg call;
+    # widening to other shapes is out of scope.
+    Vector[String] static_init_exprs
+    # GIR type id of the declared type — fed to `map_gir_type_to_lir`
+    # to recover the LIR type for `LirGlobal { ty }`.
+    Vector[int] static_type_ids
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -298,6 +314,53 @@ void float_const_put(GirModule &gmod, String name, float val):
     if not found:
         gmod.float_const_keys.push(name.clone())
         gmod.float_const_vals.push(val)
+
+# Module-level static (runtime-call init) accessors. Same parallel-Vector
+# shape as const_* / float_const_*. See GirModule.static_keys.
+bool static_contains(GirModule &gmod, String name):
+    bool found = false
+    int i = 0
+    while i < gmod.static_keys.len():
+        String k = gmod.static_keys.get(i).unwrap()
+        if k == name:
+            found = true
+        i += 1
+    return found
+
+String static_lookup_init(GirModule &gmod, String name):
+    String result = ""
+    int i = 0
+    while i < gmod.static_keys.len():
+        String k = gmod.static_keys.get(i).unwrap()
+        if k == name:
+            result = gmod.static_init_exprs.get(i).unwrap()
+        i += 1
+    return result
+
+int static_lookup_type(GirModule &gmod, String name):
+    int result = -1
+    int i = 0
+    while i < gmod.static_keys.len():
+        String k = gmod.static_keys.get(i).unwrap()
+        if k == name:
+            result = gmod.static_type_ids.get(i).unwrap()
+        i += 1
+    return result
+
+void static_put(GirModule &gmod, String name, String init_expr, int type_id):
+    bool found = false
+    int i = 0
+    while i < gmod.static_keys.len():
+        String k = gmod.static_keys.get(i).unwrap()
+        if k == name:
+            gmod.static_init_exprs.set(i, init_expr.clone())
+            gmod.static_type_ids.set(i, type_id)
+            found = true
+        i += 1
+    if not found:
+        gmod.static_keys.push(name.clone())
+        gmod.static_init_exprs.push(init_expr.clone())
+        gmod.static_type_ids.push(type_id)
 
 # none_decls accessors.
 bool none_contains(GirModule &gmod, String name):

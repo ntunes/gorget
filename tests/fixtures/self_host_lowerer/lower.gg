@@ -652,6 +652,57 @@ int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
     emit(&ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
     return adst
 
+# Module-level static reference: `stdout` / `stderr` / `stdin` etc.
+# Emits a synthetic `__global_ref__<name>` GICallExtern which
+# `lir_lower` rewrites to `IGlobalAddr(dst, gid)`. Mirrors Rust gg's
+# `Operand::Constant(Constant::GlobalRef(name))`
+# (`src/ir/lowering/exprs/mod.rs:128-130`). Returns the new local id
+# on hit (>= 0); -1 on miss. Out-of-line for the same stack-frame
+# reason as `lower_float_const_ident` / `lower_fn_addr_ident`.
+int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
+    if not static_contains(&gmod, name):
+        return -1
+    int sty = static_lookup_type(&gmod, name)
+    int sdst = add_local(&ctx, sty, NO_NAME)
+    Vector[Operand] no_args = []
+    emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
+    return sdst
+
+# Module-level static with a runtime-call init: `public static File
+# stdout = _stdout_handle()` etc. (lib/std/io.gg). Mirrors Rust gg's
+# `LoweringContext::global_names` + `module.globals: Vec<Global>`
+# (`src/ir/lowering/mod.rs:1074-1111`). Recognises the zero-arg
+# `_<sym>()` shape and registers it under `gmod.static_keys` so the
+# `EIdentifier` arm can resolve to a `__global_ref__<name>` synthetic
+# intrinsic which `lir_lower` rewrites to `IGlobalAddr`.
+#
+# Only the `_<sym>` → `gorget_<sym>` underscore-prefix mapping is
+# wired (sufficient for `_stdin_handle` / `_stdout_handle` /
+# `_stderr_handle`). Other init shapes return false; the caller
+# falls through to the existing ENoneLiteral / [bug] cascade.
+#
+# Helper lives in its own fn for the same stack-frame reason as
+# `lower_float_const_ident` / `lower_fn_addr_ident` — keeping the
+# IStaticDecl-arm dispatch site small.
+bool try_register_static_runtime_call(GirModule &gmod, SpannedType sd_ty, String sd_name, SpannedExpr sd_val):
+    match sd_val.expr:
+        case ECall(callee_box, args, _):
+            if args.len() != 0:
+                return false
+            SpannedExpr callee = *callee_box
+            match callee.expr:
+                case EIdentifier(fn_name):
+                    if not fn_name.starts_with("_"):
+                        return false
+                    String runtime_call = "gorget_" + fn_name.slice(1, fn_name.len()) + "()"
+                    int ty_id = map_ast_type(sd_ty, &gmod)
+                    static_put(&gmod, sd_name, runtime_call, ty_id)
+                    return true
+                else:
+                    return false
+        else:
+            return false
+
 Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:
         case EFloatLiteral(v):
@@ -1224,6 +1275,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int adst_or_neg = lower_fn_addr_ident(&ctx, &gmod, name)
             if adst_or_neg >= 0:
                 return adst_or_neg
+            # Module-level static with runtime-call init — `stdout` /
+            # `stderr` / `stdin` from lib/std/io.gg etc. Mirrors Rust
+            # gg's `Operand::Constant(Constant::GlobalRef(name))`
+            # (`src/ir/lowering/exprs/mod.rs:128-130`). Helper emits a
+            # `__global_ref__<name>` synthetic GICallExtern that
+            # `lir_lower` rewrites to `IGlobalAddr`. Same out-of-line
+            # rationale as the float-const / fn-addr helpers above.
+            int sdst_or_neg = lower_static_ref_ident(&ctx, &gmod, name)
+            if sdst_or_neg >= 0:
+                return sdst_or_neg
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.
@@ -4766,7 +4827,15 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         cr_i += 1
     Vector[String] type_sub_keys_init = []
     Vector[int] type_sub_vals_init = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init, !float_const_keys, !float_const_vals)
+    # Module-level statics with runtime-call init (`stdout` / `stderr` /
+    # `stdin` from lib/std/io.gg etc.). Populated below in the
+    # IStaticDecl handler when int/float eval miss and the init shape is
+    # a zero-arg call. Kept at the END of the constructor arg list so
+    # earlier fields' positions don't shift.
+    Vector[String] static_keys_init = []
+    Vector[String] static_init_exprs_init = []
+    Vector[int] static_type_ids_init = []
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init, !float_const_keys, !float_const_vals, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -4833,7 +4902,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 float_const_put(&gmod, cd_name, cfv)
                             case None:
                                 pass
-            case IStaticDecl(_, sd_name, sd_val):
+            case IStaticDecl(sd_ty, sd_name, sd_val):
                 Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
                 match sd_eval:
                     case Some(sv):
@@ -4846,13 +4915,22 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             case Some(sfv):
                                 float_const_put(&gmod, sd_name, sfv)
                             case None:
-                                # Recognise `Option[T] X = None` so EIdentifier can
-                                # emit OpConstUnit() instead of the int-0 fallback.
-                                match sd_val.expr:
-                                    case ENoneLiteral():
-                                        none_mark(&gmod, sd_name)
-                                    else:
-                                        pass
+                                # Runtime-call fallback: `public static File
+                                # stdout = _stdout_handle()` etc. Mirrors Rust
+                                # gg's `LoweringContext::global_names`. Helper
+                                # extracts the C runtime symbol; helper lives
+                                # in its own fn so this dispatch site stays
+                                # tight (the int/float cascade already lives
+                                # in lower_expr-adjacent stack frames).
+                                bool sd_handled = try_register_static_runtime_call(&gmod, sd_ty, sd_name, sd_val)
+                                if not sd_handled:
+                                    # Recognise `Option[T] X = None` so EIdentifier can
+                                    # emit OpConstUnit() instead of the int-0 fallback.
+                                    match sd_val.expr:
+                                        case ENoneLiteral():
+                                            none_mark(&gmod, sd_name)
+                                        else:
+                                            pass
             else:
                 pass
         cdi += 1
