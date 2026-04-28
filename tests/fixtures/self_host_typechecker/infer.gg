@@ -606,11 +606,29 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return types.bool_id
 
         case EAwait(inner):
-            # await returns the task's result type — skip
+            # await on Task[T] / Future[T] yields T.
+            int await_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            if await_inner_type >= 0 and await_inner_type < types.types.len():
+                ResolvedType art = get_rtype_at(types.types, await_inner_type)
+                match art:
+                    case RTGeneric(def_id, type_args):
+                        DefInfo d = scopes.get_def(def_id)
+                        if (d.name == "Task" or d.name == "Future") and type_args.len() >= 1:
+                            return get_int_at(type_args, 0)
+                    else:
+                        pass
             return NO_TYPE
 
         case ESpawn(inner):
-            # spawn returns Task[T] — skip
+            # spawn(expr) returns Task[InnerType]. Look up Task in scope
+            # and wrap the operand's inferred type.
+            int sp_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
+            if sp_inner_type >= 0:
+                int task_def = scopes.lookup("Task")
+                if task_def >= 0:
+                    Vector[int] task_args = Vector[int]()
+                    task_args.push(sp_inner_type)
+                    return types.add_type(RTGeneric(task_def, task_args))
             return NO_TYPE
 
         case EDefaultOp(left, right):
