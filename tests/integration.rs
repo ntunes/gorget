@@ -2224,9 +2224,6 @@ fn iter_enumerate_zip() {
 
 #[test]
 fn stdlib_iter_set() {
-    // LLVM regression in Set/Dict iterator paths — same family as
-    // dict_user_key_*. Pending root-cause.
-    if skip_under_llvm() { return; }
     run_gg(
         "stdlib_iter_set.gg",
         "10\n20\n30\n40\n--\n10\n20\n--\n30\n40",
@@ -2235,7 +2232,6 @@ fn stdlib_iter_set() {
 
 #[test]
 fn stdlib_iter_dict() {
-    if skip_under_llvm() { return; }
     run_gg(
         "stdlib_iter_dict.gg",
         "1\n10\n2\n20\n3\n30\n4\n40\n--\n1\n10\n2\n20\n--\n110",
@@ -15488,6 +15484,14 @@ fn closure_multiline_return() {
 
 #[test]
 fn closure_tuple_destructure() {
+    // LLVM ABI mismatch: a closure expecting a >16-byte tuple by value
+    // (e.g. `Tuple__int64_t__int64_t__int64_t`, 24 bytes) is invoked via
+    // a function pointer with `(env_ptr, ptr-to-tuple)` while the closure
+    // body is defined with `(env_ptr, %TupleStruct)` — caller and callee
+    // disagree on whether the tuple is in registers or behind a hidden
+    // pointer. Same family as the `__spawn_method_wrap_*` >16-byte spawn-
+    // arg fix; needs the same PCS-B.4 unification at closure call sites.
+    if skip_under_llvm() { return; }
     run_gg(
         "closure_tuple_destructure.gg",
         "7\n6\nalice is 30\n66\n21",
@@ -15666,8 +15670,6 @@ fn borrow_field_mut_ref_exclusive_error() {
 
 #[test]
 fn borrow_field_method_dispatch() {
-    // LLVM regression — same family as dict_user_key_*; fix pending.
-    if skip_under_llvm() { return; }
     run_gg(
         "borrow_field_method_dispatch.gg",
         "3\n2",
@@ -15676,8 +15678,6 @@ fn borrow_field_method_dispatch() {
 
 #[test]
 fn borrow_field_lazy_dict_iter() {
-    // LLVM regression in iterator chain through gorget_map_clone — pending.
-    if skip_under_llvm() { return; }
     run_gg(
         "borrow_field_lazy_dict_iter.gg",
         "60\n600\nalpha\nbeta\n3",

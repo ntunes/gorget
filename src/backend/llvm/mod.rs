@@ -2888,26 +2888,40 @@ fn emit_inst(
             let value_is_null = func.blocks.iter().any(|b| {
                 b.insts.iter().any(|i| matches!(i, Inst::NullPtr { dst } if dst.0 == value.0))
             });
+            // If the destination came from a FieldPtr, the field's declared type
+            // tells us how many bytes to write. A struct field of type `Ptr`
+            // wants an 8-byte pointer store regardless of whether the value is
+            // a `PtrTo(SomeStruct)` (which is still pointer-typed at the wire).
+            // Without this guard, a `StructInit` for a struct like
+            // `DictIter { source: ptr; cursor: i64 }` lowers the
+            // `source <- &map` field-store into a 152-byte memcpy of the
+            // GorgetMap contents, blowing past the 16-byte slot and corrupting
+            // the caller's stack.
+            let dest_field_ty = func.blocks.iter().find_map(|b| {
+                b.insts.iter().find_map(|i| {
+                    if let Inst::FieldPtr { dst: d, struct_id, field, .. } = i {
+                        if d.0 == ptr.0 {
+                            let sdef = &module.structs[struct_id.0 as usize];
+                            return sdef.fields.get(*field as usize).map(|(_, t)| t.clone());
+                        }
+                    }
+                    None
+                })
+            });
             if let Some(LirType::PtrTo(sid)) = val_ty {
-                // Source is a typed pointer to an aggregate — memcpy the struct contents
-                let sz = sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames);
-                writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
+                if matches!(&dest_field_ty, Some(LirType::Ptr) | Some(LirType::PtrTo(_))) {
+                    // Pointer-typed field: store the pointer value, don't deep-copy.
+                    writeln!(out, "  store ptr %v{}, ptr %v{}", value.0, ptr.0).unwrap();
+                } else {
+                    // Source is a typed pointer to an aggregate — memcpy the struct contents.
+                    let sz = sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames);
+                    writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
+                }
             } else if matches!(val_ty, Some(LirType::Ptr)) {
                 // Source is an opaque ptr (e.g. void* from gorget_array_safe_pop/safe_get).
                 // If the destination is a FieldPtr to an aggregate field, the ptr is actually
                 // a pointer to that struct's data → emit memcpy instead of store ptr.
-                let dest_field_ty = func.blocks.iter().find_map(|b| {
-                    b.insts.iter().find_map(|i| {
-                        if let Inst::FieldPtr { dst: d, struct_id, field, .. } = i {
-                            if d.0 == ptr.0 {
-                                let sdef = &module.structs[struct_id.0 as usize];
-                                return sdef.fields.get(*field as usize).map(|(_, t)| t.clone());
-                            }
-                        }
-                        None
-                    })
-                });
-                match dest_field_ty {
+                match dest_field_ty.clone() {
                     Some(LirType::Struct(sid)) => {
                         // void* points to an inline struct — memcpy/memset the whole struct.
                         // If the source is a NullPtr, zero the destination instead of reading from null.
