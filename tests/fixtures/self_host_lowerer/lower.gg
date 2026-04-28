@@ -2664,13 +2664,17 @@ String match_enum_type(String type_name, GirModule &gmod):
 int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
     # Prelude enums: hardcode variant indices that match lir_lower's
     # VariantInfo table (prelude_variant_info) and Pass 3's field layout.
-    if enum_name.starts_with("Option__"):
+    # Match both the mono'd form (`Option__T`) AND the bare prelude name
+    # (`Option`) — the latter is the synthetic name used by
+    # `lower_ctor_pattern`'s last-resort fallback when the scrutinee's
+    # type couldn't be recovered.
+    if enum_name == "Option" or enum_name.starts_with("Option__"):
         if variant_name == "Some":
             return 0
         if variant_name == "None":
             return 1
         return -1
-    if enum_name.starts_with("Result__"):
+    if enum_name == "Result" or enum_name.starts_with("Result__"):
         if variant_name == "Ok":
             return 0
         if variant_name == "Error":
@@ -2837,6 +2841,49 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
         String guessed = find_enum_by_variant(&gmod, effective_variant)
         if guessed.len() > 0:
             effective_enum = guessed
+    # Scrutinee-type fallback: when `match_enum_type` returned empty for
+    # the scrutinee (Dict[String,_] bug suppressed `type_infos.contains`,
+    # or the scrutinee's `auto`-inferred type didn't carry enum info into
+    # `lower_match_stmt`), recover the enum directly from the
+    # scrutinee's local type. The `__` mangling keeps `Option__T` /
+    # `Result__T__E` distinguishable, and the existing `match_variant_index`
+    # / `__field_read_<enum>_<field>` machinery already handles those
+    # prefixes (see line 2667-2678 + `lir_codegen.gg:3445` longest-prefix
+    # split). Closes the `case Ok(v):` / `case Some(v):` cascade — without
+    # this, `v` was never bound as a local and bare uses fell into the
+    # `[bug] EIdentifier` placeholder, mis-typing every Result/Option
+    # match arm body across the fixture sweep.
+    if effective_enum == "":
+        int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+        if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+            int peeled_tid = scr_tid
+            GirType bt = gmod.type_table.get(scr_tid).unwrap()
+            match bt:
+                case GtPtr(inner):
+                    peeled_tid = inner
+                case GtMutPtr(inner):
+                    peeled_tid = inner
+                else:
+                    pass
+            String scr_type_name = type_id_to_name(peeled_tid, &gmod)
+            if scr_type_name.starts_with("Option__") or scr_type_name.starts_with("Result__"):
+                effective_enum = scr_type_name
+    # Last-resort prelude fallback: when the scrutinee's type was lost
+    # entirely (`auto` binding mis-typed to I64, generic-context T not
+    # yet substituted), the variant name itself disambiguates Result vs
+    # Option. We can't reconstruct the mangled `Option__T` name here
+    # without the scrutinee type, but emitting a synthetic enum name
+    # `Option` / `Result` is enough to register the binding(s) in the
+    # match arm — `match_variant_index` and `emit_tag_read` learn to
+    # accept the bare prelude names below. Without this, every
+    # mis-typed match arm fell through to the unconditional `GTJump`
+    # path and bound nothing — every Ok/Error/Some bare-name use
+    # cascaded into a `[bug] EIdentifier` placeholder, then 0-typed.
+    if effective_enum == "":
+        if effective_variant == "Ok" or effective_variant == "Error":
+            effective_enum = "Result"
+        elif effective_variant == "Some" or effective_variant == "None":
+            effective_enum = "Option"
     if effective_enum == "":
         # Truly nothing we can do. Hits on monomorphized Option / Result
         # which use `__` separators the __field_read_ parser can't split
