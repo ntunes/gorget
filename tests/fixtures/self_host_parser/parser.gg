@@ -1298,8 +1298,14 @@ equip Parser:
         self.expect_tok(TOK_LBRACKET, "expected '[' for type args")
         if not self.check_tok(TOK_RBRACKET):
             args.push(self.parse_type())
+            # Skip optional ownership sigil after a type arg (`!` move,
+            # `&` borrow). The Rust formatter preserves these but the
+            # self-host AST drops them; consuming here keeps the parser
+            # from tripping on the `]` mismatch.
+            self.skip_ownership_markers()
             while self.match_tok(TOK_COMMA):
                 args.push(self.parse_type())
+                self.skip_ownership_markers()
         self.expect_tok(TOK_RBRACKET, "expected ']' after type args")
         return args
 
