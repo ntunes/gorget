@@ -9,7 +9,7 @@ from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
-from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, SelectArm, SORecv
+from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv
 from ast import SExpr, SVarDecl, SReturn
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
@@ -600,6 +600,16 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
 
         case EDo(body_stmts):
             type_check_stmts(body_stmts, scope_id, &scopes, &types, ctx)
+
+        case EFString(template, exprs):
+            # F-string interpolation segments are pre-parsed into real
+            # SpannedExpr by the parser; walk them so closures inside
+            # `{...}` get their params/body typed.
+            int fei = 0
+            while fei < exprs.len():
+                SpannedExpr fe = exprs.get(fei).unwrap()
+                walk_expr_closures(fe, scope_id, &scopes, &types, ctx)
+                fei = fei + 1
 
         else:
             pass
