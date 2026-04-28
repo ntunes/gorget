@@ -2064,11 +2064,21 @@ equip Parser:
             SpannedExpr aw_operand = self.parse_expr_bp(2)
             return SpannedExpr(EAwait(Box(aw_operand)), Span(start, aw_operand.span.end))
 
-        # spawn [blocking] expr
+        # spawn [blocking] [unchecked] expr / spawn [unchecked] [blocking] expr
+        # `unchecked` is a parse-time-only AST flag in Rust; gorget self-host
+        # consumes and discards it to round-trip through format equality.
         if self.check_kw(KW_SPAWN):
             self.advance()
+            bool is_blocking = false
             if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                is_blocking = true
                 self.advance()
+            if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "unchecked":
+                self.advance()
+            if not is_blocking and self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                is_blocking = true
+                self.advance()
+            if is_blocking:
                 SpannedExpr sb_operand = self.parse_expr_bp(2)
                 return SpannedExpr(ESpawnBlocking(Box(sb_operand)), Span(start, sb_operand.span.end))
             SpannedExpr s_operand = self.parse_expr_bp(2)
