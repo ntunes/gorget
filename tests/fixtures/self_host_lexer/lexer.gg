@@ -117,6 +117,10 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwUint())
     elif s == "uint8":
         return Some(KwUint8())
+    elif s == "byte":
+        # User-facing alias for uint8 — match Rust lexer at token level
+        # so all downstream stages see a single primitive name.
+        return Some(KwUint8())
     elif s == "uint16":
         return Some(KwUint16())
     elif s == "uint32":
