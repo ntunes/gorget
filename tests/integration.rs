@@ -7548,11 +7548,6 @@ fn is_comment_token(s: &str) -> bool {
 
 #[test]
 fn lexer_comparison() {
-    // Self-host comparison: requires building the self-host lexer driver,
-    // which fails under LLVM (LLVM IR validation rejects an i64-vs-i8 arg
-    // mismatch on `lexer___str_remove_char`). Skip until the self-host
-    // pipeline builds end-to-end through the LLVM backend.
-    if skip_under_llvm() { return; }
     // 1. Build the Gorget lexer driver
     let (driver_exe, driver_c) = build_gg_dir("self_host_lexer", "driver.gg");
 
@@ -10537,9 +10532,6 @@ done",
 
 #[test]
 fn parser_comparison() {
-    // Self-host comparison: blocked by the same self-host build failure as
-    // lexer_comparison until the self-host pipeline lands cleanly under LLVM.
-    if skip_under_llvm() { return; }
     use gorget::parser::Parser;
 
     // 1. Build the Gorget parser driver
@@ -10796,7 +10788,6 @@ fn normalize_resolver_output(output: &str) -> (Vec<String>, Vec<String>) {
 
 #[test]
 fn resolver_comparison() {
-    if skip_under_llvm() { return; }
     use gorget::parser::Parser;
     use gorget::semantic::resolve;
     use gorget::semantic::scope::ScopeTable;
@@ -11095,7 +11086,6 @@ fn normalize_type_output(output: &str) -> Vec<String> {
 
 #[test]
 fn type_comparison() {
-    if skip_under_llvm() { return; }
     use gorget::parser::Parser;
 
     // 1. Build the Gorget typechecker driver
