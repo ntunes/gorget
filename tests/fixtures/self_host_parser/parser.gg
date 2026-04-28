@@ -1165,15 +1165,21 @@ equip Parser:
             elif kw == KW_AUTO:
                 return self.mk_type(TInferred(), start)
             # Check for function type: RetType(ParamTypes...)
+            # Re-fetch the keyword name on each construction so neither
+                # branch relies on a moved-from `name` local. Symptom of
+                # the original code was `int(int) make_adder()` formatting
+                # as `mak(int) make_adder()` — the OUTER ret type's
+                # primitive-name String aliased the next IDENTIFIER's first
+                # N source bytes after the move into TPrimitive.
             if self.check_tok(TOK_LPAREN):
                 int saved = self.pos
-                SpannedType ret_ty = self.mk_type(TPrimitive(name), start)
+                SpannedType ret_ty = self.mk_type(TPrimitive(type_keyword_name(kw)), start)
                 SpannedType fn_ty = self.parse_function_type(ret_ty, start)
                 # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
                 if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                     return fn_ty
                 self.pos = saved
-            return self.mk_type(TPrimitive(name), start)
+            return self.mk_type(TPrimitive(type_keyword_name(kw)), start)
 
         # Box[T], Rc[T], Arc[T], Mutex[T], RwLock[T], Weak[T], Cell[T], RefCell[T]
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
