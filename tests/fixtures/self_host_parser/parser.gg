@@ -1074,6 +1074,16 @@ equip Parser:
             return "Mutex"
         if kt == KW_RWLOCK:
             return "RwLock"
+        # Result/Option variant keywords used as imported names
+        # (e.g. `from std.io import IoError, Error`).
+        if kt == KW_ERROR:
+            return "Error"
+        if kt == KW_OK:
+            return "Ok"
+        if kt == KW_SOME:
+            return "Some"
+        if kt == KW_NONE:
+            return "None"
         return ""
 
     void skip_newlines(&self):
@@ -3097,7 +3107,9 @@ equip Parser:
             self.advance()
             SpannedToken ext_tok = self.advance()
             extends_list.push(token_ident(ext_tok.lex_token))
-            while self.match_tok(TOK_COMMA):
+            # Trait extension separator can be `,` or `&` (Rust formatter
+            # normalises both to `, `).
+            while self.match_tok(TOK_COMMA) or self.match_tok(TOK_AMP):
                 SpannedToken ext_tok2 = self.advance()
                 extends_list.push(token_ident(ext_tok2.lex_token))
         self.expect_tok(TOK_COLON, "expected ':' after trait name")
