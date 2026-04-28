@@ -1453,7 +1453,12 @@ static inline GorgetString gorget_string_adopt(char* s) {
 // Drop an owned string. Views (cap == 0) are no-ops — they borrow their buffer
 // from .rodata, another Str, or an external source. Owned strings free `data`
 // via the allocator that created them, then zero the struct so double-free is safe.
-static inline void gorget_string_free(GorgetString* s) {
+// Takes void* (not GorgetString*) so the cast at __gorget_drop_fn callback
+// sites is well-typed under -fsanitize=undefined: the callee's parameter type
+// must match the function-pointer type used at the call site, not just the
+// underlying ABI. Direct callers pass &gs / &owned_string; both decay to void*.
+static inline void gorget_string_free(void* p) {
+    GorgetString* s = (GorgetString*)p;
     if (s->cap == 0) { *s = (Str){0}; return; }  // view — nothing to free
     __gorget_string_free_count++;
     s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
@@ -5264,7 +5269,11 @@ static inline void gorget_array_clear(GorgetArray* arr) {
     arr->len = 0;
 }
 
-static inline void gorget_array_free(GorgetArray* arr) {
+// Takes void* (not GorgetArray*) for the same reason as gorget_string_free:
+// keeps __gorget_drop_fn callback dispatch well-typed under UBSan. Direct
+// callers pass &arr / &nested_array, both decay to void*.
+static inline void gorget_array_free(void* p) {
+    GorgetArray* arr = (GorgetArray*)p;
     __gorget_array_free_count++;
     if (arr->elem_drop && arr->data) {
         for (size_t i = 0; i < arr->len; i++) {

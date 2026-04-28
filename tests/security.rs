@@ -947,19 +947,12 @@ fn sec_84_negative_subscript_traps() {
 }
 
 #[test]
-#[ignore = "ABI fix landed (build now succeeds, runs correctly without sanitizers); \
-            but ASan-instrumented binary hangs at runtime — separate bug, see TODO.md"]
 fn sec_85_dict_struct_key_codegen() {
-    // Original failure: `@derive(Hashable, Equatable) struct Point` as a
-    // Dict key emitted a key-equality wrapper that passed `(void*, void*)`
-    // to `Point__eq` (which wants `(void*, Point-by-value)`). That ABI bug
-    // is fixed: the wrapper now derefs `__b` and passes by value, and the
-    // unsanitized binary prints "origin-ish\norigin-ish" as expected.
-    //
-    // New finding (uncovered when build started succeeding): ASan+UBSan
-    // build hangs at 99% CPU instead of completing — exposed only under
-    // sanitizers. Harness has no `Hangs` variant, so `#[ignore]` until
-    // the underlying hang is investigated.
+    // `@derive(Hashable, Equatable) struct Point` as a Dict key — the
+    // key-equality wrapper now derefs and passes-by-value to match
+    // `Point__eq(const void*, Point)`'s ABI, lookups by structurally-
+    // equal keys hit, and the runtime drop-callback dispatch through
+    // `__gorget_drop_fn` is well-typed under UBSan.
     security_safe(
         "attack_85_dict_struct_key",
         "origin-ish\norigin-ish",
