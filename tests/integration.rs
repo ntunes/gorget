@@ -2097,8 +2097,6 @@ fn iter_map_filter_method_sugar() {
 
 #[test]
 fn iter_chain_past_one_step() {
-    // LLVM-specific iterator chain bug — fix pending.
-    if skip_under_llvm() { return; }
     run_gg(
         "iter_chain_past_one_step.gg",
         "4\n8\n--\n2\n4\n8",

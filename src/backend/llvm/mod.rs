@@ -3074,7 +3074,30 @@ fn emit_inst(
                     }
                 }
             } else {
-                let ty_str = val_ty.map(|t| llvm_type_full(t, snames))
+                // Generic-iterator-erasure widening (paired with CallClosure's
+                // widened ret-ty): when the source value is a CallClosure
+                // result whose LIR `ret_ty` was typed-erased narrower than
+                // the destination field, the call already emitted as the
+                // wider int. Use the destination field type so the store
+                // matches the call's actual return width.
+                let value_from_call_closure = func.blocks.iter().any(|b| {
+                    b.insts.iter().any(|i| matches!(i, Inst::CallClosure { dst: Some(d), .. } if d.0 == value.0))
+                });
+                let widened_via_callclosure = if value_from_call_closure {
+                    match (val_ty, dest_field_ty.as_ref()) {
+                        (Some(vt), Some(ft))
+                            if (vt.is_integer() || matches!(vt, LirType::Bool))
+                                && ft.is_integer()
+                                && int_bits(ft) > int_bits(vt) => Some(ft.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let ty_str = widened_via_callclosure
+                    .as_ref()
+                    .map(|t| llvm_type_full(t, snames))
+                    .or_else(|| val_ty.map(|t| llvm_type_full(t, snames)))
                     .unwrap_or_else(|| "i64".to_string());
                 writeln!(out, "  store {ty_str} %v{}, ptr %v{}", value.0, ptr.0).unwrap();
             }
@@ -5737,13 +5760,62 @@ fn emit_inst(
             }
             let joined_args = call_arg_strs.join(", ");
             if let Some(d) = dst {
-                let ret_type_str = llvm_arg_type(ret_ty, snames);
-                if needs_sret(ret_ty, &module.structs) {
+                // Generic-iterator-erasure workaround: when the closure's
+                // declared signature was type-erased to `GorgetClosure` (the
+                // typechecker collapses `F: Callable[U(T)]` and forgets the
+                // signature, so `_NN: bool` shows up for what should be U=i64
+                // — see `MapIter[..., U=int64_t, F]::next` where `cb(!x)`
+                // typechecks as `bool` because GorgetClosure's first cached
+                // signature wins). The actual `__adapt_*` shim returns the
+                // real type. If the call result is immediately consumed by a
+                // `Store` into a wider-int struct field (BIR-expanded from
+                // `EnumInit` like `Some(cb(!x))`), widen the call's return
+                // type to the field type so we read the full register value
+                // off `x0` instead of truncating to `i1`/`i8`. The C backend
+                // gets lucky here — `bool` is 1 byte so values <256 survive;
+                // LLVM's strict `i1` truncates to bit 0 and silently zeroes
+                // anything not divisible by 2.
+                let ret_is_intlike = ret_ty.is_integer() || matches!(ret_ty, LirType::Bool);
+                let widened_ret_ty: Option<LirType> = if ret_is_intlike
+                    && int_bits(ret_ty) < 64
+                {
+                    let mut found: Option<LirType> = None;
+                    'outer: for b in &func.blocks {
+                        for inst in &b.insts {
+                            if let Inst::Store { ptr: sptr, value: sval } = inst {
+                                if sval.0 == d.0 {
+                                    // Trace ptr back to its FieldPtr to find dst field type.
+                                    for b2 in &func.blocks {
+                                        for i2 in &b2.insts {
+                                            if let Inst::FieldPtr { dst: fd, struct_id, field, .. } = i2 {
+                                                if fd.0 == sptr.0 {
+                                                    let sdef = &module.structs[struct_id.0 as usize];
+                                                    if let Some((_, ft)) = sdef.fields.get(*field as usize) {
+                                                        if ft.is_integer() && int_bits(ft) > int_bits(ret_ty) {
+                                                            found = Some(ft.clone());
+                                                            break 'outer;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    found
+                } else {
+                    None
+                };
+                let effective_ret_ty = widened_ret_ty.as_ref().unwrap_or(ret_ty);
+                let ret_type_str = llvm_arg_type(effective_ret_ty, snames);
+                if needs_sret(effective_ret_ty, &module.structs) {
                     // Large aggregate: sret convention
                     writeln!(out, "  %v{} = alloca {ret_type_str}", d.0).unwrap();
                     let sret_args = format!("ptr sret({ret_type_str}) %v{}, {joined_args}", d.0);
                     writeln!(out, "  call void %{pfx}.fnp({sret_args})").unwrap();
-                } else if ret_ty.is_aggregate() {
+                } else if effective_ret_ty.is_aggregate() {
                     // Small aggregate: returned in registers, store to alloca
                     writeln!(out, "  %v{}.ret = call {ret_type_str} %{pfx}.fnp({joined_args})", d.0).unwrap();
                     writeln!(out, "  %v{} = alloca {ret_type_str}", d.0).unwrap();
