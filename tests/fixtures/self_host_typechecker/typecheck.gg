@@ -181,8 +181,7 @@ int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
 # ── Type-check a function definition ────────────────────────
 
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
-    # Generic functions: skip signature registration but still walk body
-    bool skip_sig = func.type_params.len() > 0
+    bool is_generic = func.type_params.len() > 0
     # Look up the function's body scope from the resolve context
     int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
     bool has_body_scope = body_scope >= 0
@@ -190,6 +189,16 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         if ctx.function_body_scopes.contains(func.name):
             body_scope = ctx.function_body_scopes.get(func.name).unwrap()
             has_body_scope = true
+
+    # Generic functions need their type params in scope when resolving
+    # the param/return types — body_scope has them defined. Switch the
+    # current scope to body_scope for the duration of signature
+    # resolution so `ast_type_to_resolved` sees T / U / etc. as
+    # DkGenericParam defs (matches Rust's per-call-site fresh-scope
+    # approach in register_function_signature).
+    int saved_scope = scopes.current_scope()
+    if is_generic and has_body_scope:
+        scopes.set_current(body_scope)
 
     # Resolve return type
     int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
@@ -210,24 +219,29 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
                 scopes.set_def_type(param_def, p_type_id)
         pi = pi + 1
 
+    # Restore scope before searching for fn_def in parent scope.
+    if is_generic and has_body_scope:
+        scopes.set_current(saved_scope)
+
     # Build RTFunction type for the function itself
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
 
-    # Find function's def_id in the parent scope and assign type.
-    # Skip generic functions — type params not in scope at module level.
-    if not skip_sig:
-        int fn_def = -1
-        # For equip methods, look up in the def scope (pass-1 equip scope)
-        if def_scope >= 0:
-            fn_def = scopes.lookup_in_scope(def_scope, func.name)
-        # Try parent scope next
-        if fn_def < 0:
-            fn_def = scopes.lookup_in_scope(parent_scope, func.name)
-        # Fall back to scanning all defs
-        if fn_def < 0:
-            fn_def = find_def_by_name(scopes, func.name, true)
-        if fn_def >= 0:
-            scopes.set_def_type(fn_def, fn_type_id)
+    # Find function's def_id and assign type. Generic functions get
+    # registered too — Rust's typechecker registers them with type
+    # placeholders (T → DkGenericParam DefId via the body-scope lookup
+    # above).
+    int fn_def = -1
+    # For equip methods, look up in the def scope (pass-1 equip scope)
+    if def_scope >= 0:
+        fn_def = scopes.lookup_in_scope(def_scope, func.name)
+    # Try parent scope next
+    if fn_def < 0:
+        fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+    # Fall back to scanning all defs
+    if fn_def < 0:
+        fn_def = find_def_by_name(scopes, func.name, true)
+    if fn_def >= 0:
+        scopes.set_def_type(fn_def, fn_type_id)
 
     # Walk body for VarDecl types
     if has_body_scope:
