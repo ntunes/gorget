@@ -101,6 +101,52 @@ fn c_func_name(name: &str) -> String {
     }
 }
 
+/// Extract the user key-type name from a Dict / Set / HashMap / HashSet
+/// constructor's `original_name` (preserved on `CallExtern` from the LIR).
+/// Mirrors the parsing that `c_lir::emit_hashable_key_bridges` does on its
+/// way to the same set of types.
+fn user_key_type_from_original(orig: &str) -> Option<(&str, bool)> {
+    let (rest, is_set) = if let Some(r) = orig.strip_prefix("Dict__") { (r, false) }
+        else if let Some(r) = orig.strip_prefix("HashMap__") { (r, false) }
+        else if let Some(r) = orig.strip_prefix("Set__") { (r, true) }
+        else if let Some(r) = orig.strip_prefix("HashSet__") { (r, true) }
+        else { return None; };
+    // Ctor names sometimes still carry the method suffix (`__new`, `__new_str`,
+    // `__with_capacity`) — strip it before reading the key segment.
+    let rest = rest.strip_suffix("__new_str")
+        .or_else(|| rest.strip_suffix("__new"))
+        .or_else(|| rest.strip_suffix("__with_capacity"))
+        .unwrap_or(rest);
+    let key = if is_set { rest } else { rest.splitn(2, "__").next()? };
+    Some((key, is_set))
+}
+
+/// Emit the post-construction `hash_fn` / `eq_fn` field stores that wire a
+/// user-keyed Dict / Set / HashMap / HashSet to the synthetic
+/// `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` runtime bridges. `dst`
+/// is the SSA id that received the sret'd collection. The C backend does the
+/// equivalent at `emit_collection_constructor`; without this, user-keyed
+/// dicts/sets fall back to byte-FNV/memcmp at runtime — wrong for any key
+/// holding a pointer field (String / Vector / …).
+fn emit_user_key_bridge_wiring(
+    out: &mut String,
+    dst_id: u32,
+    original_name: Option<&String>,
+    module: &crate::lir::LirModule,
+) {
+    use std::fmt::Write;
+    let orig = match original_name { Some(o) => o.as_str(), None => return };
+    let (key_type, is_set) = match user_key_type_from_original(orig) { Some(p) => p, None => return };
+    if !crate::backend::c_lir::helpers::is_user_hashable_key(key_type, module) {
+        return;
+    }
+    let agg_ty = if is_set { "%GorgetSet" } else { "%GorgetMap" };
+    writeln!(out, "  %v{dst_id}.hash_fp = getelementptr {agg_ty}, ptr %v{dst_id}, i32 0, i32 11").unwrap();
+    writeln!(out, "  store ptr @__gorget_ktable_hash__{key_type}, ptr %v{dst_id}.hash_fp").unwrap();
+    writeln!(out, "  %v{dst_id}.eq_fp = getelementptr {agg_ty}, ptr %v{dst_id}, i32 0, i32 12").unwrap();
+    writeln!(out, "  store ptr @__gorget_ktable_eq__{key_type}, ptr %v{dst_id}.eq_fp").unwrap();
+}
+
 /// Parse a monomorphized name like `Vector__int64_t__map` into (elem_c_name, method).
 /// Returns None if not a vector higher-order operation.
 fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
@@ -1372,6 +1418,41 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             }
         }
     }
+
+    // Forward-declare the synthetic `__gorget_ktable_hash__T` /
+    // `__gorget_ktable_eq__T` bridges for every user-keyed Dict / Set / HashMap
+    // / HashSet ctor seen in the LIR. The bodies live in the linked C runtime
+    // (emitted by `c_lir::emit_hashable_key_bridges`); LLVM only needs the
+    // address-of declarations for the `store ptr @bridge, ...` post-ctor
+    // wiring. Hash signature: `uint64_t (const void*)`. Eq signature:
+    // `bool (const void*, const void*)`.
+    let mut bridge_keys: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::CallExtern { name, original_name: Some(orig), .. } = inst {
+                    let is_collection_ctor = matches!(name.as_str(),
+                        "gorget_dict_new"
+                        | "gorget_map_new"
+                        | "gorget_set_new"
+                        | "gorget_set_with_capacity"
+                        | "gorget_ordered_set_new"
+                    );
+                    if !is_collection_ctor { continue; }
+                    if let Some((key, _)) = user_key_type_from_original(orig) {
+                        if crate::backend::c_lir::helpers::is_user_hashable_key(key, module) {
+                            bridge_keys.insert(key.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for key in &bridge_keys {
+        writeln!(out, "declare i64 @__gorget_ktable_hash__{key}(ptr)").unwrap();
+        writeln!(out, "declare i1 @__gorget_ktable_eq__{key}(ptr, ptr)").unwrap();
+    }
+
     writeln!(out).unwrap();
 }
 
@@ -2903,7 +2984,19 @@ fn emit_inst(
             let src_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let to_ty = llvm_type(to);
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
-            writeln!(out, "  %v{} = bitcast {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
+            let src_is_ptr = src_ty.map_or(false, |t| t.is_ptr());
+            let dst_is_ptr = matches!(to,
+                LirType::Ptr | LirType::PtrTo(_));
+            // LLVM's `bitcast` rejects pointer↔int conversions; those need
+            // explicit `ptrtoint` / `inttoptr` opcodes. The C backend papers
+            // over this with `(int64_t)p` / `(void*)i`. Same-kind casts (ptr→ptr,
+            // int→int with equal width) keep using `bitcast`.
+            let opcode = match (src_is_ptr, dst_is_ptr) {
+                (true, false) => "ptrtoint",
+                (false, true) => "inttoptr",
+                _ => "bitcast",
+            };
+            writeln!(out, "  %v{} = {opcode} {src_ty_str} %v{} to {to_ty}", dst.0, value.0).unwrap();
         }
 
         // ── Memory ──────────────────────────────────────────────────
@@ -3124,6 +3217,33 @@ fn emit_inst(
                     let pty = param_ty.map(|t| llvm_arg_type(t, snames))
                         .unwrap_or_else(|| actual_ty.map(|t| llvm_arg_type(t, snames))
                             .unwrap_or_else(|| "i64".to_string()));
+                    // Insert trunc/zext when the value's bit width differs from the
+                    // declared param's bit width (e.g. byte-literal IConst typed I64
+                    // flowing into an `i8` param). LLVM IR is strictly typed at calls
+                    // so a mismatch fails verification — the C backend gets implicit
+                    // C-level int promotions for free.
+                    if let (Some(p), Some(av)) = (param_ty, actual_ty) {
+                        if p.is_integer() && av.is_integer() {
+                            let pb = int_bits(p);
+                            let ab = int_bits(av);
+                            if pb != ab && pb > 0 && ab > 0 {
+                                let from_ty = llvm_type(av);
+                                let cast = format!("call.coerce.{}.{i}", a.0);
+                                let op = if ab > pb {
+                                    "trunc"
+                                } else if is_signed(p) {
+                                    "sext"
+                                } else {
+                                    "zext"
+                                };
+                                load_lines.push(format!(
+                                    "  %{cast} = {op} {from_ty} %v{} to {pty}",
+                                    a.0
+                                ));
+                                return format!("{pty} %{cast}");
+                            }
+                        }
+                    }
                     format!("{pty} %v{}", a.0)
                 }
             }).collect();
@@ -3155,7 +3275,7 @@ fn emit_inst(
                 writeln!(out, "  call {ret_ty} @{}({})", call_name, arg_strs.join(", ")).unwrap();
             }
         }
-        Inst::CallExtern { dst, name, args, .. } => {
+        Inst::CallExtern { dst, name, args, original_name, .. } => {
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
@@ -5219,6 +5339,32 @@ fn emit_inst(
                             actual_ty.map(|t| llvm_arg_type(t, snames))
                                 .unwrap_or_else(|| "i64".to_string())
                         };
+                        // Integer width mismatch (e.g. `gorget_str_byte_at` returns
+                        // i8 flowing into a `gorget_char_chr(i64)` param). LLVM
+                        // verifies arg widths strictly; the C backend gets implicit
+                        // C int promotions for free. Insert trunc / sext / zext.
+                        if let (Some(p), Some(av)) = (expected_ty, actual_ty) {
+                            if p.is_integer() && av.is_integer() {
+                                let pb = int_bits(p);
+                                let ab = int_bits(av);
+                                if pb != ab && pb > 0 && ab > 0 {
+                                    let from_ty = llvm_type(av);
+                                    let cast = format!("ext.coerce.{block_id}.{ext_uid}.{i}");
+                                    let op = if ab > pb {
+                                        "trunc"
+                                    } else if is_signed(p) {
+                                        "sext"
+                                    } else {
+                                        "zext"
+                                    };
+                                    spill_lines.push(format!(
+                                        "  %{cast} = {op} {from_ty} %v{} to {pty}",
+                                        a.0
+                                    ));
+                                    return format!("{pty} %{cast}");
+                                }
+                            }
+                        }
                         format!("{pty} %v{}", a.0)
                     }
                 }).collect();
@@ -5309,6 +5455,30 @@ fn emit_inst(
                     }
                 } else {
                     writeln!(out, "  call void @{name}({})", arg_strs.join(", ")).unwrap();
+                }
+            }
+
+            // ── Wire user-key Hashable/Equatable bridges ──
+            // For Dict / Set / HashMap / HashSet constructors keyed by a user
+            // type with `@derive(Hashable, Equatable)`, the runtime maps still
+            // default to byte-FNV / memcmp on the raw key bytes. The C backend
+            // patches `hash_fn` / `eq_fn` post-construction in
+            // `emit_collection_constructor`. Mirror that here so the generated
+            // LLVM IR routes user-keyed lookups through the
+            // `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` bridges
+            // (defined in the linked C runtime). Filters internally on the
+            // ctor's runtime-name AND original-name; non-ctor calls fall
+            // through.
+            if let Some(d) = dst {
+                let is_collection_ctor = matches!(name.as_ref(),
+                    "gorget_dict_new"
+                    | "gorget_map_new"
+                    | "gorget_set_new"
+                    | "gorget_set_with_capacity"
+                    | "gorget_ordered_set_new"
+                );
+                if is_collection_ctor {
+                    emit_user_key_bridge_wiring(out, d.0, original_name.as_ref(), module);
                 }
             }
         }
@@ -5808,7 +5978,29 @@ fn emit_term(
                     writeln!(out, "  %ret.t32.{} = trunc i64 %v{} to i32", val.0, val.0).unwrap();
                     writeln!(out, "  ret i32 %ret.t32.{}", val.0).unwrap();
                 } else {
-                    writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                    // General narrow-to-wide / wide-to-narrow integer mismatch
+                    // (e.g. IConst typed i32 returned from an i64 function).
+                    // Use trunc / sext / zext to match the declared return type.
+                    let needs_int_coerce = func.return_type.is_integer()
+                        && val_ty.map_or(false, |t| t.is_integer())
+                        && val_ty.map_or(false, |t| int_bits(t) != int_bits(&func.return_type));
+                    if needs_int_coerce {
+                        let vt = val_ty.unwrap();
+                        let vb = int_bits(vt);
+                        let rb = int_bits(&func.return_type);
+                        let from_ty = llvm_type(vt);
+                        let op = if vb > rb {
+                            "trunc"
+                        } else if is_signed(&func.return_type) {
+                            "sext"
+                        } else {
+                            "zext"
+                        };
+                        writeln!(out, "  %ret.coerce.{} = {op} {from_ty} %v{} to {ret_ty}", val.0, val.0).unwrap();
+                        writeln!(out, "  ret {ret_ty} %ret.coerce.{}", val.0).unwrap();
+                    } else {
+                        writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
+                    }
                 }
             }
         }

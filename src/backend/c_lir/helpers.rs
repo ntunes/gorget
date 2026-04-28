@@ -903,7 +903,7 @@ pub(super) fn emit_collection_constructor(
 /// Primitive types (int64_t, double, etc.), `Str` / `GorgetString`, and
 /// monomorphized collection types return false — they have their own
 /// runtime paths (byte-FNV for POD scalars, `_str` constructors for strings).
-pub(super) fn is_user_hashable_key(type_c: &str, module: &crate::lir::LirModule) -> bool {
+pub fn is_user_hashable_key(type_c: &str, module: &crate::lir::LirModule) -> bool {
     // Skip primitives and runtime types — their hashing is handled by
     // the runtime directly.
     if matches!(type_c,
@@ -925,7 +925,7 @@ pub(super) fn is_user_hashable_key(type_c: &str, module: &crate::lir::LirModule)
 /// as emitted by the IR lowerer. Trait-impl methods use the `Trait_for_Type`
 /// prefix; direct inherent methods use just `Type__method`. Both forms are
 /// checked so the bridge targets the correct symbol.
-pub(super) fn hashable_key_fn_names(type_c: &str, module: &crate::lir::LirModule) -> Option<(String, String)> {
+pub fn hashable_key_fn_names(type_c: &str, module: &crate::lir::LirModule) -> Option<(String, String)> {
     let direct_hash = format!("{type_c}__hash");
     let direct_eq = format!("{type_c}__eq");
     let trait_hash = format!("Hashable_for_{type_c}__hash");

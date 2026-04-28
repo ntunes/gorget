@@ -907,6 +907,32 @@ fn try_build_ir(
     }
 }
 
+/// True when the configured `llc` is LLVM <15, which still requires
+/// `-opaque-pointers` to accept bare `ptr` types. Probed once via `--version`;
+/// failure to parse falls open (we don't add the flag) so we don't break
+/// LLVM 22+ where the flag was removed.
+fn llc_needs_opaque_pointers_flag(llc: &str) -> bool {
+    let out = match Command::new(llc).arg("--version").output() {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Format: "LLVM version 14.0.6" / "Debian LLVM version 14.0.6"
+    for line in text.lines() {
+        if let Some(rest) = line.split("LLVM version").nth(1) {
+            if let Some(major) = rest
+                .trim()
+                .split('.')
+                .next()
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                return major < 15;
+            }
+        }
+    }
+    false
+}
+
 /// LLVM backend compilation pipeline: .ll → clang -c → link with runtime .o → binary
 fn compile_llvm_pipeline(
     ll_path: &Path,
@@ -1128,6 +1154,14 @@ fn compile_llvm_pipeline(
         .arg("-O0")
         .arg("-o").arg(&ll_o_path)
         .arg(ll_path);
+    // LLVM 14 (Debian oldstable) defaults to typed pointers and needs the
+    // explicit `-opaque-pointers` opt-in for IR that uses bare `ptr`. LLVM 15
+    // makes opaque pointers the default; LLVM 22 removed the flag entirely.
+    // Probe the version once and add the flag only when it's < 15 *and*
+    // recognized — that keeps both old local toolchains and CI happy.
+    if llc_needs_opaque_pointers_flag(&llc) {
+        ll_cmd.arg("-opaque-pointers");
+    }
 
     let status = ll_cmd.status();
     match status {
@@ -1170,10 +1204,13 @@ fn compile_llvm_pipeline(
     let status = link_cmd.status();
     match status {
         Ok(s) if s.success() => {
-            // Clean up temp files
-            let _ = fs::remove_file(&runtime_c_path);
-            let _ = fs::remove_file(&runtime_o_path);
-            let _ = fs::remove_file(&ll_o_path);
+            // Clean up temp files unless GORGET_KEEP_RUNTIME=1 (debugging
+            // runtime-side codegen — bridge wrappers, runtime fixups, etc.).
+            if env::var("GORGET_KEEP_RUNTIME").ok().as_deref() != Some("1") {
+                let _ = fs::remove_file(&runtime_c_path);
+                let _ = fs::remove_file(&runtime_o_path);
+                let _ = fs::remove_file(&ll_o_path);
+            }
             Ok(exe_path.to_path_buf())
         }
         Ok(s) => Err(format!("Linking failed: {s}\nGenerated LLVM IR: {}", ll_path.display())),

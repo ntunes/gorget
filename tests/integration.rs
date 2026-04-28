@@ -1645,10 +1645,6 @@ fn modules_import_shadow() {
 
 #[test]
 fn self_host_lexer() {
-    // Self-host lexer driver hits an LLVM IR validation error
-    // (i64↔i8 mismatch in `lexer___str_remove_char`'s call). Skip until
-    // the type-mismatch in self-host code is resolved.
-    if skip_under_llvm() { return; }
     run_gg_dir(
         "self_host_lexer",
         "main.gg",
@@ -1668,7 +1664,6 @@ kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return kw:None NL DEDENT EOF
 
 #[test]
 fn self_host_parser() {
-    if skip_under_llvm() { return; }
     run_gg_dir(
         "self_host_parser",
         "main.gg",
@@ -2004,10 +1999,6 @@ red != blue",
 
 #[test]
 fn dict_user_key_hashable() {
-    // LLVM regression: user-key Dict/Set with @derive(Hashable) crashes in
-    // gorget_map_clone called from the iterator. Suspect map-clone receiving
-    // a wrong-pointer arg specific to the LLVM ABI for the iter_kv path.
-    if skip_under_llvm() { return; }
     run_gg(
         "dict_user_key_hashable.gg",
         "\
@@ -2019,7 +2010,6 @@ missing ok
 
 #[test]
 fn dict_user_key_auto() {
-    if skip_under_llvm() { return; }
     run_gg(
         "dict_user_key_auto.gg",
         "\
@@ -2031,7 +2021,6 @@ missing ok
 
 #[test]
 fn set_user_key_hashable() {
-    if skip_under_llvm() { return; }
     run_gg(
         "set_user_key_hashable.gg",
         "\
