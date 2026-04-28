@@ -633,6 +633,43 @@ impl<'a> LoweringContext<'a> {
         // Two-pass registration to handle forward references (e.g., an enum
         // whose variant payloads reference structs defined later in the file).
 
+        // Pre-register Task__<T> LIR structs for every Named GIR type matching
+        // the pattern. spawn() lowering registers these as `GirType::Named` but
+        // many call sites omit the matching `add_type_def`, so they never reach
+        // the iteration below. The runtime ABI is a fixed 16-byte
+        // `(__task: ptr, __drop: ptr)` pair; pinning it here makes
+        // `map_gir_type` of spawn dst values resolve to a 16-byte `Struct(sid)`
+        // instead of falling through to `LirType::Ptr` — fixing the LLVM crash
+        // where the spawn extern declared an 8-byte ptr return and downstream
+        // task_group_submit_raw read .__drop from `(spawn_ret_ptr + 8)`,
+        // off the end of the .__task referent.
+        let task_names: std::collections::HashSet<String> = (0..self.gir.type_registry.len())
+            .filter_map(|i| {
+                let id = crate::ir::types::TypeId(i as u32);
+                match self.gir.type_registry.get(id) {
+                    Some(crate::ir::types::GirType::Named(name)) if name.starts_with("Task__") => Some(name.clone()),
+                    _ => None,
+                }
+            })
+            .collect();
+        for task_name in task_names {
+            if self.struct_reg.lookup(&task_name).is_some() {
+                continue;
+            }
+            let sid = self.module.add_struct(StructDef {
+                name: task_name.clone(),
+                fields: vec![
+                    ("__task".into(), LirType::Ptr),
+                    ("__drop".into(), LirType::Ptr),
+                ],
+                enum_kind: EnumKind::NotEnum,
+                is_union_layout: false,
+                computed_c_size: Some(16),
+                computed_c_align: Some(8),
+            });
+            self.struct_reg.register(&task_name, sid);
+        }
+
         // Pass 1: Pre-register all type names with empty placeholder structs.
         let mut deferred: Vec<(StructId, usize)> = Vec::new();
         for (idx, def) in self.gir.type_registry.type_defs().iter().enumerate() {
@@ -693,6 +730,13 @@ impl<'a> LoweringContext<'a> {
             computed_c_size: None, computed_c_align: None,
                               });
                 self.struct_reg.register(&def.name, sid);
+                continue;
+            }
+
+            // Task__<T> handled above by the up-front Named-type scan; if a
+            // matching TypeDef also exists, it'd already have a struct
+            // registered (the lookup at the top of this loop catches it).
+            if def.name.starts_with("Task__") {
                 continue;
             }
 
@@ -1004,20 +1048,6 @@ pub(super) fn collection_runtime_type(name: &str) -> Option<&'static str> {
     if name.starts_with("Result__") || name.starts_with("Option__") {
         // Result/Option are real structs with fields — don't alias.
         return None;
-    }
-    if name.starts_with("Task__") {
-        // Each `Task__<T>` registers in GIR as an empty-fields struct
-        // (`TypeDefKind::Struct(StructDef { fields: vec![] })`). At LIR
-        // lowering time, lookups for that name miss the LIR struct
-        // registry and `map_gir_type` falls to `LirType::Ptr`, which
-        // makes spawn externs declare an 8-byte ptr return instead of
-        // the 16-byte TaskHandle struct the C runtime actually returns.
-        // The C backend hides this via per-call coercion; the LLVM
-        // backend then loads the .__drop field from `(spawn_return_ptr) + 8`,
-        // reading off the end of the .__task pointer's referent. Aliasing
-        // every Task__<T> to the LIR-level TaskHandle (`{task_ptr, drop_fn}`)
-        // pins the ABI to the right 16-byte shape across both backends.
-        return Some("TaskHandle");
     }
     None
 }
