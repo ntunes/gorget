@@ -21,7 +21,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::SelfExpr
             | Expr::It => {}
 
-            Expr::StringLiteral(lit) => {
+            Expr::StringLiteral(lit, _) => {
                 // Re-parse and check interpolation expressions for borrow safety.
                 // Interpolations are stored as raw strings; the borrow checker must
                 // parse them to catch use-after-move, bare param mutation, etc.

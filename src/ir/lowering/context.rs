@@ -1240,7 +1240,7 @@ impl<'a> LoweringContext<'a> {
             Expr::IntLiteral(_) => I64_TYPE,
             Expr::FloatLiteral(_) => F64_TYPE,
             Expr::BoolLiteral(_) => BOOL_TYPE,
-            Expr::StringLiteral(_) => self.type_mapper.owned_string_type,
+            Expr::StringLiteral(_, _) => self.type_mapper.owned_string_type,
             Expr::BinaryOp { left, op, .. } => {
                 use crate::parser::ast::BinaryOp;
                 match op {

@@ -101,7 +101,7 @@ impl<'a> BorrowChecker<'a> {
             // Plain string literals are always valid (static storage).
             // F-strings with interpolation allocate heap memory (GorgetString)
             // with local lifetime — classified as Owned.
-            Expr::StringLiteral(s) => {
+            Expr::StringLiteral(s, _) => {
                 if s.has_interpolation() {
                     BorrowOrigin::Owned
                 } else {
@@ -667,7 +667,7 @@ impl<'a> BorrowChecker<'a> {
         }
         // Structural heuristics
         match &expr.node {
-            Expr::StringLiteral(_) => true,
+            Expr::StringLiteral(_, _) => true,
             Expr::Identifier(_) => {
                 if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
                     let def = self.scopes.get_def(def_id);

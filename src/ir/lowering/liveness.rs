@@ -243,7 +243,7 @@ fn uses_expr(
             live.remove(&variable.node);
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
-        Expr::StringLiteral(_) => {}
+        Expr::StringLiteral(_, _) => {}
         _ => {} // Literals, type names, etc.
     }
 }

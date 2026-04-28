@@ -536,7 +536,7 @@ fn visit_expr_children(expr: &Spanned<Expr>, mut visit: impl FnMut(&Spanned<Expr
             if let Some(s) = start { visit(s); }
             if let Some(e) = end { visit(e); }
         }
-        Expr::StringLiteral(_) => {
+        Expr::StringLiteral(_, _) => {
             // Interpolation segments are text-only at the AST level; no child exprs to walk
         }
         Expr::Call { callee, args, .. } => {

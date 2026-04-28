@@ -471,7 +471,7 @@ fn eval_platform_condition(expr: &Expr) -> Option<bool> {
                     if args.is_empty() {
                         if let Expr::Identifier(n) = &callee.node {
                             if n == "platform" {
-                                if let Expr::StringLiteral(sl) = b {
+                                if let Expr::StringLiteral(sl, _) = b {
                                     return Some(sl.as_plain_text());
                                 }
                             }
@@ -1020,7 +1020,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::NoneLiteral
         | Expr::SelfExpr
         | Expr::It
-        | Expr::StringLiteral(_) => {}
+        | Expr::StringLiteral(_, _) => {}
 
         Expr::Path { .. } => {}
 

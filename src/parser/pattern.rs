@@ -97,7 +97,7 @@ impl Parser {
             Token::StringLiteral(s) => {
                 self.advance();
                 Ok(Spanned::new(
-                    Pattern::Literal(Box::new(Spanned::new(Expr::StringLiteral(s), start))),
+                    Pattern::Literal(Box::new(Spanned::new(Expr::StringLiteral(s, Vec::new()), start))),
                     start,
                 ))
             }

@@ -93,7 +93,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable, error
             if let Expr::Call { ref callee, ref args, .. } = expr.node {
                 if let Expr::Identifier(ref cname) = callee.node {
                     if cname == "field_set" && args.len() == 3 {
-                        if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                        if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                             if !s.has_interpolation() {
                                 let field_name: String = s.segments.iter()
                                     .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -340,7 +340,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::StringLiteral(_) | Expr::NoneLiteral
+        | Expr::StringLiteral(_, _) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
     }
 
@@ -348,7 +348,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
             if cname == "field_value" && args.len() == 2 {
-                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()
                             .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -372,7 +372,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
             if cname == "make_variant" && args.len() == 2 {
-                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let variant_name: String = s.segments.iter()
                             .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -657,7 +657,8 @@ mod tests {
                                 crate::lexer::token::StringLiteral {
                                 kind: crate::lexer::token::StringKind::Normal,
                                 segments: vec![crate::lexer::token::StringSegment::Literal("hi".to_string())],
-                            }
+                            },
+                            Vec::new(),
                             ), dummy_span()),
                         },
                         dummy_span(),

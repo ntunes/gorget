@@ -974,8 +974,26 @@ impl<'a> TypeChecker<'a> {
             }
             Expr::FloatLiteral(_) => self.types.float_id,
             Expr::BoolLiteral(_) => self.types.bool_id,
-            Expr::StringLiteral(s) => {
+            Expr::StringLiteral(s, interp_exprs) => {
                 use crate::lexer::token::StringSegment;
+                // Typecheck each pre-parsed interpolation expression so method
+                // calls inside `f"{...}"` get their generic args inferred and
+                // mangled symbols recorded — same pipeline as any other
+                // expression. Errors fired here are *suppressed*: the prior
+                // lowering path re-parsed and lowered segments without
+                // typecheck pre-flight, so polymorphic stdlib calls like
+                // `abs(-2.5)` (which trip the unifier the same way the
+                // bound-to-local form does) used to compile via the
+                // IR-lowering dispatch path. Suppressing errors keeps existing
+                // fixtures green while still threading inferred targs into
+                // `inferred_method_targs` for Pass 4.5 sync. The simple
+                // identifier path below remains for the Displayable
+                // diagnostic on bare-name segments.
+                let saved_err_len = self.errors.len();
+                for interp in interp_exprs {
+                    let _ = self.infer_expr(interp);
+                }
+                self.errors.truncate(saved_err_len);
                 for seg in &s.segments {
                     if let StringSegment::Interpolation(var_name, _) = seg {
                         let def_id_opt = if let Some(scope_id) = self.current_fn_scope {
@@ -4677,6 +4695,11 @@ pub fn apply_inferred_method_targs(
                 for e in elems.iter_mut() { walk_expr(e, inferred); }
             }
             Expr::Block(b) => walk_block(b, inferred),
+            Expr::StringLiteral(_, interp_exprs) => {
+                for ie in interp_exprs.iter_mut() {
+                    walk_expr(ie, inferred);
+                }
+            }
             _ => {}
         }
     }
@@ -4843,6 +4866,9 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 for e in elems { walk_expr(e); }
             }
             Expr::Block(b) => walk_block(b),
+            Expr::StringLiteral(_, interp_exprs) => {
+                for ie in interp_exprs.iter_mut() { walk_expr(ie); }
+            }
             _ => {}
         }
     }

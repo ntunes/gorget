@@ -63,12 +63,12 @@ fn lower_expr_inner(
 
         Expr::BoolLiteral(b) => Operand::Constant(Constant::Bool(*b)),
 
-        Expr::StringLiteral(lit) => {
+        Expr::StringLiteral(lit, interp_exprs) => {
             if !lit.has_interpolation() {
                 let text = lit.as_plain_text();
                 Operand::Constant(Constant::Str(text))
             } else {
-                lower_string_interpolation(ctx, builder, lit)
+                lower_string_interpolation(ctx, builder, lit, interp_exprs)
             }
         }
 
@@ -2571,17 +2571,21 @@ fn lower_string_interpolation(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     lit: &crate::lexer::token::StringLiteral,
+    interp_exprs: &[Spanned<Expr>],
 ) -> Operand {
     let mut format_str = String::new();
     let mut args: Vec<Operand> = Vec::new();
 
+    let mut interp_idx = 0usize;
     for segment in &lit.segments {
         match segment {
             StringSegment::Literal(text) => {
                 format_str.push_str(text);
             }
             StringSegment::Interpolation(var_name, fmt_spec) => {
-                lower_interp_segment(ctx, builder, var_name,
+                let pre_parsed = interp_exprs.get(interp_idx);
+                interp_idx += 1;
+                lower_interp_segment(ctx, builder, var_name, pre_parsed,
                     &mut format_str, &mut args, fmt_spec.as_deref());
             }
         }
@@ -2764,7 +2768,7 @@ mod tests {
             &spanned(Expr::StringLiteral(StringLiteral {
                 kind: StringKind::Normal,
                 segments: vec![StringSegment::Literal("hello".into())],
-            })),
+            }, Vec::new())),
         );
         assert!(matches!(str_op, Operand::Constant(Constant::Str(ref s)) if s == "hello"));
     }
@@ -2816,7 +2820,7 @@ mod tests {
         let args = vec![spanned(CallArg {
             name: None,
             ownership: ast::Ownership::Borrow,
-            value: spanned(Expr::StringLiteral(lit)),
+            value: spanned(Expr::StringLiteral(lit, Vec::new())),
         })];
 
         lower_print_call(&mut ctx, &mut builder, &args);
@@ -3007,7 +3011,7 @@ mod tests {
             &spanned(Expr::StringLiteral(StringLiteral {
                 kind: StringKind::Normal,
                 segments: vec![StringSegment::Literal("hello".into())],
-            })),
+            }, Vec::new())),
         );
         assert!(
             matches!(result, Operand::Constant(Constant::Str(ref s)) if s == "hello"),
@@ -3032,7 +3036,7 @@ mod tests {
                     StringSegment::Literal("value: ".into()),
                     StringSegment::Interpolation("x".into(), None),
                 ],
-            })),
+            }, Vec::new())),
         );
         // Should return Copy (of the gorget_string_format result local)
         assert!(matches!(result, Operand::Copy(_)));

@@ -1763,7 +1763,7 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(n.to_string()),
         Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("{f}")),
         Expr::BoolLiteral(b) => return GlobalInit::RuntimeCall(if *b { "true" } else { "false" }.to_string()),
-        Expr::StringLiteral(s) => {
+        Expr::StringLiteral(s, _) => {
             // Str is just {const char*, size_t} — no heap allocation needed.
             let text = s.as_plain_text();
             let escaped = text.replace('\\', "\\\\").replace('"', "\\\"")
@@ -1902,7 +1902,7 @@ fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
         Expr::IntLiteral(n) => n.to_string(),
         Expr::FloatLiteral(f) => f.to_string(),
         Expr::BoolLiteral(b) => if *b { "1".to_string() } else { "0".to_string() },
-        Expr::StringLiteral(s) => format!("\"{}\"", s.as_plain_text()),
+        Expr::StringLiteral(s, _) => format!("\"{}\"", s.as_plain_text()),
         // Negative literals: -5, -3.14
         Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
             match &operand.node {
@@ -1919,7 +1919,7 @@ fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
 fn is_literal_arg(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::Expr;
     matches!(expr,
-        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) | Expr::StringLiteral(_)
+        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) | Expr::StringLiteral(_, _)
     ) || matches!(expr, Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand }
         if matches!(operand.node, Expr::IntLiteral(_) | Expr::FloatLiteral(_)))
 }
@@ -2680,7 +2680,7 @@ fn eval_const_expr(
         Expr::IntLiteral(v) => Some(Constant::I64(*v)),
         Expr::FloatLiteral(v) => Some(Constant::F64(*v)),
         Expr::BoolLiteral(v) => Some(Constant::Bool(*v)),
-        Expr::StringLiteral(lit) => {
+        Expr::StringLiteral(lit, _) => {
             // Simple non-interpolated string
             use crate::lexer::token::StringSegment;
             if lit.segments.len() == 1 {

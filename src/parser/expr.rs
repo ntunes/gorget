@@ -154,7 +154,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::StringLiteral(_) | Expr::NoneLiteral
+        | Expr::StringLiteral(_, _) | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } => false,
     }
 }
@@ -278,6 +278,58 @@ enum InfixOp {
     Catch,
 }
 
+/// Pre-parse each interpolation segment of a format-kind string literal
+/// into a `Spanned<Expr>`. The returned vector has one entry per
+/// `StringSegment::Interpolation` in declaration order; literal segments
+/// are skipped. Empty for non-format strings.
+///
+/// Errors during sub-expression parsing fall back to a literal string
+/// fragment carrying the original text — IR-lowering's old re-parse path
+/// remains available as a backstop. The semantic-pass benefit (resolution,
+/// typecheck, method-mangling) only requires successful parses.
+///
+/// Span keys must be unique across the module: typecheck uses
+/// `method.span.start` to index `inferred_method_targs` and Pass 4.5 sync.
+/// Each segment gets a fresh synthetic base offset from a process-global
+/// atomic counter so no two parsed segments produce the same span keys.
+/// Diagnostics inside f-string segments will point at synthetic offsets
+/// rather than real source positions — acceptable trade for correctness;
+/// the lexer would need to record per-segment source offsets to fix that.
+fn parse_format_string_interp_exprs(
+    lit: &crate::lexer::token::StringLiteral,
+    span: Span,
+) -> Vec<Spanned<Expr>> {
+    use crate::lexer::token::{StringKind, StringSegment};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Start above any plausible source-file size. 1 << 40 ≈ 1 TiB; sources
+    // are at most a few MiB, so this never collides with real spans.
+    static SEGMENT_OFFSET: AtomicUsize = AtomicUsize::new(1usize << 40);
+    if lit.kind != StringKind::Format {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for seg in &lit.segments {
+        if let StringSegment::Interpolation(text, _) = seg {
+            let base = SEGMENT_OFFSET.fetch_add(1usize << 20, Ordering::Relaxed);
+            let parsed = match Parser::new_with_offset(text, base).parse_expr() {
+                Ok(e) => e,
+                Err(_) => Spanned::new(
+                    Expr::StringLiteral(
+                        crate::lexer::token::StringLiteral {
+                            kind: StringKind::Normal,
+                            segments: vec![StringSegment::Literal(text.clone())],
+                        },
+                        Vec::new(),
+                    ),
+                    span,
+                ),
+            };
+            out.push(parsed);
+        }
+    }
+    out
+}
+
 impl Parser {
     /// Parse an expression.
     pub fn parse_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {
@@ -344,7 +396,15 @@ impl Parser {
             }
             Token::StringLiteral(s) => {
                 self.advance();
-                Ok(Spanned::new(Expr::StringLiteral(s), start))
+                // For format-kind strings, parse each interpolation segment's
+                // expression text up-front so it participates in name resolution,
+                // typechecking, and the method-mangling rewriter alongside other
+                // expressions. Without this, IR-lowering would re-parse the text
+                // and lower a fresh AST that bypassed every semantic pass — the
+                // root cause of `f"{v.iter().any(p)}"` link-failing against an
+                // un-mangled symbol.
+                let interp_exprs = parse_format_string_interp_exprs(&s, start);
+                Ok(Spanned::new(Expr::StringLiteral(s, interp_exprs), start))
             }
             Token::Keyword(Keyword::True) => {
                 self.advance();

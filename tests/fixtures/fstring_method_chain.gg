@@ -1,0 +1,27 @@
+# F-string interpolation segments now go through the typecheck rewriter
+# so iterator-method chains inside `{...}` get the same mangling as bare
+# expressions. Previously this link-failed against an un-mangled symbol;
+# users had to bind the result to a local first.
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int double(int x):
+    return x * 2
+
+void main():
+    Vector[int] v = [1, 2, 3, 4]
+
+    # Bare-name interpolation (the always-worked case).
+    bool any_even = v.iter().any(is_even)
+    print(f"any_even via local: {any_even}")
+
+    # Method-chain interpolation (the formerly-broken case).
+    print(f"any_even direct: {v.iter().any(is_even)}")
+    print(f"all_even direct: {v.iter().all(is_even)}")
+    print(f"count direct: {v.iter().count()}")
+    print(f"sum direct: {v.iter().fold(0, (int acc, int x): acc + x)}")
+    print(f"first double: {v.iter().map(double).fold(0, (int a, int b): a + b)}")
+
+    # Multi-segment with both shapes — independence check.
+    print(f"local={any_even}, direct={v.iter().any(is_even)}")

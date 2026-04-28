@@ -57,7 +57,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         | Expr::It => {}
 
         // ── String literal (may contain interpolations) ──
-        Expr::StringLiteral(s) => {
+        Expr::StringLiteral(s, _) => {
             for seg in &s.segments {
                 if let StringSegment::Interpolation(name, _) = seg {
                     // Treat interpolated name as an identifier reference.

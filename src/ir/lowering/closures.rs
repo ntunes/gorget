@@ -560,7 +560,7 @@ impl FreeVarCollector<'_> {
                 if let Some(s) = start { self.visit_expr(&s.node); }
                 if let Some(e) = end { self.visit_expr(&e.node); }
             }
-            Expr::StringLiteral(lit) => {
+            Expr::StringLiteral(lit, _) => {
                 // Visit interpolated variable references in f-strings
                 for seg in &lit.segments {
                     if let crate::lexer::token::StringSegment::Interpolation(var_name, _) = seg {
@@ -803,7 +803,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
         Expr::IntLiteral(_) => I64_TYPE,
         Expr::FloatLiteral(_) => F64_TYPE,
         Expr::BoolLiteral(_) => BOOL_TYPE,
-        Expr::StringLiteral(_) => ctx.type_mapper.owned_string_type,
+        Expr::StringLiteral(_, _) => ctx.type_mapper.owned_string_type,
         Expr::BinaryOp { op, .. } => {
             use crate::parser::ast::BinaryOp;
             match op {

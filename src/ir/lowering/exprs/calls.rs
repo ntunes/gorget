@@ -443,9 +443,9 @@ pub(super) fn lower_call(
 
         // format("...") → string interpolation or gorget_string_from_str
         if name == "format" && args.len() == 1 {
-            if let Expr::StringLiteral(lit) = &args[0].node.value.node {
+            if let Expr::StringLiteral(lit, interp_exprs) = &args[0].node.value.node {
                 if lit.segments.iter().any(|s| matches!(s, StringSegment::Interpolation(_, _))) {
-                    return lower_string_interpolation(ctx, builder, lit);
+                    return lower_string_interpolation(ctx, builder, lit, interp_exprs);
                 } else {
                     // Plain string literal → gorget_string_from_str(str_literal)
                     let str_op = lower_expr(ctx, builder, &args[0].node.value);
@@ -1141,7 +1141,7 @@ pub fn lower_print_call(
                     // `as_plain_text`. Interpolation segments are silently
                     // dropped; a user passing `terminator=f"{x}"` would only
                     // see the literal chunks, but that's not a real use case.
-                    if let Expr::StringLiteral(lit) = &arg.node.value.node {
+                    if let Expr::StringLiteral(lit, _) = &arg.node.value.node {
                         let has_interp = lit.segments.iter().any(|s| matches!(s, StringSegment::Interpolation(_, _)));
                         if !has_interp {
                             terminator = lit.as_plain_text();
@@ -1163,17 +1163,20 @@ pub fn lower_print_call(
     let arg_expr = &args[0].node.value;
 
     match &arg_expr.node {
-        Expr::StringLiteral(lit) => {
+        Expr::StringLiteral(lit, interp_exprs) => {
             let mut format_str = String::new();
             let mut printf_args: Vec<Operand> = Vec::new();
 
+            let mut interp_idx = 0usize;
             for segment in &lit.segments {
                 match segment {
                     StringSegment::Literal(text) => {
                         format_str.push_str(text);
                     }
                     StringSegment::Interpolation(var_name, fmt_spec) => {
-                        lower_interp_segment(ctx, builder, var_name,
+                        let pre_parsed = interp_exprs.get(interp_idx);
+                        interp_idx += 1;
+                        lower_interp_segment(ctx, builder, var_name, pre_parsed,
                             &mut format_str, &mut printf_args, fmt_spec.as_deref());
                     }
                 }
@@ -1217,11 +1220,20 @@ pub fn lower_print_call(
 
 /// Lower a single interpolation segment in a print/format context.
 /// Handles simple variable lookups and re-parses complex expressions (method calls, field access, etc.).
+/// `pre_parsed` is the parser-supplied AST for the segment text (populated for
+/// every f-string segment so the expression participates in resolution and
+/// typecheck/method-mangling rewrites). When `Some`, lowering uses it
+/// directly; when `None` (constructed-during-lowering literals or parse
+/// failures during early f-string sub-parse), falls back to re-parsing the
+/// raw text — that path bypasses the rewriter and may emit un-mangled
+/// symbols, but is preserved as a backstop so synthesised f-strings still
+/// work.
 /// `fmt_spec` is an optional format specifier like ".2f", "x", "08d", etc.
 pub(super) fn lower_interp_segment(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
+    pre_parsed: Option<&Spanned<Expr>>,
     format_str: &mut String,
     printf_args: &mut Vec<Operand>,
     fmt_spec: Option<&str>,
@@ -1280,11 +1292,11 @@ pub(super) fn lower_interp_segment(
         return;
     }
 
-    // 2. Try re-parsing as a full expression (handles method calls, field access, operators)
-    if let Ok(parsed_expr) = Parser::new(var_name).parse_expr() {
-        let val = lower_expr(ctx, builder, &parsed_expr);
+    // 2. Lower the parser-supplied Expr if available — it has been through
+    //    resolution and typecheck so method calls dispatch to mangled symbols.
+    if let Some(expr) = pre_parsed {
+        let val = lower_expr(ctx, builder, expr);
         let type_id = infer_operand_type_full(ctx, &val, builder);
-        // Store result in a temp local so we can take its address / reuse
         let tmp = builder.add_local(type_id, None);
         builder.assign(Place::local(tmp), val);
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
@@ -1293,7 +1305,22 @@ pub(super) fn lower_interp_segment(
         return;
     }
 
-    // 3. Fallback — insert literal text
+    // 3. Backstop — re-parse the raw text. Reached only for synthesised f-strings
+    //    constructed during lowering (no parse-time AST attached) or when the
+    //    parser's sub-expression parse failed. Bypasses semantic passes; complex
+    //    expressions here may produce un-mangled symbols.
+    if let Ok(parsed_expr) = Parser::new(var_name).parse_expr() {
+        let val = lower_expr(ctx, builder, &parsed_expr);
+        let type_id = infer_operand_type_full(ctx, &val, builder);
+        let tmp = builder.add_local(type_id, None);
+        builder.assign(Place::local(tmp), val);
+        let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
+        format_str.push_str(&spec);
+        printf_args.extend(args);
+        return;
+    }
+
+    // 4. Last-resort — insert literal text
     format_str.push_str(var_name);
 }
 

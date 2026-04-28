@@ -913,7 +913,7 @@ fn eval_expr(
         Expr::IntLiteral(n) => Ok(MetaValue::Int(*n)),
         Expr::FloatLiteral(f) => Ok(MetaValue::Float(*f)),
         Expr::BoolLiteral(b) => Ok(MetaValue::Bool(*b)),
-        Expr::StringLiteral(s) => {
+        Expr::StringLiteral(s, _) => {
             // Only plain string literals (no interpolation segments)
             if s.segments.iter().any(|seg| matches!(seg, StringSegment::Interpolation(_, _))) {
                 return Err(meta_err("interpolated strings cannot be evaluated at compile time", span));
@@ -1108,7 +1108,7 @@ fn meta_expr_to_type_name(expr: &Expr) -> String {
         // After meta-variable substitution in a `meta for` loop, what was an identifier
         // (e.g. `ftype`) becomes a StringLiteral holding the resolved type name.
         // Extract the plain text so `T is numeric` still works post-substitution.
-        Expr::StringLiteral(s) => s.segments.iter().filter_map(|seg| {
+        Expr::StringLiteral(s, _) => s.segments.iter().filter_map(|seg| {
             if let StringSegment::Literal(t) = seg { Some(t.as_str()) } else { None }
         }).collect(),
         Expr::Index { object, index } => {
@@ -2093,7 +2093,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             if let Expr::Call { ref callee, ref args, .. } = expr.node {
                 if let Expr::Identifier(ref cname) = callee.node {
                     if cname == "field_set" && args.len() == 3 {
-                        if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                        if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                             if !s.has_interpolation() {
                                 let field_name: String = s.segments.iter()
                                     .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -2384,7 +2384,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         | Expr::NoneLiteral
         | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
         // StringLiteral handled below
-        Expr::StringLiteral(_) => {}
+        Expr::StringLiteral(_, _) => {}
     }
 
     // Substitute MetaOpInfix → BinaryOp when the op_name is bound to a MetaValue::Op
@@ -2420,13 +2420,28 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         }
     }
 
-    // Also handle string interpolation segments
-    if let Expr::StringLiteral(s) = &mut expr.node {
+    // Also handle string interpolation segments. When a meta-variable name
+    // matches an interpolation, replace the segment with a Literal AND drop
+    // the corresponding parser-supplied `interp_exprs` entry (it would now
+    // be stale — a `Identifier("fname")` reference to a name that exists
+    // only in the meta env, not the runtime scope, would otherwise trigger
+    // a spurious "undefined name" diagnostic during resolution).
+    if let Expr::StringLiteral(s, interp_exprs) = &mut expr.node {
+        let mut interp_idx = 0usize;
+        let mut to_drop: Vec<usize> = Vec::new();
         for seg in &mut s.segments {
             if let StringSegment::Interpolation(name, _) = seg {
                 if let Some(value) = env.get(name.as_str()) {
                     *seg = StringSegment::Literal(meta_value_to_string(value));
+                    to_drop.push(interp_idx);
                 }
+                interp_idx += 1;
+            }
+        }
+        // Drop in reverse order so indices stay valid as we shrink the Vec.
+        for idx in to_drop.into_iter().rev() {
+            if idx < interp_exprs.len() {
+                interp_exprs.remove(idx);
             }
         }
     }
@@ -2436,7 +2451,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
             if cname == "field_value" && args.len() == 2 {
-                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let field_name: String = s.segments.iter()
                             .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -2460,7 +2475,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
     if let Expr::Call { ref callee, ref args, .. } = expr.node {
         if let Expr::Identifier(ref cname) = callee.node {
             if cname == "make_variant" && args.len() == 2 {
-                if let Expr::StringLiteral(ref s) = args[1].node.value.node {
+                if let Expr::StringLiteral(ref s, _) = args[1].node.value.node {
                     if !s.has_interpolation() {
                         let variant_name: String = s.segments.iter()
                             .filter_map(|seg| if let StringSegment::Literal(l) = seg { Some(l.as_str()) } else { None })
@@ -2496,7 +2511,7 @@ fn meta_value_to_expr(value: &MetaValue) -> Expr {
         MetaValue::Str(s) => Expr::StringLiteral(StringLiteral {
             kind: StringKind::Normal,
             segments: vec![StringSegment::Literal(s.clone())],
-        }),
+        }, Vec::new()),
         MetaValue::List(_) => {
             // Lists are not representable as a single AST expression;
             // they are only used internally by meta for iteration.
@@ -3609,7 +3624,7 @@ mod tests {
         let s = Expr::StringLiteral(StringLiteral {
             kind: StringKind::Normal,
             segments: vec![StringSegment::Literal("hello".to_string())],
-        });
+        }, Vec::new());
         let result = eval_expr(&s, &empty_env(), &no_ctx(), dummy_span());
         match result {
             Ok(MetaValue::Str(s)) => assert_eq!(s, "hello"),
@@ -3676,7 +3691,7 @@ mod tests {
                 Expr::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![StringSegment::Literal("a".to_string())],
-                }),
+                }, Vec::new()),
                 dummy_span(),
             )),
             op: BinaryOp::Add,
@@ -3684,7 +3699,7 @@ mod tests {
                 Expr::StringLiteral(StringLiteral {
                     kind: StringKind::Normal,
                     segments: vec![StringSegment::Literal("b".to_string())],
-                }),
+                }, Vec::new()),
                 dummy_span(),
             )),
         };
@@ -3879,7 +3894,7 @@ mod tests {
                             Expr::StringLiteral(StringLiteral {
                                 kind: StringKind::Normal,
                                 segments: vec![StringSegment::Literal("world".to_string())],
-                            }),
+                            }, Vec::new()),
                             dummy_span(),
                         ),
                         span: dummy_span(),
@@ -3913,7 +3928,7 @@ mod tests {
                                                     Expr::StringLiteral(StringLiteral {
                                                         kind: StringKind::Normal,
                                                         segments: vec![StringSegment::Interpolation("NAME".to_string(), None)],
-                                                    }),
+                                                    }, Vec::new()),
                                                     dummy_span(),
                                                 ),
                                             },
@@ -3945,7 +3960,7 @@ mod tests {
             if let FunctionBody::Block(block) = &f.body {
                 if let Stmt::Expr(call) = &block.stmts[0].node {
                     if let Expr::Call { args, .. } = &call.node {
-                        if let Expr::StringLiteral(s) = &args[0].node.value.node {
+                        if let Expr::StringLiteral(s, _) = &args[0].node.value.node {
                             assert_eq!(s.segments.len(), 1);
                             assert!(
                                 matches!(&s.segments[0], StringSegment::Literal(lit) if lit == "world"),
@@ -3988,7 +4003,7 @@ mod tests {
                             Expr::StringLiteral(StringLiteral {
                                 kind: StringKind::Normal,
                                 segments: vec![StringSegment::Literal("X must be positive".to_string())],
-                            }),
+                            }, Vec::new()),
                             dummy_span(),
                         )),
                         span: dummy_span(),
@@ -4015,7 +4030,7 @@ mod tests {
                         Expr::StringLiteral(StringLiteral {
                             kind: StringKind::Normal,
                             segments: vec![StringSegment::Literal("oops".to_string())],
-                        }),
+                        }, Vec::new()),
                         dummy_span(),
                     )),
                     span: dummy_span(),

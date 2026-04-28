@@ -7950,7 +7950,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             }
         }
         Expr::BoolLiteral(b) => if *b { "true" } else { "false" }.to_string(),
-        Expr::StringLiteral(slit) => {
+        Expr::StringLiteral(slit, _) => {
             let text = flatten_string_literal(slit);
             format!("\"{text}\"")
         }
@@ -8400,7 +8400,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             if let Some(msg) = message {
                 // Extract string text from message expr
                 let msg_text = match &msg.node {
-                    Expr::StringLiteral(slit) => flatten_string_literal(slit),
+                    Expr::StringLiteral(slit, _) => flatten_string_literal(slit),
                     other => format_expr_canonical(other),
                 };
                 format!("assert {cond}, \"{msg_text}\"")
@@ -8412,7 +8412,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             let cond = format_expr_canonical(&condition.node);
             if let Some(msg) = message {
                 let msg_text = match &msg.node {
-                    Expr::StringLiteral(slit) => flatten_string_literal(slit),
+                    Expr::StringLiteral(slit, _) => flatten_string_literal(slit),
                     other => format_expr_canonical(other),
                 };
                 format!("assert return {cond}, \"{msg_text}\"")
@@ -15765,6 +15765,14 @@ fn fstring_expressions() {
     run_gg(
         "fstring_expressions.gg",
         "int: 42\nfloat: 3.140000\nstr: world\nbool: true\nexpr: 50\nmulti: world has 42 items",
+    );
+}
+
+#[test]
+fn fstring_method_chain() {
+    run_gg(
+        "fstring_method_chain.gg",
+        "any_even via local: true\nany_even direct: true\nall_even direct: false\ncount direct: 4\nsum direct: 10\nfirst double: 20\nlocal=true, direct=true",
     );
 }
 

@@ -1223,15 +1223,22 @@ fn resolve_expr(
         | Expr::SelfExpr
         | Expr::It => {}
 
-        Expr::StringLiteral(s) => {
-            // Resolve interpolated expressions inside string
-            for segment in &s.segments {
-                if let crate::lexer::token::StringSegment::Interpolation(interp_expr, _) = segment {
-                    // The interpolation contains a string that was parsed — we'd need to
-                    // re-parse it. For now, we skip resolution inside string interpolations.
-                    let _ = interp_expr;
-                }
+        Expr::StringLiteral(_, interp_exprs) => {
+            // Resolve each pre-parsed interpolation expression so closure
+            // parameters / lambda bindings inside `f"{...}"` segments get
+            // DefIds that the typecheck pass can look up. Errors are
+            // *suppressed* here — meta-for loop variables (`f"{fname}"`
+            // inside `meta for fname in fields(T)`) only materialise during
+            // delayed-meta expansion at monomorphisation time, and the
+            // resolver runs before that. Real undefined names are still
+            // reported when the same expression is used outside an f-string,
+            // and Pass 4 typecheck silently produces `error_id` for unresolved
+            // references inside interpolations.
+            let mut sink: Vec<SemanticError> = Vec::new();
+            for interp in interp_exprs {
+                resolve_expr(interp, scopes, &mut sink, resolution_map);
             }
+            // Discard sink — see above.
         }
 
         Expr::Identifier(name) => {

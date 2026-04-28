@@ -495,7 +495,7 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
                 count_uses_in_expr(&body.node, counts);
             }
         }
-        Expr::StringLiteral(_) => {} // f-string interpolations don't affect move analysis
+        Expr::StringLiteral(_, _) => {} // f-string interpolations don't affect move analysis
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body, .. } => {
             count_uses_in_expr(&body.node, counts);
         }

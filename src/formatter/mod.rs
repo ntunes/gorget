@@ -1638,7 +1638,7 @@ impl Formatter {
             Expr::BoolLiteral(b) => {
                 self.emitter.write(if *b { "true" } else { "false" });
             }
-            Expr::StringLiteral(s) => {
+            Expr::StringLiteral(s, _) => {
                 self.format_string_lit(s);
             }
             Expr::NoneLiteral => self.emitter.write("None"),

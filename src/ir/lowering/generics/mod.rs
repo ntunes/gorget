@@ -11,7 +11,6 @@ use substitute::{substitute_type, substitute_function_body, inject_builtin_enums
 use rustc_hash::FxHashMap;
 
 use crate::ir::types::*;
-use crate::lexer::token::StringSegment;
 use crate::parser::ast::{self, Expr, GenericParam, Item, Stmt, Type};
 use crate::span::{Span, Spanned};
 
@@ -734,14 +733,13 @@ impl GenericCollector {
                     self.scan_expr(e);
                 }
             }
-            Expr::StringLiteral(lit) => {
-                // Scan interpolation segments for generic usages (e.g., "{add_values[int](3, 4)}")
-                for seg in &lit.segments {
-                    if let StringSegment::Interpolation(text, _) = seg {
-                        if let Ok(parsed) = crate::parser::Parser::new(text).parse_expr() {
-                            self.scan_expr(&parsed);
-                        }
-                    }
+            Expr::StringLiteral(_, interp_exprs) => {
+                // Scan pre-parsed interpolation expressions for generic usages
+                // (e.g., `f"{add_values[int](3, 4)}"`). The parser populates
+                // `interp_exprs` for every f-string; falling back to re-parsing
+                // would skip the typecheck rewriter and inferred targs.
+                for ie in interp_exprs {
+                    self.scan_expr(ie);
                 }
             }
             // Block expressions: multi-statement match arm bodies, do-blocks, etc.
@@ -1100,6 +1098,16 @@ impl GenericCollector {
             }
             Expr::Block(block) => {
                 self.walk_block_for_method_calls(block, env);
+            }
+            Expr::StringLiteral(_, interp_exprs) => {
+                // Recurse into pre-parsed f-string interpolation expressions so
+                // method calls inside `f"{...}"` participate in monomorphisation
+                // discovery (per-call-site instance registration via
+                // `try_register_method_instance`). Without this, mangled symbols
+                // referenced from f-strings have no body emitted and link-fail.
+                for ie in interp_exprs {
+                    self.walk_expr_for_method_calls(ie, env);
+                }
             }
             _ => {}
         }

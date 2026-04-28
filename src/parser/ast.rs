@@ -457,7 +457,14 @@ pub enum Expr {
     IntLiteral(i64),
     FloatLiteral(f64),
     BoolLiteral(bool),
-    StringLiteral(crate::lexer::token::StringLiteral),
+    /// String literal with optional pre-parsed interpolation expressions.
+    /// The first field is the lexer-emitted literal (text + segment list).
+    /// The second is one parsed `Expr` per `StringSegment::Interpolation`,
+    /// in order — populated by the parser for `Format`-kind strings so that
+    /// semantic passes (resolution, typecheck, method-mangling rewriter)
+    /// process the interpolation expressions naturally. Empty for non-format
+    /// strings and for synthetic literals constructed during lowering.
+    StringLiteral(crate::lexer::token::StringLiteral, Vec<Spanned<Expr>>),
     NoneLiteral,
 
     // ── Identifiers ──

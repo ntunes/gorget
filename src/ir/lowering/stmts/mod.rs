@@ -2718,6 +2718,7 @@ mod tests {
                 kind: crate::lexer::token::StringKind::Normal,
                 segments: vec![crate::lexer::token::StringSegment::Literal("error".into())],
             },
+            Vec::new(),
         ))));
 
         lower_stmt(&mut ctx, &mut builder, &stmt);
