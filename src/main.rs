@@ -1126,7 +1126,6 @@ fn compile_llvm_pipeline(
     ll_cmd
         .arg("-filetype=obj")
         .arg("-O0")
-        .arg("-opaque-pointers")
         .arg("-o").arg(&ll_o_path)
         .arg(ll_path);
 
