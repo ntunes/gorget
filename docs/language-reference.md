@@ -1741,7 +1741,10 @@ int result = do:
 ```ebnf
 closure = [ "!" | "move" ] [ "async" ] "(" [ closure_param_list ] ")" ":" ( expr | block ) ;
 closure_param_list = closure_param { "," closure_param } ;
-closure_param = [ type ] [ "&" | "!" ] IDENTIFIER ;
+closure_param = [ type ] [ "&" | "!" ] IDENTIFIER
+              | "(" tuple_destructure_list ")" ;
+tuple_destructure_list = typed_binding { "," typed_binding } ;  (* 2 or more *)
+typed_binding = type [ "&" | "!" ] IDENTIFIER ;
 ```
 
 Anonymous functions that capture variables from their environment.
@@ -1751,6 +1754,22 @@ auto doubled = numbers.map((x): x * 2)
 auto sum = pairs.map((a, b): a + b)
 auto typed = strings.map((String s): s.parse[int]())
 ```
+
+**Tuple destructuring:** A parenthesised list of two or more `Type Name`
+bindings in place of a closure parameter destructures one tuple-typed
+argument into named locals:
+
+```gorget
+# Closure receives one (K, V) tuple per call; destructured into k and v:
+int total = d.iter().fold(0, (int acc, (int k, int v)): acc + k + v)
+
+# Three-element variant — same shape, more bindings:
+records.iter().each(((int id, String name, int age)): print(id, name, age))
+```
+
+Equivalent to a closure with one tuple-typed param plus explicit field
+access (`((int, int) p): p._0`). The destructure form binds the components
+as named locals at the start of the closure body.
 
 **Move closures:** Prefix `!` or `move` forces all captured variables to be moved into the closure:
 

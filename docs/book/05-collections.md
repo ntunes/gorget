@@ -561,16 +561,46 @@ auto long = names.filter(it.len() > 3)      # ["Alice", "Charlie"]
 
 ### Dict and Set
 
-Dicts and sets also support `filter` and `fold`:
+Dicts support direct named HOFs (`any` / `all` / `each` / `find` / `fold` /
+`filter`). The closure takes key and value as two separate arguments — the
+natural shape for a Dict:
 
 ```gorget
 auto scores = {"Alice": 90, "Bob": 75, "Carol": 85}
 
-auto passing = scores.filter((String k, int v): v >= 80)
-int total = scores.fold(0, (int acc, String k, int v): acc + v)
+bool any_high  = scores.any((String k, int v): v >= 90)
+bool all_pass  = scores.all((String k, int v): v >= 60)
+auto passing   = scores.filter((String k, int v): v >= 80)
+int  total     = scores.fold(0, (int acc, String k, int v): acc + v)
 ```
 
-Sets support `filter`, `fold`, `any`, and `all`:
+When you need to **compose** transformations (filter → map → take → ...),
+use the iterator chain. `d.iter()` yields `(K, V)` tuples, and closure
+tuple destructuring binds the components as named locals:
+
+```gorget
+# Filter, transform, then aggregate — direct .filter / .any can't chain like this:
+int total_high = scores
+    .iter()
+    .filter(((String k, int v)): v >= 80)
+    .fold(0, (int acc, (String k, int v)): acc + v)
+
+# Project to keys via destructuring; underscore ignores the value:
+Vector[String] high_names = scores
+    .iter()
+    .filter(((String k, int v)): v >= 80)
+    .map(((String k, int _v)): k)
+    .collect()
+```
+
+Both shapes coexist by use case:
+
+| Use case                                            | Use            |
+|-----------------------------------------------------|----------------|
+| One-shot predicate / each / fold on a Dict          | Direct named HOF |
+| Filter / map / take / zip / chain in the middle     | Iterator chain   |
+
+Sets support `filter`, `fold`, `any`, and `all` with single-argument closures:
 
 ```gorget
 from std.collections import Set

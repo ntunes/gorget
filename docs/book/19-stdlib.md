@@ -350,11 +350,20 @@ for x in s.iter().take(2):
     print(x)
 
 # Dict.iter() yields a lazy DictIter[K, V] producing (K, V) tuples.
+# Closure tuple destructuring (`((K k, V v))`) binds the components as
+# named locals inside iterator-chain closures.
 Dict[String, int] ages = Dict[String, int]()
 ages.put("Alice", 30)
 ages.put("Bob", 25)
 for p in ages.iter():
     print(f"{p.0}: {p.1}")
+int sum_ages = ages.iter().fold(0, (int acc, (String k, int v)): acc + v)
+
+# Direct named HOFs on Dict still take key+value as TWO closure args
+# (natural shape for one-shot Dict ops). Use the iterator chain when
+# composing with .filter / .map / .take / etc.:
+bool any_adult = ages.any((String k, int v): v >= 18)
+int via_chain = ages.iter().filter(((String k, int v)): v >= 18).count()
 
 # collect() infers its target from the LHS binding type.
 Vector[int] dups = [1, 1, 2, 3, 3, 3]
