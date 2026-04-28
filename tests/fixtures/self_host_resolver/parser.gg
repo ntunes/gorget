@@ -1724,6 +1724,14 @@ equip Parser:
                 self.advance()  # (
                 self.expect_tok(TOK_RPAREN, "expected ')' after .await(")
                 return SpannedExpr(EAwait(Box(lhs)), Span(start, self.peek().lex_start))
+            # Method-level turbofish: `.method[T1, T2, ...](args)`.
+            if self.check_tok(TOK_LBRACKET):
+                int saved = self.pos
+                Vector[SpannedType] mtargs = self.parse_type_args()
+                if self.check_tok(TOK_LPAREN):
+                    Vector[SpannedExpr] call_args = self.parse_call_args()
+                    return SpannedExpr(EMethodCall(Box(lhs), name, call_args, mtargs), Span(start, self.peek().lex_start))
+                self.pos = saved
             if self.check_tok(TOK_LPAREN):
                 Vector[SpannedExpr] call_args = self.parse_call_args()
                 return SpannedExpr(EMethodCall(Box(lhs), name, call_args, Vector[SpannedType]()), Span(start, self.peek().lex_start))
