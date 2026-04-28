@@ -4,7 +4,7 @@
 # Usage: driver <path-to-file.gg>
 
 from parser import parse_source
-from ast import Module
+from ast import Module, Item
 from scope import ScopeTable
 from types import TypeTable
 from resolve import resolve_module, ResolveContext
@@ -12,15 +12,55 @@ from typecheck import type_check_module
 from format_types import format_types
 from derive import expand_derives
 from meta import expand_meta_types
-from std.fs import read_file
+from std.fs import read_file, file_exists
 from std.os import args
 from std.collections import Vector
+
+# Try loading lib/std/iter.gg from a few candidate paths and prepend its
+# items to `m.items` so the registry/typechecker can see Iterator,
+# Iterable, the adapter structs, and their equip blocks. Without this,
+# fixture chains like `v.iter().take(n).map(f).collect()` see Iterator
+# as a bare trait name with no methods registered.
+void try_prepend_std_iter(Module &m):
+    Vector[String] candidates = Vector[String]()
+    candidates.push("lib/std/iter.gg")
+    candidates.push("../lib/std/iter.gg")
+    candidates.push("../../lib/std/iter.gg")
+    candidates.push("../../../lib/std/iter.gg")
+    int i = 0
+    while i < candidates.len():
+        String p = candidates.get(i).unwrap()
+        if file_exists(p):
+            String src = read_file(p)
+            Module std_m = parse_source(src)
+            Vector[Item] merged = Vector[Item]()
+            int sj = 0
+            while sj < std_m.items.len():
+                merged.push(std_m.items.get(sj).unwrap())
+                sj = sj + 1
+            int uj = 0
+            while uj < m.items.len():
+                merged.push(m.items.get(uj).unwrap())
+                uj = uj + 1
+            m.items = merged
+            return
+        i = i + 1
 
 void main():
     Vector[String] cmd_args = args()
     String path = cmd_args.get(1).unwrap()
     String source = read_file(path)
     Module m = parse_source(source)
+    # `try_prepend_std_iter(&m)` is intentionally NOT called by default.
+    # When the std prelude is merged in, impl-override method signatures
+    # (e.g. `equip [T] Vector[T] with Iterable[T]: VectorIter[T]
+    # iter(&self)`) leak the abstract `T` placeholder TypeId into return
+    # types, which masks user-fixture locals like `auto a = parse_int(s)`
+    # because the body-scope walking finds shadowed names. Until impl-
+    # override sigs also get the AST-shape substitution treatment that
+    # default methods got in (a2), keeping the loader off-by-default
+    # avoids 4 fixture regressions in `type_comparison`. See `(2)`
+    # follow-on in TODO.md.
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()

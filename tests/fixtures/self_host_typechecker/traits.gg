@@ -1,0 +1,958 @@
+# Trait registry — mirrors src/semantic/traits.rs for the self-host typechecker.
+#
+# Indexes traits and equip blocks so EMethodCall return-type inference can
+# look up methods structurally instead of pattern-matching hardcoded
+# method-name strings. Method-level generic args are inferred at the call
+# site through MethodSigShape (Shape-1: bind G when it appears as a bare
+# param type; Shape-2: bind G when it appears in the return type and a
+# function-typed arg's return type fills it in).
+#
+# Storage uses parallel Vectors over method names instead of
+# Dict[String, _] so the structure is robust against the known stage-N
+# Dict[String, _] state-loss issue should the typechecker ever bootstrap.
+
+from std.collections import Vector
+from ast import Module, Item, Type, FunctionDef, TraitDef, EquipBlock, Param, SpannedType, Span
+from ast import ITrait, IEquip
+from ast import TPrimitive, TNamed, TArray, TSlice, TTuple, TFunction, TSelf
+from ids import NO_DEF, NO_TYPE
+from scope import ScopeTable, DefInfo, Scope, get_scope_at
+from scope import SkEquipBlock, SkFunction
+from types import TypeTable, ResolvedType, ast_type_to_resolved, get_rtype_at
+from types import RTGeneric, RTFunction
+from types import FunctionSig, MethodSigShape, TraitInfo, EquipInfo
+from types import TraitRegistry, MethodResolution, ShapeResolution
+
+# Data-type definitions (FunctionSig, MethodSigShape, TraitInfo,
+# EquipInfo, TraitRegistry, MethodResolution, ShapeResolution) live in
+# types.gg so the registry can ride on `&types` threading. This file
+# owns the builder + resolver logic.
+
+MethodResolution not_found_resolution():
+    return MethodResolution(false, FunctionSig(Vector[int](), -1, false, -1), -1)
+
+ShapeResolution not_found_shape():
+    Vector[String] empty_names = Vector[String]()
+    Vector[Type] empty_params = Vector[Type]()
+    return ShapeResolution(false, MethodSigShape(empty_names, empty_params, TPrimitive("")))
+
+TraitRegistry new_trait_registry():
+    return TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
+
+# ── Helpers: parallel-Vector lookup ──────────────────────────
+
+int find_method_index(Vector[String] names, String target):
+    int i = 0
+    while i < names.len():
+        String n = names.get(i).unwrap()
+        if n == target:
+            return i
+        i = i + 1
+    return -1
+
+# ── AST type helpers ───────────────────────────────────────
+# Walk a Type checking whether `name` appears as a bare TNamed (no args).
+# Used by Shape-2 inference to detect which generic params show up in
+# the return type.
+
+bool type_mentions_name(Type ty, String name):
+    match ty:
+        case TNamed(tname, generic_args):
+            if generic_args.len() == 0 and tname == name:
+                return true
+            int i = 0
+            while i < generic_args.len():
+                SpannedType arg = generic_args.get(i).unwrap()
+                if type_mentions_name(arg.ty, name):
+                    return true
+                i = i + 1
+            return false
+        case TArray(element, size):
+            return type_mentions_name((*element).ty, name)
+        case TSlice(element):
+            return type_mentions_name((*element).ty, name)
+        case TTuple(elements):
+            int i = 0
+            while i < elements.len():
+                SpannedType e = elements.get(i).unwrap()
+                if type_mentions_name(e.ty, name):
+                    return true
+                i = i + 1
+            return false
+        case TFunction(return_type, params, _):
+            if type_mentions_name((*return_type).ty, name):
+                return true
+            int i = 0
+            while i < params.len():
+                SpannedType p = params.get(i).unwrap()
+                if type_mentions_name(p.ty, name):
+                    return true
+                i = i + 1
+            return false
+        else:
+            return false
+    return false
+
+# Resolve an AST Type with a name → TypeId binding map. Substitutes bare
+# TNamed names that match a binding; otherwise recurses for generic args
+# or falls through to ast_type_to_resolved.
+
+int resolve_with_bindings(Type ty, Vector[String] bind_names, Vector[int] bind_tids, ScopeTable scopes, TypeTable &types):
+    match ty:
+        case TSelf():
+            int sidx = find_method_index(bind_names, "Self")
+            if sidx >= 0:
+                return bind_tids.get(sidx).unwrap()
+            return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
+        case TNamed(name, generic_args):
+            if generic_args.len() == 0:
+                int idx = find_method_index(bind_names, name)
+                if idx >= 0:
+                    return bind_tids.get(idx).unwrap()
+            if generic_args.len() > 0:
+                int def_id = scopes.lookup(name)
+                if def_id >= 0:
+                    Vector[int] resolved_args = Vector[int]()
+                    int i = 0
+                    while i < generic_args.len():
+                        SpannedType arg = generic_args.get(i).unwrap()
+                        int aid = resolve_with_bindings(arg.ty, bind_names, bind_tids, scopes, &types)
+                        resolved_args.push(aid)
+                        i = i + 1
+                    return types.add_type(RTGeneric(def_id, resolved_args))
+            return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
+        else:
+            return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
+    return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
+
+# ── Build FunctionSig from a FunctionDef ─────────────────────
+# Returns sig with method-level generics erased to types.error_id (their
+# defs aren't in scope at registry-build time).
+
+FunctionSig build_function_sig(FunctionDef func, ScopeTable scopes, TypeTable &types):
+    int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
+    Vector[int] params = Vector[int]()
+    bool has_self = false
+    int self_ownership = -1
+    int i = 0
+    while i < func.params.len():
+        Param p = func.params.get(i).unwrap()
+        if p.param_name == "self":
+            has_self = true
+            self_ownership = p.ownership
+            i = i + 1
+            continue
+        int p_tid = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
+        params.push(p_tid)
+        i = i + 1
+    return FunctionSig(params, ret_id, has_self, self_ownership)
+
+# Build a MethodSigShape (only meaningful when func.type_params is non-empty;
+# the return value is a placeholder shape when type_params is empty).
+
+MethodSigShape build_method_sig_shape(FunctionDef func):
+    Vector[Type] param_types = Vector[Type]()
+    int i = 0
+    while i < func.params.len():
+        Param p = func.params.get(i).unwrap()
+        if p.param_name != "self":
+            param_types.push(p.param_type.ty)
+        i = i + 1
+    return MethodSigShape(func.type_params, param_types, func.return_type.ty)
+
+# ── type_name: receiver shape → string ────────────────────────
+
+String type_name_of(Type ty):
+    match ty:
+        case TNamed(name, _):
+            return name
+        case TPrimitive(name):
+            return name
+        case TSelf():
+            return "Self"
+        else:
+            return ""
+    return ""
+
+# ── Collect a TraitDef into the registry ──────────────────────
+
+void collect_trait(TraitDef trait_def, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry):
+    int def_id = scopes.lookup(trait_def.name)
+    if def_id < 0:
+        return
+    Vector[String] method_names = Vector[String]()
+    Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
+    Vector[bool] method_has_default = Vector[bool]()
+    Vector[String] shape_names = Vector[String]()
+    Vector[MethodSigShape] shape_shapes = Vector[MethodSigShape]()
+    Vector[String] default_shape_names = Vector[String]()
+    Vector[MethodSigShape] default_shape_shapes = Vector[MethodSigShape]()
+    int mi = 0
+    while mi < trait_def.methods.len():
+        FunctionDef method = trait_def.methods.get(mi).unwrap()
+        FunctionSig sig = build_function_sig(method, scopes, &types)
+        method_names.push(method.name)
+        method_sigs.push(sig)
+        bool has_body = method.is_expr_body or method.body.len() > 0
+        method_has_default.push(has_body)
+        if method.type_params.len() > 0:
+            shape_names.push(method.name)
+            shape_shapes.push(build_method_sig_shape(method))
+        if has_body:
+            default_shape_names.push(method.name)
+            default_shape_shapes.push(build_method_sig_shape(method))
+        mi = mi + 1
+    Vector[int] parents = Vector[int]()
+    int pi = 0
+    while pi < trait_def.parent_traits.len():
+        String pname = trait_def.parent_traits.get(pi).unwrap()
+        int parent_id = scopes.lookup(pname)
+        if parent_id >= 0:
+            parents.push(parent_id)
+        pi = pi + 1
+    TraitInfo info = TraitInfo(def_id, trait_def.name, method_names, method_sigs, method_has_default, shape_names, shape_shapes, trait_def.type_params, parents, default_shape_names, default_shape_shapes)
+    registry.traits.push(info)
+
+# ── Find the Nth pass-1 equip scope ──────────────────────────
+
+int registry_find_nth_equip_def_scope(int n, int parent_scope, ScopeTable scopes):
+    int count = 0
+    int sid = 0
+    while sid < scopes.scope_count():
+        Scope s = get_scope_at(scopes.scopes, sid)
+        if s.parent == parent_scope:
+            bool is_equip = false
+            match s.kind:
+                case SkEquipBlock():
+                    is_equip = true
+                else:
+                    pass
+            if is_equip:
+                bool has_fn_child = false
+                int csid = sid + 1
+                while csid < scopes.scope_count():
+                    Scope cs = get_scope_at(scopes.scopes, csid)
+                    if cs.parent == sid:
+                        match cs.kind:
+                            case SkFunction():
+                                has_fn_child = true
+                            else:
+                                pass
+                    if cs.parent < sid:
+                        csid = scopes.scope_count()
+                    csid = csid + 1
+                if not has_fn_child:
+                    if count == n:
+                        return sid
+                    count = count + 1
+        sid = sid + 1
+    return -1
+
+# ── Collect an EquipBlock into the registry ──────────────────
+
+void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry):
+    int saved = scopes.current_scope()
+    if equip_scope >= 0:
+        scopes.set_current(equip_scope)
+    int self_tid = ast_type_to_resolved(eq.target.ty, eq.target.span, scopes, &types)
+    String self_name = type_name_of(eq.target.ty)
+    int trait_def_id = NO_DEF
+    String trait_name = ""
+    match eq.trait_name:
+        case Some(tn):
+            int td = scopes.lookup(tn)
+            if td >= 0:
+                trait_def_id = td
+            trait_name = tn
+        case None:
+            pass
+    Vector[String] method_names = Vector[String]()
+    Vector[int] method_def_ids = Vector[int]()
+    Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
+    Vector[String] shape_names = Vector[String]()
+    Vector[MethodSigShape] shape_shapes = Vector[MethodSigShape]()
+    int mi = 0
+    while mi < eq.methods.len():
+        FunctionDef method = eq.methods.get(mi).unwrap()
+        FunctionSig sig = build_function_sig(method, scopes, &types)
+        int mdef = -1
+        if equip_scope >= 0:
+            mdef = scopes.lookup_in_scope(equip_scope, method.name)
+        method_names.push(method.name)
+        method_def_ids.push(mdef)
+        method_sigs.push(sig)
+        if method.type_params.len() > 0:
+            shape_names.push(method.name)
+            shape_shapes.push(build_method_sig_shape(method))
+        mi = mi + 1
+    String via_name = ""
+    match eq.via_field:
+        case Some(v):
+            via_name = v
+        case None:
+            pass
+    # Capture trait generic args (AST-level Type vector) for call-site
+    # Self/T substitution. Empty for inherent impls or non-generic traits.
+    Vector[Type] trait_args = Vector[Type]()
+    int tai = 0
+    while tai < eq.trait_generic_args.len():
+        SpannedType targ = eq.trait_generic_args.get(tai).unwrap()
+        trait_args.push(targ.ty)
+        tai = tai + 1
+    EquipInfo info = EquipInfo(self_tid, self_name, trait_def_id, trait_name, method_names, method_def_ids, method_sigs, shape_names, shape_shapes, eq.target.ty, eq.type_params, via_name, trait_args)
+    registry.impls.push(info)
+    scopes.set_current(saved)
+
+# ── Built-in trait registration ──────────────────────────────
+# Mirrors src/semantic/traits.rs `register_builtin_traits`. Populates
+# TraitInfo for each known trait *name* iff the resolver pre-defined it
+# in scope (resolve.gg pushes Displayable / Equatable / … into the
+# trait_names list at scope init). Uses types.error_id as a placeholder
+# for Self / generic-param positions, exactly like the Rust impl —
+# call-site substitution will materialise them later (currently a TODO
+# follow-on; today these sigs feed the intrinsic-satisfaction path).
+#
+# Ordering: called after `collect_trait` walks user `trait` decls. If a
+# user shadows a built-in name, the user's TraitInfo is already in the
+# registry under the same DefId; we skip re-registering.
+
+# Ownership constants (mirror parser.gg's OWN_*).
+int trait_own_borrow():
+    return 0
+int trait_own_mutable():
+    return 1
+int trait_own_move():
+    return 2
+
+bool registry_has_trait_for_def_id(TraitRegistry registry, int def_id):
+    int i = 0
+    while i < registry.traits.len():
+        TraitInfo t = registry.traits.get(i).unwrap()
+        if t.def_id == def_id:
+            return true
+        i = i + 1
+    return false
+
+# Build a builtin TraitInfo with a single method.
+TraitInfo make_builtin_trait_one(int def_id, String name, String method, FunctionSig sig):
+    Vector[String] mn = Vector[String]()
+    mn.push(method)
+    Vector[FunctionSig] ms = Vector[FunctionSig]()
+    ms.push(sig)
+    Vector[bool] mh = Vector[bool]()
+    mh.push(false)
+    Vector[String] sn = Vector[String]()
+    Vector[MethodSigShape] ss = Vector[MethodSigShape]()
+    Vector[String] gp = Vector[String]()
+    Vector[int] ext = Vector[int]()
+    Vector[String] dn = Vector[String]()
+    Vector[MethodSigShape] dss = Vector[MethodSigShape]()
+    return TraitInfo(def_id, name, mn, ms, mh, sn, ss, gp, ext, dn, dss)
+
+# Register a builtin trait by name. No-op if scope doesn't define it
+# (resolver controls which builtins exist) or if it's already in the
+# registry from user collect_trait.
+void register_builtin_method(String trait_name, String method, FunctionSig sig, ScopeTable scopes, TraitRegistry &registry):
+    int def_id = scopes.lookup(trait_name)
+    if def_id < 0:
+        return
+    if registry_has_trait_for_def_id(registry, def_id):
+        return
+    registry.traits.push(make_builtin_trait_one(def_id, trait_name, method, sig))
+
+# Append a method to an existing builtin trait (used for multi-method
+# traits like Hasher).
+void append_builtin_method(String trait_name, String method, FunctionSig sig, ScopeTable scopes, TraitRegistry &registry):
+    int def_id = scopes.lookup(trait_name)
+    if def_id < 0:
+        return
+    int i = 0
+    while i < registry.traits.len():
+        TraitInfo t = registry.traits.get(i).unwrap()
+        if t.def_id == def_id:
+            t.method_names.push(method)
+            t.method_sigs.push(sig)
+            t.method_has_default_body.push(false)
+            registry.traits.set(i, t)
+            return
+        i = i + 1
+
+# Helpers to build common FunctionSigs.
+
+FunctionSig sig_self_returns(int ret_id, int self_own):
+    return FunctionSig(Vector[int](), ret_id, true, self_own)
+
+FunctionSig sig_self_one_arg(int arg_id, int ret_id, int self_own):
+    Vector[int] params = Vector[int]()
+    params.push(arg_id)
+    return FunctionSig(params, ret_id, true, self_own)
+
+FunctionSig sig_self_two_args(int a1, int a2, int ret_id, int self_own):
+    Vector[int] params = Vector[int]()
+    params.push(a1)
+    params.push(a2)
+    return FunctionSig(params, ret_id, true, self_own)
+
+FunctionSig sig_static_no_args(int ret_id):
+    return FunctionSig(Vector[int](), ret_id, false, -1)
+
+FunctionSig sig_static_one_arg(int arg_id, int ret_id):
+    Vector[int] params = Vector[int]()
+    params.push(arg_id)
+    return FunctionSig(params, ret_id, false, -1)
+
+# Register every built-in core trait. Walk through each trait name; if
+# the resolver pre-defined it AND the user hasn't supplied their own
+# TraitDef, install a TraitInfo with placeholder-typed sigs.
+void register_builtin_traits(ScopeTable scopes, TypeTable types, TraitRegistry &registry):
+    int err = types.error_id
+    int void_id = types.void_id
+    int bool_id = types.bool_id
+    int int_id = types.int_id
+    int str_id = types.string_id
+    int owned_str_id = types.owned_string_id
+    int own_borrow = trait_own_borrow()
+    int own_mutable = trait_own_mutable()
+    int own_move = trait_own_move()
+
+    # Displayable: String display(self)
+    register_builtin_method("Displayable", "display", sig_self_returns(owned_str_id, own_borrow), scopes, &registry)
+    # Debuggable: String debug(self)
+    register_builtin_method("Debuggable", "debug", sig_self_returns(owned_str_id, own_borrow), scopes, &registry)
+    # Equatable: bool eq(self, Self other)
+    register_builtin_method("Equatable", "eq", sig_self_one_arg(err, bool_id, own_borrow), scopes, &registry)
+    # Cloneable: Self clone(self) — return placeholder
+    register_builtin_method("Cloneable", "clone", sig_self_returns(err, own_borrow), scopes, &registry)
+    # Hashable: void hash[H](self, H &h)
+    register_builtin_method("Hashable", "hash", sig_self_one_arg(err, void_id, own_borrow), scopes, &registry)
+    # Hasher: write_int / write_bytes / write_string / finish
+    register_builtin_method("Hasher", "write_int", sig_self_one_arg(int_id, void_id, own_mutable), scopes, &registry)
+    append_builtin_method("Hasher", "write_bytes", sig_self_one_arg(err, void_id, own_mutable), scopes, &registry)
+    append_builtin_method("Hasher", "write_string", sig_self_one_arg(owned_str_id, void_id, own_mutable), scopes, &registry)
+    append_builtin_method("Hasher", "finish", sig_self_returns(int_id, own_borrow), scopes, &registry)
+    # Ordinal: int ordinal(self)
+    register_builtin_method("Ordinal", "ordinal", sig_self_returns(int_id, own_borrow), scopes, &registry)
+    # Drop: void drop(!self)
+    register_builtin_method("Drop", "drop", sig_self_returns(void_id, own_move), scopes, &registry)
+    # Iterable: IterType iter(&self) — return placeholder; concrete from impl
+    register_builtin_method("Iterable", "iter", sig_self_returns(err, own_mutable), scopes, &registry)
+    # Add[Out] / Sub / Mul / Div / Rem / Mod: Out op(self, Self rhs)
+    register_builtin_method("Add", "add", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    register_builtin_method("Sub", "sub", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    register_builtin_method("Mul", "mul", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    register_builtin_method("Div", "div", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    register_builtin_method("Rem", "rem", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    register_builtin_method("Mod", "mod", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    # Neg[Out]: Out neg(self)
+    register_builtin_method("Neg", "neg", sig_self_returns(err, own_borrow), scopes, &registry)
+    # Comparable: int compare(self, Self other)
+    register_builtin_method("Comparable", "compare", sig_self_one_arg(err, int_id, own_borrow), scopes, &registry)
+    # Index[K, V]: V get(self, K key)
+    register_builtin_method("Index", "get", sig_self_one_arg(err, err, own_borrow), scopes, &registry)
+    # IndexMut[K, V]: void set(&self, K key, V value)
+    register_builtin_method("IndexMut", "set", sig_self_two_args(err, err, void_id, own_mutable), scopes, &registry)
+    # Default: Self default() — static
+    register_builtin_method("Default", "default", sig_static_no_args(err), scopes, &registry)
+    # From[T]: Self from(T) — static
+    register_builtin_method("From", "from", sig_static_one_arg(err, err), scopes, &registry)
+    # TryFrom[T]: Result[Self, str] try_from(T) — static
+    register_builtin_method("TryFrom", "try_from", sig_static_one_arg(err, err), scopes, &registry)
+    # Measurable: int len(self)
+    register_builtin_method("Measurable", "len", sig_self_returns(int_id, own_borrow), scopes, &registry)
+    # Parseable: Option[Self] parse(str) — static
+    register_builtin_method("Parseable", "parse", sig_static_one_arg(str_id, err), scopes, &registry)
+    # One: Self one() — static
+    register_builtin_method("One", "one", sig_static_no_args(err), scopes, &registry)
+    # Numeric: composite — empty methods, extends others
+    int numeric_def = scopes.lookup("Numeric")
+    if numeric_def >= 0 and not registry_has_trait_for_def_id(registry, numeric_def):
+        Vector[int] parents = Vector[int]()
+        Vector[String] parent_names = Vector[String]()
+        parent_names.push("Add")
+        parent_names.push("Sub")
+        parent_names.push("Mul")
+        parent_names.push("Div")
+        parent_names.push("Rem")
+        parent_names.push("Mod")
+        parent_names.push("Neg")
+        parent_names.push("Comparable")
+        parent_names.push("Default")
+        parent_names.push("One")
+        int pi = 0
+        while pi < parent_names.len():
+            String pn = parent_names.get(pi).unwrap()
+            int pd = scopes.lookup(pn)
+            if pd >= 0:
+                parents.push(pd)
+            pi = pi + 1
+        Vector[String] empty_mn = Vector[String]()
+        Vector[FunctionSig] empty_ms = Vector[FunctionSig]()
+        Vector[bool] empty_mh = Vector[bool]()
+        Vector[String] empty_sn = Vector[String]()
+        Vector[MethodSigShape] empty_ss = Vector[MethodSigShape]()
+        Vector[String] empty_gp = Vector[String]()
+        Vector[String] empty_dn = Vector[String]()
+        Vector[MethodSigShape] empty_dss = Vector[MethodSigShape]()
+        TraitInfo numeric_info = TraitInfo(numeric_def, "Numeric", empty_mn, empty_ms, empty_mh, empty_sn, empty_ss, empty_gp, parents, empty_dn, empty_dss)
+        registry.traits.push(numeric_info)
+
+# ── Build the registry for a module ──────────────────────────
+
+# Typed accessor — works around a codegen bug where inline
+# `module.items.get(i).unwrap()` zero-inits the local instead of loading.
+Item get_item_at_idx(Vector[Item] v, int i):
+    return v.get(i).unwrap()
+
+TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable &types):
+    TraitRegistry registry = new_trait_registry()
+    int module_scope = 0
+    int i = 0
+    while i < module.items.len():
+        Item item_a = get_item_at_idx(module.items, i)
+        match item_a:
+            case ITrait(td):
+                collect_trait(td, &scopes, &types, &registry)
+            else:
+                pass
+        i = i + 1
+    int eq_idx = 0
+    int j = 0
+    while j < module.items.len():
+        Item item_b = get_item_at_idx(module.items, j)
+        match item_b:
+            case IEquip(eq):
+                int equip_scope = registry_find_nth_equip_def_scope(eq_idx, module_scope, scopes)
+                collect_equip(eq, equip_scope, &scopes, &types, &registry)
+                eq_idx = eq_idx + 1
+            else:
+                pass
+        j = j + 1
+    # Register built-in core traits last so user-defined traits (collected
+    # above via collect_trait) win on the same DefId.
+    register_builtin_traits(scopes, types, &registry)
+    return registry
+
+# ── Default-method Self/T substitution ───────────────────────
+# Mirrors `substitute_default_method_sig` in src/semantic/typecheck.rs.
+# When phase 3 of resolve_method matches a trait-default method, the
+# stored FunctionSig's return_type is `error_id` for any slot that was
+# `Self` or trait-T in the source. The AST shape preserves that structure
+# in `default_shape_shapes`. We bind `Self → impl.self_type` and
+# `trait_generic_params[i] → impl.trait_generic_args[i]` (resolved to
+# TypeIds) and walk the AST return type, producing a substituted TypeId.
+
+int substitute_default_return(EquipInfo impl, TraitInfo trait_info, MethodSigShape default_shape, ScopeTable scopes, TypeTable &types):
+    Vector[String] bind_names = Vector[String]()
+    Vector[int] bind_tids = Vector[int]()
+    bind_names.push("Self")
+    bind_tids.push(impl.self_type)
+    int n = trait_info.trait_generic_params.len()
+    if impl.trait_generic_args.len() < n:
+        n = impl.trait_generic_args.len()
+    int i = 0
+    while i < n:
+        String tname = trait_info.trait_generic_params.get(i).unwrap()
+        Type targ_ast = impl.trait_generic_args.get(i).unwrap()
+        int targ_tid = ast_type_to_resolved(targ_ast, Span(0, 0), scopes, &types)
+        if targ_tid >= 0:
+            bind_names.push(tname)
+            bind_tids.push(targ_tid)
+        i = i + 1
+    return resolve_with_bindings(default_shape.return_type, bind_names, bind_tids, scopes, &types)
+
+# Substitution-aware variant of resolve_method. Inherent + trait-override
+# phases (1, 2) behave identically; phase 3 (trait default) additionally
+# substitutes Self / trait-T placeholders in the return type before
+# returning. Use this from the call site whenever you can — it produces
+# concrete TypeIds for default-method return types where the bare
+# resolve_method would surface `error_id`.
+
+# Substitute default-method return for a *generic* impl. Differs from
+# substitute_default_return: when the impl has its own generics
+# (`equip [I, T] TakeIter[I, T] with Iterator[T]:`), the trait_generic_args
+# are AST types that reference the impl's locals (e.g. TNamed("T")). We
+# first build an impl-arg binding (impl_generic_params[i] →
+# recv_args[i]) so the trait args resolve to concrete TypeIds, then add
+# `Self → recv_type_id` and `trait_generic_params[i] → resolved trait
+# arg[i]` and walk the default-method return AST.
+
+int substitute_default_return_generic(EquipInfo impl, TraitInfo trait_info, MethodSigShape default_shape, int recv_type_id, Vector[String] impl_bind_names, Vector[int] impl_bind_tids, ScopeTable scopes, TypeTable &types):
+    Vector[String] bind_names = Vector[String]()
+    Vector[int] bind_tids = Vector[int]()
+    bind_names.push("Self")
+    bind_tids.push(recv_type_id)
+    int n = trait_info.trait_generic_params.len()
+    if impl.trait_generic_args.len() < n:
+        n = impl.trait_generic_args.len()
+    int i = 0
+    while i < n:
+        String tname = trait_info.trait_generic_params.get(i).unwrap()
+        Type targ_ast = impl.trait_generic_args.get(i).unwrap()
+        int targ_tid = resolve_with_bindings(targ_ast, impl_bind_names, impl_bind_tids, scopes, &types)
+        if targ_tid >= 0:
+            bind_names.push(tname)
+            bind_tids.push(targ_tid)
+        i = i + 1
+    # Fold impl bindings in too — they might appear directly in the
+    # return-type AST (e.g. `Self` in a non-generic position).
+    int bi = 0
+    while bi < impl_bind_names.len():
+        bind_names.push(impl_bind_names.get(bi).unwrap())
+        bind_tids.push(impl_bind_tids.get(bi).unwrap())
+        bi = bi + 1
+    return resolve_with_bindings(default_shape.return_type, bind_names, bind_tids, scopes, &types)
+
+# Look up a method for a generic-shaped receiver (RTGeneric). Walks impls
+# whose self_type_name matches the receiver's name, binds the impl's
+# generic params positionally from the receiver's type args, then runs
+# the same three phases as resolve_method_full but with the generic
+# substitution kernel. Without this, chains like
+# `v.iter().take(n).map(f)` lose all type info past the first call
+# because the registered impl's self_type holds abstract placeholder
+# TypeIds that no concrete receiver matches.
+
+MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, String recv_name, Vector[int] recv_args, int recv_type_id, String method, ScopeTable scopes, TypeTable &types):
+    int i = 0
+    while i < registry.impls.len():
+        EquipInfo impl = registry.impls.get(i).unwrap()
+        if impl.self_type_name == recv_name:
+            # Build impl-generic bindings from the receiver's args.
+            Vector[String] impl_bind_names = Vector[String]()
+            Vector[int] impl_bind_tids = Vector[int]()
+            int n = impl.impl_generic_params.len()
+            if recv_args.len() < n:
+                n = recv_args.len()
+            int bi = 0
+            while bi < n:
+                String pn = impl.impl_generic_params.get(bi).unwrap()
+                int pt = recv_args.get(bi).unwrap()
+                impl_bind_names.push(pn)
+                impl_bind_tids.push(pt)
+                bi = bi + 1
+            # Phase 1+2: method directly on this impl. Method sig still
+            # uses placeholder TypeIds in places that reference the
+            # impl's own generics; the FunctionSig path doesn't yet
+            # substitute. (Future improvement.)
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+            # Phase 3: trait default-method fallback with full
+            # generic-receiver substitution.
+            if impl.trait_def_id != NO_DEF:
+                int ti = 0
+                while ti < registry.traits.len():
+                    TraitInfo tinfo = registry.traits.get(ti).unwrap()
+                    if tinfo.def_id == impl.trait_def_id:
+                        int midx = find_method_index(tinfo.method_names, method)
+                        if midx >= 0:
+                            bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
+                            if has_default:
+                                FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
+                                int sidx = find_method_index(tinfo.default_shape_names, method)
+                                if sidx >= 0:
+                                    MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
+                                    int subst_ret = substitute_default_return_generic(impl, tinfo, shape, recv_type_id, impl_bind_names, impl_bind_tids, scopes, &types)
+                                    if subst_ret >= 0 and subst_ret != types.error_id:
+                                        sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
+                                return MethodResolution(true, sig, tinfo.def_id)
+                    ti = ti + 1
+        i = i + 1
+    return not_found_resolution()
+
+MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String method, ScopeTable scopes, TypeTable &types):
+    int i = 0
+    while i < registry.impls.len():
+        EquipInfo impl = registry.impls.get(i).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id == NO_DEF:
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+        i = i + 1
+    int j = 0
+    while j < registry.impls.len():
+        EquipInfo impl = registry.impls.get(j).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+        j = j + 1
+    int k = 0
+    while k < registry.impls.len():
+        EquipInfo impl = registry.impls.get(k).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+            int ti = 0
+            while ti < registry.traits.len():
+                TraitInfo tinfo = registry.traits.get(ti).unwrap()
+                if tinfo.def_id == impl.trait_def_id:
+                    int midx = find_method_index(tinfo.method_names, method)
+                    if midx >= 0:
+                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
+                        if has_default:
+                            FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
+                            int sidx = find_method_index(tinfo.default_shape_names, method)
+                            if sidx >= 0:
+                                MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
+                                int subst_ret = substitute_default_return(impl, tinfo, shape, scopes, &types)
+                                if subst_ret >= 0 and subst_ret != types.error_id:
+                                    sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
+                            return MethodResolution(true, sig, tinfo.def_id)
+                ti = ti + 1
+        k = k + 1
+    return not_found_resolution()
+
+# ── Intrinsic-satisfaction helpers ──────────────────────────
+# Mirror Rust's is_numeric_primitive / is_numeric_trait /
+# is_hashable_primitive / is_copy_displayable_primitive. Used by
+# resolve_method's Phase 4 to dispatch builtin-trait methods on
+# primitives that don't have an explicit equip block.
+
+bool is_numeric_primitive_name(String name):
+    if name == "int" or name == "float":
+        return true
+    if name == "int8" or name == "int16" or name == "int32" or name == "int64":
+        return true
+    if name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64":
+        return true
+    if name == "float32" or name == "float64":
+        return true
+    return false
+
+bool is_hashable_primitive_name(String name):
+    if name == "int" or name == "char" or name == "bool" or name == "str" or name == "String":
+        return true
+    if name == "int8" or name == "int16" or name == "int32" or name == "int64":
+        return true
+    if name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64":
+        return true
+    return false
+
+bool is_copy_displayable_primitive_name(String name):
+    if is_numeric_primitive_name(name):
+        return true
+    if name == "str" or name == "bool" or name == "char" or name == "String":
+        return true
+    return false
+
+bool is_numeric_trait_name(String name):
+    if name == "Add" or name == "Sub" or name == "Mul" or name == "Div" or name == "Rem" or name == "Mod":
+        return true
+    if name == "Neg" or name == "Comparable" or name == "Default" or name == "One" or name == "Numeric":
+        return true
+    return false
+
+bool is_hashable_trait_name(String name):
+    return name == "Hashable" or name == "Equatable"
+
+bool is_copy_displayable_trait_name(String name):
+    return name == "Displayable" or name == "Debuggable" or name == "Cloneable"
+
+bool primitive_satisfies_trait(String prim_name, String trait_name):
+    if is_numeric_primitive_name(prim_name) and is_numeric_trait_name(trait_name):
+        return true
+    if is_hashable_primitive_name(prim_name) and is_hashable_trait_name(trait_name):
+        return true
+    if is_copy_displayable_primitive_name(prim_name) and is_copy_displayable_trait_name(trait_name):
+        return true
+    # Measurable: types with a length — handled here only for str/String;
+    # collections go through the hardcoded len() path so we don't need
+    # to special-case them at this layer.
+    if trait_name == "Measurable" and (prim_name == "str" or prim_name == "String"):
+        return true
+    return false
+
+# Look up a method on built-in traits using intrinsic satisfaction. Walks
+# every registered builtin trait, checks if `prim_name` intrinsically
+# satisfies it, and returns the method's FunctionSig if found. Self / Out
+# placeholders in the sig (stored as types.error_id) are substituted to
+# the receiver's primitive TypeId — so e.g. `int.add(self, Self) -> Self`
+# resolves to `add(self, int) -> int` for int receivers.
+
+MethodResolution intrinsic_resolve(TraitRegistry registry, String prim_name, int prim_type_id, int err_id, String method):
+    int ti = 0
+    while ti < registry.traits.len():
+        TraitInfo tinfo = registry.traits.get(ti).unwrap()
+        if primitive_satisfies_trait(prim_name, tinfo.name):
+            int midx = find_method_index(tinfo.method_names, method)
+            if midx >= 0:
+                FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
+                FunctionSig substituted = substitute_self_placeholders(sig, prim_type_id, err_id)
+                return MethodResolution(true, substituted, tinfo.def_id)
+        ti = ti + 1
+    return not_found_resolution()
+
+# Replace error_id placeholders (Self/Out in built-in sigs) with the
+# concrete receiver type. Walks the params Vector and the return slot.
+FunctionSig substitute_self_placeholders(FunctionSig sig, int self_tid, int err_id):
+    Vector[int] new_params = Vector[int]()
+    int i = 0
+    while i < sig.params.len():
+        int p = sig.params.get(i).unwrap()
+        if p == err_id:
+            new_params.push(self_tid)
+        else:
+            new_params.push(p)
+        i = i + 1
+    int ret = sig.return_type
+    if ret == err_id:
+        ret = self_tid
+    return FunctionSig(new_params, ret, sig.has_self, sig.self_ownership)
+
+# ── resolve_method: lookup by (TypeId, method name) ──────────
+# Phases: inherent impls → trait impls → trait default-method fallback
+# → intrinsic primitive satisfaction.
+
+MethodResolution resolve_method(TraitRegistry registry, int type_id, String method):
+    int i = 0
+    while i < registry.impls.len():
+        EquipInfo impl = registry.impls.get(i).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id == NO_DEF:
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+        i = i + 1
+    int j = 0
+    while j < registry.impls.len():
+        EquipInfo impl = registry.impls.get(j).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+        j = j + 1
+    int k = 0
+    while k < registry.impls.len():
+        EquipInfo impl = registry.impls.get(k).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+            int ti = 0
+            while ti < registry.traits.len():
+                TraitInfo tinfo = registry.traits.get(ti).unwrap()
+                if tinfo.def_id == impl.trait_def_id:
+                    int midx = find_method_index(tinfo.method_names, method)
+                    if midx >= 0:
+                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
+                        if has_default:
+                            return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
+                ti = ti + 1
+        k = k + 1
+    return not_found_resolution()
+
+# Lookup by self_type_name; fallback when TypeIds don't align across modules.
+
+MethodResolution resolve_method_by_name(TraitRegistry registry, String type_name, String method):
+    int i = 0
+    while i < registry.impls.len():
+        EquipInfo impl = registry.impls.get(i).unwrap()
+        if impl.self_type_name == type_name:
+            int idx = find_method_index(impl.method_names, method)
+            if idx >= 0:
+                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+        i = i + 1
+    int k = 0
+    while k < registry.impls.len():
+        EquipInfo impl = registry.impls.get(k).unwrap()
+        if impl.self_type_name == type_name and impl.trait_def_id != NO_DEF:
+            int ti = 0
+            while ti < registry.traits.len():
+                TraitInfo tinfo = registry.traits.get(ti).unwrap()
+                if tinfo.def_id == impl.trait_def_id:
+                    int midx = find_method_index(tinfo.method_names, method)
+                    if midx >= 0:
+                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
+                        if has_default:
+                            return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
+                ti = ti + 1
+        k = k + 1
+    return not_found_resolution()
+
+# Lookup MethodSigShape by (TypeId, method).
+
+ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String method):
+    int i = 0
+    while i < registry.impls.len():
+        EquipInfo impl = registry.impls.get(i).unwrap()
+        if impl.self_type == type_id:
+            int idx = find_method_index(impl.shape_method_names, method)
+            if idx >= 0:
+                return ShapeResolution(true, impl.shape_method_shapes.get(idx).unwrap())
+        i = i + 1
+    int k = 0
+    while k < registry.impls.len():
+        EquipInfo impl = registry.impls.get(k).unwrap()
+        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
+            int ti = 0
+            while ti < registry.traits.len():
+                TraitInfo tinfo = registry.traits.get(ti).unwrap()
+                if tinfo.def_id == impl.trait_def_id:
+                    int midx = find_method_index(tinfo.shape_method_names, method)
+                    if midx >= 0:
+                        return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
+                ti = ti + 1
+        k = k + 1
+    return not_found_shape()
+
+# ── Method-generic inference ──────────────────────────────────
+# Returns a Vector[int] of length shape.generic_params.len(); element i
+# is the bound TypeId for the i-th generic, or -1 if unbound.
+#
+# Shape 1: G appears bare as a param's type → bind G to that arg's type.
+# Shape 2: G appears in the return type, exactly one arg is a function
+#   typed value → bind G to that function's return type.
+
+Vector[int] infer_method_targs(MethodSigShape shape, Vector[int] arg_types, ScopeTable scopes, TypeTable types):
+    Vector[int] tids = Vector[int]()
+    int init_i = 0
+    while init_i < shape.generic_params.len():
+        tids.push(-1)
+        init_i = init_i + 1
+    if shape.param_types.len() != arg_types.len():
+        return tids
+    int i = 0
+    while i < shape.param_types.len():
+        Type pt = shape.param_types.get(i).unwrap()
+        match pt:
+            case TNamed(pname, generic_args):
+                if generic_args.len() == 0:
+                    int gi = 0
+                    while gi < shape.generic_params.len():
+                        String gn = shape.generic_params.get(gi).unwrap()
+                        if gn == pname and tids.get(gi).unwrap() < 0:
+                            int arg_tid = arg_types.get(i).unwrap()
+                            if arg_tid >= 0 and arg_tid != types.error_id:
+                                tids.set(gi, arg_tid)
+                        gi = gi + 1
+            else:
+                pass
+        i = i + 1
+    int gi2 = 0
+    while gi2 < shape.generic_params.len():
+        if tids.get(gi2).unwrap() < 0:
+            String gname = shape.generic_params.get(gi2).unwrap()
+            if type_mentions_name(shape.return_type, gname):
+                int fn_ret = -1
+                bool ambiguous = false
+                int ai = 0
+                while ai < arg_types.len():
+                    int at = arg_types.get(ai).unwrap()
+                    if at >= 0 and at < types.types.len():
+                        ResolvedType rt = get_rtype_at(types.types, at)
+                        match rt:
+                            case RTFunction(_, _, ret_id):
+                                if ret_id != types.error_id:
+                                    if fn_ret < 0:
+                                        fn_ret = ret_id
+                                    elif fn_ret != ret_id:
+                                        ambiguous = true
+                            else:
+                                pass
+                    ai = ai + 1
+                if fn_ret >= 0 and not ambiguous:
+                    tids.set(gi2, fn_ret)
+        gi2 = gi2 + 1
+    return tids
+
+# Substitute the shape's return type using inferred targs.
+# Returns the resolved TypeId (may still contain unresolved generics if
+# inference came up short — caller should treat `error_id` / negative as
+# inference-failed).
+
+int substitute_return_type(MethodSigShape shape, Vector[int] bind_tids, ScopeTable scopes, TypeTable &types):
+    return resolve_with_bindings(shape.return_type, shape.generic_params, bind_tids, scopes, &types)

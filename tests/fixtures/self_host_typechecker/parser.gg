@@ -3191,6 +3191,7 @@ equip Parser:
         SpannedType target = self.parse_type()
         Option[String] trait_name = None
         Option[String] via_field = None
+        Vector[SpannedType] trait_generic_args = Vector[SpannedType]()
         if self.check_kw(KW_WITH):
             self.advance()
             # Special-case prelude-variant keywords used as trait names
@@ -3215,9 +3216,18 @@ equip Parser:
                 tn = "None"
                 self.advance()
             else:
-                # Parse trait name as a type, then convert to string
+                # Parse trait name as a type. Store just the base name in
+                # `trait_name` (e.g. "Iterator" not "Iterator[int]") so
+                # that scope lookups against the trait DefId succeed; the
+                # generic args go into `trait_generic_args` for call-site
+                # Self/T substitution on trait defaults.
                 SpannedType trait_type = self.parse_type()
-                tn = type_to_name(trait_type)
+                match trait_type.ty:
+                    case TNamed(base_name, targs):
+                        tn = base_name
+                        trait_generic_args = targs
+                    else:
+                        tn = type_to_name(trait_type)
             Option[String] some_tn = Some(tn)
             trait_name = !some_tn
             # Capture optional 'via field_name' delegation
@@ -3231,7 +3241,7 @@ equip Parser:
         # Bodyless equip: `equip T with Trait` (no colon) — default implementations
         if not self.check_tok(TOK_COLON):
             self.skip_newlines()
-            return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field))
+            return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field, trait_generic_args))
         self.expect_tok(TOK_COLON, "expected ':' after equip target")
         self.expect_tok(TOK_NEWLINE, "expected newline after equip ':'")
         self.expect_tok(TOK_INDENT, "expected indent in equip body")
@@ -3259,7 +3269,7 @@ equip Parser:
             methods.push(m)
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
-        return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field))
+        return IEquip(EquipBlock(target, type_params, trait_name, methods, via_field, trait_generic_args))
 
     Item parse_import_item(&self):
         int start = self.peek().lex_start

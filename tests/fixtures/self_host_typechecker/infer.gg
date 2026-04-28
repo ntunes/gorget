@@ -18,7 +18,12 @@ from types import TypeTable, ResolvedType, get_stype_at, get_rtype_at, get_int_a
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef
 from types import ast_type_to_resolved
+from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
+from traits import resolve_method, resolve_method_by_name, resolve_method_shape
+from traits import resolve_method_full, resolve_method_for_generic_receiver
+from traits import infer_method_targs, substitute_return_type, type_name_of
+from traits import intrinsic_resolve
 
 # ── Statement return type inference (for closure bodies) ──────
 
@@ -232,6 +237,99 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return NO_TYPE
 
         case EMethodCall(obj, method_name, args, targs):
+            # Trait registry lookup: user-defined equip methods win over the
+            # hardcoded collection-method fallback chain below. Returns -1
+            # (skip) if the receiver type isn't registered, the method
+            # isn't found, or method-generic inference can't resolve the
+            # return type cleanly. The hardcoded chain still owns built-in
+            # collection runtime methods (Vector.get, Dict.keys, …) where
+            # no equip block exists in user-space.
+            int reg_obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
+            if reg_obj_type >= 0 and reg_obj_type < types.types.len():
+                MethodResolution reg_res = resolve_method_full(types.trait_registry, reg_obj_type, method_name, scopes, &types)
+                # Receiver-by-name fallback for cases where the receiver's
+                # TypeId came back as `defined_id` of an imported type that
+                # the registry indexed by its name in another module.
+                if not reg_res.found:
+                    String recv_name = ""
+                    String recv_prim_name = ""
+                    Vector[int] recv_targs = Vector[int]()
+                    bool is_generic_recv = false
+                    ResolvedType reg_obj_rt = get_rtype_at(types.types, reg_obj_type)
+                    match reg_obj_rt:
+                        case RTDefined(rdef):
+                            DefInfo rd = scopes.get_def(rdef)
+                            recv_name = rd.name
+                        case RTGeneric(rdef, type_args):
+                            DefInfo rd = scopes.get_def(rdef)
+                            recv_name = rd.name
+                            recv_targs = type_args
+                            is_generic_recv = true
+                        case RTPrimitive(pname):
+                            recv_prim_name = pname
+                        else:
+                            pass
+                    # Generic-receiver path: substitution-aware, handles
+                    # chained adapter calls like `t1.take(3)` where t1 is
+                    # `TakeIter[X, Y]` and the impl is generic over [I, T].
+                    if is_generic_recv and recv_name.len() > 0:
+                        reg_res = resolve_method_for_generic_receiver(types.trait_registry, recv_name, recv_targs, reg_obj_type, method_name, scopes, &types)
+                    if not reg_res.found and recv_name.len() > 0:
+                        reg_res = resolve_method_by_name(types.trait_registry, recv_name, method_name)
+                    # Phase 4: intrinsic satisfaction for primitives. Looks
+                    # up built-in trait methods that the primitive
+                    # intrinsically satisfies (e.g. int.add → Add.add,
+                    # str.display → Displayable.display) and substitutes
+                    # `Self` placeholders to the receiver's TypeId.
+                    if not reg_res.found and recv_prim_name.len() > 0:
+                        reg_res = intrinsic_resolve(types.trait_registry, recv_prim_name, reg_obj_type, types.error_id, method_name)
+                if reg_res.found:
+                    # Generic methods: try Shape-1/2 inference. Compute arg
+                    # types up front and feed them to the shape resolver.
+                    int reg_ret = reg_res.sig.return_type
+                    Vector[int] reg_arg_types = Vector[int]()
+                    int rai = 0
+                    while rai < args.len():
+                        SpannedExpr a = args.get(rai).unwrap()
+                        reg_arg_types.push(infer_expr_type(a, scopes, &types, ctx))
+                        rai = rai + 1
+                    ShapeResolution sh = resolve_method_shape(types.trait_registry, reg_obj_type, method_name)
+                    if sh.found:
+                        Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
+                        int subst_ret = substitute_return_type(sh.shape, bound, scopes, &types)
+                        if subst_ret >= 0 and subst_ret != types.error_id:
+                            reg_ret = subst_ret
+                    # Receiver-generic substitution: if the method's return
+                    # type is `T` and the receiver is `Vector[T]`-shaped,
+                    # bind T to the receiver's i-th type arg. We piggy-back
+                    # on the registered impl's self_type_ast: the impl's
+                    # self_type_ast is `Foo[T]`; binding `T → arg_i` from
+                    # the receiver's RTGeneric type_args lets us resolve
+                    # `T`-shaped returns without a method-level shape.
+                    if reg_ret == types.error_id:
+                        ResolvedType reg_obj_rt2 = get_rtype_at(types.types, reg_obj_type)
+                        match reg_obj_rt2:
+                            case RTGeneric(_, recv_type_args):
+                                # Find the matching impl and read its
+                                # self_type_ast generic-arg names.
+                                int impl_i = 0
+                                while impl_i < types.trait_registry.impls.len():
+                                    EquipInfo impl_info = types.trait_registry.impls.get(impl_i).unwrap()
+                                    if impl_info.self_type == reg_obj_type:
+                                        # impl_generic_params lines up
+                                        # positionally with recv_type_args.
+                                        # We don't have a method shape
+                                        # (covered above) — this branch
+                                        # only fires when the method's
+                                        # return type is bare `T`, so
+                                        # without a shape we can't tell
+                                        # which generic; skip.
+                                        impl_i = types.trait_registry.impls.len()
+                                    impl_i = impl_i + 1
+                            else:
+                                pass
+                    if reg_ret >= 0 and reg_ret != types.error_id and reg_ret != types.void_id:
+                        return reg_ret
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":
                 return types.int_id

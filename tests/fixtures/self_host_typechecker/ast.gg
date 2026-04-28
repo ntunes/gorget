@@ -199,6 +199,11 @@ struct EquipBlock:
     Option[String] trait_name
     Vector[FunctionDef] methods
     Option[String] via_field
+    # Generic args from the trait clause, e.g. [TPrimitive("int")] for
+    # `with Iterator[int]`. Empty for non-generic traits or when no
+    # `with` clause is present. Populated by parser; consumed by
+    # traits.gg for call-site Self/T substitution on trait defaults.
+    Vector[SpannedType] trait_generic_args
 
 struct MatchArm:
     SpannedPattern pattern

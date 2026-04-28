@@ -22,6 +22,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, get_rtype_at, get_i
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
+from traits import build_trait_registry
 
 # ── Option helpers ──────────────────────────────────────────
 
@@ -1090,6 +1091,11 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
     int module_scope = 0
     # Set current scope so scope.lookup() works from module level
     scopes.set_current(module_scope)
+    # Build the trait registry up front. type_check_function will register
+    # struct fields / enum variants as it walks; the registry only needs
+    # equip-block self types and method sigs which `ast_type_to_resolved`
+    # can compute from the resolved scope tree.
+    types.trait_registry = build_trait_registry(module, &scopes, &types)
     int i = 0
     while i < module.items.len():
         Item item = get_item_at(module.items, i)

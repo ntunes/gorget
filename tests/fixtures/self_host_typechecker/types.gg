@@ -40,6 +40,70 @@ int get_int_at(Vector[int] v, int i):
 
 # ── Type table ──────────────────────────────────────────────
 
+# ── Trait-registry data (used by typecheck/infer; see traits.gg) ──
+# Stored on TypeTable so the registry can ride on the existing `&types`
+# threading rather than adding a new parameter to every typechecker
+# function. Builder + lookup logic lives in traits.gg.
+
+struct FunctionSig:
+    Vector[int] params
+    int return_type
+    bool has_self
+    int self_ownership
+
+struct MethodSigShape:
+    Vector[String] generic_params
+    Vector[Type] param_types
+    Type return_type
+
+struct TraitInfo:
+    int def_id
+    String name
+    Vector[String] method_names
+    Vector[FunctionSig] method_sigs
+    Vector[bool] method_has_default_body
+    Vector[String] shape_method_names
+    Vector[MethodSigShape] shape_method_shapes
+    Vector[String] trait_generic_params
+    Vector[int] parent_trait_ids
+    # AST-level shapes for default-bodied methods (mirrors Rust's
+    # default_method_sigs). Populated for methods whose body is
+    # non-empty so call-site substitution can bind Self / trait-T
+    # in the AST return type before resolving to a TypeId.
+    Vector[String] default_shape_names
+    Vector[MethodSigShape] default_shape_shapes
+
+struct EquipInfo:
+    int self_type
+    String self_type_name
+    int trait_def_id
+    String trait_name
+    Vector[String] method_names
+    Vector[int] method_def_ids
+    Vector[FunctionSig] method_sigs
+    Vector[String] shape_method_names
+    Vector[MethodSigShape] shape_method_shapes
+    Type self_type_ast
+    Vector[String] impl_generic_params
+    String via_field
+    # AST args from the trait clause (e.g. [TPrimitive("int")] for
+    # `with Iterator[int]`). Empty for non-generic traits / inherent
+    # impls. Used at call site to bind trait-T in default-method sigs.
+    Vector[Type] trait_generic_args
+
+struct TraitRegistry:
+    Vector[TraitInfo] traits
+    Vector[EquipInfo] impls
+
+struct MethodResolution:
+    bool found
+    FunctionSig sig
+    int def_id
+
+struct ShapeResolution:
+    bool found
+    MethodSigShape shape
+
 struct TypeTable:
     Vector[ResolvedType] types
     Dict[int, int] defined_cache
@@ -58,6 +122,7 @@ struct TypeTable:
     int equip_def_index
     Dict[String, String] meta_aliases
     int next_type_var
+    TraitRegistry trait_registry
 
 equip TypeTable:
 
@@ -82,7 +147,8 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1)
+        TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg)
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()
