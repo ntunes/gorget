@@ -630,6 +630,28 @@ int lower_float_const_ident(LowerCtx &ctx, GirModule &gmod, String name):
     emit(&ctx, GIAssign(fdst, OpConstF64(float_const_lookup(&gmod, name))))
     return fdst
 
+# Function-as-value: `filter(is_even)` / `map(double)` etc. — a bare
+# function name passed where a Callable is expected. Mirrors Rust
+# gg's `Constant::FuncRef(name)` operand. Emit a synthetic
+# `__fn_addr__<name>` GICallExtern; `lir_lower` intercepts that
+# prefix and lowers to `IFuncAddr(fid)`, which the C codegen turns
+# into the `static void*[] = {(void*)__adapt_<name>, NULL}` shape
+# `gorget_array_filter` / etc. expect. Returns the new local id on
+# hit (>= 0); -1 on miss.
+#
+# Only fires for non-generic functions registered in `fn_sigs` — a
+# generic template wouldn't have a single mono'd target to point at.
+# The helper is in its own function (not inlined) for the same
+# stack-frame reason as `lower_float_const_ident`.
+int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
+    if not gmod.fn_sigs.contains(name) and not fn_sig_contains(&gmod, name):
+        return -1
+    int gs_tid = lookup_or_register_named(&gmod, "GorgetClosure")
+    int adst = add_local(&ctx, gs_tid, NO_NAME)
+    Vector[Operand] no_args = []
+    emit(&ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
+    return adst
+
 Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:
         case EFloatLiteral(v):
@@ -1195,6 +1217,13 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int fdst_or_neg = lower_float_const_ident(&ctx, &gmod, name)
             if fdst_or_neg >= 0:
                 return fdst_or_neg
+            # Function-as-value: `filter(is_even)` / `.map(double)` etc.
+            # — bare fn name passed where a Callable is expected. Helper
+            # lives in its own function to keep `lower_expr`'s already-
+            # massive stack frame from growing.
+            int adst_or_neg = lower_fn_addr_ident(&ctx, &gmod, name)
+            if adst_or_neg >= 0:
+                return adst_or_neg
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.

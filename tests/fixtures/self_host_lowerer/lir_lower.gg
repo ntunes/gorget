@@ -2317,6 +2317,27 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             # Canonical prelude variants (same as GICall arm).
             if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
                 return
+            # Function-as-value pseudo-intrinsic: `__fn_addr__<name>` —
+            # emitted by `lower_expr`'s EIdentifier arm when the
+            # identifier resolves to a known function. Convert into an
+            # `IFuncAddr(dst, fid)` so the C codegen emits the
+            # `static void* __fa_X[] = { (void*)__adapt_<name>, NULL }`
+            # callable shape. Mirrors Rust gg's `Constant::FuncRef`
+            # → `IFuncAddr` lowering. The `__fn_addr__` prefix is
+            # 12 chars; the rest is the target function name.
+            if func_name.starts_with("__fn_addr__") and dst_local >= 0:
+                String fa_target = func_name.slice(11, func_name.len())
+                if func_index.contains(fa_target):
+                    int fa_fid = func_index.get(fa_target).unwrap()
+                    int fa_dst = lir_fn_next_value(&f)
+                    LirBlock fa_blk = f.blocks.get(bb).unwrap()
+                    fa_blk.insts.push(IFuncAddr(fa_dst, fa_fid))
+                    f.blocks.set(bb, fa_blk)
+                    int fa_dst_slot = local_to_slot.get(dst_local).unwrap()
+                    LirBlock fa_blk2 = f.blocks.get(bb).unwrap()
+                    fa_blk2.insts.push(ISlotStore(fa_dst_slot, fa_dst, false))
+                    f.blocks.set(bb, fa_blk2)
+                    return
             # Canonical Box(x): emit IBoxAlloc, same as in GICall.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 Operand box_arg = args.get(0).unwrap()
