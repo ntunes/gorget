@@ -2288,8 +2288,6 @@ fn stdlib_udp_typed() {
 
 #[test]
 fn vector_swap_fill() {
-    // LLVM regression — fix pending.
-    if skip_under_llvm() { return; }
     run_gg(
         "vector_swap_fill.gg",
         "50\n10\n4\n10\n3\n7\n7\n2\n99\n99",
@@ -4973,7 +4971,6 @@ done",
 
 #[test]
 fn vector_sort_by_key() {
-    if skip_under_llvm() { return; }
     run_gg(
         "vector_sort_by_key.gg",
         "\
@@ -5032,7 +5029,6 @@ done",
 /// the previous qsort-based implementation did not.
 #[test]
 fn vector_sort_stable() {
-    if skip_under_llvm() { return; }
     run_gg(
         "vector_sort_stable.gg",
         "\

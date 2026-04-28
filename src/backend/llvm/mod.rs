@@ -4,7 +4,7 @@
 //! since LIR is already SSA with block parameters (phi-equivalent).
 
 use crate::lir::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 /// LLVM IR backend.
@@ -2221,11 +2221,30 @@ fn emit_function(
                 for &pred_id in preds {
                     let pred_block = &func.blocks[pred_id.0 as usize];
                     let args = get_branch_args_for_target(&pred_block.terminator, block.id);
+                    // If the predecessor is a same-target `Term::Branch`
+                    // whose two arms diverge at this arg index, the
+                    // terminator emit lowered the branch into selects
+                    // named `%br.sel.<pred>.<target>.<pi>` followed by an
+                    // unconditional jump. Reference that select here so
+                    // the phi sees the clamp instead of just the THEN arg.
+                    let same_target_with_diverging_args = matches!(
+                        &pred_block.terminator,
+                        Term::Branch { then_block, else_block, then_args, else_args, .. }
+                            if then_block == else_block
+                                && pi < then_args.len()
+                                && pi < else_args.len()
+                                && then_args[pi] != else_args[pi]
+                    );
                     // Use the actual exit label (may differ from bb{N} due to overflow checks)
                     let pred_label = block_exit_labels.get(&pred_id)
                         .cloned()
                         .unwrap_or_else(|| format!("bb{}", pred_id.0));
-                    if pi < args.len() {
+                    if same_target_with_diverging_args {
+                        phi_entries.push(format!(
+                            "[ %br.sel.{}.{}.{pi}, %{pred_label} ]",
+                            pred_id.0, block.id.0
+                        ));
+                    } else if pi < args.len() {
                         // If emit_branch_arg_casts widened/narrowed/spilled this arg, use the cast.
                         let arg = args[pi];
                         let actual = val_types.get(arg.0 as usize).and_then(|t| t.as_ref());
@@ -2269,7 +2288,7 @@ fn emit_function(
         // Terminator — pre-emit any int-width casts needed for branch args
         // whose types don't match the target block's params.
         emit_branch_arg_casts(out, &block.terminator, func, bid, &val_types, snames);
-        emit_term(out, &block.terminator, func, module, snames, &val_types);
+        emit_term(out, &block.terminator, func, module, snames, &val_types, bid);
     }
 
     writeln!(out, "}}\n").unwrap();
@@ -2280,8 +2299,25 @@ fn emit_function(
 fn build_predecessor_map(func: &LirFunction) -> HashMap<BlockId, Vec<BlockId>> {
     let mut map: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
     for block in &func.blocks {
+        // Dedupe successors per terminator: a `Term::Branch` with
+        // `then_block == else_block` lists the same successor twice. The
+        // phi-emission below would then add two entries from this pred to
+        // the target's phi node, which LLVM only accepts when both values
+        // are identical. The merge-sort BIR synth uses exactly this pattern
+        // (`compute_right_bb` clamps `right = min(right_raw, n)` by
+        // branching to `merge_loop_bb` on both arms with different args),
+        // and the duplicate-pred phi silently kept the THEN value for
+        // both, dropping the clamp → write past the malloc'd merge buffer
+        // → heap corruption that surfaces as a glibc malloc assertion when
+        // the program later allocates anything (e.g. `int_to_str`).
+        // `Term::Branch` is rewritten to select-then-jump in the
+        // terminator emit; pred_map only reports each pred once so phi
+        // emission produces one consolidated entry.
+        let mut seen: HashSet<BlockId> = HashSet::new();
         for succ in block.terminator.successors() {
-            map.entry(succ).or_default().push(block.id);
+            if seen.insert(succ) {
+                map.entry(succ).or_default().push(block.id);
+            }
         }
     }
     map
@@ -5724,6 +5760,7 @@ fn emit_term(
     _module: &LirModule,
     snames: &HashMap<u32, String>,
     val_types: &[Option<LirType>],
+    block_id: u32,
 ) {
     match term {
         Term::Ret(val) => {
@@ -5782,8 +5819,38 @@ fn emit_term(
             // Args are consumed by phi nodes in the target block
             writeln!(out, "  br label %bb{}", target.0).unwrap();
         }
-        Term::Branch { cond, then_block, then_args: _, else_block, else_args: _, .. } => {
-            writeln!(out, "  br i1 %v{}, label %bb{}, label %bb{}", cond.0, then_block.0, else_block.0).unwrap();
+        Term::Branch { cond, then_block, then_args, else_block, else_args, .. } => {
+            // Same-target branch with diverging block args: lower as `select +
+            // unconditional jump`. The target's phi reads from the merged
+            // values via `%br.sel.<pred>.<target>.<i>` (see phi emission).
+            // Without this, both arms collapse into one edge and LLVM picks
+            // the THEN args silently — dropping any clamp/compute the ELSE
+            // arm performed. Surfaced in the BIR-synth merge-sort's
+            // `right = min(right_raw, n)` clamp (compute_right_bb branches
+            // to merge_loop_bb on both arms with different right values).
+            if then_block == else_block && then_args != else_args {
+                let target = then_block.0;
+                let pred = block_id;
+                for (pi, (t_arg, e_arg)) in then_args.iter().zip(else_args.iter()).enumerate() {
+                    let ty = val_types
+                        .get(t_arg.0 as usize)
+                        .and_then(|x| x.as_ref())
+                        .map(|t| llvm_arg_type(t, snames))
+                        .unwrap_or_else(|| "i64".to_string());
+                    writeln!(
+                        out,
+                        "  %br.sel.{pred}.{target}.{pi} = select i1 %v{}, {ty} %v{}, {ty} %v{}",
+                        cond.0, t_arg.0, e_arg.0
+                    ).unwrap();
+                }
+                writeln!(out, "  br label %bb{target}").unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "  br i1 %v{}, label %bb{}, label %bb{}",
+                    cond.0, then_block.0, else_block.0
+                ).unwrap();
+            }
         }
         Term::Switch { value, cases, default, default_args: _ } => {
             let val_ty = val_types.get(value.0 as usize)

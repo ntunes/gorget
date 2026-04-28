@@ -249,6 +249,14 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         }
         "gorget_array_remove" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
         "gorget_array_remove_opt" => sig(vec![LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, Scalar]),
+        // void gorget_array_fill(GorgetArray*, size_t n, const void* val_src)
+        // The third arg is a pointer to one element (the runtime memcpy's
+        // `arr->elem_size` bytes from there). Without this entry, the call
+        // site infers `i64` from the user's `int` literal in `v.fill(n, 7)`
+        // and the runtime tries to memcpy from address `7` → SEGV.
+        "gorget_array_fill" => sig(vec![LirType::Ptr, LirType::I64, LirType::Ptr], LirType::Void, vec![Ptr, Scalar, VoidElem]),
+        "gorget_array_swap" => sig(vec![LirType::Ptr, LirType::I64, LirType::I64], LirType::Void, vec![Ptr, Scalar, Scalar]),
+        "gorget_array_swap_remove" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
         "gorget_array_len" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
         "gorget_array_capacity" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
         // gorget_array_contains(arr*, elem*, elem_size)
