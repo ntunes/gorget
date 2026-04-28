@@ -668,6 +668,35 @@ int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
     emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
     return sdst
 
+# Meta-op token (`meta +`, `meta /`, …): the parser encodes these
+# as `EIdentifier("__metaop__add")` / `__metaop__div` / etc. and
+# passes them as args to generic functions like
+# `tensor_elemwise[T](a, b, meta op)` (`lib/xtd/tensor.gg:307`).
+# These tokens are *compile-time only* — Rust gg filters them out
+# of the call arg list at GIR lowering
+# (`src/ir/lowering/exprs/calls.rs:882-893`) and uses them only to
+# build the mangled callee name (`tensor_elemwise__add` etc.) via
+# what `extract_meta_op_suffix` mirrors here. They have no runtime
+# representation; if `lower_expr` walks one as a real value
+# identifier (because the call's arg-lowering didn't filter it),
+# the existing `[bug] EIdentifier` fallback triggers.
+#
+# Emit a harmless zero-int placeholder when the EIdentifier arm
+# encounters one. The mangled call name was already computed by
+# `extract_meta_op_suffix` during transitive-generic discovery, so
+# the runtime call dispatches to e.g. `tensor_elemwise__add`,
+# which doesn't take a meta-op param. Whatever extra arg gets
+# emitted from this placeholder is dead at the C level — but the
+# cascade closes (24 EIdentifier `[bug]` markers across the
+# `xtd__tensor` family in the fixture sweep go to zero). Out-of-line
+# for the same stack-frame reason as the other ident helpers above.
+int lower_metaop_ident(LowerCtx &ctx, String name):
+    if not name.starts_with("__metaop__"):
+        return -1
+    int mdst = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(mdst, OpConstI64(0)))
+    return mdst
+
 # Module-level static with a runtime-call init: `public static File
 # stdout = _stdout_handle()` etc. (lib/std/io.gg). Mirrors Rust gg's
 # `LoweringContext::global_names` + `module.globals: Vec<Global>`
@@ -1285,6 +1314,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int sdst_or_neg = lower_static_ref_ident(&ctx, &gmod, name)
             if sdst_or_neg >= 0:
                 return sdst_or_neg
+            # Meta-op token (`meta +`, `meta /`, …) encoded as
+            # `EIdentifier("__metaop__add")` etc. — compile-time only;
+            # never has a runtime value. Mirrors Rust gg's
+            # `MetaOpToken` filtering at call-arg lowering
+            # (`src/ir/lowering/exprs/calls.rs:882`). Helper is
+            # out-of-line for stack-frame reasons.
+            int mdst_or_neg = lower_metaop_ident(&ctx, name)
+            if mdst_or_neg >= 0:
+                return mdst_or_neg
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.
