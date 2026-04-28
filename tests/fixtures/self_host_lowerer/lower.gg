@@ -4944,15 +4944,39 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             StructDef sdef = struct_templates.get(mrinst.base_name).unwrap()
             # Build substitution map
             setup_type_subs(&gmod, sdef.type_params, mrinst.type_args)
+            # Register the mono'd struct's field info in `type_infos` so
+            # later `EFieldAccess` lookups find `TypedColumn__int64_t.data`
+            # / `Tensor__double.shape` etc. without falling through to
+            # the `[bug]` placeholder. Field types are template-fields
+            # substituted via `gmod.type_subs` (T → int64_t etc.).
+            # Mirrors Rust gg's `monomorphize_struct()` step
+            # (`src/ir/lowering/generics/mod.rs:2249-2304`).
+            Vector[GirFieldInfo] mono_fields = []
             bool has_resource = false
             int mrf = 0
             while mrf < sdef.fields.len():
                 Param fld = sdef.fields.get(mrf).unwrap()
                 int ft = map_ast_type(fld.param_type, &gmod)
                 String ft_name = type_id_to_name(ft, &gmod)
+                mono_fields.push(GirFieldInfo(fld.param_name.clone(), ft_name.clone()))
                 if is_resource_type_name(ft_name, &gmod):
                     has_resource = true
                 mrf += 1
+            # Register only when the mono'd name isn't already there
+            # (avoids duplicate clones when `generic_instances` lists
+            # the same mono more than once across import cycles).
+            if not type_info_contains(&gmod, mrinst.mangled_name):
+                Vector[GirFieldInfo] mono_fields_clone = []
+                int mfci = 0
+                while mfci < mono_fields.len():
+                    GirFieldInfo mfi_orig = mono_fields.get(mfci).unwrap()
+                    mono_fields_clone.push(GirFieldInfo(mfi_orig.name.clone(), mfi_orig.type_name.clone()))
+                    mfci += 1
+                Vector[GirEnumVariantInfo] mono_no_variants = []
+                Vector[GirEnumVariantInfo] mono_no_variants_clone = []
+                gmod.type_info_keys.push(mrinst.mangled_name.clone())
+                gmod.type_info_vals.push(GirTypeInfo(mrinst.mangled_name.clone(), !mono_fields_clone, !mono_no_variants_clone, false))
+                gmod.type_infos.put(mrinst.mangled_name.clone(), GirTypeInfo(mrinst.mangled_name.clone(), mono_fields, mono_no_variants, false))
             clear_type_subs(&gmod)
             if has_resource:
                 gmod.resource_types.put(mrinst.mangled_name.clone(), true)
