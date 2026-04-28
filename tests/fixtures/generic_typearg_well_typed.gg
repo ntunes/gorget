@@ -1,0 +1,48 @@
+# Companion to the *_mismatch_error fixtures: well-typed forms of the same
+# patterns must continue to compile and run correctly. Guards against an
+# overzealous fix that rejects valid generic instantiations.
+#
+# Uses explicit type-arg syntax (`fn[T](...)`) — that's the form that's
+# stable through IR-lowering's monomorphisation today. Inferred-arg form
+# is supported by the typechecker but doesn't always reach the lowering
+# pass with concrete instantiation info; users who hit that boundary
+# should pass type args explicitly.
+
+enum AppError:
+    NotFound
+    BadInput
+
+Result[T, E] passthrough[T, E](Result[T, E] r):
+    return r
+
+Result[int, AppError] producer():
+    return Ok(7)
+
+Vector[T] wrap_one[T](T x):
+    Vector[T] v = []
+    v.push(x)
+    return v
+
+struct Pair[A, B]:
+    A first
+    B second
+
+Pair[A, B] make_pair[A, B](A a, B b):
+    return Pair[A, B](a, b)
+
+void main():
+    # Result[int, AppError] flows through correctly.
+    Result[int, AppError] r = passthrough[int, AppError](producer())
+    match r:
+        case Ok(v):
+            print(f"ok: {v}")
+        case Error(_e):
+            print("err")
+
+    # Vector[int] both sides match.
+    Vector[int] v = wrap_one[int](42)
+    print(v.len())
+
+    # Pair[int, String] both sides match.
+    Pair[int, String] p = make_pair[int, String](1, "hello")
+    print(f"{p.first}:{p.second}")

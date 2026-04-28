@@ -1257,6 +1257,20 @@ impl<'a> TypeChecker<'a> {
                         return_type,
                         ..
                     } => {
+                        // Fresh-instantiate any generic-param `Defined` references so
+                        // unification binds them per call site (rather than treating
+                        // T/U/E as concrete types that conflict across calls). The
+                        // signature was registered with `Defined(generic_param_def_id)`
+                        // placeholders; here we replace each unique generic-param
+                        // DefId with a fresh `Var`, sharing the same fresh var across
+                        // all positions so `Result[T, E] → Result[U, E]` correctly
+                        // links the two `E`s.
+                        let mut subst: FxHashMap<DefId, TypeId> = FxHashMap::default();
+                        let params: Vec<TypeId> = params.iter()
+                            .map(|&t| self.instantiate_generic_params(t, &mut subst))
+                            .collect();
+                        let return_type = self.instantiate_generic_params(return_type, &mut subst);
+
                         let has_named = args.iter().any(|a| a.node.name.is_some());
                         let has_defaults = func_info.map_or(false, |fi| fi.param_defaults.iter().any(|d| d.is_some()));
 
@@ -2929,6 +2943,128 @@ impl<'a> TypeChecker<'a> {
         }).collect()
     }
 
+    /// Walk a TypeId tree and replace each `Defined(def_id)` whose def is a
+    /// `GenericParam` with a fresh `Var` per unique DefId, sharing the same
+    /// fresh var across all occurrences of the same param so the unifier links
+    /// them. Used at generic function call sites to instantiate the signature
+    /// with fresh inference variables.
+    fn instantiate_generic_params(
+        &mut self,
+        type_id: TypeId,
+        subst: &mut FxHashMap<DefId, TypeId>,
+    ) -> TypeId {
+        match self.types.get(type_id).clone() {
+            ResolvedType::Defined(def_id) => {
+                if self.scopes.get_def(def_id).kind == DefKind::GenericParam {
+                    *subst.entry(def_id).or_insert_with(|| self.fresh_type_var())
+                } else {
+                    type_id
+                }
+            }
+            ResolvedType::Generic(def_id, args) => {
+                let new_args: Vec<TypeId> = args.iter()
+                    .map(|&a| self.instantiate_generic_params(a, subst))
+                    .collect();
+                if new_args == args {
+                    type_id
+                } else {
+                    self.types.intern_generic(def_id, new_args)
+                }
+            }
+            ResolvedType::Tuple(elems) => {
+                let new_elems: Vec<TypeId> = elems.iter()
+                    .map(|&e| self.instantiate_generic_params(e, subst))
+                    .collect();
+                if new_elems == elems {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Tuple(new_elems))
+                }
+            }
+            ResolvedType::Array(elem, size) => {
+                let new_elem = self.instantiate_generic_params(elem, subst);
+                if new_elem == elem {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Array(new_elem, size))
+                }
+            }
+            ResolvedType::Slice(elem) => {
+                let new_elem = self.instantiate_generic_params(elem, subst);
+                if new_elem == elem {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Slice(new_elem))
+                }
+            }
+            ResolvedType::Function { params, param_ownerships, return_type } => {
+                let new_params: Vec<TypeId> = params.iter()
+                    .map(|&p| self.instantiate_generic_params(p, subst))
+                    .collect();
+                let new_return = self.instantiate_generic_params(return_type, subst);
+                if new_params == params && new_return == return_type {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Function {
+                        params: new_params,
+                        param_ownerships,
+                        return_type: new_return,
+                    })
+                }
+            }
+            ResolvedType::Ref(inner) => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Ref(new_inner))
+                }
+            }
+            ResolvedType::Owned(inner) => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::Owned(new_inner))
+                }
+            }
+            ResolvedType::CallableTrait(inner) => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::CallableTrait(new_inner))
+                }
+            }
+            ResolvedType::MutCallableTrait(inner) => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::MutCallableTrait(new_inner))
+                }
+            }
+            ResolvedType::ConsumeCallableTrait(inner) => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::ConsumeCallableTrait(new_inner))
+                }
+            }
+            ResolvedType::BoxedCallable { kind, inner } => {
+                let new_inner = self.instantiate_generic_params(inner, subst);
+                if new_inner == inner {
+                    type_id
+                } else {
+                    self.types.insert(ResolvedType::BoxedCallable { kind, inner: new_inner })
+                }
+            }
+            // Var, Primitive, TraitObject, Error, Void, Never — leaf, no substitution needed.
+            _ => type_id,
+        }
+    }
+
     /// Resolve an AST type to a TypeId, applying generic substitutions.
     fn resolve_ast_type_with_subst(&mut self, ast_ty: &Type, span: Span, subst: &FxHashMap<String, TypeId>) -> TypeId {
         // Check if the type is a named type that matches a substitution
@@ -4278,9 +4414,27 @@ impl<'a> TypeChecker<'a> {
     /// so that callers can infer the function's type during type checking.
     /// Skips generic functions since their type params aren't in scope at module level.
     fn register_function_signature(&mut self, func: &FunctionDef) {
-        // Skip generic functions — type params not in scope at module level
-        if func.generic_params.is_some() {
-            return;
+        // For generic functions, the type-param names (T, U, E, ...) live in the
+        // function's body scope. We push a scratch scope mirroring those names to
+        // GenericParam DefIds so `ast_type_to_resolved` can resolve them while
+        // building the signature. The actual function body's references will use
+        // the function's body-scope DefIds, which are SEPARATE from these
+        // scratch ones — so per-call instantiation must operate by NAME not
+        // by DefId. See `infer_generic_function_call`.
+        let has_generics = func.generic_params.is_some();
+        if has_generics {
+            self.scopes.push_scope(super::scope::ScopeKind::Function);
+            if let Some(generics) = &func.generic_params {
+                for param in &generics.node.params {
+                    if let crate::parser::ast::GenericParam::Type { name, .. } = &param.node {
+                        let _ = self.scopes.define(
+                            name.node.clone(),
+                            DefKind::GenericParam,
+                            name.span,
+                        );
+                    }
+                }
+            }
         }
 
         let def_id = match self.scopes.lookup(&func.name.node) {
@@ -4347,6 +4501,10 @@ impl<'a> TypeChecker<'a> {
             return_type,
         });
         self.scopes.get_def_mut(def_id).type_id = Some(func_type);
+
+        if has_generics {
+            self.scopes.pop_scope();
+        }
     }
 
     fn check_function(&mut self, func: &FunctionDef) {

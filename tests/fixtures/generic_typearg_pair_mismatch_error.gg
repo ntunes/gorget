@@ -1,0 +1,15 @@
+# A 2-arg generic where the wrong arg slot gets swapped. Catches "skipping the
+# second type-arg when the head matches" — the original failure shape suspected
+# in the TODO.
+
+struct Pair[A, B]:
+    A first
+    B second
+
+Pair[A, B] make_pair[A, B](A a, B b):
+    return Pair[A, B](a, b)
+
+void main():
+    # Call binds A=int, B=String; LHS swaps to Pair[String, int]. Must error.
+    Pair[String, int] p = make_pair(1, "hello")
+    print("done")

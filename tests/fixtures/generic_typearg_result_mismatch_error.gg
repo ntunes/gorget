@@ -1,0 +1,25 @@
+# Regression fixture for the SECURITY bug where the typechecker silently accepted
+# `Result[T, A] = call_returning_Result_T_B()` for distinct A and B. The bug let
+# code drop garbage bytes through the wrong-typed error variant, producing
+# SIGSEGVs in `gorget_string_free` on macOS arm64. See DONE.md 2026-04-28.
+#
+# This fixture exists to *fail* type-checking with a clear `expected X, found Y`
+# diagnostic so the regression is caught the moment unification slacks again.
+
+enum AppError:
+    NotFound
+    BadInput
+
+# Generic identity over Result. Calling this returns `Result[T, E]` with E
+# bound from the argument; if the LHS declares a different E, that's a soundness
+# violation the typechecker MUST catch.
+Result[T, E] passthrough[T, E](Result[T, E] r):
+    return r
+
+Result[int, AppError] producer():
+    return Ok(7)
+
+void main():
+    # E inferred from arg as AppError; LHS says String. Must be a type error.
+    Result[int, String] r = passthrough(producer())
+    print("done")

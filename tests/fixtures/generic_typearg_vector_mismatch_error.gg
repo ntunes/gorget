@@ -1,0 +1,12 @@
+# Same class of bug as `generic_typearg_result_mismatch_error.gg` but for any
+# generic head — Vector here. Ensures the typecheck fix isn't Result-specific.
+
+Vector[T] wrap_one[T](T x):
+    Vector[T] v = []
+    v.push(x)
+    return v
+
+void main():
+    # Generic call returns Vector[int]; LHS declares Vector[String]. Must error.
+    Vector[String] v = wrap_one(42)
+    print("done")

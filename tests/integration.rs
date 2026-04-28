@@ -15780,6 +15780,38 @@ fn fstring_method_chain() {
 }
 
 #[test]
+fn generic_typearg_well_typed() {
+    run_gg(
+        "generic_typearg_well_typed.gg",
+        "ok: 7\n1\n1:hello",
+    );
+}
+
+#[test]
+fn generic_typearg_result_mismatch_error() {
+    check_gg_fails(
+        "generic_typearg_result_mismatch_error.gg",
+        "expected `String`, found `AppError`",
+    );
+}
+
+#[test]
+fn generic_typearg_vector_mismatch_error() {
+    check_gg_fails(
+        "generic_typearg_vector_mismatch_error.gg",
+        "expected `String`, found `int`",
+    );
+}
+
+#[test]
+fn generic_typearg_pair_mismatch_error() {
+    check_gg_fails(
+        "generic_typearg_pair_mismatch_error.gg",
+        "expected `String`, found `int`",
+    );
+}
+
+#[test]
 fn control_match_in_loop() {
     run_gg("control_match_in_loop.gg", "12\n13");
 }
