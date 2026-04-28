@@ -351,6 +351,19 @@ impl TypeRegistry {
     /// without TypeDefs to avoid transitive struct field upgrade.
     pub fn needs_drop(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        // Callable values lower to either `GirType::FnPtr` (the bare type-level
+        // form, e.g. a `Callable[int()] f` local) or `GirType::Named("Callable__…")`
+        // (the mangled monomorphized form used inside collections and after
+        // `clone_fn_for_ptr` materializes a value). Both shapes carry a
+        // heap-alloc'd env at runtime (via `__gorget_closure_env_alloc`) that
+        // must be freed on scope exit, otherwise `Vector[Callable].get(i).
+        // unwrap().clone()` leaks one env per call. Targeted at `needs_drop`
+        // rather than `is_resource_type` because the borrow checker / call ABI
+        // for closure params is POD-shaped and we don't want to cascade
+        // Resource semantics through every closure-typed binding.
+        if matches!(self.get(type_id), Some(GirType::FnPtr { .. })) {
+            return true;
+        }
         if let Some(GirType::Named(name)) = self.get(type_id) {
             // Collection types (no TypeDef, by design — avoids transitive struct upgrade)
             if self.is_collection_type_name(name) {
@@ -358,6 +371,13 @@ impl TypeRegistry {
             }
             // GorgetString is droppable — gorget_string_free handles cap=0 views.
             if name == "GorgetString" { return true; }
+            if name == "GorgetClosure"
+                || name.starts_with("Callable__")
+                || name.starts_with("MutCallable__")
+                || name.starts_with("ConsumeCallable__")
+            {
+                return true;
+            }
             if let Some(type_def) = self.get_type_def(name) {
                 if type_def.metadata.copy_semantics == CopySemantics::Resource
                     || type_def.metadata.drop_strategy != DropStrategy::None

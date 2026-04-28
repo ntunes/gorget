@@ -1416,6 +1416,18 @@ impl<'a> LoweringContext<'a> {
             if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
                 return Some("gorget_set_clone".to_string());
             }
+            // Callable values stored in collections own a heap-alloc'd env
+            // (via `__gorget_closure_env_alloc`). `.clone()` on a borrow of one
+            // must produce an independently-owned closure with its own env —
+            // shallow memcpy would leave both the slot and the clone aliasing
+            // the same heap region and UAF when the source drops.
+            if name.starts_with("Callable__")
+                || name.starts_with("MutCallable__")
+                || name.starts_with("ConsumeCallable__")
+                || name == "GorgetClosure"
+            {
+                return Some("gorget_closure_clone_to_owned".to_string());
+            }
 
             // User structs with Recursive or Custom drop → generated {Name}__clone.
             if let Some(type_def) = self.type_registry.get_type_def(name) {

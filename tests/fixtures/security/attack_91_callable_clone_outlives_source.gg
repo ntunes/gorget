@@ -1,0 +1,32 @@
+# Probe: a Callable cloned out of a Vector — exercises the deep-clone
+# path on `Ref[Callable].clone()`. Before the fix:
+#  * `.clone()` did a 16-byte shallow memcpy of the GorgetClosure, so
+#    the cloned `f` shared its `env` pointer with the Vector's slot.
+#  * The Vector's elem_drop ran `gorget_closure_free(slot)`, freeing
+#    the env. The cloned `f`'s scope-exit drop (or any later use) then
+#    UAF'd / double-free'd.
+# After the fix:
+#  * `clone_fn_for_ptr` routes Callable through
+#    `gorget_closure_clone_to_owned`, which size-prefix-allocates a
+#    fresh env and memcpys it. Both the slot and the clone own
+#    independent heap allocations.
+#  * `needs_drop` returns true for FnPtr-typed locals; lower_drop
+#    emits `gorget_closure_free` on scope exit so cloned closures
+#    free their own env without touching the Vector's.
+#
+# This fixture exercises three patterns: (1) clone in a loop, where each
+# iteration's local must drop its env without touching the next; (2) the
+# Vector itself dropping after the loop, freeing its own envs; (3)
+# cloning the *same* closure twice — both clones must own independent
+# envs so dropping one doesn't free the other.
+
+void main():
+    int x = 100
+    Vector[Callable[int()]] fns = []
+    fns.push((): x + 1)
+
+    int i = 0
+    while i < 3:
+        Callable[int()] f = fns.get(0).unwrap().clone()
+        print(f())
+        i += 1

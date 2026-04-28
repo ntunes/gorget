@@ -113,6 +113,14 @@ pub(super) fn elem_clone_fn_for_type(elem_type: &str) -> Option<String> {
         Some("gorget_set_clone_inplace".into())
     } else if elem_type == "GorgetString" {
         Some("gorget_string_clone_inplace".into())
+    } else if elem_type == "GorgetClosure"
+        || elem_type.starts_with("Callable__")
+        || elem_type.starts_with("MutCallable__")
+        || elem_type.starts_with("ConsumeCallable__")
+    {
+        // `Vector[Callable].clone()` deep-clones each element so the new
+        // vector's closures own independent envs.
+        Some("gorget_closure_clone_inplace".into())
     } else {
         None
     }

@@ -1273,16 +1273,21 @@ impl<'a> FuncLowering<'a> {
         let env_size = c_sizeof_lir_type(&src_ty, self.module_structs);
 
         // Emit: env_ptr = malloc(env_size)
+        // Allocate via the closure-specific allocator that prefixes an 8-byte
+        // size header. `gorget_closure_free` and `gorget_closure_clone_to_owned`
+        // walk back to the header to recover the env size, so the GorgetClosure
+        // value carries enough info for both deep clone and drop without
+        // growing its 16-byte ABI (fn_ptr + env).
         let size_val = self.emit_i64_const(bb, env_size as i64);
         let heap_ptr = self.lir_func.next_value();
-        self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
-        let malloc_abis = self.lookup_arg_abis("malloc");
+        self.ensure_extern("__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr);
+        let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: Some(heap_ptr),
-            name: "malloc".to_string(),
+            name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
             original_name: None,
-            arg_abis: malloc_abis,
+            arg_abis: alloc_abis,
         });
 
         // Emit: memcpy(env_ptr, &src_slot, env_size)
@@ -1375,6 +1380,69 @@ impl<'a> FuncLowering<'a> {
             }
         }
 
+        // Case 2a: pre-packed `Callable` local (`GirType::FnPtr` or
+        // `Named("Callable__…")`) — already a 16-byte GorgetClosure with a
+        // heap-alloc'd env. The collection is about to take ownership, so
+        // deep-clone the closure (fresh env via `gorget_closure_clone_to_owned`,
+        // size-prefix preserved) and pass a pointer to the cloned slot.
+        // Without this the source local and the slot share the same env
+        // pointer; both then drop and double-free (e.g. router.route stores
+        // a Callable param into a Dict — both the local and the Dict slot
+        // would call gorget_closure_free on the same allocation).
+        if let Operand::Copy(place) | Operand::Move(place) = gir_arg {
+            if place.projections.is_empty() {
+                let src_idx = place.local.0 as usize;
+                if src_idx < self.gir_func.locals.len() {
+                    let gir_ty = self.gir_func.locals[src_idx].type_id;
+                    let is_packed_callable = match self.gir_types.get(gir_ty) {
+                        Some(ir::types::GirType::FnPtr { .. }) => true,
+                        Some(ir::types::GirType::Named(n)) => {
+                            n == "GorgetClosure"
+                                || n.starts_with("Callable__")
+                                || n.starts_with("MutCallable__")
+                                || n.starts_with("ConsumeCallable__")
+                        }
+                        _ => false,
+                    };
+                    if is_packed_callable {
+                        let gc_sid = match self.struct_reg.lookup("GorgetClosure") {
+                            Some(sid) => sid,
+                            None => return,
+                        };
+                        let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
+                        let src_slot = self.local_to_slot[src_idx];
+                        let src_addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: src_addr, slot: src_slot,
+                        });
+                        let cloned = self.lir_func.next_value();
+                        self.ensure_extern(
+                            "gorget_closure_clone_to_owned",
+                            &[LirType::Ptr],
+                            &LirType::Struct(gc_sid),
+                        );
+                        let abis = self.lookup_arg_abis("gorget_closure_clone_to_owned");
+                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            dst: Some(cloned),
+                            name: "gorget_closure_clone_to_owned".to_string(),
+                            args: vec![src_addr],
+                            original_name: None,
+                            arg_abis: abis,
+                        });
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                            slot: tmp_slot, value: cloned, is_move: false,
+                        });
+                        let addr = self.lir_func.next_value();
+                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            dst: addr, slot: tmp_slot,
+                        });
+                        lir_args[i] = addr;
+                        return;
+                    }
+                }
+            }
+        }
+
         // Case 2: __Closure_N local → heap-alloc env + ClosurePack.
         let closure_name = match gir_arg {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1411,16 +1479,21 @@ impl<'a> FuncLowering<'a> {
         let src_ty = self.lir_func.slots[src_slot.0 as usize].ty.clone();
         let env_size = c_sizeof_lir_type(&src_ty, self.module_structs);
 
+        // Allocate via the closure-specific allocator that prefixes an 8-byte
+        // size header. `gorget_closure_free` and `gorget_closure_clone_to_owned`
+        // walk back to the header to recover the env size, so the GorgetClosure
+        // value carries enough info for both deep clone and drop without
+        // growing its 16-byte ABI (fn_ptr + env).
         let size_val = self.emit_i64_const(bb, env_size as i64);
         let heap_ptr = self.lir_func.next_value();
-        self.ensure_extern("malloc", &[LirType::I64], &LirType::Ptr);
-        let malloc_abis = self.lookup_arg_abis("malloc");
+        self.ensure_extern("__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr);
+        let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: Some(heap_ptr),
-            name: "malloc".to_string(),
+            name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
             original_name: None,
-            arg_abis: malloc_abis,
+            arg_abis: alloc_abis,
         });
 
         let src_addr = self.lir_func.next_value();

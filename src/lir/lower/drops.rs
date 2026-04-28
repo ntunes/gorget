@@ -82,6 +82,14 @@ impl<'a> FuncLowering<'a> {
                 self.infer_drop_strategy(name)
             };
             (Some(name.clone()), strat)
+        } else if matches!(self.gir_types.get(type_id), Some(GirType::FnPtr { .. })) {
+            // Bare `Callable[Sig]` locals lower to `GirType::FnPtr` rather than
+            // a named type. The runtime layout is still a `GorgetClosure` with
+            // a heap-alloc'd env, so the drop must call `gorget_closure_free`
+            // to release the env (otherwise `f = fns.get(i).unwrap().clone()`
+            // leaks one env per loop iteration).
+            (Some("GorgetClosure".to_string()),
+             DropStrategy::Trivial("gorget_closure_free".to_string()))
         } else {
             (None, DropStrategy::None)
         };
@@ -531,6 +539,17 @@ impl<'a> FuncLowering<'a> {
         }
         if type_name.starts_with("Box__") {
             return DropStrategy::Trivial("free".to_string());
+        }
+        // Callable values that flowed through `wrap_closure_args_at_void_elem`
+        // own a heap-alloc'd env (size-prefix header + env data); on scope
+        // exit the value's drop frees that allocation. `__Closure_N` source
+        // structs stay None — they're stack envs that haven't escaped yet.
+        if type_name.starts_with("Callable__")
+            || type_name.starts_with("MutCallable__")
+            || type_name.starts_with("ConsumeCallable__")
+            || type_name == "GorgetClosure"
+        {
+            return DropStrategy::Trivial("gorget_closure_free".to_string());
         }
         DropStrategy::None
     }

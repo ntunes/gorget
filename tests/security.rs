@@ -999,3 +999,18 @@ fn sec_90_vector_zero_capacity_then_push() {
     // reserve(0) is a no-op; push allocates on demand.
     security_safe("attack_90_vector_zero_capacity", "2\n42\n43");
 }
+
+#[test]
+fn sec_91_callable_clone_outlives_source() {
+    // Deep-clone path on Ref[Callable].clone(). Before the fix, .clone()
+    // shallow-memcpy'd the GorgetClosure, so the cloned f shared its env
+    // pointer with the Vector's slot. Vector elem_drop then UAF'd /
+    // double-free'd at scope exit. The fix routes Callable through
+    // gorget_closure_clone_to_owned + size-prefixed env malloc + emits
+    // gorget_closure_free on FnPtr-typed locals. Each loop iteration's f
+    // owns its own env; the Vector owns the slot's env independently.
+    security_safe(
+        "attack_91_callable_clone_outlives_source",
+        "101\n101\n101",
+    );
+}

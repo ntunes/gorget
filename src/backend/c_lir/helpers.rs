@@ -797,6 +797,14 @@ pub(super) fn elem_clone_fn_for_c_type(c_type: &str) -> Option<String> {
         Some("gorget_set_clone_inplace".into())
     } else if c_type == "GorgetString" {
         Some("gorget_string_clone_inplace".into())
+    } else if c_type == "GorgetClosure"
+        || c_type.starts_with("Callable__")
+        || c_type.starts_with("MutCallable__")
+        || c_type.starts_with("ConsumeCallable__")
+    {
+        // `Vector[Callable].clone()` deep-clones each element so the new
+        // vector's closures own independent envs.
+        Some("gorget_closure_clone_inplace".into())
     } else {
         // User struct/enum clone functions are set via dv.elem_clone = ...
         // at the specific call sites where we know the type has a __clone function.

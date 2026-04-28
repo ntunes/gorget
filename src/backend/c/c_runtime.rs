@@ -1465,26 +1465,59 @@ static inline void gorget_string_free(void* p) {
     *s = (Str){0};
 }
 
-// Drop a closure stored in a collection slot. The env pointer is heap-alloc'd
-// by `wrap_closure_args_at_void_elem` (LIR) at the push/set/put site, so the
-// container owns it and must free on element drop. NULL env (FuncRef wrap)
-// is a no-op. Function pointers are weak references to .text and are never
-// freed. Same void* signature pattern as gorget_string_free for typed callback
-// dispatch. Direct callers pass &closure; decays to void*.
+// Closure env allocator. Returns a pointer to the env data; the 8 bytes
+// preceding the returned pointer hold the env size, so `gorget_closure_free`
+// and `gorget_closure_clone_to_owned` can recover the size without keeping
+// it on the GorgetClosure struct (which stays at 16 bytes — fn_ptr + env).
 //
-// Caveat: `.clone()` on a `Ref[Callable]` extracted from such a collection
-// today does a shallow memcpy of the GorgetClosure struct, so the cloned
-// closure shares its env with the source slot. If the clone outlives the
-// source collection, freeing here UAFs the clone. Today no fixture exercises
-// that pattern; a deep-clone path (clone env + register elem_clone for
-// `Callable__…` here too) is the natural follow-on.
+// Layout: [size_t size | env_data...]
+//                       ^-- returned pointer
+static inline void* __gorget_closure_env_alloc(size_t env_size) {
+    void* hdr = malloc(sizeof(size_t) + env_size);
+    if (!hdr) return NULL;
+    *(size_t*)hdr = env_size;
+    return (char*)hdr + sizeof(size_t);
+}
+
+// Drop a closure value. The env pointer is heap-alloc'd by
+// `wrap_closure_args_at_void_elem` (LIR) via `__gorget_closure_env_alloc`,
+// so the GorgetClosure value owns it and must free on drop. NULL env
+// (FuncRef wrap with adapter) is a no-op. Function pointers are weak
+// references to .text and are never freed. Same void* signature pattern as
+// gorget_string_free for typed __gorget_drop_fn callback dispatch under
+// UBSan. Direct callers pass &closure; decays to void*.
 static inline void gorget_closure_free(void* p) {
     GorgetClosure* c = (GorgetClosure*)p;
     if (c->env) {
-        free(c->env);
+        // Walk back to the size-prefix header and free the original allocation.
+        free((char*)c->env - sizeof(size_t));
     }
     c->fn_ptr = NULL;
     c->env = NULL;
+}
+
+// Deep-clone a closure: copy fn_ptr as-is, allocate a fresh env via
+// `__gorget_closure_env_alloc` (reading the size from the source's prefix
+// header), and memcpy the env contents. Result is independently owned —
+// the clone's drop frees its own env without affecting the source.
+static inline GorgetClosure gorget_closure_clone_to_owned(const GorgetClosure* src) {
+    GorgetClosure dst;
+    dst.fn_ptr = src->fn_ptr;
+    if (src->env) {
+        size_t env_size = ((size_t*)src->env)[-1];
+        dst.env = __gorget_closure_env_alloc(env_size);
+        memcpy(dst.env, src->env, env_size);
+    } else {
+        dst.env = NULL;
+    }
+    return dst;
+}
+
+// In-place clone for collection elem_clone slots: read the closure at p,
+// deep-clone it, write the deep copy back to p.
+static inline void gorget_closure_clone_inplace(void* p) {
+    GorgetClosure* c = (GorgetClosure*)p;
+    *c = gorget_closure_clone_to_owned(c);
 }
 
 // Clone: produces an independently-owned copy. Under 32-byte this is

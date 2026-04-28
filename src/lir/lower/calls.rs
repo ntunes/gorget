@@ -540,6 +540,17 @@ pub(super) fn clone_fn_for_collection_element(elem_type_name: &str) -> Option<&'
         Some("gorget_set_clone")
     } else if elem_type_name == "GorgetString" {
         Some("gorget_string_clone_to_owned")
+    } else if elem_type_name == "GorgetClosure"
+        || elem_type_name.starts_with("Callable__")
+        || elem_type_name.starts_with("MutCallable__")
+        || elem_type_name.starts_with("ConsumeCallable__")
+    {
+        // Callable elements: deep-clone on read so the source slot stays
+        // intact. Without this, the IndexLoad path treats the Callable's
+        // `Trivial("gorget_closure_free")` drop strategy as a Move, memsets
+        // the slot to zero after the read, and the next iteration of (e.g.)
+        // a middleware loop reads `fn_ptr=NULL` → SEGV calling the closure.
+        Some("gorget_closure_clone_to_owned")
     } else {
         None
     }
