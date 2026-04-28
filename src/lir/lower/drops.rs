@@ -357,8 +357,49 @@ impl<'a> FuncLowering<'a> {
     /// Compute the byte size of a place's type for memcmp zero checks.
     pub(super) fn compute_place_byte_size(&self, place: &Place) -> usize {
         let local_idx = place.local.0 as usize;
-        let type_id = self.gir_func.locals[local_idx].type_id;
-        let lir_ty = self.map_type(&type_id);
+        // Walk projections to find the *final* GIR type, so the memcmp
+        // guard reads exactly the bytes behind the place's address — not
+        // the parent local's full size when the place is a field/elem.
+        // Without this, `Inst::DropGuardOpen { kind: NonZero, value: &p->f }`
+        // emits `memcmp(&p->f, 0, sizeof(P))` which reads up to
+        // sizeof(P) - sizeof(F) bytes past the field's end into adjacent
+        // fields. Stays inside the parent's allocation (so not UB), but
+        // the "non-zero" check then triggers spurious drops on already-
+        // zeroed fields whose neighbours happen to be non-zero.
+        let mut current_gir_type = if local_idx < self.gir_func.locals.len() {
+            self.gir_func.locals[local_idx].type_id
+        } else {
+            crate::ir::types::I64_TYPE
+        };
+        // Mirror lower_place_addr's ref-local short-circuit: a Ptr-typed
+        // local without an explicit Deref projection produces the
+        // pointee's address (via SlotLoad), so the "current type" we
+        // walk projections from is the pointee, not the Ptr.
+        let is_ref_local = self.gir_func.locals.get(local_idx)
+            .map_or(false, |l| l.ownership.is_ref());
+        let has_deref = place.projections.first() == Some(&Projection::Deref);
+        if is_ref_local && !has_deref {
+            if let Some(GirType::Ptr(inner)) = self.gir_types.get(current_gir_type) {
+                current_gir_type = *inner;
+            }
+        }
+        for proj in &place.projections {
+            match proj {
+                Projection::Field(field) => {
+                    current_gir_type = self.resolve_field_gir_type_id(current_gir_type, *field);
+                }
+                Projection::Deref => {
+                    current_gir_type = self.resolve_deref_gir_type_id(current_gir_type);
+                }
+                Projection::Index(_) => {
+                    // Array/Vector element: type resolution not implemented
+                    // here. Drops on collection elements go through the
+                    // ElemDropAction path, not this size-guard, so this is
+                    // unreachable in practice.
+                }
+            }
+        }
+        let lir_ty = self.map_type(&current_gir_type);
         match &lir_ty {
             LirType::Struct(_) => c_sizeof_lir_type(&lir_ty, &self.module_structs),
             _ => crate::lir::types::scalar_size(&lir_ty).unwrap_or(8) as usize,

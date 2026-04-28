@@ -1140,7 +1140,75 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                         ptr_pointee[dst.0 as usize] = Some(pt);
                     }
                 }
+                // Propagate pointee through pointer-identity casts.
+                // A `(void*)src` cast produces a pointer to the same memory
+                // — losing the pointee type makes Store fall back to the
+                // 8-byte `*(void**)p = NULL` form for null stores, which
+                // partially zeros multi-word destinations like Str (32B)
+                // and creates `data=NULL, len>0` invariant breaks.
+                // PtrCast is pure type-punning at the C level (`(void*)v`),
+                // and Bitcast is a memcpy-shaped cast — neither changes
+                // what the pointer addresses.
+                Inst::PtrCast { dst, value } | Inst::Bitcast { dst, value, .. } => {
+                    let prop = ptr_pointee.get(value.0 as usize).and_then(|p| p.clone());
+                    if let Some(pt) = prop {
+                        ptr_pointee[dst.0 as usize] = Some(pt);
+                    }
+                }
                 _ => {}
+            }
+        }
+    }
+
+    // Propagate pointee through block-arg → block-param passing.
+    // Block params are SSA's phi equivalent; without this, a Ptr-typed
+    // block param with a known-pointee source value loses the pointee
+    // type, and downstream Stores fall back to the 8-byte `*(void**)p
+    // = NULL` form — which partially zeros multi-word destinations
+    // like Str (32B) and creates `data=NULL, len>0` invariant breaks.
+    // Iterate to fixed point: a block param can feed another block
+    // param (loops, diamonds), so one pass isn't enough.
+    {
+        let mut changed = true;
+        let mut iters = 0;
+        while changed && iters < 16 {
+            changed = false;
+            iters += 1;
+            for block in &func.blocks {
+                // Collect (target_block, args) pairs from this block's terminator.
+                let pairs: Vec<(BlockId, Vec<ValueId>)> = match &block.terminator {
+                    Term::Jump(target, args) => vec![(*target, args.clone())],
+                    Term::Branch { then_block, then_args, else_block, else_args, .. } => {
+                        vec![(*then_block, then_args.clone()), (*else_block, else_args.clone())]
+                    }
+                    Term::Switch { cases, default, default_args, .. } => {
+                        let mut v: Vec<(BlockId, Vec<ValueId>)> = cases.iter()
+                            .map(|(_, b, a)| (*b, a.clone()))
+                            .collect();
+                        v.push((*default, default_args.clone()));
+                        v
+                    }
+                    _ => continue,
+                };
+                for (target_id, args) in pairs {
+                    let target_block = match func.blocks.get(target_id.0 as usize) {
+                        Some(b) => b,
+                        None => continue,
+                    };
+                    for (i, arg) in args.iter().enumerate() {
+                        let param_vid = match target_block.params.get(i) {
+                            Some((vid, _ty)) => *vid,
+                            None => continue,
+                        };
+                        let param_idx = param_vid.0 as usize;
+                        if ptr_pointee.get(param_idx).map_or(true, |p| p.is_none()) {
+                            if let Some(pt) = ptr_pointee.get(arg.0 as usize).and_then(|p| p.clone()) {
+                                ptr_pointee[param_idx] = Some(pt);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -2664,7 +2664,8 @@ static inline GorgetString gorget_str_replacen(Str s, Str old, Str new_s, int64_
         const char* found = gorget_memmem(p, remaining, (const char*)old.data, old.len);
         if (!found) break;
         size_t chunk = (size_t)(found - p);
-        Str before = { .data = p, .cap = 0, .len = chunk, .alloc = NULL };
+        // Cast to discard const: cap=0 view means we won't write through .data.
+        Str before = { .data = (char*)p, .cap = 0, .len = chunk, .alloc = NULL };
         gorget_string_append_str(&result, before);
         gorget_string_append_str(&result, new_s);
         size_t skip = chunk + old.len;
@@ -2672,7 +2673,7 @@ static inline GorgetString gorget_str_replacen(Str s, Str old, Str new_s, int64_
         remaining -= skip;
         replaced++;
     }
-    Str rest = { .data = p, .cap = 0, .len = remaining, .alloc = NULL };
+    Str rest = { .data = (char*)p, .cap = 0, .len = remaining, .alloc = NULL };
     gorget_string_append_str(&result, rest);
     return result;
 }
@@ -2771,8 +2772,9 @@ static inline int64_t gorget_str_find_from(Str s, Str needle, int64_t from) {
         cp++;
     }
     if (byte_start >= s.len) return -1;
-    // Search in the remaining portion
-    Str sub = { .data = d + byte_start, .cap = 0, .len = s.len - byte_start, .alloc = NULL };
+    // Search in the remaining portion. Cast to discard const: cap=0
+    // view means we won't write through .data.
+    Str sub = { .data = (char*)(d + byte_start), .cap = 0, .len = s.len - byte_start, .alloc = NULL };
     int64_t byte_off = gorget_str_find(sub, needle);
     if (byte_off < 0) return -1;
     // Convert byte offset in sub to codepoint index in original

@@ -1013,25 +1013,31 @@ fn eliminate_common_subexpressions(func: &mut LirFunction) -> usize {
             }
         }
 
-        // Apply replacements: replace the instruction with IntCast (identity copy)
+        // Apply replacements: replace the instruction with an identity copy.
+        // For pointer-producing ops (FieldPtr) use PtrCast — IntCast emits
+        // `dst = (void*)(value);` which the C backend's null-store path can't
+        // size-propagate through (it loses pointee tracking, and a subsequent
+        // `store dst, NULL` falls back to the 8-byte `*(void**)dst = NULL;`
+        // form — partially zeroing 32-byte Str fields and breaking the
+        // `data=NULL ⟹ len=0` invariant). PtrCast propagates pointee.
         for (idx, _old_dst, existing) in &replacements {
             let old_inst = &block.insts[*idx];
             if let Some(dst) = old_inst.dst() {
-                let ty = match old_inst {
-                    Inst::Cmp { .. } | Inst::Not { .. } => LirType::Bool,
-                    Inst::FieldPtr { .. } => LirType::Ptr,
+                let new_inst = match old_inst {
+                    Inst::FieldPtr { .. } => Inst::PtrCast { dst, value: *existing },
+                    Inst::Cmp { .. } | Inst::Not { .. } => Inst::IntCast { dst, value: *existing, to: LirType::Bool },
                     inst => {
-                        // Extract type from the instruction
-                        match inst {
+                        let ty = match inst {
                             Inst::Add { ty, .. } | Inst::Sub { ty, .. } | Inst::Mul { ty, .. }
                             | Inst::Div { ty, .. } | Inst::Rem { ty, .. } | Inst::Neg { ty, .. }
                             | Inst::BitAnd { ty, .. } | Inst::BitOr { ty, .. } | Inst::BitXor { ty, .. }
                             | Inst::BitNot { ty, .. } | Inst::Shl { ty, .. } | Inst::Shr { ty, .. } => ty.clone(),
                             _ => LirType::I64,
-                        }
+                        };
+                        Inst::IntCast { dst, value: *existing, to: ty }
                     }
                 };
-                block.insts[*idx] = Inst::IntCast { dst, value: *existing, to: ty };
+                block.insts[*idx] = new_inst;
                 eliminated += 1;
             }
         }
