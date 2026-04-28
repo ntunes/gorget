@@ -1307,7 +1307,9 @@ equip Parser:
         Vector[String] params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             self.advance()
-            while self.check_tok(TOK_IDENT) or self.check_kw(KW_CONST):
+            # Loop while we have a type-like token: ident, value-namespace
+            # keyword usable as trait name (Error/Ok/Some/None), or const.
+            while self.check_tok(TOK_IDENT) or self.check_kw(KW_CONST) or self.check_kw(KW_ERROR) or self.check_kw(KW_OK) or self.check_kw(KW_SOME) or self.check_kw(KW_NONE):
                 if self.check_kw(KW_CONST):
                     self.advance()
                     # Skip the type, read the name
@@ -1315,12 +1317,19 @@ equip Parser:
                     SpannedToken name_tok = self.advance()
                     params.push(token_ident(name_tok.lex_token))
                 else:
-                    SpannedToken t = self.advance()
-                    # If next is also an identifier, first was a trait bound — use the second
+                    # Tentatively skip a type-like prefix (the trait bound).
+                    # If a name-IDENT follows, the prefix was the bound;
+                    # else the prefix WAS the name. This handles
+                    # [Error E], [Iterator[T] I], plain [T], etc.
+                    int saved = self.pos
+                    self.skip_type_lookahead()
                     if self.check_tok(TOK_IDENT):
                         SpannedToken name_tok = self.advance()
                         params.push(token_ident(name_tok.lex_token))
                     else:
+                        # Wasn't a bound — restore and read just the name.
+                        self.pos = saved
+                        SpannedToken t = self.advance()
                         params.push(token_ident(t.lex_token))
                 if not self.match_tok(TOK_COMMA):
                     break
@@ -1387,6 +1396,11 @@ equip Parser:
 
         if self.check_kw(KW_NONE):
             SpannedToken t = self.advance()
+            # `None()` and `None` are both valid; consume optional parens
+            # so the trailing `()` doesn't leak into the body parser.
+            if self.check_tok(TOK_LPAREN):
+                self.advance()
+                self.expect_tok(TOK_RPAREN, "expected ')' after None()")
             SpannedExpr lit = SpannedExpr(ENoneLiteral(), Span(t.lex_start, t.lex_end))
             return self.mk_pat(PLiteral(lit), start)
 
@@ -1459,7 +1473,7 @@ equip Parser:
             return self.mk_pat(PBinding(name), start)
 
         # Keywords that can be constructors: Some, Ok, Error, None
-        if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR):
+        if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_NONE):
             SpannedToken kw_tok = self.advance()
             String name = ""
             int kt = keyword_tag(kw_tok.lex_token)
@@ -1469,6 +1483,8 @@ equip Parser:
                 name = "Ok"
             elif kt == KW_ERROR:
                 name = "Error"
+            elif kt == KW_NONE:
+                name = "None"
             if self.check_tok(TOK_LPAREN):
                 self.advance()
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
@@ -2768,6 +2784,14 @@ equip Parser:
             return true
 
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
+            self.advance()
+            if self.check_tok(TOK_LBRACKET):
+                self.skip_bracket_contents()
+            return true
+
+        # Result/Option variant keywords used as trait names in
+        # generic-param trait bounds (e.g. `[Error E]`).
+        if self.check_kw(KW_ERROR) or self.check_kw(KW_OK) or self.check_kw(KW_SOME) or self.check_kw(KW_NONE):
             self.advance()
             if self.check_tok(TOK_LBRACKET):
                 self.skip_bracket_contents()
