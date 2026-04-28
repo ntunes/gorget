@@ -31,3 +31,9 @@ core.*
 # Profiler outputs
 callgrind.out.*
 perf.data*
+
+# LLVM backend intermediate artifacts (per-fixture runtime/user objects + IR)
+**/__gorget_runtime*.c
+**/__gorget_runtime*.o
+**/__gorget_user*.o
+*.ll

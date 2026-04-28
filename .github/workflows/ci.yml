@@ -41,3 +41,42 @@ jobs:
         run: cargo test --test security -- --test-threads=1
         env:
           GG_TEST_TIMEOUT_SECS: 600
+
+  llvm-backend:
+    name: LLVM Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-llvm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build
+        run: cargo build --release
+
+      # Drives every fixture build through `--backend=llvm` (see gg_command in
+      # tests/integration.rs). Tests that exercise paths the LLVM backend
+      # doesn't yet support — self-host comparisons, hot-reload, tracing, plus
+      # ~17 known LLVM regressions tracked in project_llvm_backend.md — short-
+      # circuit via `skip_under_llvm()` so the suite stays green and gates
+      # against new regressions while we work the residual list down.
+      - name: Integration tests (LLVM backend)
+        run: cargo test --test integration --release -- --test-threads=4
+        env:
+          GG_BACKEND: llvm
+          GG_TEST_TIMEOUT_SECS: 600

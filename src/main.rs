@@ -919,8 +919,15 @@ fn compile_llvm_pipeline(
 ) -> Result<PathBuf, String> {
     let tmp_dir = ll_path.parent().unwrap_or(Path::new("."));
 
+    // Per-fixture intermediate filenames keep parallel `gg build` invocations
+    // from clobbering each other's runtime .c / .o (and the LLVM .o).
+    // Integration tests run --test-threads up to N and would otherwise race
+    // through the same `__gorget_runtime.c` path → undefined-reference link
+    // failures because one process truncated the file mid-compile of another.
+    let stem = ll_path.file_stem().and_then(|s| s.to_str()).unwrap_or("gg");
+
     // Step 1: Write the C runtime to a temporary file and compile it
-    let runtime_c_path = tmp_dir.join("__gorget_runtime.c");
+    let runtime_c_path = tmp_dir.join(format!("__gorget_runtime_{stem}.c"));
     let mut runtime_src = String::with_capacity(256 * 1024);
     // Include all runtime modules needed for a basic program
     use gorget::backend::c::c_runtime;
@@ -1090,7 +1097,7 @@ fn compile_llvm_pipeline(
     }
 
     // Compile runtime C → .o
-    let runtime_o_path = tmp_dir.join("__gorget_runtime.o");
+    let runtime_o_path = tmp_dir.join(format!("__gorget_runtime_{stem}.o"));
     let cc = env::var("CC").unwrap_or_else(|_| "cc".to_string());
     let mut rt_cmd = Command::new(&cc);
     rt_cmd
@@ -1113,7 +1120,7 @@ fn compile_llvm_pipeline(
     }
 
     // Step 2: Compile LLVM IR → .o using llc
-    let ll_o_path = tmp_dir.join("__gorget_user.o");
+    let ll_o_path = tmp_dir.join(format!("__gorget_user_{stem}.o"));
     let llc = env::var("LLC").unwrap_or_else(|_| "llc".to_string());
     let mut ll_cmd = Command::new(&llc);
     ll_cmd
