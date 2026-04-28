@@ -1,16 +1,16 @@
 # Unified Resource Model — Design
 
-> **Status:** Proposed (2026-04-28).
+> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4).
 > **Authors:** opus-4.7 session.
 > **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`.
-> **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1.
+> **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4).
 
 This document proposes a three-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time.
 
 The changes are:
 
 - **Phase A — Unified resource metadata.** Replace the current ~10 parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. All consumers read from one accessor. Adding a new resource type touches one declaration site instead of ten.
-- **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses (`cap == 0` ⇒ view, the drop fn is a no-op) to every resource type. Shallow copies become safe at runtime: only the owner ever frees. Defends in depth against bugs that escape Phase C.
+- **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses (`cap == 0` ⇒ view, the drop fn is a no-op) to every resource type, with one rule: **first 8 bytes == 0 ⇒ view**. Collections move existing `cap` to offset 0; non-collections (Box, Closure, Task) prepend a uniform `flags` header. Shallow copies become safe at runtime: only the owner ever frees, every other holder is a view that no-ops on drop. One `__gorget_is_view(void*)` function works on any resource pointer with no metadata lookup. Defends in depth against bugs that escape Phase C.
 - **Phase C — Strict move/clone validation.** Make every read of a resource-typed value either `MoveZero` (source dies), an explicit `Clone` (independent deep copy), or a `Borrow` (typed `Ref[T]`/`MutPtr<T>` that has its own no-drop discipline). Reject any IR that produces a shallow alias of an owned resource. This makes the Phase B safety net redundant in steady state, but keeps it as defence in depth during migration.
 
 The phases compose: Phase A is a refactor that unblocks the others; Phase B is a runtime safety net that ships fast and catches bugs while Phase C is being built; Phase C is the compile-time guarantee that the bug class can't recur.
@@ -133,12 +133,15 @@ pub struct ResourceMetadata {
     pub clone_inplace_fn: &'static str,
 
     /// CoW materialise function (`void(*)(void*)`) — view → owned in place.
-    /// `None` if the type has no view/owner distinction (Phase B will
-    /// fill these in).
+    /// `None` if the type has no view/owner distinction (opaque handles).
     pub materialize_fn: Option<&'static str>,
 
-    /// View discriminator scheme. See §4.2 for details.
-    pub view: ViewScheme,
+    /// True if the type participates in the universal view-discriminator
+    /// scheme (§4): first 8 bytes == 0 ⇒ view, otherwise owner. Almost
+    /// every Gorget resource sets this. False for opaque handles whose
+    /// layout we don't control (FFI-shaped types like `int64_t`-sized
+    /// runtime handles).
+    pub has_view_header: bool,
 
     /// On `.get(i)` from a collection of this type, do we return
     /// `Option[Ref[T]]` (borrow) or `Option[T]` (by value)?
@@ -153,19 +156,6 @@ pub struct ResourceMetadata {
     pub elem_abi: AbiKind,
 }
 
-pub enum ViewScheme {
-    /// No view distinction — every value is its own owner. Drop always frees.
-    /// (Box[T], Task[T], opaque handles.)
-    AlwaysOwned,
-
-    /// View ⇔ a sentinel value at field offset N equals K.
-    /// (String: cap==0; Array: data==NULL; ClosureV2: env_owned_bit==0.)
-    SentinelField {
-        offset: u32,
-        sentinel: u64,
-    },
-}
-
 pub enum GetReturnConvention {
     /// `coll.get(i)` returns `Option[Ref[T]]`. Caller .clone()s for ownership.
     /// (Vector today; Dict/Set should join after Phase A.)
@@ -177,6 +167,13 @@ pub enum GetReturnConvention {
     Value,
 }
 ```
+
+The earlier draft of this doc had a `ViewScheme` enum with three variants
+(`AlwaysOwned`, `SentinelField`, `LeadingHeader`) to accommodate per-type
+discriminator placement. After the §4 convergence — every resource starts
+with the discriminator at offset 0 — `ViewScheme` collapses to a single
+boolean (`has_view_header`). One rule everywhere: **first 8 bytes == 0
+⇒ view, otherwise owner**.
 
 ### 3.3 The accessor
 
@@ -242,102 +239,110 @@ String has the same shape but doesn't bite because `gorget_string_free` checks `
 
 **Generalising this to every resource type makes shallow-copy double-free physically impossible**, regardless of whether the IR tracks ownership correctly.
 
-### 4.2 The view discriminator schemes
+### 4.2 One rule for every resource
 
-Most resources can dedicate a sentinel field. For the hard cases we extend the runtime header.
+The earlier draft of this section had three view-discriminator schemes (per-type sentinel fields, leading-header word, pointer-bit tagging) chosen for ABI preservation. That preservation isn't worth the maintenance debt — bit-stealing on `env` size prefixes and pointer alignment bits is exactly the kind of clever-now-cursed-later trick this whole document is supposed to eliminate.
 
-| Resource | Today | Proposed view marker |
-|---|---|---|
-| `GorgetString` | `cap == 0` ⇒ view | (already correct) |
-| `GorgetArray` | `cap == 0 && len > 0` ⇒ view (informally) | `cap == 0` ⇒ view (formalise; teach `gorget_array_free` to no-op on views) |
-| `GorgetMap` / `GorgetSet` | none | `cap == 0` ⇒ view (same as Array) |
-| `GorgetClosure` | none | env's size-prefix header (added in deep-clone landing) gets a high-bit flag: `size & 0x8000_0000 ⇒ view` |
-| `Box[T]` | none | sentinel pointer value or extra field; details in §4.3 |
-| `Task[T]` | none | `task_ptr == NULL` ⇒ view |
-| User structs with `Resource` semantics | none | a generated `__gorget_view_bit` field at offset 0; auto-set/checked by generated `T__drop` |
-
-### 4.3 The hard case: `GorgetClosure`
-
-GorgetClosure is `{fn_ptr, env}` — 16 bytes, ABI-locked because closure invocation is performance-critical. Adding a third field grows it to 24 bytes and breaks every site that assumes `sizeof(GorgetClosure) == 16`.
-
-Solution: piggyback on the env size prefix that the deep-clone landing already added. The env layout is now `[size_t size | env_data]`; the high bit of `size` becomes a view flag.
+The right design: **every resource type's first 8 bytes are the discriminator. `0` ⇒ view, anything non-zero ⇒ owner. One rule, one runtime check.**
 
 ```c
-// Before this phase:
-static inline void gorget_closure_free(void* p) {
-    GorgetClosure* c = (GorgetClosure*)p;
-    if (c->env) {
-        free((char*)c->env - sizeof(size_t));
-    }
-    c->fn_ptr = NULL;
-    c->env = NULL;
-}
-
-// After Phase B:
-static inline void gorget_closure_free(void* p) {
-    GorgetClosure* c = (GorgetClosure*)p;
-    if (c->env) {
-        size_t header = ((size_t*)c->env)[-1];
-        if (header & GORGET_CLOSURE_VIEW_BIT) {
-            // View — borrow only, don't free.
-            c->fn_ptr = NULL; c->env = NULL;
-            return;
-        }
-        free((char*)c->env - sizeof(size_t));
-    }
-    c->fn_ptr = NULL;
-    c->env = NULL;
+static inline bool __gorget_is_view(const void* p) {
+    return *(const uint64_t*)p == 0;
 }
 ```
 
-When does the view bit get set? Anywhere the runtime produces a *shallow copy* of a GorgetClosure that will outlive its source. Two specific cases:
+For collections this is *already true* if we move the existing `cap` field from offset 8 to offset 0 — `cap == 0` already coincides with "view" (a borrowed buffer with no allocated capacity of its own). The 2026-04-12 layout decision (cap at offset 8 / field index 1) was the project's first attempt at a uniform discriminator location; this is the second attempt that picks the *useful* location instead of the merely consistent one.
 
-1. `Dict.get(key).unwrap()` for `Dict[K, Callable]`: the unwrap result reads the slot's GorgetClosure value. We set the view bit on the result *and on the original* (so neither thinks it owns the env any more — the Dict slot is the canonical owner). The next read of the Dict slot would re-mark the slot as owner. This is the same idea as String CoW where the *first* mutator becomes the owner.
+For non-collections (`GorgetClosure`, `Box[T]`, `Task[T]`), we prepend an 8-byte `flags` header. Bit 0 = `OWNED`. Other bits reserved for future use (refcounted, frozen, thread-shared, etc. — all the things we'll inevitably want to add later). The "extra" 8 bytes is honest cost for a uniform safe scheme; trying to avoid it via bit-stealing is the trap.
 
-   Actually, simpler: the unwrap result gets the view bit set; the slot stays owner. View-result drops are no-op. Slot drop frees as normal.
+### 4.3 Layouts after convergence
 
-2. Field projections of a struct field of type `Callable`: same pattern.
+| Type | Today | After Phase B | Δ |
+|---|---|---|---|
+| `GorgetString` | `{data, cap, len, alloc}` 32 B (cap at offset 8) | `{cap, data, len, alloc}` 32 B (cap at offset 0) | reorder only, same size |
+| `GorgetArray` | `{data, cap, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize}` 64 B | `{cap, data, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize}` 64 B | reorder only |
+| `GorgetMap` / `GorgetSet` | cap at field index 1 | cap at field index 0, all other fields shift left | reorder only |
+| `GorgetClosure` | `{fn_ptr, env}` 16 B | `{flags, fn_ptr, env}` 24 B | +8 B (50%) |
+| `Box[T]` | `T*` 8 B | `{flags, T*}` 16 B | +8 B (100%) |
+| `Task[T]` | `{task_ptr, drop_fn}` 16 B | `{flags, task_ptr, drop_fn}` 24 B | +8 B (50%) |
+| Opaque handles (Socket, Mutex, …) | bare `int64_t`-sized | unchanged | 0 — these set `has_view_header: false` in the metadata and stay FFI-shaped |
 
-The cost: one bitwise check per `gorget_closure_free` call. Negligible.
+The cost concentrates on small/hot types. For collections it's free (just a field-index renumber). For Box, Closure, Task it's an honest +8 bytes — paid for runtime safety, debuggability, and the elimination of bit-stealing tricks.
 
-### 4.4 The hard case: `Box[T]`
+Cache impact of moving `cap` to offset 0 is essentially zero: `cap` and `data` always live in the same 64-byte cache line, so the access order doesn't change cache misses. If anything it helps — the discriminator-first layout lets the CPU's branch predictor speculate the view-vs-owner check before the data load completes.
 
-`Box[T]` is a heap-allocated `T` represented as a raw pointer. There's no struct, just a pointer. We can't put a view bit on a bare pointer without growing the type to 16 bytes.
+### 4.4 Drop functions become uniform
 
-Three options:
+```c
+// Before:
+static inline void gorget_string_free(void* p) {
+    GorgetString* s = (GorgetString*)p;
+    if (s->cap == 0) { *s = (Str){0}; return; }
+    s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
+    *s = (Str){0};
+}
 
-a. **Steal pointer alignment bits.** `T*` from `malloc` is at least 8-aligned, so the low 3 bits are always 0. Use bit 0 = view marker. `Box__T__drop` masks the low bits before passing to `free`. Cheap (no struct growth) but every pointer dereference must mask.
+// After (uniform check, type-specific free):
+static inline void gorget_string_free(void* p) {
+    if (__gorget_is_view(p)) { return; }   // first 8 bytes == 0 ⇒ view
+    GorgetString* s = (GorgetString*)p;
+    s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
+    *(uint64_t*)p = 0;                      // mark as view post-drop (idempotent)
+}
 
-b. **Maintain a side table.** A `__gorget_box_owners` set of pointers; `Box__T__drop` checks membership before freeing. Simple but allocates.
+static inline void gorget_closure_free(void* p) {
+    if (__gorget_is_view(p)) { return; }
+    GorgetClosure* c = (GorgetClosure*)p;
+    if (c->env) free((char*)c->env - sizeof(size_t));  // env still uses size prefix
+    *(uint64_t*)p = 0;
+}
 
-c. **Grow `Box[T]` to `{T*, bool}`.** Honest. ABI break.
+static inline void gorget_box_free(void* p) {
+    if (__gorget_is_view(p)) { return; }
+    GorgetBox* b = (GorgetBox*)p;
+    free(b->data);
+    *(uint64_t*)p = 0;
+}
+```
 
-Probably (a) is the best trade-off. The masking cost is one `&` per dereference, hot-loop friendly.
+Same shape every time. The post-drop `*(uint64_t*)p = 0` makes free idempotent — repeated drops of the same slot are no-ops. That's the same property `gorget_string_free` already gets accidentally from setting `*s = (Str){0}`; we make it uniform and explicit.
 
-### 4.5 What this saves
+### 4.5 When does the view bit get set?
+
+Any runtime path that produces a shallow copy of an owned resource sets the view bit on either the source or the destination. The two specific cases:
+
+1. **`Dict.get(key).unwrap()` for `Dict[K, Callable]`** (today's known double-free). The unwrap result reads the slot's GorgetClosure value. The IR emits a `mark_view` on the unwrap result; the Dict slot stays owner. View-result drop is no-op; slot drop frees as normal.
+
+2. **Field projections of a resource-typed struct field.** Reading `s.field` where field is resource produces a view of the field's data. The struct stays the owner.
+
+Once Phase C lands, both of these become impossible to *write* in the IR — the only way to read a resource value is `Move`, `Clone`, or `Borrow`. The view-bit machinery becomes the runtime safety net under Phase C, only relevant if Phase C has bugs.
+
+### 4.6 What this saves
 
 Every "shallow copy and both drop" bug class. Concretely, after Phase B:
-- Dict[K, Callable] double-free → impossible (view bit).
-- routes.put(key, h) double-free → impossible (slot tracks ownership; h's drop is no-op once put fires).
-- Vector[Callable] env leak from intermediate locals → impossible (view-bit intermediate drops are no-ops).
+- `Dict[K, Callable]` double-free → impossible (view bit on unwrap result).
+- `routes.put(key, h)` double-free → impossible (slot stays owner; h's post-put drop is no-op).
+- `Vector[Callable]` env leak from intermediate locals → impossible.
 - The `__gorget_drop_fn` UBSan trip stays (separate type-system issue).
 - Dropped match-arm value stays (separate IR-lowering issue).
 
-So Phase B closes ~half the SECURITY-tagged TODOs and prevents future ones in that class.
+Phase B closes ~half the SECURITY-tagged TODOs and prevents future ones in that class.
 
-### 4.6 Migration plan for Phase B
+### 4.7 Migration plan for Phase B
 
-Stage B1: Formalise `cap == 0` ⇒ view for `GorgetArray`, `GorgetMap`, `GorgetSet`. Update `gorget_array_free` / `gorget_map_free` / `gorget_set_free` to no-op on views.
+Stage B1: Reorder collection structs to put `cap` at offset 0. Update positional struct initializers in `c_runtime.rs` (~20-30 sites — most use designated initializers and are robust). Renumber LIR `FieldPtr` indices: `cap` was index 1, becomes 0; `data` was 0, becomes 1; rest of fields renumber accordingly. Audit hardcoded field-offset assumptions in self-host (project memory documents these — must move in lockstep).
 
-Stage B2: Extend the env size prefix on `GorgetClosure` to carry a view bit. Update `gorget_closure_free` and `gorget_closure_clone_to_owned`. Wire the bit-setting to the Dict.get/field-projection paths in the LIR.
+Stage B2: Add `__gorget_is_view(void*)` runtime helper. Update every `*_free` runtime function (string, array, map, set) to check it first. Add idempotent post-drop zeroing.
 
-Stage B3: Pick one strategy for `Box[T]` (likely 4.4a). Migrate.
+Stage B3: Prepend `uint64_t flags` to `GorgetClosure`, `Box[T]`, `Task[T]`. Update the matching `*_free` and `*_clone` functions. Wire the LIR sites that allocate / pack these to set `flags = GORGET_OWNED`. Update every site that assumes `sizeof(GorgetClosure) == 16` (probably ~10-20 sites; mechanical).
 
-Stage B4: For user-defined Resource structs, generate a `__gorget_view_bit` field at offset 0 (mandated when registering the resource); generated `T__drop` checks it before freeing fields.
+Stage B4: For user-defined Resource structs, the auto-generated `T__drop` prepends a `__gorget_is_view` check. The struct itself either gets a generated `flags: u64` field at offset 0 (mandated by the resource registration), or — if the user already declared a leading 8-byte field that's never zero in practice — reuse that offset.
 
-Stage B5: Audit all `*_free` runtime functions to confirm they all check the view marker first.
+Stage B5: Audit all custom drop functions for runtime types to confirm they all check the view marker first. Add a compile-time assertion that every `ResourceMetadata.drop_fn` starts with the view check (sanity-checked via a runtime preamble that wraps each registered drop_fn).
 
-Estimated effort: 1.5 weeks. Risk: medium — touches runtime code, requires careful audit. Each resource type can be migrated independently.
+Stage B6: Wire the IR sites that produce shallow copies of resources (Dict.get unwrap, field projection of resource fields) to emit a `mark_view` LIR instruction on the result.
+
+Estimated effort: 2 weeks (revised from 1.5 — the field-reorder ripples are real, especially for self-host parity). Risk: medium. Each resource type can be migrated independently, but the field-reorder needs the whole runtime + self-host moved in one synchronised change.
 
 ---
 
@@ -471,7 +476,7 @@ Recommended landing order: A → B → C. Each phase builds on the previous and 
 ### 7.1 ABI breaks
 
 - Phase A: none — purely a refactor.
-- Phase B for `Box[T]`: may need pointer tagging which complicates dereferences. Mitigated by using high alignment bits that are already wasted.
+- Phase B grows `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). Real ABI break — every site that assumes `sizeof(GorgetClosure) == 16` needs to update. Bounded though: ~10-20 sites in the runtime + LIR codegen, all mechanical. The earlier-draft pointer-tagging alternative was rejected as too clever (see §4.2).
 - Phase C: none — the IR pass is internal.
 
 ### 7.2 Performance
@@ -501,13 +506,13 @@ The validation pass in C is itself a test mechanism — once it's a hard error, 
 - B: 1.5 weeks. Runtime + LIR. Requires careful audit of each resource's drop function.
 - C: 3 weeks. IR-lowering changes spread across many sites. Highest risk of "fixing one violation creates another".
 
-Total: ~6.5 weeks of focused work. Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
+Total: ~7 weeks of focused work (revised from 6.5 — Phase B's field-reorder ripples into the self-host lowerer's hardcoded offsets, see project memory's 2026-04-12 layout note). Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
 
 ---
 
 ## 8. Open questions
 
-1. **Should Phase B's view bit be uniformly at offset 0?** A single convention (e.g. every resource has `view_bit` at offset 0) makes a generic `__gorget_is_view(ptr)` possible. Costs alignment for types that wouldn't otherwise have a leading discriminator. Probably worth the uniformity.
+1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-04-28: yes.** The full first 8 bytes of every resource are the discriminator (`0` ⇒ view, non-zero ⇒ owner). Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. See §4.2-4.3 for the converged design. The cost (Box/Closure/Task gain 8 bytes each) is paid for: a single `__gorget_is_view` function works on any resource pointer, no metadata-dispatch needed in the hot drop path, no bit-stealing on `env` size prefixes or pointer alignment bits.
 
 2. **How does Phase C handle generic `T: Resource` parameters?** When the body calls `T.clone()` it should resolve via the unified metadata (Phase A). When it does `move_only T x = y`, the validation pass needs to know T is Resource even before monomorphisation. Probably need a `Resource` trait bound that's checked at the generic-fn level.
 
@@ -541,6 +546,6 @@ We keep finding double-free / UAF / shallow-alias bugs because the architecture 
 
 Recommended path: A first (foundation), B second (runtime safety net), C third (compile-time guarantee that supersedes B).
 
-Total cost: ~6.5 weeks. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety" promise mechanical instead of aspirational.
+Total cost: ~7 weeks. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety" promise mechanical instead of aspirational.
 
 Land Phase A and we're already winning. Land Phase C and the bug class is dead.
