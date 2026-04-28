@@ -9,7 +9,7 @@ from ast import EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess
 from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
 from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
-from ast import EDictLiteral, EDefaultOp, EBlock, EDo
+from ast import EDictLiteral, EDefaultOp, EBlock, EDo, EFString
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -110,6 +110,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             if has_interp:
                 return types.owned_string_id
             return types.string_id
+
+        case EFString(template, exprs):
+            # f-strings always materialise as owned String — the
+            # interpolation segments concat with the literal pieces.
+            return types.owned_string_id
 
         case ECharLiteral(c):
             return types.char_id
