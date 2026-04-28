@@ -1110,9 +1110,20 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     // Leave as None; Store will fall back to sizeof(*(val)).
                     let _ = dst;
                 }
-                Inst::GlobalAddr { dst, .. } => {
-                    // Could track global type, but globals are rarely stored into via Store.
-                    let _ = dst;
+                Inst::GlobalAddr { dst, global } => {
+                    // Track global pointee type so a Store into the global
+                    // address knows the destination's size. Without this, a
+                    // module-level `global = value` assignment falls back to
+                    // `memcpy(&global, val, sizeof(*(val)))` which is
+                    // `sizeof(void)` (== 1 in gcc) for a void* `val`,
+                    // partially copying multi-word destinations like
+                    // GorgetArray (32B) and leaving the rest of the global
+                    // in its prior state (all zeros at startup → null
+                    // .data with non-zero len-from-source = invalid). Fixed
+                    // by reading `module.globals[global]`'s declared type.
+                    if let Some(g) = module.globals.get(global.0 as usize) {
+                        ptr_pointee[dst.0 as usize] = Some(g.ty.clone());
+                    }
                 }
                 // Propagate pointee types through SlotStore→SlotLoad chains.
                 // When a Ptr-typed slot stores a value with known pointee, propagate
