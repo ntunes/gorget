@@ -700,6 +700,20 @@ pub struct ClosureParam {
     pub type_: Option<Spanned<Type>>,
     pub ownership: Ownership,
     pub name: Spanned<String>,
+    /// Source-level tuple destructuring: `((T1 x, T2 y))`. When Some, `name` is
+    /// a compiler-synthesised `__dp_N` placeholder; the closure body's first
+    /// `destructure.as_ref().unwrap().len()` statements are the desugared
+    /// `T1 x = __dp_N._0; T2 y = __dp_N._1; ...` prelude. The formatter prints
+    /// the destructure pattern in source form and skips the prelude statements.
+    pub destructure: Option<Vec<DestructureBinding>>,
+}
+
+/// One binding inside a `((T1 x, T2 y))` closure-param tuple destructure.
+#[derive(Debug, Clone)]
+pub struct DestructureBinding {
+    pub type_: Spanned<Type>,
+    pub ownership: Ownership,
+    pub name: Spanned<String>,
 }
 
 #[derive(Debug, Clone)]

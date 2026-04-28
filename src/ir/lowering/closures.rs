@@ -961,6 +961,7 @@ mod tests {
             ))),
             ownership: crate::parser::ast::Ownership::Borrow,
             name: Spanned::dummy("y".to_string()),
+            destructure: None,
         })];
 
         let body = Spanned::dummy(Expr::BinaryOp {

@@ -648,6 +648,7 @@ fn lower_expr_inner(
                 type_: None,
                 ownership: ast::Ownership::Borrow,
                 name: Spanned::dummy("it".to_string()),
+                destructure: None,
             };
             let params = vec![Spanned::dummy(param)];
             let mut cl = std::mem::take(&mut ctx.closures);

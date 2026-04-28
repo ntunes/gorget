@@ -1248,29 +1248,100 @@ impl Parser {
         self.expect(&Token::LParen)?;
 
         let mut params = Vec::new();
+        // Per-param destructuring metadata. We accumulate it here and stamp it onto the
+        // matching `ClosureParam.destructure` field after each push, then later use it
+        // to prepend `T name = __dp_<i>._<j>` decls to the body.
+        let mut destructure_bindings: Vec<(usize, usize, Spanned<Type>, Ownership, Spanned<String>)> =
+            Vec::new();
         while !self.check(&Token::RParen) && !self.at_end() {
             let param_start = self.peek_span();
 
-            // Try to parse typed parameter
-            let (type_, ownership, name) = if self.is_type_start() {
+            // First: try tuple-destructuring pattern `(Type Name, Type Name, ...)`.
+            // Only applicable when the param slot opens with `(` AND the inner shape is at least
+            // two `Type Name` pairs (or one `Type Name,` followed by another). This disambiguates
+            // from `((Tuple) name)` — a tuple-typed param with a trailing name — which is parsed
+            // by the existing typed-param branch below.
+            let destructure: Option<Vec<(Spanned<Type>, Ownership, Spanned<String>)>> =
+                if self.check(&Token::LParen) {
+                    self.try_parse(|p| {
+                        p.expect(&Token::LParen).ok()?;
+                        let mut bindings = Vec::new();
+                        loop {
+                            let ty = p.parse_type().ok()?;
+                            let ownership = p.parse_ownership_modifier();
+                            if !matches!(p.peek(), Token::Identifier(_)) {
+                                return None;
+                            }
+                            let n = p.expect_identifier().ok()?;
+                            bindings.push((ty, ownership, n));
+                            if p.check(&Token::Comma) {
+                                p.advance();
+                                continue;
+                            }
+                            break;
+                        }
+                        p.expect(&Token::RParen).ok()?;
+                        // Must be at end of param (next is `,` or closing `)`).
+                        if !p.check(&Token::Comma) && !p.check(&Token::RParen) {
+                            return None;
+                        }
+                        // Need at least 2 bindings — single-binding `((T x))` is just
+                        // a typed param wrapped in extra parens; reject so the existing
+                        // typed-param branch can handle it.
+                        if bindings.len() < 2 {
+                            return None;
+                        }
+                        Some(bindings)
+                    })
+                } else {
+                    None
+                };
+
+            let (type_, ownership, name, destructure_meta) = if let Some(bindings) = destructure {
+                // Synthesize tuple-typed param. Name uses `__dp_` prefix (compiler-internal,
+                // unreachable from user code since identifiers can't contain `__`).
+                let param_idx = params.len();
+                let synth_name = format!("__dp_{}", param_idx);
+                let pattern_span = param_start.merge(self.previous_span());
+                let tuple_types: Vec<Spanned<Type>> =
+                    bindings.iter().map(|(ty, _, _)| ty.clone()).collect();
+                let tuple_ty = Spanned::new(Type::Tuple(tuple_types), pattern_span);
+                let meta: Vec<DestructureBinding> = bindings
+                    .iter()
+                    .map(|(ty, own, n)| DestructureBinding {
+                        type_: ty.clone(),
+                        ownership: *own,
+                        name: n.clone(),
+                    })
+                    .collect();
+                for (binding_idx, (ty, own, n)) in bindings.into_iter().enumerate() {
+                    destructure_bindings.push((param_idx, binding_idx, ty, own, n));
+                }
+                (
+                    Some(tuple_ty),
+                    Ownership::Borrow,
+                    Spanned::new(synth_name, pattern_span),
+                    Some(meta),
+                )
+            } else if self.is_type_start() {
                 // type-first: Could be typed parameter `Type name`
                 if let Some(result) = self.try_parse(|p| {
                     let ty = p.parse_type().ok()?;
                     let ownership = p.parse_ownership_modifier();
                     matches!(p.peek(), Token::Identifier(_)).then(|| {
                         let n = p.expect_identifier().unwrap(); // safe: just checked
-                        (Some(ty), ownership, n)
+                        (Some(ty), ownership, n, None)
                     })
                 }) {
                     result
                 } else {
                     // Not a typed param — treat as untyped
                     let n = self.expect_identifier()?;
-                    (None, Ownership::Borrow, n)
+                    (None, Ownership::Borrow, n, None)
                 }
             } else {
                 let n = self.expect_identifier()?;
-                (None, Ownership::Borrow, n)
+                (None, Ownership::Borrow, n, None)
             };
 
             let param_end = self.previous_span();
@@ -1279,6 +1350,7 @@ impl Parser {
                     type_,
                     ownership,
                     name,
+                    destructure: destructure_meta,
                 },
                 param_start.merge(param_end),
             ));
@@ -1300,6 +1372,54 @@ impl Parser {
         } else {
             // Single expression
             self.parse_expr()?
+        };
+
+        // If we have destructure bindings, prepend `T name = __dp_<i>.<j>` stmts to body.
+        let body = if destructure_bindings.is_empty() {
+            body
+        } else {
+            let body_span = body.span;
+            // Normalize body to a Block. For expression-body closures, wrap the expression
+            // in a `return` — block-bodied closure lowering requires an explicit terminator
+            // (lowered as `Expr::Block` doesn't auto-return the last expression).
+            let mut block = match body.node {
+                Expr::Block(b) => b,
+                other => Block {
+                    stmts: vec![Spanned::new(
+                        Stmt::Return(Some(Spanned::new(other, body_span))),
+                        body_span,
+                    )],
+                    span: body_span,
+                },
+            };
+            // Build prelude stmts. Iterate in declaration order.
+            let mut prelude: Vec<Spanned<Stmt>> = Vec::with_capacity(destructure_bindings.len());
+            for (param_idx, binding_idx, ty, own, n) in destructure_bindings {
+                let synth_name = format!("__dp_{}", param_idx);
+                let span = n.span;
+                let object = Spanned::new(Expr::Identifier(synth_name), span);
+                let value = Spanned::new(
+                    Expr::TupleFieldAccess {
+                        object: Box::new(object),
+                        index: binding_idx,
+                    },
+                    span,
+                );
+                let pattern = Spanned::new(Pattern::Binding(n.node.clone()), span);
+                let stmt = Stmt::VarDecl {
+                    is_const: false,
+                    is_mutable: matches!(own, Ownership::MutableBorrow),
+                    shared: SharedKind::None,
+                    type_: ty,
+                    pattern,
+                    value,
+                };
+                prelude.push(Spanned::new(stmt, span));
+            }
+            // Prepend prelude before the existing block stmts.
+            prelude.extend(block.stmts.drain(..));
+            block.stmts = prelude;
+            Spanned::new(Expr::Block(block), body_span)
         };
 
         let end = body.span;

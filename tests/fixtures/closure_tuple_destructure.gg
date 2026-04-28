@@ -1,0 +1,46 @@
+# Closure tuple destructuring: `((T1 x, T2 y))` destructures a single tuple-typed
+# argument into named bindings. Desugars at parse time to a synthetic tuple-typed
+# param plus prepended `T1 x = __dp_N._0` decls in the body.
+#
+# Counted parens: outer closure param list `(...)` plus destructure pattern `(...)`
+# means a closure literal in argument position needs three opening parens:
+#     call_sum( ((int a, int b)) : a + b, ... )
+#               ^ ^^             ^^
+#               | closure params | body
+#               | destructure    |
+#
+
+int call_sum(int((int, int)) f, int a, int b):
+    return f((a, b))
+
+int call_three(int((int, int, int)) f, int a, int b, int c):
+    return f((a, b, c))
+
+String call_str(String((String, int)) f, String s, int n):
+    return f((s, n))
+
+void main():
+    # Two-element destructuring.
+    int sum = call_sum(((int a, int b)): a + b, 3, 4)
+    print(sum)
+
+    # Three-element destructuring.
+    int total = call_three(((int x, int y, int z)): x + y + z, 1, 2, 3)
+    print(total)
+
+    # Mixed types: String + int.
+    String greeting = call_str(((String name, int age)): f"{name} is {age}", "alice", 30)
+    print(greeting)
+
+    # Real motivating case: iterator chain over a Dict.
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 10)
+    d.put(2, 20)
+    d.put(3, 30)
+    int dict_total = d.iter().fold(0, (int acc, (int k, int v)): acc + k + v)
+    print(dict_total)
+
+    # Iterator chain over Vector[(int, int)] pairs.
+    Vector[(int, int)] pairs = [(1, 2), (3, 4), (5, 6)]
+    int pair_sum = pairs.iter().fold(0, (int acc, (int a, int b)): acc + a + b)
+    print(pair_sum)

@@ -15487,6 +15487,14 @@ fn closure_multiline_return() {
 }
 
 #[test]
+fn closure_tuple_destructure() {
+    run_gg(
+        "closure_tuple_destructure.gg",
+        "7\n6\nalice is 30\n66\n21",
+    );
+}
+
+#[test]
 fn string_reassign_loop() {
     run_gg("string_reassign_loop.gg", "aaa\nbbb\nccc");
 }

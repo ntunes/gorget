@@ -3299,6 +3299,7 @@ void main():
             type_: Some(Spanned::dummy(ast::Type::Primitive(PrimitiveType::Int))),
             ownership: Ownership::Borrow,
             name: Spanned::dummy("y".to_string()),
+            destructure: None,
         })];
 
         let body = Spanned::dummy(ast::Expr::BinaryOp {

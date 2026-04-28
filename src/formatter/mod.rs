@@ -1822,12 +1822,40 @@ impl Formatter {
                 let params_doc = doc::surround("(", items, ")", true);
                 self.write_doc(&params_doc);
                 self.emitter.write(": ");
-                // Check if closure body is a multi-line block
+                // Total prelude stmts injected by the parser for tuple destructuring.
+                let prelude_skip: usize = params
+                    .iter()
+                    .filter_map(|p| p.node.destructure.as_ref().map(|b| b.len()))
+                    .sum();
                 if let Expr::Block(ref block) = body.node {
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(block);
-                    self.emitter.dedent();
+                    // If the only post-prelude stmt is `return expr;`, render the closure
+                    // as expression-body — mirrors the parser's wrap of inline `((...)): expr`
+                    // bodies into `Block { ..prelude.., Stmt::Return(Some(expr)) }`.
+                    let post_prelude: Vec<&Spanned<Stmt>> =
+                        block.stmts.iter().skip(prelude_skip).collect();
+                    let inline_expr = if post_prelude.len() == 1 {
+                        match &post_prelude[0].node {
+                            Stmt::Return(Some(e)) => Some(e.clone()),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(expr) = inline_expr {
+                        self.format_expr(&expr);
+                    } else {
+                        self.emitter.newline();
+                        self.emitter.indent();
+                        if prelude_skip > 0 {
+                            for stmt in &post_prelude {
+                                self.emit_comments_before(stmt.span.start);
+                                self.format_stmt(stmt);
+                            }
+                        } else {
+                            self.format_block_stmts(block);
+                        }
+                        self.emitter.dedent();
+                    }
                 } else {
                     self.format_expr(body);
                 }
@@ -2034,6 +2062,22 @@ impl Formatter {
     }
 
     fn format_closure_param(&mut self, param: &ClosureParam) {
+        // Tuple destructuring: print `(T1 x, T2 y, ...)` from the source-level metadata
+        // rather than the synthesised `(T1, T2) __dp_N` form.
+        if let Some(ref bindings) = param.destructure {
+            self.emitter.write("(");
+            for (i, b) in bindings.iter().enumerate() {
+                if i > 0 {
+                    self.emitter.write(", ");
+                }
+                self.format_type(&b.type_);
+                self.emitter.write(" ");
+                self.format_ownership_prefix(b.ownership);
+                self.emitter.write(&b.name.node);
+            }
+            self.emitter.write(")");
+            return;
+        }
         // type-first: `[type] [&|!]name`
         if let Some(ref ty) = param.type_ {
             self.format_type(ty);
