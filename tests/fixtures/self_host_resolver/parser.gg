@@ -1349,6 +1349,9 @@ equip Parser:
                 else:
                     int saved = self.pos
                     self.skip_type_lookahead()
+                    while self.check_tok(TOK_AMP):
+                        self.advance()
+                        self.skip_type_lookahead()
                     if self.check_tok(TOK_IDENT):
                         SpannedToken name_tok = self.advance()
                         params.push(token_ident(name_tok.lex_token))

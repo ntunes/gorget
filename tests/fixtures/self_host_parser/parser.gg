@@ -1317,12 +1317,16 @@ equip Parser:
                     SpannedToken name_tok = self.advance()
                     params.push(token_ident(name_tok.lex_token))
                 else:
-                    # Tentatively skip a type-like prefix (the trait bound).
-                    # If a name-IDENT follows, the prefix was the bound;
-                    # else the prefix WAS the name. This handles
-                    # [Error E], [Iterator[T] I], plain [T], etc.
+                    # Tentatively skip a type-like prefix (the trait bound)
+                    # plus any `& AdditionalTrait` chains. If a name-IDENT
+                    # follows, the prefix was the bound(s); else the prefix
+                    # WAS the name. Handles [Error E], [A & B & C T],
+                    # plain [T], etc.
                     int saved = self.pos
                     self.skip_type_lookahead()
+                    while self.check_tok(TOK_AMP):
+                        self.advance()
+                        self.skip_type_lookahead()
                     if self.check_tok(TOK_IDENT):
                         SpannedToken name_tok = self.advance()
                         params.push(token_ident(name_tok.lex_token))
