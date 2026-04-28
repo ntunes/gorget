@@ -1621,6 +1621,7 @@ equip Parser:
                 continue
 
             # catch: expr catch ( name ): recovery
+            # Multi-line body wraps in EDo (matches Rust parse_body_or_expr).
             if self.check_kw(KW_CATCH):
                 if 1 < min_bp:
                     break
@@ -1630,7 +1631,12 @@ equip Parser:
                 String catch_name = token_ident(cn_tok.lex_token)
                 self.expect_tok(TOK_RPAREN, "expected ')' in catch")
                 self.expect_tok(TOK_COLON, "expected ':' after catch binding")
-                SpannedExpr catch_val = self.parse_expr_bp(2)
+                SpannedExpr catch_val = SpannedExpr(EIntLiteral(0), Span(0, 0))
+                if self.check_tok(TOK_NEWLINE):
+                    Vector[Stmt] body = self.parse_block()
+                    catch_val = SpannedExpr(EDo(body), Span(lhs.span.start, self.peek().lex_start))
+                else:
+                    catch_val = self.parse_expr_bp(2)
                 lhs = SpannedExpr(ECatch(Box(lhs), catch_name, Box(catch_val)), Span(lhs.span.start, catch_val.span.end))
                 continue
 
