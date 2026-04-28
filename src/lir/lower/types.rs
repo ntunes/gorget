@@ -90,6 +90,14 @@ pub(super) fn elem_drop_fn_for_type(elem_type: &str) -> Option<String> {
         Some("gorget_set_free".into())
     } else if elem_type == "GorgetString" {
         Some("gorget_string_free".into())
+    } else if elem_type == "GorgetClosure"
+        || elem_type.starts_with("Callable__")
+        || elem_type.starts_with("MutCallable__")
+        || elem_type.starts_with("ConsumeCallable__")
+    {
+        // Closures stored in collections own a heap-alloc'd env (packed by
+        // `wrap_closure_args_at_void_elem`); container drop must free it.
+        Some("gorget_closure_free".into())
     } else {
         None
     }

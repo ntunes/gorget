@@ -3748,12 +3748,16 @@ impl<'a> FuncLowering<'a> {
         // Array literal path: gorget_array_new(sizeof(T)) from lower_array_literal
         // doesn't carry element type info in original_name (it's just "gorget_array_new").
         // Synthesize a monomorphized name so the C backend can set elem_drop/elem_clone.
+        // Callable element types come through as `GirType::FnPtr` (no Named name); map
+        // them to `Vector__GorgetClosure__new` so the C backend wires
+        // `gorget_closure_free` as elem_drop and frees the heap-alloc'd closure envs
+        // (otherwise `Vector[Callable].push(closure)` leaks `sizeof(env)` per push).
         let effective_original_name = if original_name == "gorget_array_new" && !args.is_empty() {
             if let Some(Operand::Constant(Constant::SizeOf(type_id))) = args.first() {
-                if let Some(GirType::Named(name)) = self.gir_types.get(*type_id) {
-                    format!("Vector__{name}__new")
-                } else {
-                    original_name.to_string()
+                match self.gir_types.get(*type_id) {
+                    Some(GirType::Named(name)) => format!("Vector__{name}__new"),
+                    Some(GirType::FnPtr { .. }) => "Vector__GorgetClosure__new".to_string(),
+                    _ => original_name.to_string(),
                 }
             } else {
                 original_name.to_string()

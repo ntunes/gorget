@@ -1465,6 +1465,28 @@ static inline void gorget_string_free(void* p) {
     *s = (Str){0};
 }
 
+// Drop a closure stored in a collection slot. The env pointer is heap-alloc'd
+// by `wrap_closure_args_at_void_elem` (LIR) at the push/set/put site, so the
+// container owns it and must free on element drop. NULL env (FuncRef wrap)
+// is a no-op. Function pointers are weak references to .text and are never
+// freed. Same void* signature pattern as gorget_string_free for typed callback
+// dispatch. Direct callers pass &closure; decays to void*.
+//
+// Caveat: `.clone()` on a `Ref[Callable]` extracted from such a collection
+// today does a shallow memcpy of the GorgetClosure struct, so the cloned
+// closure shares its env with the source slot. If the clone outlives the
+// source collection, freeing here UAFs the clone. Today no fixture exercises
+// that pattern; a deep-clone path (clone env + register elem_clone for
+// `Callable__…` here too) is the natural follow-on.
+static inline void gorget_closure_free(void* p) {
+    GorgetClosure* c = (GorgetClosure*)p;
+    if (c->env) {
+        free(c->env);
+    }
+    c->fn_ptr = NULL;
+    c->env = NULL;
+}
+
 // Clone: produces an independently-owned copy. Under 32-byte this is
 // view-aware — if src is already a view, we allocate a fresh owned buffer
 // with the same contents. If src is owned, same thing (fresh buffer).
