@@ -378,7 +378,7 @@ String hashable_field_line(String access, String ftype):
 
 String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
-    src = src + "    void hash(self, FxHasher &h):\n"
+    src = src + "    void hash[Hasher H](self, H &h):\n"
     if fields.len() == 0:
         src = src + "        h.write_int(0)\n"
     else:
@@ -621,7 +621,7 @@ String gen_enum_cloneable(String name, String gs, String gp, Vector[EnumVariant]
 
 String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
-    src = src + "    void hash(self, FxHasher &h):\n"
+    src = src + "    void hash[Hasher H](self, H &h):\n"
     src = src + "        match self:\n"
     int vi = 0
     while vi < variants.len():
