@@ -324,6 +324,23 @@ String gen_struct_displayable(String name, String gs, String gp, Vector[Param] f
         src = src + "        return f\"" + name + "(" + parts + ")\"\n"
     return src
 
+String gen_struct_debuggable(String name, String gs, String gp, Vector[Param] fields):
+    String src = "equip " + gp + name + gs + " with Debuggable:\n"
+    src = src + "    String debug(self):\n"
+    if fields.len() == 0:
+        src = src + "        return \"" + name + "()\"\n"
+    else:
+        String parts = ""
+        int i = 0
+        while i < fields.len():
+            Param f = fields.get(i).unwrap()
+            if i > 0:
+                parts = parts + ", "
+            parts = parts + f.param_name + "={self." + f.param_name + "}"
+            i = i + 1
+        src = src + "        return f\"" + name + "(" + parts + ")\"\n"
+    return src
+
 String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
@@ -549,6 +566,38 @@ String gen_enum_displayable(String name, String gs, String gp, Vector[EnumVarian
         vi = vi + 1
     return src
 
+String gen_enum_debuggable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
+    String src = "equip " + gp + name + gs + " with Debuggable:\n"
+    src = src + "    String debug(self):\n"
+    src = src + "        match self:\n"
+    int vi = 0
+    while vi < variants.len():
+        EnumVariant v = variants.get(vi).unwrap()
+        int fc = v.fields.len()
+        String binds = ""
+        int fi = 0
+        while fi < fc:
+            if fi > 0:
+                binds = binds + ", "
+            binds = binds + "a" + int_to_str(fi)
+            fi = fi + 1
+        String pat = pfx + v.name + "(" + binds + ")"
+        if fc == 0:
+            src = src + "            case " + pat + ":\n"
+            src = src + "                return \"" + v.name + "()\"\n"
+        else:
+            String parts = ""
+            int pi = 0
+            while pi < fc:
+                if pi > 0:
+                    parts = parts + ", "
+                parts = parts + "{a" + int_to_str(pi) + "}"
+                pi = pi + 1
+            src = src + "            case " + pat + ":\n"
+            src = src + "                return f\"" + v.name + "(" + parts + ")\"\n"
+        vi = vi + 1
+    return src
+
 String gen_enum_cloneable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
@@ -732,6 +781,8 @@ void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
             source = gen_struct_equatable(name, gs, gp, sd.fields)
         elif trait_name == "Displayable":
             source = gen_struct_displayable(name, gs, gp, sd.fields)
+        elif trait_name == "Debuggable":
+            source = gen_struct_debuggable(name, gs, gp, sd.fields)
         elif trait_name == "Cloneable":
             source = gen_struct_cloneable(name, gs, gp, sd.fields)
         elif trait_name == "Hashable":
@@ -765,6 +816,8 @@ void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
             source = gen_enum_equatable(name, gs, gp, ed.variants, pfx)
         elif trait_name == "Displayable":
             source = gen_enum_displayable(name, gs, gp, ed.variants, pfx)
+        elif trait_name == "Debuggable":
+            source = gen_enum_debuggable(name, gs, gp, ed.variants, pfx)
         elif trait_name == "Cloneable":
             source = gen_enum_cloneable(name, gs, gp, ed.variants, pfx)
         elif trait_name == "Hashable":
