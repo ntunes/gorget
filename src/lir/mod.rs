@@ -695,6 +695,31 @@ pub enum Inst {
     /// pure dataflow annotation consumed by the drop elaboration pass.
     MoveSlot { slot: SlotId },
 
+    /// Wire `collection.hash_fn` / `collection.eq_fn` to user-derived
+    /// `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` bridges so a
+    /// `Dict[T, V]` / `Set[T]` keyed by a `@derive(Hashable, Equatable)`
+    /// user struct dispatches lookups through `T__hash` / `T__eq` instead
+    /// of the runtime's byte-FNV / memcmp fallback.
+    ///
+    /// Inserted by the post-LIR-lower `wire_collection_bridges` pass
+    /// after each `gorget_dict_new` / `gorget_set_new` (etc.) call whose
+    /// key type is user-hashable. Both backends compile it as two field
+    /// stores against `collection`. Replaces the per-backend post-call
+    /// hooks that string-parsed the LIR's `original_name` field.
+    SetCollectionBridge {
+        collection: ValueId,
+        /// Target struct shape — `Set` and `Dict` happen to share the
+        /// underlying `GorgetMap` layout (Set is a typedef alias), but
+        /// the IR-level distinction is preserved here for readability
+        /// and so the C backend can pick the right `__gorget_ktable_*`
+        /// helper signature.
+        is_set: bool,
+        /// User key type name (`Named`, `Person`, …). Backends form the
+        /// bridge symbol by prepending `__gorget_ktable_hash__` /
+        /// `__gorget_ktable_eq__`.
+        key_type: String,
+    },
+
     // ── No-op (source mapping placeholder) ──────────────────────────
     Nop,
 }
@@ -708,7 +733,8 @@ impl Inst {
             | Inst::Trap { .. } | Inst::Printf { .. } | Inst::Fprintf { .. }
             | Inst::ClosurePack { .. } | Inst::MoveSlot { .. }
             | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop
-            | Inst::EnumInit { .. } | Inst::StructInit { .. } => None,
+            | Inst::EnumInit { .. } | Inst::StructInit { .. }
+            | Inst::SetCollectionBridge { .. } => None,
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -861,6 +887,7 @@ impl Inst {
             }
             Inst::AddressOf { value, .. } => vec![*value],
             Inst::BoxAlloc { value, .. } => vec![*value],
+            Inst::SetCollectionBridge { collection, .. } => vec![*collection],
         }
     }
 }

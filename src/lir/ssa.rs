@@ -582,6 +582,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         | Inst::Trap { .. }
         | Inst::MoveSlot { .. }
         | Inst::Nop | Inst::InlineC { .. } => {}
+        Inst::SetCollectionBridge { collection, .. } => sub(collection),
     }
 }
 

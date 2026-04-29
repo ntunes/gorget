@@ -515,6 +515,7 @@ fn try_build_ir(
                 stats.copies_propagated, stats.drops_elaborated, stats.memsets_removed,
                 stats.drop_flags_inserted, stats.move_slots_removed);
         }
+        gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
         print!("{}", gorget::lir::display::dump_module(&lir_module));
@@ -539,6 +540,7 @@ fn try_build_ir(
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
@@ -565,6 +567,7 @@ fn try_build_ir(
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
 

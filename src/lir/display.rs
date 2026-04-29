@@ -367,6 +367,10 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write!(f, "closure_pack {slot}, env={env_ptr}, call={call_func}{adapt}")
         }
         Inst::MoveSlot { slot } => write!(f, "move_slot {slot}"),
+        Inst::SetCollectionBridge { collection, is_set, key_type } => {
+            let kind = if *is_set { "set" } else { "dict" };
+            write!(f, "set_collection_bridge {collection}, kind={kind}, key={key_type}")
+        }
         Inst::Nop => write!(f, "nop"),
         Inst::InlineC { dst, code } => {
             if let Some(d) = dst {

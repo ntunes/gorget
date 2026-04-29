@@ -542,6 +542,7 @@ fn has_side_effects(inst: &Inst) -> bool {
                 | Inst::Printf { .. }
                 | Inst::Fprintf { .. }
                 | Inst::MoveSlot { .. }
+                | Inst::SetCollectionBridge { .. }
                 | Inst::Nop
         ),
     }
@@ -1474,6 +1475,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         }
         Inst::AddressOf { value, .. } => { *value = next(&uses, &mut idx); }
         Inst::BoxAlloc { value, .. } => { *value = next(&uses, &mut idx); }
+        Inst::SetCollectionBridge { collection, .. } => { *collection = next(&uses, &mut idx); }
     }
 }
 

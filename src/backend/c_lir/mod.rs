@@ -2694,6 +2694,20 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             write!(out, "}} }}").unwrap();
         }
 
+        Inst::SetCollectionBridge { collection, is_set: _, key_type } => {
+            // Wire the runtime hash_fn / eq_fn slots to the user-derived
+            // bridges. The bridge symbols (`__gorget_ktable_hash__T` /
+            // `__gorget_ktable_eq__T`) are emitted earlier by
+            // `emit_hashable_key_bridges`. The struct cast is the same
+            // for Set and Dict — both alias `GorgetMap` at the runtime
+            // layout level.
+            write!(out,
+                "{}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{key_type}; \
+                 {}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{key_type};",
+                v(*collection), v(*collection)
+            ).unwrap();
+        }
+
         Inst::Nop => {
             write!(out, "/* nop */;").unwrap();
         }

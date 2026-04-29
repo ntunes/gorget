@@ -34,6 +34,7 @@ mod tests {
         }
 
         // Run optimizer
+        crate::lir::types::wire_collection_bridges(&mut lir);
         optimize::optimize_module(&mut lir);
         crate::lir::types::compute_module_value_types(&mut lir);
         crate::lir::types::compute_module_pointee_types(&mut lir);

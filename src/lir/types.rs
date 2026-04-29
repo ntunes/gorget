@@ -487,6 +487,79 @@ pub fn compute_module_value_types(module: &mut LirModule) {
     }
 }
 
+/// Insert `Inst::SetCollectionBridge` after each `gorget_dict_new` /
+/// `gorget_set_new` (etc.) call whose key type is a user
+/// `@derive(Hashable, Equatable)` struct. The IR-level distinction
+/// between user-keyed and primitive-keyed collections is preserved as
+/// an explicit instruction so backends compile it 1:1 instead of
+/// scanning `original_name` strings to recover the key type.
+///
+/// Walks each function's blocks and inserts the new inst immediately
+/// after the matching `Inst::CallExtern`. The collection's `ValueId`
+/// is the same as the call's `dst`. The pass is idempotent — guards on
+/// `dst` being defined and on the original-name → key-type parse
+/// succeeding (both are a no-op for non-collection-ctor calls).
+///
+/// Must run after `lower_module` (so `original_name` is preserved) and
+/// before SSA construction or BIR lowering (so the inst exists when
+/// they iterate). Mirrors the C backend's `emit_collection_constructor`
+/// post-call hook and the LLVM backend's `emit_user_key_bridge_wiring`
+/// — both of which become no-ops once this pass runs.
+pub fn wire_collection_bridges(module: &mut LirModule) {
+    use crate::lir::Inst;
+    use crate::lir::queries;
+
+    // Parse `Dict__K__V__new` / `Set__T__new` / etc. to recover the
+    // user key type from the LIR's preserved `original_name` field.
+    fn parse_key(orig: &str) -> Option<(String, bool)> {
+        let (rest, is_set) = if let Some(r) = orig.strip_prefix("Dict__") { (r, false) }
+            else if let Some(r) = orig.strip_prefix("HashMap__") { (r, false) }
+            else if let Some(r) = orig.strip_prefix("Set__") { (r, true) }
+            else if let Some(r) = orig.strip_prefix("HashSet__") { (r, true) }
+            else { return None; };
+        let rest = rest.strip_suffix("__new_str")
+            .or_else(|| rest.strip_suffix("__new"))
+            .or_else(|| rest.strip_suffix("__with_capacity"))
+            .unwrap_or(rest);
+        let key = if is_set { rest } else { rest.splitn(2, "__").next()? };
+        Some((key.to_string(), is_set))
+    }
+
+    // Two passes — first scan, then mutate. Mutating mid-iteration
+    // would invalidate the index into `block.insts`.
+    let mut to_insert: Vec<(usize /*func*/, usize /*block*/, usize /*after_idx*/, Inst)> =
+        Vec::new();
+    for (fi, func) in module.functions.iter().enumerate() {
+        for (bi, block) in func.blocks.iter().enumerate() {
+            for (ii, inst) in block.insts.iter().enumerate() {
+                if let Inst::CallExtern { dst: Some(d), name, original_name: Some(orig), .. } = inst {
+                    if !queries::is_user_keyable_collection_ctor(name) { continue; }
+                    let (key_type, is_set) = match parse_key(orig) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    if !queries::is_user_hashable_key(&key_type, module) { continue; }
+                    to_insert.push((fi, bi, ii + 1, Inst::SetCollectionBridge {
+                        collection: *d,
+                        is_set,
+                        key_type,
+                    }));
+                }
+            }
+        }
+    }
+    // Insert in reverse so earlier indices stay valid. Sort by
+    // (func, block, idx) descending — `Inst` doesn't `Ord`.
+    to_insert.sort_by(|a, b| {
+        let ka = (a.0, a.1, a.2);
+        let kb = (b.0, b.1, b.2);
+        kb.cmp(&ka)
+    });
+    for (fi, bi, idx, inst) in to_insert {
+        module.functions[fi].blocks[bi].insts.insert(idx, inst);
+    }
+}
+
 /// Populate `func.pointee_types` for every function in the module.
 ///
 /// For each pointer-typed value, records the type the pointer addresses
