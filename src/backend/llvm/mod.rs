@@ -1103,6 +1103,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_set_clone_inplace(ptr)").unwrap();
     writeln!(out, "declare void @gorget_string_clone_inplace(ptr)").unwrap();
     writeln!(out, "declare void @gorget_string_materialize_inplace(ptr)").unwrap();
+    // Closure resource ops — landed with the Vector[Callable] deep-clone work
+    // (commit 58396fca). Like the string/collection inplace pairs, these are
+    // referenced through `NamedFuncAddr` for elem_drop / elem_clone slots, so
+    // the LLVM IR needs the bare declare even when no LirExtern carries them.
+    writeln!(out, "declare void @gorget_closure_free(ptr)").unwrap();
+    writeln!(out, "declare void @gorget_closure_clone_inplace(ptr)").unwrap();
     // Collection constructors and HOF helpers — always declare so inline HOF expansion works
     // even when the function is not in module.externs (e.g. flat_map inlining needs extend).
     let hof_decls: &[(&str, &str)] = &[
@@ -1238,6 +1244,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         "gorget_string_free", "gorget_array_free", "gorget_map_free", "gorget_set_free",
         "gorget_array_clone_inplace", "gorget_map_clone_inplace", "gorget_set_clone_inplace",
         "gorget_string_clone_inplace", "gorget_string_materialize_inplace",
+        "gorget_closure_free", "gorget_closure_clone_inplace",
         // HOF helpers declared in preamble
         "gorget_map_put_cloned", "gorget_set_add",
     ] {
