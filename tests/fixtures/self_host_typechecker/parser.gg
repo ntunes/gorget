@@ -637,154 +637,176 @@ bool expr_contains_it(Expr &e):
         else:
             return false
 
-bool is_type_keyword(int kw):
-    if kw == KW_INT:
-        return true
-    elif kw == KW_INT8:
-        return true
-    elif kw == KW_INT16:
-        return true
-    elif kw == KW_INT32:
-        return true
-    elif kw == KW_INT64:
-        return true
-    elif kw == KW_UINT:
-        return true
-    elif kw == KW_UINT8:
-        return true
-    elif kw == KW_UINT16:
-        return true
-    elif kw == KW_UINT32:
-        return true
-    elif kw == KW_UINT64:
-        return true
-    elif kw == KW_FLOAT:
-        return true
-    elif kw == KW_FLOAT32:
-        return true
-    elif kw == KW_FLOAT64:
-        return true
-    elif kw == KW_BOOL:
-        return true
-    elif kw == KW_CHAR:
-        return true
-    elif kw == KW_STR:
-        return true
-    elif kw == KW_STRING_TYPE:
-        return true
-    elif kw == KW_VOID:
-        return true
-    elif kw == KW_AUTO:
-        return true
-    elif kw == KW_SELF_UPPER:
-        return true
-    return false
+# Predicate: does this keyword name a type? Mirrors the variant set
+# in type_keyword_name. Takes Keyword so callers don't have to launder
+# a Keyword through int via keyword_tag (the previous int signature
+# was a primitive-obsession antipattern; see type_keyword_name's
+# header comment for context).
+bool is_type_keyword(Keyword kw):
+    match kw:
+        case KwInt:
+            return true
+        case KwInt8:
+            return true
+        case KwInt16:
+            return true
+        case KwInt32:
+            return true
+        case KwInt64:
+            return true
+        case KwUint:
+            return true
+        case KwUint8:
+            return true
+        case KwUint16:
+            return true
+        case KwUint32:
+            return true
+        case KwUint64:
+            return true
+        case KwFloat:
+            return true
+        case KwFloat32:
+            return true
+        case KwFloat64:
+            return true
+        case KwBool:
+            return true
+        case KwChar:
+            return true
+        case KwStr:
+            return true
+        case KwStringType:
+            return true
+        case KwVoid:
+            return true
+        case KwAuto:
+            return true
+        case KwSelfUpper:
+            return true
+        else:
+            return false
 
-String type_keyword_name(int kw):
-    if kw == KW_INT:
-        return "int"
-    elif kw == KW_INT8:
-        return "int8"
-    elif kw == KW_INT16:
-        return "int16"
-    elif kw == KW_INT32:
-        return "int32"
-    elif kw == KW_INT64:
-        return "int64"
-    elif kw == KW_UINT:
-        return "uint"
-    elif kw == KW_UINT8:
-        return "uint8"
-    elif kw == KW_UINT16:
-        return "uint16"
-    elif kw == KW_UINT32:
-        return "uint32"
-    elif kw == KW_UINT64:
-        return "uint64"
-    elif kw == KW_FLOAT:
-        return "float"
-    elif kw == KW_FLOAT32:
-        return "float32"
-    elif kw == KW_FLOAT64:
-        return "float64"
-    elif kw == KW_BOOL:
-        return "bool"
-    elif kw == KW_CHAR:
-        return "char"
-    elif kw == KW_STR:
-        return "str"
-    elif kw == KW_STRING_TYPE:
-        return "String"
-    elif kw == KW_VOID:
-        return "void"
-    elif kw == KW_AUTO:
-        return "auto"
-    elif kw == KW_SELF_UPPER:
-        return "Self"
-    return ""
+# Lookup the canonical source spelling for a type-keyword (`KwInt`
+# → "int" etc.). Takes a `Keyword` rather than an int discriminant so
+# the typechecker can prove exhaustiveness over keyword variants
+# (the int-keyed if/elif chain hid that — the previous signature
+# also routinely required a keyword_tag conversion at every call
+# site, propagating an int-as-Keyword antipattern). Non-type
+# keywords return "" (sentinel for "not a type keyword"); use
+# non_type_keyword_name as the fallback.
+String type_keyword_name(Keyword kw):
+    match kw:
+        case KwInt:
+            return "int"
+        case KwInt8:
+            return "int8"
+        case KwInt16:
+            return "int16"
+        case KwInt32:
+            return "int32"
+        case KwInt64:
+            return "int64"
+        case KwUint:
+            return "uint"
+        case KwUint8:
+            return "uint8"
+        case KwUint16:
+            return "uint16"
+        case KwUint32:
+            return "uint32"
+        case KwUint64:
+            return "uint64"
+        case KwFloat:
+            return "float"
+        case KwFloat32:
+            return "float32"
+        case KwFloat64:
+            return "float64"
+        case KwBool:
+            return "bool"
+        case KwChar:
+            return "char"
+        case KwStr:
+            return "str"
+        case KwStringType:
+            return "String"
+        case KwVoid:
+            return "void"
+        case KwAuto:
+            return "auto"
+        case KwSelfUpper:
+            return "Self"
+        else:
+            return ""
 
-String non_type_keyword_name(int kw):
-    if kw == KW_OR:
-        return "or"
-    elif kw == KW_AND:
-        return "and"
-    elif kw == KW_IN:
-        return "in"
-    elif kw == KW_NOT:
-        return "not"
-    elif kw == KW_IF:
-        return "if"
-    elif kw == KW_FOR:
-        return "for"
-    elif kw == KW_WHILE:
-        return "while"
-    elif kw == KW_RETURN:
-        return "return"
-    elif kw == KW_BREAK:
-        return "break"
-    elif kw == KW_CONTINUE:
-        return "continue"
-    elif kw == KW_MATCH:
-        return "match"
-    elif kw == KW_FROM:
-        return "from"
-    elif kw == KW_AS:
-        return "as"
-    elif kw == KW_PASS:
-        return "pass"
-    elif kw == KW_TRUE:
-        return "true"
-    elif kw == KW_FALSE:
-        return "false"
-    elif kw == KW_NONE:
-        return "none"
-    elif kw == KW_IT:
-        return "it"
-    elif kw == KW_TYPE:
-        return "type"
-    elif kw == KW_ASYNC:
-        return "async"
-    elif kw == KW_AWAIT:
-        return "await"
-    elif kw == KW_SPAWN:
-        return "spawn"
-    elif kw == KW_CATCH:
-        return "catch"
-    elif kw == KW_ON:
-        return "on"
-    elif kw == KW_RETHROW:
-        return "rethrow"
-    elif kw == KW_MOD:
-        return "mod"
-    elif kw == KW_SELECT:
-        return "select"
-    elif kw == KW_SHARED:
-        return "shared"
-    elif kw == KW_META:
-        return "meta"
-    elif kw == KW_SNAPSHOT:
-        return "snapshot"
-    return ""
+# Lookup the source spelling for a non-type keyword. Mirror of
+# type_keyword_name above. Returns "" for keywords that aren't in
+# the "name as identifier" set.
+String non_type_keyword_name(Keyword kw):
+    match kw:
+        case KwOr:
+            return "or"
+        case KwAnd:
+            return "and"
+        case KwIn:
+            return "in"
+        case KwNot:
+            return "not"
+        case KwIf:
+            return "if"
+        case KwFor:
+            return "for"
+        case KwWhile:
+            return "while"
+        case KwReturn:
+            return "return"
+        case KwBreak:
+            return "break"
+        case KwContinue:
+            return "continue"
+        case KwMatch:
+            return "match"
+        case KwFrom:
+            return "from"
+        case KwAs:
+            return "as"
+        case KwPass:
+            return "pass"
+        case KwTrue:
+            return "true"
+        case KwFalse:
+            return "false"
+        case KwNone:
+            return "none"
+        case KwIt:
+            return "it"
+        case KwType:
+            return "type"
+        case KwAsync:
+            return "async"
+        case KwAwait:
+            return "await"
+        case KwSpawn:
+            return "spawn"
+        case KwCatch:
+            return "catch"
+        case KwOn:
+            return "on"
+        case KwRethrow:
+            return "rethrow"
+        case KwMod:
+            return "mod"
+        case KwSelect:
+            return "select"
+        case KwShared:
+            return "shared"
+        case KwMeta:
+            return "meta"
+        case KwSnapshot:
+            return "snapshot"
+        else:
+            return ""
 
 # ── Operator helpers ─────────────────────────────────────────
 
@@ -1161,30 +1183,40 @@ equip Parser:
     SpannedType parse_type(&self):
         int start = self.peek().lex_start
 
-        # Primitive type keywords
-        int kw = self.peek_kw()
-        if is_type_keyword(kw):
-            String name = type_keyword_name(kw)
-            self.advance()
-            if kw == KW_SELF_UPPER:
-                return self.mk_type(TSelf(), start)
-            elif kw == KW_AUTO:
-                return self.mk_type(TInferred(), start)
-            # Check for function type: RetType(ParamTypes...)
-            # Re-fetch the keyword name on each TPrimitive construction
-            # to dodge a String-move aliasing bug where the OUTER ret
-            # type's primitive name ends up pointing into source memory
-            # (formats `int(int) make_adder()` as `mak(int) make_adder()`).
-            if self.check_tok(TOK_LPAREN):
-                int saved = self.pos
-                SpannedType ret_ty = self.mk_type(TPrimitive(type_keyword_name(kw)), start)
-                SpannedType fn_ty = self.parse_function_type(ret_ty, start)
-                # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
-                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
-                    return fn_ty
-                self.pos = saved
-                return self.mk_type(TPrimitive(type_keyword_name(kw)), start)
-            return self.mk_type(TPrimitive(name), start)
+        # Primitive type keywords. Match the token directly to get a
+        # Keyword (no int-laundering through keyword_tag); is_type_keyword
+        # / type_keyword_name / inner kw checks all match on Keyword
+        # variants for exhaustiveness.
+        match self.peek().lex_token:
+            case TkKeyword(kw):
+                if is_type_keyword(kw):
+                    String name = type_keyword_name(kw)
+                    self.advance()
+                    match kw:
+                        case KwSelfUpper:
+                            return self.mk_type(TSelf(), start)
+                        case KwAuto:
+                            return self.mk_type(TInferred(), start)
+                        else:
+                            pass
+                    # Check for function type: RetType(ParamTypes...)
+                    # Re-fetch the keyword name on each TPrimitive
+                    # construction to dodge a String-move aliasing bug
+                    # where the OUTER ret type's primitive name ends up
+                    # pointing into source memory (formats
+                    # `int(int) make_adder()` as `mak(int) make_adder()`).
+                    if self.check_tok(TOK_LPAREN):
+                        int saved = self.pos
+                        SpannedType ret_ty = self.mk_type(TPrimitive(type_keyword_name(kw)), start)
+                        SpannedType fn_ty = self.parse_function_type(ret_ty, start)
+                        # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
+                        if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                            return fn_ty
+                        self.pos = saved
+                        return self.mk_type(TPrimitive(type_keyword_name(kw)), start)
+                    return self.mk_type(TPrimitive(name), start)
+            else:
+                pass
 
         # Box[T], Rc[T], Arc[T], Mutex[T], RwLock[T], Weak[T], Cell[T], RefCell[T]
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
@@ -1704,11 +1736,16 @@ equip Parser:
             SpannedToken name_tok = self.advance()
             String name = token_ident(name_tok.lex_token)
             if name == "":
-                # Keyword token — extract name from keyword tag
-                int kw = keyword_tag(name_tok.lex_token)
-                name = type_keyword_name(kw)
-                if name == "":
-                    name = non_type_keyword_name(kw)
+                # Keyword token — destructure for the Keyword variant
+                # so type_keyword_name / non_type_keyword_name can match
+                # exhaustively (no int-laundering through keyword_tag).
+                match name_tok.lex_token:
+                    case TkKeyword(kw):
+                        name = type_keyword_name(kw)
+                        if name == "":
+                            name = non_type_keyword_name(kw)
+                    else:
+                        pass
             if name == "await" and self.check_tok(TOK_LPAREN):
                 self.advance()  # (
                 self.expect_tok(TOK_RPAREN, "expected ')' after .await(")
@@ -1846,8 +1883,12 @@ equip Parser:
         # Check if first thing inside parens is a type keyword or 'auto' followed by an identifier
         # Pattern: (Type name, Type name, ...):
         # We need to check if the first parameter looks like Type Ident
-        int kw = self.peek_kw()
-        bool first_is_type = is_type_keyword(kw)
+        bool first_is_type = false
+        match self.peek().lex_token:
+            case TkKeyword(kw):
+                first_is_type = is_type_keyword(kw)
+            else:
+                pass
         if not first_is_type:
             # Could also be a named type (identifier) followed by another identifier
             if self.check_tok(TOK_IDENT):
@@ -1900,8 +1941,12 @@ equip Parser:
         # Check if this is a typed param: Type ident
         # or untyped: just ident
         int saved = self.pos
-        int kw = self.peek_kw()
-        bool is_typed = is_type_keyword(kw)
+        bool is_typed = false
+        match self.peek().lex_token:
+            case TkKeyword(kw):
+                is_typed = is_type_keyword(kw)
+            else:
+                pass
         if not is_typed and self.check_tok(TOK_IDENT):
             # Could be: ident ident (typed) or just ident (untyped)
             self.advance()
@@ -2012,11 +2057,24 @@ equip Parser:
             return SpannedExpr(ESelfExpr(), Span(t.lex_start, t.lex_end))
 
         # Type keyword as expression (e.g., int.parse(), SparseSet[int])
-        int prefix_kw = self.peek_kw()
-        if is_type_keyword(prefix_kw) and prefix_kw != KW_AUTO and prefix_kw != KW_SELF_UPPER and prefix_kw != KW_VOID:
-            String tname = type_keyword_name(prefix_kw)
-            SpannedToken t = self.advance()
-            return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
+        match self.peek().lex_token:
+            case TkKeyword(prefix_kw):
+                bool is_named_type_kw = is_type_keyword(prefix_kw)
+                match prefix_kw:
+                    case KwAuto:
+                        is_named_type_kw = false
+                    case KwSelfUpper:
+                        is_named_type_kw = false
+                    case KwVoid:
+                        is_named_type_kw = false
+                    else:
+                        pass
+                if is_named_type_kw:
+                    String tname = type_keyword_name(prefix_kw)
+                    SpannedToken t = self.advance()
+                    return SpannedExpr(EIdentifier(tname), Span(t.lex_start, t.lex_end))
+            else:
+                pass
 
         # it keyword (implicit closure parameter)
         if self.check_kw(KW_IT):
@@ -2753,23 +2811,22 @@ equip Parser:
     # ── Match statement ──────────────────────────────────────
 
     # Parse a single meta-for loop variable: an identifier or a
-    # type-keyword used as one (e.g. `T` is fine, `int` would be too).
-    # `keyword_tag` returns the underlying int — passing the Keyword
-    # enum directly to `*_keyword_name` works under the Rust-compiled
-    # build but emits incompatible-type C under the self-compiled
-    # bootstrap (Keyword is a tagged-union pointer there, not a raw int).
+    # keyword-as-identifier (e.g. `T` is fine, `int` would be too —
+    # no, both are accepted: `int` becomes the string "int" via
+    # type_keyword_name).
     String parse_meta_for_var_name(&self):
         SpannedToken st = self.advance()
         String n = token_ident(st.lex_token)
         if n != "":
             return n
-        int kw = keyword_tag(st.lex_token)
-        if kw <= 0:
-            return ""
-        String tn = type_keyword_name(kw)
-        if tn != "":
-            return tn
-        return non_type_keyword_name(kw)
+        match st.lex_token:
+            case TkKeyword(kw):
+                String tn = type_keyword_name(kw)
+                if tn != "":
+                    return tn
+                return non_type_keyword_name(kw)
+            else:
+                return ""
 
     Stmt parse_match_stmt(&self):
         int start = self.peek().lex_start
@@ -2897,13 +2954,25 @@ equip Parser:
 
     bool skip_type_lookahead(&self):
         # Try to skip over what looks like a type expression
-        int kw = self.peek_kw()
-        if is_type_keyword(kw):
-            self.advance()
-            # Check for function type: RetType(ParamTypes...) — but not auto(...)
-            if kw != KW_AUTO and kw != KW_SELF_UPPER and self.check_tok(TOK_LPAREN):
-                self.skip_paren_contents()
-            return true
+        match self.peek().lex_token:
+            case TkKeyword(kw):
+                if is_type_keyword(kw):
+                    self.advance()
+                    # Function type RetType(ParamTypes...) — but not
+                    # auto(...) or Self(...)
+                    bool is_callable = true
+                    match kw:
+                        case KwAuto:
+                            is_callable = false
+                        case KwSelfUpper:
+                            is_callable = false
+                        else:
+                            pass
+                    if is_callable and self.check_tok(TOK_LPAREN):
+                        self.skip_paren_contents()
+                    return true
+            else:
+                pass
 
         if self.check_kw(KW_BOX) or self.check_kw(KW_RC) or self.check_kw(KW_ARC) or self.check_kw(KW_WEAK) or self.check_kw(KW_CELL) or self.check_kw(KW_REFCELL) or self.check_kw(KW_MUTEX) or self.check_kw(KW_RWLOCK):
             self.advance()
@@ -3102,10 +3171,13 @@ equip Parser:
         String name = token_ident(name_tok.lex_token)
         if name == "":
             # Function name is a keyword (e.g., 'from' in trait impl)
-            int fn_kw = keyword_tag(name_tok.lex_token)
-            name = non_type_keyword_name(fn_kw)
-            if name == "":
-                name = type_keyword_name(fn_kw)
+            match name_tok.lex_token:
+                case TkKeyword(fn_kw):
+                    name = non_type_keyword_name(fn_kw)
+                    if name == "":
+                        name = type_keyword_name(fn_kw)
+                else:
+                    pass
         Vector[String] type_params = Vector[String]()
         if self.check_tok(TOK_LBRACKET):
             type_params = self.parse_type_params()
@@ -3225,10 +3297,13 @@ equip Parser:
             SpannedToken fname_tok = self.advance()
             String fname = token_ident(fname_tok.lex_token)
             if fname == "":
-                int fname_kw = keyword_tag(fname_tok.lex_token)
-                fname = non_type_keyword_name(fname_kw)
-                if fname == "":
-                    fname = type_keyword_name(fname_kw)
+                match fname_tok.lex_token:
+                    case TkKeyword(fname_kw):
+                        fname = non_type_keyword_name(fname_kw)
+                        if fname == "":
+                            fname = type_keyword_name(fname_kw)
+                    else:
+                        pass
             fields.push(Param(ftype, fname, OWN_BORROW))
             self.skip_newlines()
         self.match_tok(TOK_DEDENT)
@@ -3404,16 +3479,24 @@ equip Parser:
             SpannedToken first = self.advance()
             module_path = token_ident(first.lex_token)
             if module_path == "":
-                module_path = non_type_keyword_name(keyword_tag(first.lex_token))
-                if module_path == "":
-                    module_path = type_keyword_name(keyword_tag(first.lex_token))
+                match first.lex_token:
+                    case TkKeyword(first_kw):
+                        module_path = non_type_keyword_name(first_kw)
+                        if module_path == "":
+                            module_path = type_keyword_name(first_kw)
+                    else:
+                        pass
             while self.match_tok(TOK_DOT):
                 SpannedToken next = self.advance()
                 String seg = token_ident(next.lex_token)
                 if seg == "":
-                    seg = non_type_keyword_name(keyword_tag(next.lex_token))
-                    if seg == "":
-                        seg = type_keyword_name(keyword_tag(next.lex_token))
+                    match next.lex_token:
+                        case TkKeyword(next_kw):
+                            seg = non_type_keyword_name(next_kw)
+                            if seg == "":
+                                seg = type_keyword_name(next_kw)
+                        else:
+                            pass
                 module_path = module_path + "." + seg
             self.expect_kw(KW_IMPORT, "expected 'import' after from path")
             # Parse names (identifiers or keywords used as names like Box, Rc, Arc)
@@ -3755,7 +3838,11 @@ equip Parser:
                                 mt_callee = token_ident(ct.lex_token)
                             elif self.peek_kw() > 0:
                                 SpannedToken ct = self.advance()
-                                mt_callee = non_type_keyword_name(keyword_tag(ct.lex_token))
+                                match ct.lex_token:
+                                    case TkKeyword(ct_kw):
+                                        mt_callee = non_type_keyword_name(ct_kw)
+                                    else:
+                                        pass
                             self.match_tok(TOK_LPAREN)
                             Vector[SpannedExpr] mt_call_args = Vector[SpannedExpr]()
                             while not self.check_tok(TOK_RPAREN) and not self.at_end():
