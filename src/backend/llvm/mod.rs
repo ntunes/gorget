@@ -430,6 +430,45 @@ fn int_bits(ty: &LirType) -> u32 {
     }
 }
 
+/// Emit an LLVM int-width coercion when `src` and `dst` differ in bit
+/// width. Picks `trunc` (narrowing) / `sext` (widening signed) / `zext`
+/// (widening unsigned) based on `dst`'s signedness, and writes the cast
+/// instruction to `lines` (caller decides whether to flush inline before
+/// the consuming instruction or via a spill list). Returns the new
+/// SSA name to reference in place of `%v{src_id}`. Returns `None` when
+/// no coercion is needed (widths match) or types aren't both integers.
+///
+/// Centralises the trunc/sext/zext sequence used at `Inst::Call` /
+/// `Inst::CallExtern` / `Term::Ret` / `Inst::CallClosure` widening
+/// sites — all of which used to copy-paste the same op-picking logic.
+fn emit_int_coerce(
+    lines: &mut Vec<String>,
+    cast_name: &str,
+    src_id: u32,
+    src: &LirType,
+    dst: &LirType,
+) -> Option<String> {
+    if !src.is_integer() || !dst.is_integer() {
+        return None;
+    }
+    let sb = int_bits(src);
+    let db = int_bits(dst);
+    if sb == db || sb == 0 || db == 0 {
+        return None;
+    }
+    let from_ty = llvm_type(src);
+    let to_ty = llvm_type(dst);
+    let op = if sb > db {
+        "trunc"
+    } else if is_signed(dst) {
+        "sext"
+    } else {
+        "zext"
+    };
+    lines.push(format!("  %{cast_name} = {op} {from_ty} %v{src_id} to {to_ty}"));
+    Some(format!("%{cast_name}"))
+}
+
 // ── String Escaping ────────────────────────────────────────────────────────
 
 /// Escape a string for LLVM IR constant data (byte-level, not C-style).
@@ -3510,31 +3549,13 @@ fn emit_inst(
                     let pty = param_ty.map(|t| llvm_arg_type(t, snames))
                         .unwrap_or_else(|| actual_ty.map(|t| llvm_arg_type(t, snames))
                             .unwrap_or_else(|| "i64".to_string()));
-                    // Insert trunc/zext when the value's bit width differs from the
-                    // declared param's bit width (e.g. byte-literal IConst typed I64
-                    // flowing into an `i8` param). LLVM IR is strictly typed at calls
-                    // so a mismatch fails verification — the C backend gets implicit
-                    // C-level int promotions for free.
+                    // Width mismatch (e.g. byte-literal `IConst` typed I64 flowing
+                    // into an i8 param). LLVM verifies arg widths strictly; the C
+                    // backend gets implicit C int promotions for free.
                     if let (Some(p), Some(av)) = (param_ty, actual_ty) {
-                        if p.is_integer() && av.is_integer() {
-                            let pb = int_bits(p);
-                            let ab = int_bits(av);
-                            if pb != ab && pb > 0 && ab > 0 {
-                                let from_ty = llvm_type(av);
-                                let cast = format!("call.coerce.{}.{i}", a.0);
-                                let op = if ab > pb {
-                                    "trunc"
-                                } else if is_signed(p) {
-                                    "sext"
-                                } else {
-                                    "zext"
-                                };
-                                load_lines.push(format!(
-                                    "  %{cast} = {op} {from_ty} %v{} to {pty}",
-                                    a.0
-                                ));
-                                return format!("{pty} %{cast}");
-                            }
+                        let cast = format!("call.coerce.{}.{i}", a.0);
+                        if let Some(coerced) = emit_int_coerce(&mut load_lines, &cast, a.0, av, p) {
+                            return format!("{pty} {coerced}");
                         }
                     }
                     format!("{pty} %v{}", a.0)
@@ -5632,30 +5653,13 @@ fn emit_inst(
                             actual_ty.map(|t| llvm_arg_type(t, snames))
                                 .unwrap_or_else(|| "i64".to_string())
                         };
-                        // Integer width mismatch (e.g. `gorget_str_byte_at` returns
-                        // i8 flowing into a `gorget_char_chr(i64)` param). LLVM
-                        // verifies arg widths strictly; the C backend gets implicit
-                        // C int promotions for free. Insert trunc / sext / zext.
+                        // Width mismatch (e.g. `gorget_str_byte_at` returns i8
+                        // flowing into a `gorget_char_chr(i64)` param). LLVM
+                        // verifies arg widths strictly.
                         if let (Some(p), Some(av)) = (expected_ty, actual_ty) {
-                            if p.is_integer() && av.is_integer() {
-                                let pb = int_bits(p);
-                                let ab = int_bits(av);
-                                if pb != ab && pb > 0 && ab > 0 {
-                                    let from_ty = llvm_type(av);
-                                    let cast = format!("ext.coerce.{block_id}.{ext_uid}.{i}");
-                                    let op = if ab > pb {
-                                        "trunc"
-                                    } else if is_signed(p) {
-                                        "sext"
-                                    } else {
-                                        "zext"
-                                    };
-                                    spill_lines.push(format!(
-                                        "  %{cast} = {op} {from_ty} %v{} to {pty}",
-                                        a.0
-                                    ));
-                                    return format!("{pty} %{cast}");
-                                }
+                            let cast = format!("ext.coerce.{block_id}.{ext_uid}.{i}");
+                            if let Some(coerced) = emit_int_coerce(&mut spill_lines, &cast, a.0, av, p) {
+                                return format!("{pty} {coerced}");
                             }
                         }
                         format!("{pty} %v{}", a.0)
@@ -6359,26 +6363,16 @@ fn emit_term(
                     writeln!(out, "  %ret.t32.{} = trunc i64 %v{} to i32", val.0, val.0).unwrap();
                     writeln!(out, "  ret i32 %ret.t32.{}", val.0).unwrap();
                 } else {
-                    // General narrow-to-wide / wide-to-narrow integer mismatch
-                    // (e.g. IConst typed i32 returned from an i64 function).
-                    // Use trunc / sext / zext to match the declared return type.
-                    let needs_int_coerce = func.return_type.is_integer()
-                        && val_ty.map_or(false, |t| t.is_integer())
-                        && val_ty.map_or(false, |t| int_bits(t) != int_bits(&func.return_type));
-                    if needs_int_coerce {
-                        let vt = val_ty.unwrap();
-                        let vb = int_bits(vt);
-                        let rb = int_bits(&func.return_type);
-                        let from_ty = llvm_type(vt);
-                        let op = if vb > rb {
-                            "trunc"
-                        } else if is_signed(&func.return_type) {
-                            "sext"
-                        } else {
-                            "zext"
-                        };
-                        writeln!(out, "  %ret.coerce.{} = {op} {from_ty} %v{} to {ret_ty}", val.0, val.0).unwrap();
-                        writeln!(out, "  ret {ret_ty} %ret.coerce.{}", val.0).unwrap();
+                    // General narrow↔wide integer mismatch (e.g. IConst typed
+                    // i32 returned from an i64 function).
+                    let mut lines: Vec<String> = Vec::new();
+                    let cast = format!("ret.coerce.{}", val.0);
+                    let coerced = val_ty.and_then(|av| {
+                        emit_int_coerce(&mut lines, &cast, val.0, av, &func.return_type)
+                    });
+                    for line in &lines { writeln!(out, "{line}").unwrap(); }
+                    if let Some(name) = coerced {
+                        writeln!(out, "  ret {ret_ty} {name}").unwrap();
                     } else {
                         writeln!(out, "  ret {ret_ty} %v{}", val.0).unwrap();
                     }
