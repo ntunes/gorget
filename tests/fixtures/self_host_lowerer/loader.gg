@@ -272,7 +272,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                 real_methods.push(emdef)
                             emi += 1
                         if real_methods.len() > 0:
-                            EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field)
+                            EquipBlock filtered = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, real_methods, eqblk.via_field, eqblk.trait_generic_args)
                             m.items.push(IEquip(filtered))
                     case IConstDecl(_, _, _):
                         # Merge module-level `const int X = 5` so the main

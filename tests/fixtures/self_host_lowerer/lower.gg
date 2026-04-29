@@ -4281,7 +4281,7 @@ void lower_generic_equip(EquipBlock eqblk, Vector[SpannedType] type_args, GirMod
     # For generic equip, Rust uses Type__method naming (no trait prefix) and concrete self types.
     # Strip the trait_name so lower_equip_block uses plain Type__method naming.
     Option[String] no_trait = None
-    EquipBlock plain_eqblk = EquipBlock(eqblk.target, eqblk.type_params, no_trait, eqblk.methods, eqblk.via_field)
+    EquipBlock plain_eqblk = EquipBlock(eqblk.target, eqblk.type_params, no_trait, eqblk.methods, eqblk.via_field, eqblk.trait_generic_args)
     lower_equip_block(plain_eqblk, &gmod)
     clear_type_subs(&gmod)
 
@@ -5443,12 +5443,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     smi += 1
                                 # Emit own-vtable methods with Trait_for_Type naming
                                 if own_methods.len() > 0:
-                                    EquipBlock own_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, own_methods, eqblk.via_field)
+                                    EquipBlock own_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, own_methods, eqblk.via_field, eqblk.trait_generic_args)
                                     lower_equip_block(own_eqblk, &gmod)
                                 # Emit inherited overrides with Type__ naming (no trait prefix)
                                 if inherited_methods.len() > 0:
                                     Option[String] inh_no_trait = None
-                                    EquipBlock inh_eqblk = EquipBlock(eqblk.target, eqblk.type_params, inh_no_trait, inherited_methods, eqblk.via_field)
+                                    EquipBlock inh_eqblk = EquipBlock(eqblk.target, eqblk.type_params, inh_no_trait, inherited_methods, eqblk.via_field, eqblk.trait_generic_args)
                                     lower_equip_block(inh_eqblk, &gmod)
                                 # Collect all overridden method names
                                 Dict[String, bool] overridden = {}
@@ -5539,7 +5539,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                                 Vector[FunctionDef] stub_meths = []
                                                 stub_meths.push(via_meth)
                                                 Option[String] stub_via = None
-                                                EquipBlock stub_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, stub_meths, stub_via)
+                                                EquipBlock stub_eqblk = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, stub_meths, stub_via, eqblk.trait_generic_args)
                                                 lower_equip_block(stub_eqblk, &gmod)
                                                 via_done.put(via_meth.name.clone(), true)
                                             vimi += 1

@@ -11238,7 +11238,6 @@ fn type_comparison() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn lowerer_comparison() {
-    if skip_under_llvm() { return; }
     // 1. Build the Gorget lowerer driver
     let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -11379,11 +11378,6 @@ fn lowerer_comparison() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn c_emit_comparison() {
-    // Self-host comparison: builds the self-host lowerer driver and compares
-    // its emitted C against the Rust compiler's emit. Inherently C-backend
-    // specific; the self-host driver itself doesn't build under LLVM yet
-    // (i64↔i8 mismatch in `lexer___str_remove_char`'s call signature).
-    if skip_under_llvm() { return; }
     let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
