@@ -1858,8 +1858,15 @@ fn emit_function(
     // 8 i64 registers (its own non-PCS ABI), and `byval` puts the data on caller's
     // stack — neither matches GCC. Declaring such params as plain `ptr` matches
     // PCS exactly: caller passes a pointer, callee derefs through it.
+    // Three spawn-wrapper naming patterns flow from `src/ir/lowering/exprs/spawn.rs`:
+    //   - `__spawn_method_wrap_<sym>`  — `Type.method` spawn (line 131)
+    //   - `__spawn_wrap_<struct>`      — bare-closure / async-fn spawn (line 375)
+    //   - `__shared_token_<sym>`       — shared-token transform (shared_async.rs)
+    // `__spawn_thread_wrap_` was the old name; kept here for backwards-compat
+    // until the rename has fully propagated through the LIR.
     let is_spawn_wrapper = func.name.starts_with("__spawn_method_wrap_")
         || func.name.starts_with("__spawn_thread_wrap_")
+        || func.name.starts_with("__spawn_wrap_")
         || func.name.starts_with("__shared_token_");
     let params: Vec<String> = func.params.iter().enumerate()
         .map(|(i, p)| {
@@ -2671,6 +2678,7 @@ fn emit_inst(
                     // of attempting `store %S, ptr` which would be ill-typed.
                     let is_spawn_wrapper_fn = func.name.starts_with("__spawn_method_wrap_")
                         || func.name.starts_with("__spawn_thread_wrap_")
+                        || func.name.starts_with("__spawn_wrap_")
                         || func.name.starts_with("__shared_token_");
                     let large_agg = ty.is_aggregate() && !is_small_aggregate(ty, &module.structs);
                     if is_spawn_wrapper_fn && large_agg {

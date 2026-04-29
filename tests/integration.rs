@@ -12333,8 +12333,6 @@ done",
 
 #[test]
 fn spawn_unchecked_bypasses_check() {
-    // Pending LLVM investigation — fix not yet root-caused.
-    if skip_under_llvm() { return; }
     run_gg(
         "spawn_unchecked_bypasses_check.gg",
         "\
