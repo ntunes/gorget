@@ -1546,14 +1546,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         for block in &func.blocks {
             for inst in &block.insts {
                 if let Inst::CallExtern { name, original_name: Some(orig), .. } = inst {
-                    let is_collection_ctor = matches!(name.as_str(),
-                        "gorget_dict_new"
-                        | "gorget_map_new"
-                        | "gorget_set_new"
-                        | "gorget_set_with_capacity"
-                        | "gorget_ordered_set_new"
-                    );
-                    if !is_collection_ctor { continue; }
+                    if !crate::lir::queries::is_user_keyable_collection_ctor(name) { continue; }
                     if let Some((key, _)) = user_key_type_from_original(orig) {
                         if crate::lir::queries::is_user_hashable_key(key, module) {
                             bridge_keys.insert(key.to_string());
@@ -5758,14 +5751,7 @@ fn emit_inst(
             // ctor's runtime-name AND original-name; non-ctor calls fall
             // through.
             if let Some(d) = dst {
-                let is_collection_ctor = matches!(name.as_ref(),
-                    "gorget_dict_new"
-                    | "gorget_map_new"
-                    | "gorget_set_new"
-                    | "gorget_set_with_capacity"
-                    | "gorget_ordered_set_new"
-                );
-                if is_collection_ctor {
+                if crate::lir::queries::is_user_keyable_collection_ctor(name.as_ref()) {
                     emit_user_key_bridge_wiring(out, d.0, original_name.as_ref(), module);
                 }
             }

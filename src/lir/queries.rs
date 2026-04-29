@@ -12,6 +12,22 @@
 use crate::lir::{LirFunction, LirModule, LirType, StructId};
 use std::collections::HashSet;
 
+/// Whether the (post-mapping) extern name is a runtime constructor for
+/// a Dict / Set / HashMap / HashSet that takes element-size argument(s)
+/// and whose result needs `hash_fn` / `eq_fn` post-construction wiring
+/// when the element/key type is a user `@derive(Hashable, Equatable)`
+/// struct. Five canonical names — kept in one place so the LLVM backend
+/// (bridge-decl scan + post-ctor wiring) and any future bridge-aware
+/// pass agree on the set.
+pub fn is_user_keyable_collection_ctor(extern_name: &str) -> bool {
+    matches!(extern_name,
+        "gorget_dict_new"
+        | "gorget_map_new"
+        | "gorget_set_new"
+        | "gorget_set_with_capacity"
+        | "gorget_ordered_set_new")
+}
+
 /// Whether `func` is a spawn-wrapper synthesized by IR lowering or the
 /// shared-async transform. Spawn wrappers are called from the C-emitted
 /// runtime (`__spawn_run_*`) which uses gcc's AArch64 PCS rule B.4 (>16-byte
