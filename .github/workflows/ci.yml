@@ -80,3 +80,15 @@ jobs:
         env:
           GG_BACKEND: llvm
           GG_TEST_TIMEOUT_SECS: 600
+
+      # Sanitize-build the security fixtures through `--backend=llvm` so an
+      # LLVM-only memory bug (e.g. a regressed `i64`-vs-`ptr` arg width on
+      # `free`, or a wrong-size memcpy through a misemitted struct field)
+      # surfaces here instead of in a user's program. Mirrors the C-backend
+      # security step in the `test` job above. Sequential threads — ASan
+      # serialises on its global state, parallel runs flake.
+      - name: Security tests (LLVM + ASan + UBSan)
+        run: cargo test --test security --release -- --test-threads=1
+        env:
+          GG_BACKEND: llvm
+          GG_TEST_TIMEOUT_SECS: 600
