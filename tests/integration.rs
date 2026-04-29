@@ -11232,6 +11232,191 @@ fn type_comparison() {
     eprintln!("\n================================\n");
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Check Comparison Test (loader + analyze, vs self_host_check driver)
+// ═══════════════════════════════════════════════════════════════
+//
+// Sister test to `type_comparison`. Where `type_comparison` tests
+// `analyze()` in isolation (no loader, single module), `check_comparison`
+// tests the full check path: ModuleLoader → merge_modules → analyze on
+// the Rust side, vs `self_host_check/driver.gg` (which runs its own
+// loader.gg + typecheck pipeline) on the self-host side.
+//
+// Both sides see the same merged module (with auto-loaded std.iter
+// when the heuristic fires, transitive imports resolved), so the
+// TYPE output should match for fixtures the loader handles cleanly.
+
+#[test]
+fn check_comparison() {
+    use gorget::parser::Parser;
+    use std::path::Path;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let driver_dir = manifest_dir
+        .join("tests/fixtures")
+        .join("self_host_check");
+    let driver_main = driver_dir.join("driver.gg");
+
+    if !driver_main.exists() {
+        eprintln!("\n=== Check Comparison Results ===");
+        eprintln!("SKIP: self_host_check/driver.gg not found");
+        eprintln!("\n================================\n");
+        return;
+    }
+
+    let (driver_exe, driver_c) = build_gg_dir("self_host_check", "driver.gg");
+
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    struct Mismatch {
+        fixture: String,
+        rust_line: String,
+        gorget_line: String,
+        rust_total: usize,
+        gorget_total: usize,
+    }
+
+    fn rust_check_output(fixture_path: &Path, source: &str) -> Option<String> {
+        // Mirror what `gg check` does internally: parse → load all imports
+        // (with auto-load + multi-file) → merge_modules → analyze.
+        // Returns None on loader errors (treat as crash).
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut module = Parser::new(source).parse_module();
+            let mut loader = gorget::loader::ModuleLoader::new();
+            let modules = loader
+                .load_all(fixture_path, source.to_string(), module)
+                .ok()?;
+            let mut merged = gorget::loader::merge_modules(modules);
+            let res = gorget::semantic::analyze(&mut merged, &[]);
+            Some(format_types_canonical(&res.scopes, &res.types))
+        }));
+        result.ok().flatten()
+    }
+
+    let mut matched = 0;
+    let mut superset_matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_skipped = 0;
+    let mut compared = 0;
+
+    for fixture in &fixtures {
+        let source = match std::fs::read_to_string(fixture) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+
+        // Rust side: full pipeline (loader + analyze).
+        let rust_output = match rust_check_output(fixture, &source) {
+            Some(s) => s,
+            None => {
+                rust_skipped += 1;
+                continue;
+            }
+        };
+
+        // Self-host side: run the check driver
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(fixture),
+            &fname,
+        );
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            crashes.push((fname.clone(), stderr));
+            compared += 1;
+            continue;
+        }
+
+        let gorget_output = String::from_utf8_lossy(&out.stdout)
+            .trim_end()
+            .to_string();
+
+        let rust_lines = normalize_type_output(&rust_output);
+        let gorget_lines = normalize_type_output(&gorget_output);
+
+        let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
+            lines.iter().filter_map(|line| {
+                if let Some(quote_start) = line.find('"') {
+                    Some(line[quote_start..].to_string())
+                } else {
+                    None
+                }
+            }).collect()
+        };
+        let rust_set = extract_pairs(&rust_lines);
+        let gorget_set = extract_pairs(&gorget_lines);
+
+        if rust_set == gorget_set {
+            matched += 1;
+        } else if rust_set.is_subset(&gorget_set) {
+            superset_matched += 1;
+        } else {
+            let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
+            let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
+            let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+            let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+            mismatches.push(Mismatch {
+                fixture: fname.clone(),
+                rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
+                gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
+                rust_total: rust_lines.len(),
+                gorget_total: gorget_lines.len(),
+            });
+        }
+        compared += 1;
+    }
+
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+
+    eprintln!("\n=== Check Comparison Results ===");
+    eprintln!(
+        "Fixtures compared: {compared}, exact: {matched}, superset: {superset_matched}, total: {}, mismatched: {}, crashed: {}, rust_skipped: {}",
+        matched + superset_matched,
+        mismatches.len(),
+        crashes.len(),
+        rust_skipped,
+    );
+
+    if !crashes.is_empty() {
+        eprintln!("\n--- Crashes ({}) ---", crashes.len());
+        for (name, err) in crashes.iter().take(20) {
+            let first_line = err.lines().next().unwrap_or("(no stderr)");
+            eprintln!("  {name}: {first_line}");
+        }
+        if crashes.len() > 20 {
+            eprintln!("  ... and {} more", crashes.len() - 20);
+        }
+    }
+
+    if !mismatches.is_empty() {
+        eprintln!("\n--- Mismatches ({}) ---", mismatches.len());
+        for m in mismatches.iter().take(30) {
+            eprintln!(
+                "\n  {} (rust={} gorget={} lines)",
+                m.fixture, m.rust_total, m.gorget_total
+            );
+            eprintln!("    Rust:   {}", m.rust_line);
+            eprintln!("    Gorget: {}", m.gorget_line);
+        }
+        if mismatches.len() > 30 {
+            eprintln!("\n  ... and {} more", mismatches.len() - 30);
+        }
+    }
+
+    eprintln!("\n================================\n");
+}
+
 // GIR Lowerer Comparison Test
 // ═══════════════════════════════════════════════════════════════
 

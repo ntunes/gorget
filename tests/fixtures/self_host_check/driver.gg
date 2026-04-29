@@ -1,0 +1,64 @@
+# CLI driver for the loader-aware typecheck path.
+#
+# Pipeline: parse → load multi-file imports → expand derives → expand
+# meta types → resolve names → typecheck → format type output.
+#
+# Sister to `self_host_typechecker/driver.gg`, which intentionally
+# bypasses the loader to test analyze() in isolation. THIS driver
+# tests the full check path with auto-loaded std.iter and explicit
+# imports resolved end-to-end.
+#
+# Usage: driver <path-to-file.gg> [<lib-dir>]
+
+from parser import parse_source
+from ast import Module, Item
+from scope import ScopeTable
+from types import TypeTable
+from resolve import resolve_module, ResolveContext
+from typecheck import type_check_module
+from format_types import format_types
+from derive import expand_derives
+from meta import expand_meta_types
+from loader import load_all
+from std.fs import read_file, file_exists
+from std.os import args
+from std.collections import Vector
+
+String find_lib_dir(Vector[String] cmd_args, String entry_path):
+    # Explicit lib-dir from the second positional arg
+    if cmd_args.len() >= 3:
+        return cmd_args.get(2).unwrap()
+    # Walk up from entry to find a `lib/` sibling — handles the
+    # common case of running from a project root or a fixtures
+    # subdir without needing the user to spell the path out.
+    Vector[String] candidates = []
+    candidates.push("lib")
+    candidates.push("../lib")
+    candidates.push("../../lib")
+    candidates.push("../../../lib")
+    int i = 0
+    while i < candidates.len():
+        String c = candidates.get(i).unwrap()
+        if file_exists(c + "/std/iter.gg"):
+            return c
+        i += 1
+    return "lib"
+
+void main():
+    Vector[String] cmd_args = args()
+    String path = cmd_args.get(1).unwrap()
+    String lib_dir = find_lib_dir(cmd_args, path)
+    String source = read_file(path)
+    Module m = parse_source(source)
+
+    # Multi-file import resolution + auto-load std.iter
+    load_all(&m, path, lib_dir)
+
+    expand_derives(&m)
+    ScopeTable scopes = ScopeTable.new_scope_table()
+    scopes.init()
+    TypeTable types = TypeTable.new_type_table()
+    expand_meta_types(&m, &types)
+    ResolveContext ctx = resolve_module(m, &scopes, &types)
+    type_check_module(m, &scopes, &types, ctx)
+    print(format_types(scopes, types))

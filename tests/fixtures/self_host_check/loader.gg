@@ -1,0 +1,429 @@
+# Multi-module loader for the self-host typechecker.
+#
+# Pure pipeline stage: takes the entry module + entry path + lib root,
+# returns a single Module with all transitive imports merged in.
+#
+# Distinct from `self_host_lowerer/loader.gg`, which intermixes loading
+# with C-codegen concerns (function-name mangling, extern-stub
+# filtering, call-redirect tables). Those belong to lowering, not to
+# loading. This loader is purely about discovering and merging items.
+#
+# Resolver does two-pass top-level collection (collect_top_level walks
+# all items registering names BEFORE resolve_bodies walks them again
+# resolving references), so item ordering in the merged module doesn't
+# affect visibility — we simply append imported items to the entry's.
+#
+# Auto-load: mirrors Rust's `module_should_auto_load_std_iter` heuristic.
+# Modules that mention `Iterator` / `Iterable` / iterator-adapter struct
+# names or call `.iter()` get `std.iter` injected as an implicit import,
+# unless they already import it explicitly or shadow `VectorIter`.
+
+from parser import parse_source
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
+from ast import SpannedExpr, Expr, Stmt, SpannedType, Type, EnumVariant, Param
+from ast import EMethodCall, EIdentifier, EFString, EBinaryOp, EUnaryOp, ECall, EClosure
+from ast import EFieldAccess, EIs, EAs, EBlock, EDo, ESelfExpr, EIndex, EStructLiteral
+from ast import SExpr, SVarDecl, SReturn, SAssign, SIf, SWhile, SFor, SMatch
+from ast import SMetaFor, SMetaIf, MatchArm, ElseBranch, SelectArm
+from ast import TPrimitive, TNamed, TArray, TSlice, TTuple, TFunction, TSelf, TInferred
+from std.fs import read_file, file_exists
+from std.collections import Vector
+from std.conv import int_to_str
+
+# ── Names that trigger std.iter auto-load ──────────────────
+# Mirrors STD_ITER_NAMES in src/loader.rs. If the entry module
+# AST mentions any of these (and isn't already importing or
+# shadowing std.iter), inject `std.iter` as an implicit import.
+
+bool is_iter_trigger_name(String n):
+    if n == "Iterator":
+        return true
+    if n == "Iterable":
+        return true
+    if n == "IntoIterable":
+        return true
+    if n == "Drainable":
+        return true
+    if n == "VectorIter":
+        return true
+    if n == "VectorDrain":
+        return true
+    if n == "TakeIter":
+        return true
+    if n == "SkipIter":
+        return true
+    if n == "ChainIter":
+        return true
+    if n == "MapIter":
+        return true
+    if n == "FilterIter":
+        return true
+    if n == "TakeWhileIter":
+        return true
+    if n == "DropWhileIter":
+        return true
+    if n == "FilterMapIter":
+        return true
+    if n == "InspectIter":
+        return true
+    if n == "EnumerateIter":
+        return true
+    if n == "ZipIter":
+        return true
+    if n == "WindowsIter":
+        return true
+    if n == "ChunksIter":
+        return true
+    if n == "DictIter":
+        return true
+    if n == "SetIter":
+        return true
+    if n == "sum_iter":
+        return true
+    if n == "product_iter":
+        return true
+    if n == "min_iter":
+        return true
+    if n == "max_iter":
+        return true
+    if n == "join_iter":
+        return true
+    if n == "set_iter":
+        return true
+    return false
+
+# ── AST walkers for auto-load detection ─────────────────────
+
+bool type_mentions_iter(Type ty):
+    match ty:
+        case TNamed(name, args):
+            if is_iter_trigger_name(name):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedType arg = args.get(i).unwrap()
+                if type_mentions_iter(arg.ty):
+                    return true
+                i += 1
+            return false
+        case TArray(elem, _):
+            return type_mentions_iter((*elem).ty)
+        case TSlice(elem):
+            return type_mentions_iter((*elem).ty)
+        case TTuple(elems):
+            int i = 0
+            while i < elems.len():
+                SpannedType e = elems.get(i).unwrap()
+                if type_mentions_iter(e.ty):
+                    return true
+                i += 1
+            return false
+        case TFunction(ret, params, _):
+            if type_mentions_iter((*ret).ty):
+                return true
+            int i = 0
+            while i < params.len():
+                SpannedType p = params.get(i).unwrap()
+                if type_mentions_iter(p.ty):
+                    return true
+                i += 1
+            return false
+        else:
+            return false
+
+bool expr_mentions_iter(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EIdentifier(name):
+            return is_iter_trigger_name(name)
+        case EMethodCall(obj, method_name, args, _):
+            if method_name == "iter":
+                return true
+            if expr_mentions_iter(SpannedExpr((*obj).expr, (*obj).span)):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_mentions_iter(a):
+                    return true
+                i += 1
+            return false
+        case ECall(callee, args, _):
+            if expr_mentions_iter(SpannedExpr((*callee).expr, (*callee).span)):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_mentions_iter(a):
+                    return true
+                i += 1
+            return false
+        case EFieldAccess(obj, _):
+            return expr_mentions_iter(SpannedExpr((*obj).expr, (*obj).span))
+        case EBinaryOp(left, _, right):
+            if expr_mentions_iter(SpannedExpr((*left).expr, (*left).span)):
+                return true
+            return expr_mentions_iter(SpannedExpr((*right).expr, (*right).span))
+        case EUnaryOp(_, operand):
+            return expr_mentions_iter(SpannedExpr((*operand).expr, (*operand).span))
+        case EIndex(obj, idx):
+            if expr_mentions_iter(SpannedExpr((*obj).expr, (*obj).span)):
+                return true
+            return expr_mentions_iter(SpannedExpr((*idx).expr, (*idx).span))
+        case EAs(operand, target):
+            if expr_mentions_iter(SpannedExpr((*operand).expr, (*operand).span)):
+                return true
+            return type_mentions_iter((*target).ty)
+        case EIs(operand, _, _):
+            return expr_mentions_iter(SpannedExpr((*operand).expr, (*operand).span))
+        case EClosure(params, body):
+            int i = 0
+            while i < params.len():
+                Param p = params.get(i).unwrap()
+                if type_mentions_iter(p.param_type.ty):
+                    return true
+                i += 1
+            return stmts_mention_iter(body)
+        case EBlock(stmts):
+            return stmts_mention_iter(stmts)
+        case EDo(stmts):
+            return stmts_mention_iter(stmts)
+        case EStructLiteral(name, _, values):
+            if is_iter_trigger_name(name):
+                return true
+            int i = 0
+            while i < values.len():
+                SpannedExpr v = values.get(i).unwrap()
+                if expr_mentions_iter(v):
+                    return true
+                i += 1
+            return false
+        else:
+            return false
+
+bool stmt_mentions_iter(Stmt s):
+    match s:
+        case SExpr(sx):
+            return expr_mentions_iter(sx)
+        case SVarDecl(stype, _, init, _, _, _):
+            if type_mentions_iter(stype.ty):
+                return true
+            return expr_mentions_iter(init)
+        case SReturn(opt):
+            match opt:
+                case Some(e):
+                    return expr_mentions_iter(e)
+                case None:
+                    return false
+        case SAssign(target, value):
+            if expr_mentions_iter(target):
+                return true
+            return expr_mentions_iter(value)
+        case SIf(cond, then_block, else_branches):
+            if expr_mentions_iter(cond):
+                return true
+            if stmts_mention_iter(then_block):
+                return true
+            int i = 0
+            while i < else_branches.len():
+                ElseBranch eb = else_branches.get(i).unwrap()
+                if stmts_mention_iter(eb.body):
+                    return true
+                i += 1
+            return false
+        case SWhile(cond, body):
+            if expr_mentions_iter(cond):
+                return true
+            return stmts_mention_iter(body)
+        case SFor(_, iter_expr, body, _, else_block):
+            if expr_mentions_iter(iter_expr):
+                return true
+            if stmts_mention_iter(body):
+                return true
+            return stmts_mention_iter(else_block)
+        case SMatch(scrutinee, arms):
+            if expr_mentions_iter(scrutinee):
+                return true
+            int i = 0
+            while i < arms.len():
+                MatchArm arm = arms.get(i).unwrap()
+                if stmts_mention_iter(arm.body):
+                    return true
+                i += 1
+            return false
+        else:
+            return false
+
+bool stmts_mention_iter(Vector[Stmt] stmts):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        if stmt_mentions_iter(s):
+            return true
+        i += 1
+    return false
+
+bool function_mentions_iter(FunctionDef f):
+    if type_mentions_iter(f.return_type.ty):
+        return true
+    int i = 0
+    while i < f.params.len():
+        Param p = f.params.get(i).unwrap()
+        if type_mentions_iter(p.param_type.ty):
+            return true
+        i += 1
+    return stmts_mention_iter(f.body)
+
+bool ast_mentions_std_iter_need(Vector[Item] items):
+    int i = 0
+    while i < items.len():
+        Item item = items.get(i).unwrap()
+        match item:
+            case IFunction(f):
+                if function_mentions_iter(f):
+                    return true
+            case IEquip(eqblk):
+                int mi = 0
+                while mi < eqblk.methods.len():
+                    FunctionDef m = eqblk.methods.get(mi).unwrap()
+                    if function_mentions_iter(m):
+                        return true
+                    mi += 1
+            else:
+                pass
+        i += 1
+    return false
+
+# ── Suppression checks ──────────────────────────────────────
+
+bool module_imports_std_iter(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IImport(imp):
+                if imp.module_path == "std.iter":
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
+bool module_shadows_vector_iter(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IStruct(s):
+                if s.name == "VectorIter":
+                    return true
+            case IEnum(e):
+                if e.name == "VectorIter":
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
+bool should_auto_load_std_iter(Module m):
+    if module_imports_std_iter(m):
+        return false
+    if module_shadows_vector_iter(m):
+        return false
+    return ast_mentions_std_iter_need(m.items)
+
+# ── Path resolution ─────────────────────────────────────────
+
+String resolve_module_path(String base_dir, String module_path):
+    # std.net.foo → std/foo (no std/net/ subdir on disk)
+    String resolved = module_path
+    if module_path.starts_with("std.net."):
+        resolved = "std." + module_path.slice(8, module_path.len())
+    String path_part = resolved.replace(".", "/")
+    return base_dir + "/" + path_part + ".gg"
+
+String parent_dir(String path):
+    int last_slash = -1
+    int i = 0
+    while i < path.len():
+        if i + 1 <= path.len():
+            String ch = path.slice(i, i + 1)
+            if ch == "/":
+                last_slash = i
+        i += 1
+    if last_slash >= 0:
+        return path.slice(0, last_slash)
+    return "."
+
+# ── Linear-scan dedup ────────────────────────────────────────
+# Avoids Dict[String, bool].contains, which has staging issues when
+# the loader runs under a self-host-compiled driver (see
+# self_host_lowerer/loader.gg's notes on this).
+
+bool string_in(Vector[String] v, String s):
+    int i = 0
+    while i < v.len():
+        if v.get(i).unwrap() == s:
+            return true
+        i += 1
+    return false
+
+# ── Entry point ─────────────────────────────────────────────
+#
+# Loads the entry module's transitive imports, optionally injects
+# implicit std.iter, and merges all items into the entry module
+# in place. Imported items are appended to the entry's; the
+# resolver's Pass 1 top-level collection makes order-independent.
+
+void load_all(Module &entry, String entry_path, String lib_dir):
+    String base_dir = parent_dir(entry_path)
+    Vector[String] loaded = []
+    Vector[String] queue = []
+
+    # Collect direct imports from entry module
+    int i = 0
+    while i < entry.items.len():
+        Item item = entry.items.get(i).unwrap()
+        match item:
+            case IImport(imp):
+                if not string_in(loaded, imp.module_path):
+                    queue.push(imp.module_path.clone())
+                    loaded.push(imp.module_path.clone())
+            else:
+                pass
+        i += 1
+
+    # Auto-load std.iter when the entry needs it (but doesn't import it)
+    if should_auto_load_std_iter(entry):
+        if not string_in(loaded, "std.iter"):
+            queue.push("std.iter")
+            loaded.push("std.iter")
+
+    # BFS over the queue: resolve, parse, collect items + sub-imports
+    int qi = 0
+    while qi < queue.len():
+        String mod_path = queue.get(qi).unwrap()
+
+        # Try entry-relative first, then lib_dir
+        String file_path = resolve_module_path(base_dir, mod_path)
+        if not file_exists(file_path):
+            file_path = resolve_module_path(lib_dir, mod_path)
+
+        if file_exists(file_path):
+            String src = read_file(file_path)
+            Module imported = parse_source(src)
+
+            # Discover sub-imports + append items to entry (skip imports —
+            # they're consumed at load time, not items in the merged AST)
+            int ji = 0
+            while ji < imported.items.len():
+                Item imp_item = imported.items.get(ji).unwrap()
+                match imp_item:
+                    case IImport(sub_imp):
+                        if not string_in(loaded, sub_imp.module_path):
+                            queue.push(sub_imp.module_path.clone())
+                            loaded.push(sub_imp.module_path.clone())
+                    else:
+                        entry.items.push(imp_item)
+                ji += 1
+
+        qi += 1
