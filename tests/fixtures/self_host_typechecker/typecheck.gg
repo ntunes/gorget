@@ -187,6 +187,13 @@ int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
 # RTDefined to a fresh tagged RTVar at every binding site (function
 # params, closure params, VarDecl, const, static, type alias). The
 # signature slot keeps the original RTDefined.
+#
+# Recurses through container types (RTGeneric, RTTuple, RTArray,
+# RTSlice, RTRef) so `Pair[T, U]` becomes `Pair[<error>, <error>]`
+# and `Vector[T]` becomes `Vector[<error>]` at binding sites.
+# Does NOT descend into RTFunction / RTCallableTrait / RTBoxedCallable —
+# those are signature-shaped types and Rust keeps `T` inside them
+# (e.g. `Callable[T(int)]` stays `Callable[T(int)]`).
 int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types):
     if type_id < 0:
         return type_id
@@ -203,6 +210,49 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
                     return types.fresh_generic_var()
                 else:
                     return type_id
+        case RTGeneric(gen_def_id, args):
+            Vector[int] new_args = Vector[int]()
+            bool any_changed = false
+            int i = 0
+            while i < args.len():
+                int arg_tid = get_int_at(args, i)
+                int new_arg_tid = demote_generic_param_to_var(arg_tid, scopes, &types)
+                if new_arg_tid != arg_tid:
+                    any_changed = true
+                new_args.push(new_arg_tid)
+                i = i + 1
+            if any_changed:
+                return types.add_type(RTGeneric(gen_def_id, new_args))
+            return type_id
+        case RTTuple(elems):
+            Vector[int] new_elems = Vector[int]()
+            bool any_changed = false
+            int i = 0
+            while i < elems.len():
+                int elem_tid = get_int_at(elems, i)
+                int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
+                if new_elem_tid != elem_tid:
+                    any_changed = true
+                new_elems.push(new_elem_tid)
+                i = i + 1
+            if any_changed:
+                return types.add_type(RTTuple(new_elems))
+            return type_id
+        case RTArray(elem_tid, size):
+            int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
+            if new_elem_tid != elem_tid:
+                return types.add_type(RTArray(new_elem_tid, size))
+            return type_id
+        case RTSlice(elem_tid):
+            int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
+            if new_elem_tid != elem_tid:
+                return types.add_type(RTSlice(new_elem_tid))
+            return type_id
+        case RTRef(inner_tid):
+            int new_inner_tid = demote_generic_param_to_var(inner_tid, scopes, &types)
+            if new_inner_tid != inner_tid:
+                return types.add_type(RTRef(new_inner_tid))
+            return type_id
         else:
             return type_id
 
