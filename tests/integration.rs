@@ -2349,9 +2349,6 @@ fn stdlib_io_reader() {
 
 #[test]
 fn stdlib_io_file_writer() {
-    // LLVM trait-dispatched write_str path — same family as the file_io
-    // -O1 regression where Writer_for_File__write got DCE'd. Fix pending.
-    if skip_under_llvm() { return; }
     run_gg(
         "stdlib_io_file_writer.gg",
         "hello\n6\nfrom writer",
@@ -2383,7 +2380,6 @@ fn stdlib_io_tls_writer() {
 
 #[test]
 fn stdlib_io_fs_typed() {
-    if skip_under_llvm() { return; }
     run_gg(
         "stdlib_io_fs_typed.gg",
         "10\nround-trip\n9\n9\nnot found",

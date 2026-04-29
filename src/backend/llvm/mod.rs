@@ -853,6 +853,20 @@ fn emit_string_globals(out: &mut String, sg: &StrGlobals) {
 fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>) {
     for (i, def) in module.structs.iter().enumerate() {
         let name = &snames[&(i as u32)];
+        // Opaque-runtime overrides — these structs cross the LLVM↔C ABI
+        // boundary, and the gorget-visible struct (e.g. `struct File: int handle`,
+        // 8 bytes) is a single-field "cover" for a wider C runtime struct (e.g.
+        // `GorgetFile { FILE* handle; bool owned; }`, 16 bytes). LLVM must
+        // declare the *runtime* layout, otherwise an `alloca %File` is short by
+        // 8 bytes and the runtime's `gorget_file_open_try(... GorgetFile* out)`
+        // store of `out->owned` walks off the alloca → SIGSEGV. Emit the
+        // override here, before the field-driven path below sees the gorget
+        // declaration. `def.fields.is_empty()` branch below catches the
+        // truly-opaque (zero-field) form for completeness.
+        if !def.is_union_layout && (name == "File" || name == "GorgetFile") {
+            writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
+            continue;
+        }
         if def.is_union_layout {
             // Enum: { i32 tag, i32 pad, [payload_bytes x i8] }
             // Padding matches C ABI: union payload at 8-byte-aligned offset.
