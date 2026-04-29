@@ -129,6 +129,13 @@ struct TypeTable:
     # representation), while regular closure-inference RTVars keep
     # their "?N" rendering. See `fresh_generic_var` below.
     Dict[int, bool] generic_var_ids
+    # Scope id of the trait-bounded equip we're currently inside, or
+    # -1 if not in one. Generic params defined IN that scope (the
+    # impl's own [T]) keep their `Defined` rendering — Rust does not
+    # demote them. Method-level generics (`[Hasher H]`) inside the
+    # method still demote, because their def lives in the method's
+    # body scope, not the equip scope.
+    int trait_equip_scope_id
 
 equip TypeTable:
 
@@ -154,7 +161,7 @@ equip TypeTable:
         # 8: never
         types.push(RTNever())
         TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool]())
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1)
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()
