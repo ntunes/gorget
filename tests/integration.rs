@@ -9445,11 +9445,6 @@ fn shared_spawn_with_tracked() {
 
 #[test]
 fn shared_float() {
-    // LLVM concurrency race: ~15% of runs print 2.0 (occasionally 0.0) instead
-    // of the expected 2.5. Doesn't repro under the C backend. Suspected
-    // memory-ordering / aliasing assumption that LLVM optimizes differently
-    // than gcc; not yet root-caused. See project_llvm_backend.md.
-    if skip_under_llvm() { return; }
     run_gg("shared_float.gg", "2.500000");
 }
 

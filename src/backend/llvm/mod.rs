@@ -1513,6 +1513,30 @@ fn split_top_level_args(s: &str) -> Vec<String> {
     out
 }
 
+/// Return the `n`-th `%`-prefixed format specifier in a printf format
+/// string (skipping `%%`), or `None` if the format has fewer specs.
+/// Used by the guard-value type-inference pass to pick `F64` for args
+/// at `%f`/`%g`/`%e` positions.
+fn nth_printf_spec(fmt: &str, n: usize) -> Option<String> {
+    let mut chars = fmt.chars().peekable();
+    let mut idx = 0usize;
+    while let Some(c) = chars.next() {
+        if c != '%' { continue; }
+        if chars.peek() == Some(&'%') { chars.next(); continue; }
+        // Consume flags / width / precision / length, then return on the
+        // conversion char.
+        let mut spec = String::from('%');
+        while let Some(&nc) = chars.peek() {
+            spec.push(nc);
+            chars.next();
+            if nc.is_alphabetic() { break; }
+        }
+        if idx == n { return Some(spec); }
+        idx += 1;
+    }
+    None
+}
+
 /// Detect `(TypeName){args}` compound-literal init expressions emitted
 /// by `eval_static_init` in `src/ir/lowering/mod.rs`. Returns the type
 /// name and the comma-separated args between the braces, or `None` if
@@ -2124,6 +2148,39 @@ fn emit_function(
                                     other => other.clone(),
                                 });
                                 break;
+                            }
+                        }
+                        // Printf-as-consumer: a printf-like extern with a static
+                        // `%f`/`%g`/`%e` spec at our position means the runtime
+                        // expects a double in the matching FP register; loading
+                        // as i64 puts the bits in x{n} and printf reads stale
+                        // garbage off v0 → silent flake (~63% wrong on shared_float).
+                        // Mirrors what the C backend gets via `*(double*)v` at the
+                        // call site.
+                        Inst::CallExtern { name, args: pargs, .. }
+                            if matches!(name.as_str(),
+                                "printf" | "fprintf_stderr" | "snprintf" | "sprintf"
+                                | "gorget_string_format" | "gorget_string_format_alloc")
+                                && pargs.len() >= 2
+                                && pargs[1..].iter().position(|a| *a == *d).is_some() =>
+                        {
+                            // Walk back to find the format-string str_lit. The
+                            // format is the first arg; we want the spec at our
+                            // position in the variadic tail.
+                            let pos_in_varargs = pargs[1..].iter().position(|a| *a == *d).unwrap();
+                            let fmt_arg = pargs[0];
+                            let fmt = insts[..ci].iter().find_map(|s| match s {
+                                Inst::StrLit { dst: sd, value } if *sd == fmt_arg => Some(value.as_str()),
+                                _ => None,
+                            });
+                            if let Some(fmt_str) = fmt {
+                                if let Some(spec) = nth_printf_spec(fmt_str, pos_in_varargs) {
+                                    let last = spec.chars().last().unwrap_or(' ');
+                                    if matches!(last, 'f' | 'g' | 'e' | 'F' | 'G' | 'E' | 'a' | 'A') {
+                                        inferred = Some(LirType::F64);
+                                        break;
+                                    }
+                                }
                             }
                         }
                         _ => {}
