@@ -857,6 +857,15 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
+        case EFString(_, exprs):
+            # Walk pre-parsed interpolation segments so identifiers /
+            # closures inside `{...}` get resolved.
+            int fi = 0
+            while fi < sexpr_vec_len(exprs):
+                SpannedExpr fe = get_sexpr_at(exprs, fi)
+                resolve_expr(fe, &scopes, &ctx)
+                fi = fi + 1
+
 
 # ── Block expr resolution (no TypeTable needed) ────────────
 
