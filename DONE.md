@@ -1,5 +1,7 @@
 # DONE
 
+- [2026-04-29] **Self-host: resolver walks EFString interp segments + @derive(Debuggable) generators** — closes two more typecheck-comparison gaps. (1) resolve.gg's resolve_expr was missing an EFString case so identifiers / closures inside f-string interpolation segments were never name-resolved; closure params in segments like `f"sum: {v.iter().fold(0, (int acc, int x): acc + x)}"` had no DkVariable defs, so the typechecker's later walk couldn't assign their types. Now iterates the parser's pre-parsed `exprs` sidecar. (2) derive.gg's expand_struct_derives / expand_enum_derives didn't recognise 'Debuggable'; added gen_struct_debuggable + gen_enum_debuggable mirroring the Displayable shape. Net: type_comparison **949 → 951/996** (+2: fstring_method_chain.gg + derive_debuggable.gg).
+
 - [2026-04-28] **Self-host typechecker: spawn → Task[T] / await → T inference** — added type-inference cases for ESpawn (looks up Task in scope, wraps the operand's inferred type as RTGeneric(Task, [inner])) and EAwait (extracts type arg from RTGeneric(Task | Future, [T]) when present). Both arms previously returned NO_TYPE leaving spawn-returned variables and await results untyped on auto-typed bindings. Net: type_comparison **947 → 949/996** (+2).
 
 - [2026-04-28] **Self-host typechecker: f-string returns owned String** — infer_expr_type was missing an EFString case, falling through to NO_TYPE and breaking closures whose body returned an f-string (formatted as `void(...)` instead of `String(...)`). Net: type_comparison **943 → 947/996** (+4).
