@@ -82,25 +82,36 @@ int find_def_by_name(ScopeTable scopes, String name, bool require_function):
 # includes parent_scope.
 
 int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
+    # Two-pass walk: direct-parent match always beats grandparent
+    # match, regardless of order. Without this, when a user fixture
+    # has a top-level fn named `chain` and std.iter is prepended
+    # (which has `chain` as a method on VectorIter), the std.iter
+    # chain's grandparent match (module → equip → method-fn-scope)
+    # would beat the user's direct-parent match because std.iter's
+    # entry comes first in fn_scope_names.
     int best = -1
     int i = 0
     while i < ctx.fn_scope_names.len():
         String sn = ctx.fn_scope_names.get(i).unwrap()
         if sn == name:
             int sid = ctx.fn_scope_ids.get(i).unwrap()
-            # Check direct parent match
             int p = scopes.scope_parent_of(sid)
             if p == parent_scope:
                 return sid
-            # Check grandparent (function → equip → module)
+            if best < 0:
+                best = sid
+        i = i + 1
+    int j = 0
+    while j < ctx.fn_scope_names.len():
+        String sn = ctx.fn_scope_names.get(j).unwrap()
+        if sn == name:
+            int sid = ctx.fn_scope_ids.get(j).unwrap()
+            int p = scopes.scope_parent_of(sid)
             if p >= 0:
                 int gp = scopes.scope_parent_of(p)
                 if gp == parent_scope:
                     return sid
-            # Track first match as fallback
-            if best < 0:
-                best = sid
-        i = i + 1
+        j = j + 1
     return best
 
 # ── Find the next SkEquipBlock scope ───────────────────────

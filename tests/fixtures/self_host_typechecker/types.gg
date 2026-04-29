@@ -90,6 +90,16 @@ struct EquipInfo:
     # `with Iterator[int]`). Empty for non-generic traits / inherent
     # impls. Used at call site to bind trait-T in default-method sigs.
     Vector[Type] trait_generic_args
+    # AST-level return type for EVERY impl method (parallel to
+    # method_names). Used by `resolve_method_for_generic_receiver`
+    # to substitute the impl's generic-param placeholders with the
+    # receiver's concrete type args at call time, so e.g.
+    # `equip [T] Vector[T] with Iterable[T]: VectorIter[T] iter(&self)`
+    # called on `Vector[int]` returns `VectorIter[int]` instead of
+    # `VectorIter[T_param_def_id]` (abstract placeholder).
+    # Distinct from `shape_method_shapes` which only stores AST shapes
+    # for METHOD-GENERIC methods (those with their own `[G]` params).
+    Vector[Type] method_return_types_ast
 
 struct TraitRegistry:
     Vector[TraitInfo] traits

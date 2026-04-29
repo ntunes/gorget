@@ -271,6 +271,7 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
     Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
     Vector[String] shape_names = Vector[String]()
     Vector[MethodSigShape] shape_shapes = Vector[MethodSigShape]()
+    Vector[Type] method_return_types_ast = Vector[Type]()
     int mi = 0
     while mi < eq.methods.len():
         FunctionDef method = eq.methods.get(mi).unwrap()
@@ -281,6 +282,7 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
         method_names.push(method.name)
         method_def_ids.push(mdef)
         method_sigs.push(sig)
+        method_return_types_ast.push(method.return_type.ty)
         if method.type_params.len() > 0:
             shape_names.push(method.name)
             shape_shapes.push(build_method_sig_shape(method))
@@ -299,7 +301,7 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
         SpannedType targ = eq.trait_generic_args.get(tai).unwrap()
         trait_args.push(targ.ty)
         tai = tai + 1
-    EquipInfo info = EquipInfo(self_tid, self_name, trait_def_id, trait_name, method_names, method_def_ids, method_sigs, shape_names, shape_shapes, eq.target.ty, eq.type_params, via_name, trait_args)
+    EquipInfo info = EquipInfo(self_tid, self_name, trait_def_id, trait_name, method_names, method_def_ids, method_sigs, shape_names, shape_shapes, eq.target.ty, eq.type_params, via_name, trait_args, method_return_types_ast)
     registry.impls.push(info)
     scopes.set_current(saved)
 
@@ -629,13 +631,24 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
                 impl_bind_names.push(pn)
                 impl_bind_tids.push(pt)
                 bi = bi + 1
-            # Phase 1+2: method directly on this impl. Method sig still
-            # uses placeholder TypeIds in places that reference the
-            # impl's own generics; the FunctionSig path doesn't yet
-            # substitute. (Future improvement.)
+            # Phase 1+2: method directly on this impl. The stored
+            # FunctionSig has the impl's generic-param placeholders
+            # baked into its TypeIds. To get a concrete return type
+            # for chains like `v.iter().map(f).collect()`, substitute
+            # the AST return type with the impl-arg bindings — this
+            # turns `VectorIter[T]` (placeholder T) into
+            # `VectorIter[int]` when the receiver is `Vector[int]`.
+            # Mirrors what (a2) does for trait DEFAULT methods, but
+            # for IMPL-OVERRIDE methods.
             int idx = find_method_index(impl.method_names, method)
             if idx >= 0:
-                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
+                FunctionSig sig = impl.method_sigs.get(idx).unwrap()
+                if impl.method_return_types_ast.len() > idx and impl.impl_generic_params.len() > 0:
+                    Type ret_ast = impl.method_return_types_ast.get(idx).unwrap()
+                    int subst_ret = resolve_with_bindings(ret_ast, impl_bind_names, impl_bind_tids, scopes, &types)
+                    if subst_ret >= 0 and subst_ret != types.error_id:
+                        sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
+                return MethodResolution(true, sig, impl.method_def_ids.get(idx).unwrap())
             # Phase 3: trait default-method fallback with full
             # generic-receiver substitution.
             if impl.trait_def_id != NO_DEF:

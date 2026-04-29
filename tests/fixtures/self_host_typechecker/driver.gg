@@ -51,16 +51,17 @@ void main():
     String path = cmd_args.get(1).unwrap()
     String source = read_file(path)
     Module m = parse_source(source)
-    # `try_prepend_std_iter(&m)` is intentionally NOT called by default.
-    # When the std prelude is merged in, impl-override method signatures
-    # (e.g. `equip [T] Vector[T] with Iterable[T]: VectorIter[T]
-    # iter(&self)`) leak the abstract `T` placeholder TypeId into return
-    # types, which masks user-fixture locals like `auto a = parse_int(s)`
-    # because the body-scope walking finds shadowed names. Until impl-
-    # override sigs also get the AST-shape substitution treatment that
-    # default methods got in (a2), keeping the loader off-by-default
-    # avoids 4 fixture regressions in `type_comparison`. See `(2)`
-    # follow-on in TODO.md.
+    # `try_prepend_std_iter(&m)` is intentionally NOT called for the
+    # type_comparison path: Rust's `gorget::semantic::analyze(&mut
+    # module, &[])` only sees the single user module (no multi-file
+    # loader runs), so prepending std.iter would dump ~150 lines of
+    # iter trait/adapter TYPE entries that have no Rust counterpart.
+    # Instead, the impl-override-return-type substitution in
+    # `resolve_method_for_generic_receiver` (traits.gg) handles user
+    # fixtures that explicitly `from std.iter import ...`. The shim
+    # at `try_prepend_std_iter` above remains available for future
+    # paths (e.g. running this driver against a multi-module entry)
+    # but is off for the comparison test.
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
