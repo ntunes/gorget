@@ -768,7 +768,7 @@ equip_block = "equip" [ generic_params ] type [ "with" type ] [ "via" IDENTIFIER
               ":" NEWLINE INDENT { function_def | "pass" } DEDENT ;
 ```
 
-Equip blocks attach methods to types. There are three forms:
+Equip blocks attach methods to types. There are four forms:
 
 **Inherent implementation** (methods directly on a type):
 
@@ -787,6 +787,30 @@ equip Point with Displayable:
     String to_string(self):
         return "({self.x}, {self.y})"
 ```
+
+**Generic implementation** (one impl that covers a family of types — `Vector[T]` for any `T`, `Pair[A, B]` for any `A` / `B`):
+
+```gorget
+# Inherent generic impl — all `Vector[T]` get this method
+equip [T] Vector[T]:
+    void describe_self(self):
+        print("a Vector with {self.len()} items")
+
+# Trait generic impl — every `Vector[T]` becomes an `Iterable[T]`
+equip [T] Vector[T] with Iterable[T]:
+    VectorIter[T] iter(&self):
+        return VectorIter[T](self, 0)
+```
+
+The leading `[T]` (or `[K, V]`, `[Iter, T, U, F]`, etc.) declares the impl's type parameters — read it as **"for every T, …"**. Inside the block, those names refer to the same `T` whether they appear in the target type, in the trait clause, or in method signatures. The generated impl is a family: when the typechecker sees `Vector[int].iter()`, it monomorphizes the `[T]` family into `Vector[int]`'s instantiation, so `iter()` returns a concrete `VectorIter[int]` rather than the abstract placeholder.
+
+A few notes on the form:
+
+- **Every name in `[...]` should appear in the target type.** The typechecker matches them up positionally with the receiver's type arguments at call time. Names that appear *only* in the trait clause or in method bodies aren't bound from the receiver and resolve as unbound generics.
+- **Bounds attach inline to a name in the bracket list:** `equip [Displayable T] Vector[T] with Printable: ...`. This mirrors the function-declaration form (`void print_all[Displayable T](Vector[T] items)`) — the constraint comes before the name it constrains.
+- **Method-level type parameters live separately**, on the method itself (`void hash[Hasher H](self, H &h):`). They're bound from the call's arguments at the use site, independently of the equip block's `[T]`.
+
+> **Open design question**: the leading `[T]` is purely a binder declaration; every name in it appears again in the target type that follows. A future revision of the language may infer the binder list from the target type itself, allowing the shorter form `equip Vector[T] with Iterable[T]:`. Until then, the explicit form above is canonical and is what `lib/std/iter.gg` uses for all generic-iterator impls.
 
 **Delegation via field** (auto-forward unimplemented trait methods through a struct field):
 
