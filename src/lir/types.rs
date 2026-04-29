@@ -276,6 +276,13 @@ fn infer_call_extern_type(
         "float" => return Some(LirType::F64),
         "int" => return Some(LirType::I64),
         "bool" => return Some(LirType::Bool),
+        // libc allocators — BIR synthesis (e.g. `__gg_synth_sort_impl`)
+        // emits raw `Inst::CallExtern { name: "malloc", ... }` without
+        // registering the matching `LirExtern` in `module.externs`. Without
+        // this special-case the fallback at the bottom returns `LirType::I64`
+        // for malloc, downstream `free(aux)` arg-emit picks `i64 %v8` against
+        // the preamble's `declare void @free(ptr)`, and llc rejects it.
+        "malloc" | "calloc" | "realloc" => return Some(LirType::Ptr),
         _ => {}
     }
     // Tag checks always return bool
