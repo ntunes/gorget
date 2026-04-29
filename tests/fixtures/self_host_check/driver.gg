@@ -18,7 +18,7 @@ from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from format_types import format_types
 from derive import expand_derives
-from meta import expand_meta_types
+from meta import expand_meta_types, expand_meta_for_match
 from loader import load_all
 from std.fs import read_file, file_exists
 from std.os import args
@@ -59,6 +59,7 @@ void main():
     scopes.init()
     TypeTable types = TypeTable.new_type_table()
     expand_meta_types(&m, &types)
+    expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     print(format_types(scopes, types))

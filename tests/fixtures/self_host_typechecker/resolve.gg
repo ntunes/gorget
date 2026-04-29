@@ -621,6 +621,12 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
+        case SMetaForMatch(_, _, _):
+            # Meta expansion runs before resolve (driver.gg ordering).
+            # If we still see this here, the expansion didn't happen
+            # for some reason — leave it alone, no further work to do.
+            pass
+
         case SMetaIf(then_body, elif_branches):
             scopes.push_scope(SkBlock())
             resolve_block(then_body, &scopes, &types, &ctx)
@@ -1016,6 +1022,10 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkBlock())
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
+
+        case SMetaForMatch(_, _, _):
+            # Meta expansion runs before resolve.
+            pass
 
         case SMetaIf(then_body, elif_branches):
             scopes.push_scope(SkBlock())

@@ -467,6 +467,8 @@ String format_stmt(Stmt s):
             return "meta"
         case SMetaFor(body):
             return "meta"
+        case SMetaForMatch(_, _, _):
+            return "meta"
         case SMetaIf(then_body, branches):
             return "meta"
         case SFor(pat, iter, body, own, _):

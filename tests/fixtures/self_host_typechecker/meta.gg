@@ -2,11 +2,15 @@
 # Evaluates meta const values and resolves meta type aliases so that
 # the type checker can resolve types like `Num` (alias for `int`).
 
-from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc
+from ast import Module, Item, IMetaConst, IMetaType, IMetaTypeFunc, IFunction, IEquip
 from ast import MetaTypeRhs, MtrPlain, MtrConditional, MtrCall, MtrUnresolved
 from ast import SpannedType, Type, TPrimitive, TNamed, SpannedExpr, Expr
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import EIdentifier, EBinaryOp, EUnaryOp, ECall
+from ast import Stmt, SMatch, SMetaForMatch, SIf, SWhile, SFor, SReturn, SExpr
+from ast import SVarDecl, SAssign, SMetaFor, SMetaIf
+from ast import MatchArm, ElseBranch, EnumDef, EnumVariant, FunctionDef, EquipBlock
+from ast import SpannedPattern, Pattern, PConstructor, PWildcard, PBinding
 from types import TypeTable
 from std.collections import Vector, Dict
 
@@ -177,6 +181,176 @@ void expand_meta_types(Module &m, TypeTable &types):
                             types.meta_aliases[mt_name] = result
                     case MtrUnresolved():
                         pass
+            else:
+                pass
+        i = i + 1
+
+# ── Meta-for-in-match expansion ─────────────────────────────
+#
+# For each `match X: meta for vname, T in variant_payloads(EnumName):
+# case vname(c): ...`, look up EnumName's variants and replace the
+# meta-for arm with concrete `case Variant1(c): ...`, `case Variant2(c):
+# ...` arms — one per variant. The first loop variable (`vname`) binds
+# the variant name and is substituted into PConstructor heads in the
+# arm template's pattern. Additional loop variables (`T`, etc.) bind
+# variant payload TYPES and would substitute into types in the body —
+# the typechecker can usually infer payload types from the concrete
+# pattern match so we skip type substitution for now (simplest correct).
+
+# Find all variants of an enum by name. Returns empty if not found.
+Vector[EnumVariant] find_enum_variants(Module m, String enum_name):
+    Vector[EnumVariant] result = Vector[EnumVariant]()
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IEnum(edef):
+                if edef.name == enum_name:
+                    int vi = 0
+                    while vi < edef.variants.len():
+                        result.push(edef.variants.get(vi).unwrap())
+                        vi = vi + 1
+                    return result
+            else:
+                pass
+        i = i + 1
+    return result
+
+# Substitute a single PConstructor head name in a pattern.
+# Only the OUTERMOST PConstructor head is rewritten — that's the
+# `vname(...)` slot in `case vname(c):`. Inner sub-patterns are
+# unchanged (the bound variables like `c` keep their names).
+SpannedPattern substitute_pattern_head(SpannedPattern sp, String var_name, String concrete_name):
+    match sp.pat:
+        case PConstructor(name, args):
+            if name == var_name:
+                return SpannedPattern(PConstructor(concrete_name, args), sp.span)
+        else:
+            pass
+    return sp
+
+# Clone a MatchArm template with the loop variable substituted in
+# the pattern head. Body and guard are unchanged — the typechecker
+# resolves bindings via pattern-driven inference.
+MatchArm substitute_arm(MatchArm template, String var_name, String concrete_name):
+    SpannedPattern new_pat = substitute_pattern_head(template.pattern, var_name, concrete_name)
+    return MatchArm(new_pat, template.guard, template.body)
+
+# Try to extract the enum name from a `variant_payloads(EnumName)`
+# range expression. Returns "" if the expression doesn't match the
+# expected shape.
+String extract_variant_payloads_target(SpannedExpr range):
+    match range.expr:
+        case ECall(callee, args, _):
+            match (*callee).expr:
+                case EIdentifier(callee_name):
+                    if callee_name == "variant_payloads" and args.len() == 1:
+                        SpannedExpr arg0 = args.get(0).unwrap()
+                        match arg0.expr:
+                            case EIdentifier(en):
+                                return en
+                            else:
+                                return ""
+                    return ""
+                else:
+                    return ""
+        else:
+            return ""
+
+# Expand any meta-for-in-match arms to concrete arms. Walks `arms`
+# once; arms without an SMetaForMatch body pass through unchanged.
+Vector[MatchArm] expand_meta_for_arms(Vector[MatchArm] arms, Module m):
+    Vector[MatchArm] result = Vector[MatchArm]()
+    int i = 0
+    while i < arms.len():
+        MatchArm arm = arms.get(i).unwrap()
+        bool handled = false
+        if arm.body.len() == 1:
+            Stmt b0 = arm.body.get(0).unwrap()
+            match b0:
+                case SMetaForMatch(vars, range, templates):
+                    handled = true
+                    String enum_name = extract_variant_payloads_target(range)
+                    if enum_name != "" and vars.len() > 0:
+                        Vector[EnumVariant] variants = find_enum_variants(m, enum_name)
+                        String var0 = vars.get(0).unwrap()
+                        int vi = 0
+                        while vi < variants.len():
+                            EnumVariant v = variants.get(vi).unwrap()
+                            int ti = 0
+                            while ti < templates.len():
+                                MatchArm template = templates.get(ti).unwrap()
+                                result.push(substitute_arm(template, var0, v.name))
+                                ti = ti + 1
+                            vi = vi + 1
+                else:
+                    pass
+        if not handled:
+            result.push(arm)
+        i = i + 1
+    return result
+
+# Walk a vector of statements, expanding any SMatch.arms that
+# contain SMetaForMatch wrappers. Recurses into nested control
+# flow (if / while / for / match arms / etc.) so meta-for inside
+# nested constructs is also handled.
+Vector[Stmt] expand_meta_for_in_stmts(Vector[Stmt] stmts, Module m):
+    Vector[Stmt] result = Vector[Stmt]()
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        match s:
+            case SMatch(scrutinee, arms):
+                Vector[MatchArm] expanded_arms = expand_meta_for_arms(arms, m)
+                # Recurse into arm bodies in case they contain nested matches
+                Vector[MatchArm] final_arms = Vector[MatchArm]()
+                int ai = 0
+                while ai < expanded_arms.len():
+                    MatchArm a = expanded_arms.get(ai).unwrap()
+                    Vector[Stmt] new_body = expand_meta_for_in_stmts(a.body, m)
+                    final_arms.push(MatchArm(a.pattern, a.guard, new_body))
+                    ai = ai + 1
+                result.push(SMatch(scrutinee, final_arms))
+            case SIf(cond, then_b, else_branches):
+                Vector[Stmt] new_then = expand_meta_for_in_stmts(then_b, m)
+                Vector[ElseBranch] new_branches = Vector[ElseBranch]()
+                int ei = 0
+                while ei < else_branches.len():
+                    ElseBranch eb = else_branches.get(ei).unwrap()
+                    Vector[Stmt] new_eb_body = expand_meta_for_in_stmts(eb.body, m)
+                    new_branches.push(ElseBranch(eb.condition, new_eb_body))
+                    ei = ei + 1
+                result.push(SIf(cond, new_then, new_branches))
+            case SWhile(cond, body):
+                result.push(SWhile(cond, expand_meta_for_in_stmts(body, m)))
+            case SFor(pat, iter_expr, body, own, else_b):
+                result.push(SFor(pat, iter_expr, expand_meta_for_in_stmts(body, m), own, expand_meta_for_in_stmts(else_b, m)))
+            else:
+                result.push(s)
+        i = i + 1
+    return result
+
+# Expand meta-for in every function body in the module.
+void expand_meta_for_match(Module &m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IFunction(fdef):
+                Vector[Stmt] new_body = expand_meta_for_in_stmts(fdef.body, m)
+                FunctionDef new_fn = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, new_body, fdef.is_expr_body, fdef.throws_type)
+                m.items.set(i, IFunction(new_fn))
+            case IEquip(eqblk):
+                Vector[FunctionDef] new_methods = Vector[FunctionDef]()
+                int mi = 0
+                while mi < eqblk.methods.len():
+                    FunctionDef method = eqblk.methods.get(mi).unwrap()
+                    Vector[Stmt] new_body = expand_meta_for_in_stmts(method.body, m)
+                    FunctionDef new_method = FunctionDef(method.name, method.params, method.return_type, method.type_params, new_body, method.is_expr_body, method.throws_type)
+                    new_methods.push(new_method)
+                    mi = mi + 1
+                EquipBlock new_eq = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, new_methods, eqblk.via_field, eqblk.trait_generic_args)
+                m.items.set(i, IEquip(new_eq))
             else:
                 pass
         i = i + 1

@@ -107,6 +107,14 @@ enum Stmt:
     SMeta
     SMetaFor(Vector[Stmt])
     SMetaIf(Vector[Stmt], Vector[ElseBranch])
+    # Meta-for nested INSIDE a match arm. The parser captures the loop
+    # variable names + the range expression (e.g. `variant_payloads(T)`)
+    # + the inner case-arm templates so that meta.gg's expand_meta_types
+    # can iterate the range, substitute the vars in each template's
+    # pattern/body, and replace the synthetic wrapping arm with the
+    # expanded concrete arms. Lives only between parse and meta
+    # expansion — never seen by resolve/typecheck.
+    SMetaForMatch(Vector[String], SpannedExpr, Vector[MatchArm])
     SFor(SpannedPattern, SpannedExpr, Vector[Stmt], int, Vector[Stmt])
     SWhile(SpannedExpr, Vector[Stmt])
     SLoop(Vector[Stmt])

@@ -1076,6 +1076,11 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
         case SMetaFor(body):
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
+        case SMetaForMatch(_, _, _):
+            # Meta expansion (meta.gg) replaces these with concrete arms
+            # before typecheck. If we still see one, treat it as a no-op.
+            pass
+
         case SMetaIf(then_body, else_branches):
             type_check_stmts(then_body, scope_id, &scopes, &types, ctx)
             int ei = 0
