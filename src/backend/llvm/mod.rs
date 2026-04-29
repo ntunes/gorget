@@ -5735,6 +5735,35 @@ fn emit_inst(
                 // String]`. The comment elsewhere about "resource aggregates
                 // travel by pointer" applies to bare-fn callees and
                 // `__adapt_*` shims, not to `__Closure_N__call` bodies.
+                // For tuple-by-value > 16 B (e.g. `((int, int, int))` 24-byte
+                // destructure), `Inst::CallClosure` lowering at insts.rs:3287
+                // only promotes Auto→ByValue for `is_small_aggregate` types
+                // (≤16 B). The closure body's declared param type, however, is
+                // always the bare struct (`resolve_param_type` returns the
+                // base for non-resource Borrows). Caller-side `Auto` then
+                // falls through to passing `ptr`, while the callee reads it as
+                // struct value — first slot becomes the pointer's address.
+                //
+                // The C backend distinguishes via `ptr_pointee` (only set by
+                // `SlotAddr` / `FieldPtr` / `GlobalAddr`, not function params).
+                // LLVM lacks that tracking; mirror it inline by checking the
+                // value's defining instruction. A `SlotAddr` of a non-resource
+                // struct slot means the closure body got the bare struct as
+                // its param type and the call site must load + pass by value.
+                // A `Counter&`-style param-of-Ptr never goes through SlotAddr
+                // here (param values flow via `ParamRef` / SlotStore-then-load
+                // of a Ptr slot), so the disambiguation falls out naturally.
+                let arg_from_slotaddr_struct: Option<crate::lir::StructId> = func.blocks.iter()
+                    .find_map(|b| b.insts.iter().find_map(|i| match i {
+                        Inst::SlotAddr { dst, slot } if dst.0 == a.0 => {
+                            match func.slots.get(slot.0 as usize).map(|s| &s.ty) {
+                                Some(LirType::Struct(sid)) => Some(*sid),
+                                Some(LirType::PtrTo(sid)) => Some(*sid),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    }));
                 let by_value_sid = if matches!(abi,
                     crate::ir::abi::AbiKind::ByValue | crate::ir::abi::AbiKind::Scalar)
                 {
@@ -5742,6 +5771,17 @@ fn emit_inst(
                         Some(LirType::PtrTo(sid)) => Some(*sid),
                         _ => None,
                     }
+                } else if matches!(abi, crate::ir::abi::AbiKind::Auto) {
+                    // Non-small-aggregate `Auto` only widens when the value
+                    // came from a SlotAddr of a non-resource struct slot —
+                    // i.e. a locally-built tuple/struct value, not a borrow.
+                    arg_from_slotaddr_struct.and_then(|sid| {
+                        if crate::backend::c_lir::helpers::struct_contains_resource(sid, module) {
+                            None
+                        } else {
+                            Some(sid)
+                        }
+                    })
                 } else {
                     None
                 };

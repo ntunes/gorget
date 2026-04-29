@@ -15457,21 +15457,6 @@ fn closure_multiline_return() {
 
 #[test]
 fn closure_tuple_destructure() {
-    // LLVM ABI mismatch when a closure literal accepts a >16-byte
-    // *non-resource* tuple by value (e.g. `((int x, int y, int z)): …` —
-    // 24 B). The closure body declares `(env, %Tuple_3)` as struct-by-value
-    // (resolve_param_type returns the base type for non-resource Borrow);
-    // `CallClosure` only promotes ByValue when `is_small_aggregate` is
-    // true (≤16 B). Caller then passes ptr, callee reads it as a struct
-    // value → first slot is the pointer's address, prints as a giant
-    // integer. Naively flipping the threshold also breaks
-    // `Counter&`-typed callable params (those resolve to a real ptr-arg
-    // — caller's Auto-abi must stay pass-as-ptr). The right fix needs to
-    // distinguish "closure body declared struct-by-value" from "closure
-    // body declared ptr" and mirror that at the call site, which the
-    // c_lir backend gets via `ptr_pointee` tracking. Carrying the same
-    // signal into LLVM is non-trivial — leave skipped.
-    if skip_under_llvm() { return; }
     run_gg(
         "closure_tuple_destructure.gg",
         "7\n6\nalice is 30\n66\n21",
