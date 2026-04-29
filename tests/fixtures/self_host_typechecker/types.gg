@@ -123,6 +123,12 @@ struct TypeTable:
     Dict[String, String] meta_aliases
     int next_type_var
     TraitRegistry trait_registry
+    # Side-channel: var_ids of RTVars allocated as the binding-side
+    # demotion of a generic-param reference. The formatter renders
+    # these as "<error>" (matching Rust's two-tier signature/binding
+    # representation), while regular closure-inference RTVars keep
+    # their "?N" rendering. See `fresh_generic_var` below.
+    Dict[int, bool] generic_var_ids
 
 equip TypeTable:
 
@@ -148,7 +154,7 @@ equip TypeTable:
         # 8: never
         types.push(RTNever())
         TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg)
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool]())
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()
@@ -158,6 +164,15 @@ equip TypeTable:
     int fresh_var(&self):
         int var_id = self.next_type_var
         self.next_type_var = var_id + 1
+        return self.add_type(RTVar(var_id))
+
+    # Allocate a fresh RTVar AND tag it as a generic-param-binding
+    # demotion. The formatter renders these as "<error>" (matching
+    # Rust's signature-vs-binding asymmetry); see format_types.gg.
+    int fresh_generic_var(&self):
+        int var_id = self.next_type_var
+        self.next_type_var = var_id + 1
+        self.generic_var_ids.put(var_id, true)
         return self.add_type(RTVar(var_id))
 
     int defined_id(&self, int def_id):

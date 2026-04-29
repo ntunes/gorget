@@ -178,6 +178,34 @@ int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
         sid = sid + 1
     return -1
 
+# ── Generic-param binding-side demotion ─────────────────────
+# Rust's typechecker uses two distinct values for the same generic
+# param: `Defined(generic_param_def_id)` for the SIGNATURE slot
+# (renders as "T") and a fresh inference variable for the BINDING
+# slot (renders as "<error>"). Our resolver produces RTDefined for
+# both. To match Rust's two-tier output, we demote a generic-param
+# RTDefined to a fresh tagged RTVar at every binding site (function
+# params, closure params, VarDecl, const, static, type alias). The
+# signature slot keeps the original RTDefined.
+int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types):
+    if type_id < 0:
+        return type_id
+    if type_id >= types.types.len():
+        return type_id
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTDefined(def_id):
+            if def_id < 0:
+                return type_id
+            DefInfo d = scopes.get_def(def_id)
+            match d.kind:
+                case DkGenericParam():
+                    return types.fresh_generic_var()
+                else:
+                    return type_id
+        else:
+            return type_id
+
 # ── Type-check a function definition ────────────────────────
 
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
@@ -212,11 +240,16 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
         param_type_ids.push(p_type_id)
         param_ownerships.push(p.ownership)
-        # Look up param def in the function body scope
+        # Look up param def in the function body scope. The signature
+        # slot (param_type_ids above) keeps the original RTDefined for
+        # generic params, but the BINDING is demoted to a fresh tagged
+        # RTVar so it renders as "<error>" — matching Rust's two-tier
+        # signature/binding representation.
         if has_body_scope:
             int param_def = scopes.lookup_in_scope(body_scope, p.param_name)
             if param_def >= 0:
-                scopes.set_def_type(param_def, p_type_id)
+                int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
+                scopes.set_def_type(param_def, binding_type_id)
         pi = pi + 1
 
     # Restore scope before searching for fn_def in parent scope.
@@ -534,7 +567,8 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                 if p_type_id >= 0 and p_type_id != types.error_id:
                     int param_def = scopes.lookup_in_subtree_untyped(scope_id, p.param_name)
                     if param_def >= 0:
-                        scopes.set_def_type(param_def, p_type_id)
+                        int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
+                        scopes.set_def_type(param_def, binding_type_id)
                 pi = pi + 1
             # Walk closure body for VarDecls and nested closures
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
@@ -829,7 +863,8 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             if var_type_id >= 0:
                 int var_def = scopes.lookup_in_subtree_untyped(scope_id, name)
                 if var_def >= 0:
-                    scopes.set_def_type(var_def, var_type_id)
+                    int binding_type_id = demote_generic_param_to_var(var_type_id, scopes, &types)
+                    scopes.set_def_type(var_def, binding_type_id)
             # Walk initializer for closures and block expressions
             # Pass expected type so untyped closure params can be inferred
             walk_expr_closures_with_type(init_expr, var_type_id, scope_id, &scopes, &types, ctx)
@@ -1070,13 +1105,15 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 if const_def < 0:
                     const_def = scopes.lookup_in_subtree(scope_id, name)
                 if const_def >= 0:
-                    scopes.set_def_type(const_def, const_type_id)
+                    int binding_type_id = demote_generic_param_to_var(const_type_id, scopes, &types)
+                    scopes.set_def_type(const_def, binding_type_id)
 
         case ITypeAlias(name, type_params, underlying):
             int alias_type_id = ast_type_to_resolved(underlying.ty, underlying.span, scopes, &types)
             int alias_def = scopes.lookup_in_scope(scope_id, name)
             if alias_def >= 0:
-                scopes.set_def_type(alias_def, alias_type_id)
+                int binding_type_id = demote_generic_param_to_var(alias_type_id, scopes, &types)
+                scopes.set_def_type(alias_def, binding_type_id)
 
         case IStaticDecl(stype, name, init_expr):
             bool is_inferred = false
@@ -1095,7 +1132,8 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 if static_def < 0:
                     static_def = scopes.lookup_in_subtree(scope_id, name)
                 if static_def >= 0:
-                    scopes.set_def_type(static_def, static_type_id)
+                    int binding_type_id = demote_generic_param_to_var(static_type_id, scopes, &types)
+                    scopes.set_def_type(static_def, binding_type_id)
 
         case ITest(name, with_exprs, with_names, body):
             # Type with-clause bindings (test "name" with expr as var:)

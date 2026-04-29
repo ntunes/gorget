@@ -73,6 +73,12 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
         case RTBoxedCallable(kind_name, func_id):
             return "Box[" + kind_name + "[" + describe_type(func_id, scopes, types) + "]]"
         case RTVar(id):
+            # Vars allocated as the binding-side demotion of a
+            # generic-param render as "<error>" (matching Rust's
+            # signature/binding asymmetry); regular closure-inference
+            # vars keep "?N".
+            if types.generic_var_ids.contains(id):
+                return "<error>"
             return "?" + int_to_str(id)
         case RTError():
             return "<error>"
