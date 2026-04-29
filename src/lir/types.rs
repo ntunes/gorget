@@ -487,6 +487,142 @@ pub fn compute_module_value_types(module: &mut LirModule) {
     }
 }
 
+/// Populate `func.pointee_types` for every function in the module.
+///
+/// For each pointer-typed value, records the type the pointer addresses
+/// when it can be derived from a canonical pointer-producing instruction:
+///
+/// - `SlotAddr { dst, slot }`            → the slot's declared type
+/// - `FieldPtr { dst, struct_id, field }`→ that field's declared type
+/// - `GlobalAddr { dst, global }`        → the global's declared type
+/// - `PtrCast` / `Bitcast`               → propagate from source
+/// - `SlotStore` of a known-pointee value into a `Ptr`/`PtrTo(_)` slot,
+///   followed by `SlotLoad`              → propagate slot→load
+/// - block-arg → block-param at fixed point (loops + diamonds)
+///
+/// `ElemPtr` is left `None` (no element-type info on the instruction);
+/// call returns are left `None` (callee-dependent).
+///
+/// Both backends consume this to disambiguate value-vs-pointer ABIs
+/// at call sites — replacing the per-backend inline scans that were
+/// doing the same lookup ad hoc (the LLVM backend's `Inst::CallClosure`
+/// arg-handling, the C backend's drop-target inference).
+pub fn compute_module_pointee_types(module: &mut LirModule) {
+    for i in 0..module.functions.len() {
+        compute_function_pointee_types_at(module, i);
+    }
+}
+
+pub fn compute_function_pointee_types_at(module: &mut LirModule, fi: usize) {
+    use crate::lir::{Inst, BlockId, ValueId, Term};
+    let n = module.functions[fi].value_count() as usize;
+    let mut pt: Vec<Option<LirType>> = vec![None; n];
+    // `slot_pointee[slot.0]` = the inferred pointee for whatever pointer
+    // value last got stored into that slot. Used to propagate through
+    // SlotStore→SlotLoad chains where the slot itself is `Ptr`/`PtrTo(_)`.
+    let mut slot_pointee: Vec<Option<LirType>> = vec![None; module.functions[fi].slots.len()];
+
+    for block in &module.functions[fi].blocks {
+        for inst in &block.insts {
+            match inst {
+                Inst::SlotAddr { dst, slot } => {
+                    let slot_ty = &module.functions[fi].slots[slot.0 as usize].ty;
+                    if (dst.0 as usize) < n {
+                        pt[dst.0 as usize] = Some(slot_ty.clone());
+                    }
+                }
+                Inst::FieldPtr { dst, struct_id, field, .. } => {
+                    let sdef = &module.structs[struct_id.0 as usize];
+                    if (*field as usize) < sdef.fields.len() && (dst.0 as usize) < n {
+                        pt[dst.0 as usize] = Some(sdef.fields[*field as usize].1.clone());
+                    }
+                }
+                Inst::GlobalAddr { dst, global } => {
+                    if let Some(g) = module.globals.get(global.0 as usize) {
+                        if (dst.0 as usize) < n {
+                            pt[dst.0 as usize] = Some(g.ty.clone());
+                        }
+                    }
+                }
+                Inst::PtrCast { dst, value } | Inst::Bitcast { dst, value, .. } => {
+                    if let Some(p) = pt.get(value.0 as usize).and_then(|p| p.clone()) {
+                        if (dst.0 as usize) < n {
+                            pt[dst.0 as usize] = Some(p);
+                        }
+                    }
+                }
+                Inst::SlotStore { slot, value, .. } => {
+                    if let Some(p) = pt.get(value.0 as usize).and_then(|p| p.clone()) {
+                        let slot_ty = &module.functions[fi].slots[slot.0 as usize].ty;
+                        if matches!(slot_ty, LirType::Ptr | LirType::PtrTo(_)) {
+                            slot_pointee[slot.0 as usize] = Some(p);
+                        }
+                    }
+                }
+                Inst::SlotLoad { dst, slot, .. } => {
+                    if let Some(p) = slot_pointee.get(slot.0 as usize).and_then(|p| p.clone()) {
+                        if (dst.0 as usize) < n {
+                            pt[dst.0 as usize] = Some(p);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Block-arg → block-param fixed-point. A pointer flowing through a
+    // `Jump`/`Branch`/`Switch` should propagate its pointee to the
+    // matching block param. Iterate until stable; loops and diamonds can
+    // require multiple passes. Cap at 16 to stay bounded on pathological
+    // CFGs (in practice 1-3 passes suffice).
+    let mut changed = true;
+    let mut iters = 0;
+    while changed && iters < 16 {
+        changed = false;
+        iters += 1;
+        for block in &module.functions[fi].blocks {
+            let pairs: Vec<(BlockId, Vec<ValueId>)> = match &block.terminator {
+                Term::Jump(target, args) => vec![(*target, args.clone())],
+                Term::Branch { then_block, then_args, else_block, else_args, .. } => {
+                    vec![
+                        (*then_block, then_args.clone()),
+                        (*else_block, else_args.clone()),
+                    ]
+                }
+                Term::Switch { cases, default, default_args, .. } => {
+                    let mut v: Vec<(BlockId, Vec<ValueId>)> = cases.iter()
+                        .map(|(_, b, a)| (*b, a.clone()))
+                        .collect();
+                    v.push((*default, default_args.clone()));
+                    v
+                }
+                _ => continue,
+            };
+            for (target_id, args) in pairs {
+                let target_block = match module.functions[fi].blocks.get(target_id.0 as usize) {
+                    Some(b) => b,
+                    None => continue,
+                };
+                for (i, arg) in args.iter().enumerate() {
+                    let param_vid = match target_block.params.get(i) {
+                        Some((vid, _)) => *vid,
+                        None => continue,
+                    };
+                    let param_idx = param_vid.0 as usize;
+                    if param_idx >= n || pt[param_idx].is_some() { continue; }
+                    if let Some(p) = pt.get(arg.0 as usize).and_then(|p| p.clone()) {
+                        pt[param_idx] = Some(p);
+                        changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    module.functions[fi].pointee_types = pt;
+}
+
 /// Compute value types for a single function at index `i` in `module.functions`.
 ///
 /// Split out from `compute_module_value_types` so BIR synthesis can populate

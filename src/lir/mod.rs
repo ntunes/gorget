@@ -8,6 +8,7 @@ pub mod drop_elab;
 mod integration;
 pub mod lower;
 pub mod optimize;
+pub mod queries;
 pub mod ssa;
 pub mod types;
 pub mod validate;
@@ -985,6 +986,22 @@ pub struct LirFunction {
     /// Computed once after SSA + optimization; both backends read this
     /// instead of reconstructing types from instructions.
     pub value_types: Vec<Option<LirType>>,
+    /// For pointer-typed values, the type the pointer addresses.
+    ///
+    /// Populated by `compute_module_pointee_types` from the canonical
+    /// pointer-producing instructions (`SlotAddr`, `FieldPtr`, `GlobalAddr`)
+    /// plus propagation through `SlotStore`→`SlotLoad`, `PtrCast`/`Bitcast`,
+    /// and block-arg→block-param at fixed point. `ElemPtr` and call returns
+    /// are left `None` — the array element type isn't on the LIR instruction
+    /// and call returns vary by callee.
+    ///
+    /// Both backends consume this to disambiguate value-vs-pointer ABIs at
+    /// call sites where the LIR-declared type alone is ambiguous (e.g. a
+    /// closure callable with `Auto` arg-abi: `PtrTo(Struct)` from a
+    /// `SlotAddr` of a non-resource struct slot means "load + pass by value",
+    /// from a borrowed param it means "stay by-pointer"; see the LLVM
+    /// `Inst::CallClosure` handler).
+    pub pointee_types: Vec<Option<LirType>>,
 }
 
 impl LirFunction {
@@ -1002,6 +1019,7 @@ impl LirFunction {
             const_params: Vec::new(),
             str_ptr_values: rustc_hash::FxHashSet::default(),
             value_types: Vec::new(),
+            pointee_types: Vec::new(),
         }
     }
 

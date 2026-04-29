@@ -516,6 +516,7 @@ fn try_build_ir(
                 stats.drop_flags_inserted, stats.move_slots_removed);
         }
         gorget::lir::types::compute_module_value_types(&mut lir_module);
+        gorget::lir::types::compute_module_pointee_types(&mut lir_module);
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {
@@ -539,11 +540,13 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::types::compute_module_value_types(&mut lir_module);
+        gorget::lir::types::compute_module_pointee_types(&mut lir_module);
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
         // Optimize runs post-BIR so synth fns (when present) get DCE/fold/CSE.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
         let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
         print!("{c_code}");
         let input_path = Path::new(filename);
@@ -563,6 +566,7 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::types::compute_module_value_types(&mut lir_module);
+        gorget::lir::types::compute_module_pointee_types(&mut lir_module);
 
         // Save metadata we need after handing ownership to BirModule.
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
@@ -572,6 +576,7 @@ fn try_build_ir(
         // etc.) rather than the opaque high-level shape.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
 
         // Hot-reload's two-phase build (host binary + guest .dylib) leans on
         // C-level syntax — `generate_hot_reload_split` searches for `int main(`
@@ -1309,6 +1314,7 @@ fn try_profile(
     // Phase 8a: LIR value-types (pre-BIR) — optimize moves to post-BIR
     // so synth fns benefit from DCE/fold/CSE.
     gorget::lir::types::compute_module_value_types(&mut lir_module);
+    gorget::lir::types::compute_module_pointee_types(&mut lir_module);
     let lir_functions = lir_module.functions.len();
     let lir_instructions: usize = lir_module.functions.iter()
         .map(|f| f.blocks.iter().map(|b| b.insts.len()).sum::<usize>())
@@ -1320,6 +1326,7 @@ fn try_profile(
         .map_err(|e| format!("BIR lowering failed: {e}"))?;
     let lir_opt_stats = gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
     gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
+    gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
     let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
     let backend = gorget::backend::c_lir::CLirBackend;

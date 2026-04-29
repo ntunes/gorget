@@ -340,12 +340,17 @@ pub(super) fn find_struct_cname_by_orig(module: &LirModule, orig_name: &str, sn:
     orig_name.to_string()
 }
 
-/// Check if a Box type is a trait object box (has a corresponding _TraitObj struct).
-pub fn is_trait_box(module: &LirModule, box_type: &str) -> bool {
-    let trait_name = box_type.strip_prefix("Box__").unwrap_or(box_type);
-    let traitobj_name = format!("{trait_name}_TraitObj");
-    module.structs.iter().any(|d| d.name == traitobj_name)
-}
+// `is_trait_box`, `struct_contains_resource`, `is_user_hashable_key`,
+// `hashable_key_fn_names` were lifted to `crate::lir::queries` so the
+// LLVM backend can consume them without reaching into `c_lir`. Use the
+// `queries::*` paths at call sites; this module re-exports through the
+// `pub use` at the top of `helpers.rs` to avoid churn at internal sites.
+pub use crate::lir::queries::{
+    is_trait_box,
+    struct_contains_resource,
+    is_user_hashable_key,
+    hashable_key_fn_names,
+};
 
 /// Returns true if the function is provided by the Gorget C runtime (static inline).
 pub(super) fn is_runtime_fn(name: &str) -> bool {
@@ -898,54 +903,8 @@ pub(super) fn emit_collection_constructor(
     }
 }
 
-/// Whether `type_c` is a user struct/enum used as a Dict/Set key that has
-/// both `T__hash` (Hashable) and `T__eq` (Equatable) methods in the LIR.
-/// Primitive types (int64_t, double, etc.), `Str` / `GorgetString`, and
-/// monomorphized collection types return false — they have their own
-/// runtime paths (byte-FNV for POD scalars, `_str` constructors for strings).
-pub fn is_user_hashable_key(type_c: &str, module: &crate::lir::LirModule) -> bool {
-    // Skip primitives and runtime types — their hashing is handled by
-    // the runtime directly.
-    if matches!(type_c,
-        "int64_t" | "int32_t" | "int16_t" | "int8_t"
-        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
-        | "double" | "float" | "bool" | "_Bool"
-        | "Str" | "GorgetString"
-    ) {
-        return false;
-    }
-    // Skip monomorphized wrapper types (Option__T, Result__T__E, Vector__T, …).
-    if type_c.contains("__") {
-        return false;
-    }
-    hashable_key_fn_names(type_c, module).is_some()
-}
-
-/// Returns the concrete C function name for `{type}.hash(&h)` / `{type}.eq(other)`
-/// as emitted by the IR lowerer. Trait-impl methods use the `Trait_for_Type`
-/// prefix; direct inherent methods use just `Type__method`. Both forms are
-/// checked so the bridge targets the correct symbol.
-pub fn hashable_key_fn_names(type_c: &str, module: &crate::lir::LirModule) -> Option<(String, String)> {
-    let direct_hash = format!("{type_c}__hash");
-    let direct_eq = format!("{type_c}__eq");
-    let trait_hash = format!("Hashable_for_{type_c}__hash");
-    let trait_eq = format!("Equatable_for_{type_c}__eq");
-    let hash_name = if module.functions.iter().any(|f| f.name == direct_hash) {
-        direct_hash
-    } else if module.functions.iter().any(|f| f.name == trait_hash) {
-        trait_hash
-    } else {
-        return None;
-    };
-    let eq_name = if module.functions.iter().any(|f| f.name == direct_eq) {
-        direct_eq
-    } else if module.functions.iter().any(|f| f.name == trait_eq) {
-        trait_eq
-    } else {
-        return None;
-    };
-    Some((hash_name, eq_name))
-}
+// `is_user_hashable_key` and `hashable_key_fn_names` were lifted to
+// `crate::lir::queries` and are re-exported at the top of this module.
 
 /// Maps a runtime function name to its thread-local error check function.
 /// Functions in this list return a raw scalar value in C, but the GIR expects
@@ -1064,48 +1023,8 @@ pub(super) fn box_alloc_inner_c_type(suffix: &str, lir_ty: &LirType, struct_name
     // For primitives, the LIR type is accurate
     c_type_named(lir_ty, struct_names)
 }
-/// Return true if `sid` names a struct that owns heap buffers (String / Vector /
-/// Dict / Set / HashMap / any struct transitively containing one of those).
-///
-/// Used to decide closure call-site ABI: resource-containing aggregates must
-/// stay by-pointer across the `GorgetClosure` boundary to match the callee
-/// signature (both `__Closure_N__call` — see
-/// `ir/lowering/closures.rs::resolve_param_type` — and `__adapt_*` declare
-/// resource aggregate params as `void*`). Non-resource aggregates are small,
-/// pod-like, and may flow by value.
-///
-/// Walks the field graph; memoization happens implicitly via the `visited`
-/// set — cyclic structs hit the "already visiting" branch and short-circuit
-/// to `false` (a cyclic type with no resource descendants is non-resource;
-/// anything truly resource-containing will have a non-cycle field that
-/// returns `true` on its own walk).
-pub fn struct_contains_resource(sid: crate::lir::StructId, module: &LirModule) -> bool {
-    fn walk(sid: crate::lir::StructId, module: &LirModule, visited: &mut std::collections::HashSet<u32>) -> bool {
-        if !visited.insert(sid.0) { return false; }
-        let sdef = match module.structs.get(sid.0 as usize) {
-            Some(s) => s,
-            None => return false,
-        };
-        // Runtime-owned aggregates are resources by construction.
-        if matches!(sdef.name.as_str(),
-            "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure") {
-            return true;
-        }
-        for (_, fty) in &sdef.fields {
-            match fty {
-                LirType::Struct(inner_sid) => {
-                    if walk(*inner_sid, module, visited) { return true; }
-                }
-                // Ptr fields are bare pointers — they don't "contain" anything;
-                // ownership responsibility lives with whoever holds the Ptr value.
-                _ => {}
-            }
-        }
-        false
-    }
-    let mut visited = std::collections::HashSet::new();
-    walk(sid, module, &mut visited)
-}
+// `struct_contains_resource` was lifted to `crate::lir::queries` and is
+// re-exported at the top of this module.
 
 pub(super) fn c_type_named(ty: &LirType, struct_names: &HashMap<u32, String>) -> String {
     match ty {

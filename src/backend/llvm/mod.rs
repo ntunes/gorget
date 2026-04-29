@@ -137,7 +137,7 @@ fn emit_user_key_bridge_wiring(
     use std::fmt::Write;
     let orig = match original_name { Some(o) => o.as_str(), None => return };
     let (key_type, is_set) = match user_key_type_from_original(orig) { Some(p) => p, None => return };
-    if !crate::backend::c_lir::helpers::is_user_hashable_key(key_type, module) {
+    if !crate::lir::queries::is_user_hashable_key(key_type, module) {
         return;
     }
     let agg_ty = if is_set { "%GorgetSet" } else { "%GorgetMap" };
@@ -893,7 +893,7 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 } else if name == "File" || name == "GorgetFile" {
                     writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
                 } else if name.starts_with("Box__")
-                    && crate::backend::c_lir::helpers::is_trait_box(module, name)
+                    && crate::lir::queries::is_trait_box(module, name)
                 {
                     // Box[Trait] is C-typedef'd to <Trait>_TraitObj (16 bytes:
                     // { data ptr, vtable ptr }) — the opaque-runtime-size table
@@ -1484,7 +1484,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     );
                     if !is_collection_ctor { continue; }
                     if let Some((key, _)) = user_key_type_from_original(orig) {
-                        if crate::backend::c_lir::helpers::is_user_hashable_key(key, module) {
+                        if crate::lir::queries::is_user_hashable_key(key, module) {
                             bridge_keys.insert(key.to_string());
                         }
                     }
@@ -6027,26 +6027,25 @@ fn emit_inst(
                 // falls through to passing `ptr`, while the callee reads it as
                 // struct value — first slot becomes the pointer's address.
                 //
-                // The C backend distinguishes via `ptr_pointee` (only set by
-                // `SlotAddr` / `FieldPtr` / `GlobalAddr`, not function params).
-                // LLVM lacks that tracking; mirror it inline by checking the
-                // value's defining instruction. A `SlotAddr` of a non-resource
-                // struct slot means the closure body got the bare struct as
-                // its param type and the call site must load + pass by value.
-                // A `Counter&`-style param-of-Ptr never goes through SlotAddr
-                // here (param values flow via `ParamRef` / SlotStore-then-load
-                // of a Ptr slot), so the disambiguation falls out naturally.
-                let arg_from_slotaddr_struct: Option<crate::lir::StructId> = func.blocks.iter()
-                    .find_map(|b| b.insts.iter().find_map(|i| match i {
-                        Inst::SlotAddr { dst, slot } if dst.0 == a.0 => {
-                            match func.slots.get(slot.0 as usize).map(|s| &s.ty) {
-                                Some(LirType::Struct(sid)) => Some(*sid),
-                                Some(LirType::PtrTo(sid)) => Some(*sid),
-                                _ => None,
-                            }
-                        }
+                // The shared `compute_module_pointee_types` pass populates
+                // `func.pointee_types` for every pointer-typed value via the
+                // canonical pointer-producing instructions (`SlotAddr` /
+                // `FieldPtr` / `GlobalAddr`) and propagates through
+                // `SlotStore`→`SlotLoad` chains, casts, and block params.
+                // For Auto-abi'd callable args we look up the pointee — when
+                // it's a non-resource `Struct`, that means a locally-built
+                // tuple/struct value and the closure body declared the param
+                // by-value, so the call site must load + pass by value. A
+                // `Counter&`-style param-of-Ptr has no pointee tracked
+                // (params don't go through SlotAddr/FieldPtr) so the
+                // disambiguation falls out naturally.
+                let auto_struct_pointee: Option<crate::lir::StructId> = func
+                    .pointee_types.get(a.0 as usize)
+                    .and_then(|p| p.as_ref())
+                    .and_then(|pt| match pt {
+                        LirType::Struct(sid) => Some(*sid),
                         _ => None,
-                    }));
+                    });
                 let by_value_sid = if matches!(abi,
                     crate::ir::abi::AbiKind::ByValue | crate::ir::abi::AbiKind::Scalar)
                 {
@@ -6055,11 +6054,11 @@ fn emit_inst(
                         _ => None,
                     }
                 } else if matches!(abi, crate::ir::abi::AbiKind::Auto) {
-                    // Non-small-aggregate `Auto` only widens when the value
-                    // came from a SlotAddr of a non-resource struct slot —
-                    // i.e. a locally-built tuple/struct value, not a borrow.
-                    arg_from_slotaddr_struct.and_then(|sid| {
-                        if crate::backend::c_lir::helpers::struct_contains_resource(sid, module) {
+                    // Non-small-aggregate `Auto` only widens when the
+                    // pointer's pointee is a non-resource struct (i.e. a
+                    // locally-built tuple/struct value, not a borrow).
+                    auto_struct_pointee.and_then(|sid| {
+                        if crate::lir::queries::struct_contains_resource(sid, module) {
                             None
                         } else {
                             Some(sid)

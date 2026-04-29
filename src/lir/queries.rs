@@ -1,0 +1,105 @@
+//! LIR-module queries shared across backends.
+//!
+//! These are property-style functions (no I/O, no mutation) that ask
+//! "does the LIR module have this shape?" Both the C and LLVM backends
+//! consume them — they live here, in the LIR module, rather than inside
+//! one backend, so neither backend has to reach into the other.
+//!
+//! Each function takes `&LirModule` and queries declared types,
+//! function signatures, or struct shapes — never module state owned by a
+//! specific backend.
+
+use crate::lir::{LirModule, LirType, StructId};
+use std::collections::HashSet;
+
+/// Whether the named Box type is a trait-object box (i.e. there is a
+/// matching `<TraitName>_TraitObj` struct in the module). Trait boxes
+/// are 16 bytes (data ptr + vtable ptr); concrete-type boxes are 8
+/// (just data ptr). Both backends need to disambiguate to pick the
+/// right LLVM/C struct type for `Box[T]` slots.
+pub fn is_trait_box(module: &LirModule, box_type: &str) -> bool {
+    let trait_name = box_type.strip_prefix("Box__").unwrap_or(box_type);
+    let traitobj_name = format!("{trait_name}_TraitObj");
+    module.structs.iter().any(|d| d.name == traitobj_name)
+}
+
+/// Walks the struct's field graph and returns true if any (transitively-
+/// reached) field type is a runtime resource — `GorgetString`,
+/// `GorgetArray`, `GorgetMap`, `GorgetSet`, or `GorgetClosure`. Used to
+/// pick the right ABI for closure-arg passing (resource aggregates
+/// travel by pointer to match `__adapt_*` shims; non-resource go
+/// by-value at the call site).
+///
+/// Visits each struct at most once; `Ptr` fields don't recurse (a bare
+/// pointer doesn't itself "contain" the pointee — ownership lives with
+/// whoever holds the value).
+pub fn struct_contains_resource(sid: StructId, module: &LirModule) -> bool {
+    fn walk(sid: StructId, module: &LirModule, visited: &mut HashSet<u32>) -> bool {
+        if !visited.insert(sid.0) { return false; }
+        let sdef = match module.structs.get(sid.0 as usize) {
+            Some(s) => s,
+            None => return false,
+        };
+        if matches!(sdef.name.as_str(),
+            "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure") {
+            return true;
+        }
+        for (_, fty) in &sdef.fields {
+            if let LirType::Struct(inner_sid) = fty {
+                if walk(*inner_sid, module, visited) { return true; }
+            }
+        }
+        false
+    }
+    let mut visited = HashSet::new();
+    walk(sid, module, &mut visited)
+}
+
+/// Whether `type_c` is a user struct/enum used as a Dict / Set key that
+/// has both `T__hash` (Hashable) and `T__eq` (Equatable) methods in the
+/// LIR. Primitive types (int64_t, double, etc.), `Str` / `GorgetString`,
+/// and monomorphized collection types return false — they have their
+/// own runtime paths (byte-FNV for POD scalars, `_str` constructors for
+/// strings).
+pub fn is_user_hashable_key(type_c: &str, module: &LirModule) -> bool {
+    if matches!(type_c,
+        "int64_t" | "int32_t" | "int16_t" | "int8_t"
+        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
+        | "double" | "float" | "bool" | "_Bool"
+        | "Str" | "GorgetString"
+    ) {
+        return false;
+    }
+    // Skip monomorphized wrapper types (Option__T, Result__T__E, Vector__T, …).
+    if type_c.contains("__") {
+        return false;
+    }
+    hashable_key_fn_names(type_c, module).is_some()
+}
+
+/// Returns the concrete LIR function names for `{type}.hash(&h)` /
+/// `{type}.eq(other)` as emitted by the IR lowerer. Trait-impl methods
+/// use the `Trait_for_Type` prefix; direct inherent methods use just
+/// `Type__method`. Both forms are checked so the bridge targets the
+/// correct symbol.
+pub fn hashable_key_fn_names(type_c: &str, module: &LirModule) -> Option<(String, String)> {
+    let direct_hash = format!("{type_c}__hash");
+    let direct_eq = format!("{type_c}__eq");
+    let trait_hash = format!("Hashable_for_{type_c}__hash");
+    let trait_eq = format!("Equatable_for_{type_c}__eq");
+    let hash_name = if module.functions.iter().any(|f| f.name == direct_hash) {
+        direct_hash
+    } else if module.functions.iter().any(|f| f.name == trait_hash) {
+        trait_hash
+    } else {
+        return None;
+    };
+    let eq_name = if module.functions.iter().any(|f| f.name == direct_eq) {
+        direct_eq
+    } else if module.functions.iter().any(|f| f.name == trait_eq) {
+        trait_eq
+    } else {
+        return None;
+    };
+    Some((hash_name, eq_name))
+}
