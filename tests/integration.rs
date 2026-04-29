@@ -2357,7 +2357,6 @@ fn stdlib_io_file_writer() {
 
 #[test]
 fn static_global_method_call() {
-    if skip_under_llvm() { return; }
     run_gg(
         "static_global_method_call.gg",
         "counter: 1 2 3\ndirect\nwrote 7",
