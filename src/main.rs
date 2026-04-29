@@ -573,7 +573,18 @@ fn try_build_ir(
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
 
-        let backend: Box<dyn gorget::backend::Backend> = match backend_name {
+        // Hot-reload's two-phase build (host binary + guest .dylib) leans on
+        // C-level syntax — `generate_hot_reload_split` searches for `int main(`
+        // and bracket-matches the body, then injects `__attribute__((visibility))`
+        // wrappers and a dlopen/dlsym glue main. None of that ports to LLVM IR
+        // without re-implementing the split at IR level. Fall back to the C
+        // backend transparently when hot-reload is requested under
+        // `--backend=llvm`, so the test fixture and the dev workflow keep
+        // working — with the same binary semantics either way.
+        let lir_meta = bir_module.as_lir();
+        let needs_c_for_hot_reload = lir_meta.hot_reload && backend_name == "llvm";
+        let effective_backend = if needs_c_for_hot_reload { "c" } else { backend_name };
+        let backend: Box<dyn gorget::backend::Backend> = match effective_backend {
             "llvm" => Box::new(gorget::backend::llvm::LlvmBackend),
             _ => Box::new(gorget::backend::c_lir::CLirBackend),
         };

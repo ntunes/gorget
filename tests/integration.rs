@@ -6361,9 +6361,6 @@ c-a-f-\u{e9}-",
 #[test]
 #[serial(hot_reload_basic_gg)]
 fn hot_reload_basic() {
-    // Hot-reload pipeline isn't wired into the LLVM backend yet (uses
-    // dlopen on per-translation-unit shared libs).
-    if skip_under_llvm() { return; }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
     let dir = fixture_path.parent().unwrap();
@@ -6421,7 +6418,6 @@ fn hot_reload_basic() {
 #[test]
 #[serial(hot_reload_basic_gg)]
 fn hot_reload_basic_lir() {
-    if skip_under_llvm() { return; }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/hot_reload_basic.gg");
     let dir = fixture_path.parent().unwrap();
