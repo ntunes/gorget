@@ -165,7 +165,18 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     case RTFunction(params, ownerships, ret_id):
                         return ret_id
                     case RTDefined(def_id):
-                        # Constructor call — returns the defined type
+                        # Constructor call — return the defined type,
+                        # possibly with call-site type args
+                        # (e.g. `Vector[int](...)` → RTGeneric).
+                        if targs.len() > 0:
+                            Vector[int] targ_ids = Vector[int]()
+                            int ti = 0
+                            while ti < targs.len():
+                                SpannedType ta = get_stype_at(targs, ti)
+                                int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
+                                targ_ids.push(ta_id)
+                                ti = ti + 1
+                            return types.add_type(RTGeneric(def_id, targ_ids))
                         return callee_type
                     case RTGeneric(def_id, type_args):
                         # Generic constructor — return the generic type
@@ -184,8 +195,6 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 is_struct = true
                             else:
                                 pass
-                        if is_struct:
-                            return types.defined_id(def_id)
                         bool is_enum = false
                         match d.kind:
                             case DkEnum():
@@ -194,7 +203,16 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 is_enum = true
                             else:
                                 pass
-                        if is_enum:
+                        if is_struct or is_enum:
+                            if targs.len() > 0:
+                                Vector[int] targ_ids = Vector[int]()
+                                int ti = 0
+                                while ti < targs.len():
+                                    SpannedType ta = get_stype_at(targs, ti)
+                                    int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
+                                    targ_ids.push(ta_id)
+                                    ti = ti + 1
+                                return types.add_type(RTGeneric(def_id, targ_ids))
                             return types.defined_id(def_id)
                 else:
                     pass
