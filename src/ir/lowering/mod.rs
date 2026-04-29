@@ -1870,22 +1870,32 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         "File" if callee_name == "_stderr_handle" => "gorget_stderr_handle()".to_string(),
         "File" if callee_name == "_stdin_handle"  => "gorget_stdin_handle()".to_string(),
         _ => {
-            // Generic struct constructor: if callee matches type name and all
-            // args are literals, emit a C compound literal at runtime.
-            // e.g. Vec3(-15.0, -24.0, -15.0) → (Vec3){-15.0, -24.0, -15.0}
+            // Generic struct constructor: if callee matches the type name and all
+            // args are literals, emit a typed compile-time `Struct` initializer
+            // (positional fields named `_0`, `_1`, …; the lowerer drops the
+            // names). Both backends already render `Struct` to their target
+            // syntax (`{f0, f1, …}` for C, `%T { i64 f0, … }` for LLVM) — no
+            // runtime constructor needed. Replaces the prior
+            // `RuntimeCall(format!("(T){{...}}"))` shape that forced backends
+            // to parse C compound-literal syntax out of an opaque string.
             if callee_name == type_name {
-                let all_literal = match expr {
+                let arg_inits: Option<Vec<GlobalInit>> = match expr {
                     Expr::StructLiteral { args, .. } =>
-                        args.iter().all(|a| is_literal_arg(&a.node)),
+                        args.iter().map(|a| literal_to_global_init(&a.node)).collect(),
                     Expr::Call { args, .. } =>
-                        args.iter().all(|a| is_literal_arg(&a.node.value.node)),
-                    _ => false,
+                        args.iter().map(|a| literal_to_global_init(&a.node.value.node)).collect(),
+                    _ => None,
                 };
-                if all_literal && !literal_args.is_empty() {
-                    let args_str = literal_args.join(", ");
-                    return GlobalInit::RuntimeCall(
-                        format!("({type_name}){{{args_str}}}")
-                    );
+                if let Some(inits) = arg_inits {
+                    if !inits.is_empty() {
+                        let fields = inits.into_iter().enumerate()
+                            .map(|(i, init)| (format!("_{i}"), init))
+                            .collect();
+                        return GlobalInit::Struct {
+                            type_name: type_name.to_string(),
+                            fields,
+                        };
+                    }
                 }
             }
             return GlobalInit::Zeroed;
@@ -1915,14 +1925,32 @@ fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
     }
 }
 
-/// Check if an expression is a compile-time evaluable literal (including negated literals).
-fn is_literal_arg(expr: &crate::parser::ast::Expr) -> bool {
+/// Lower a compile-time literal expression to a `GlobalInit::Bytes`
+/// payload. Integers / negated integers encode as 8-byte little-endian
+/// i64 (the byte-length-driven C/LLVM backends pick the right width
+/// from the consuming struct field's type). Floats encode as 8-byte
+/// f64. Bools encode as a single byte. Returns `None` for non-literal
+/// exprs.
+fn literal_to_global_init(expr: &crate::parser::ast::Expr) -> Option<crate::ir::GlobalInit> {
     use crate::parser::ast::Expr;
-    matches!(expr,
-        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_) | Expr::StringLiteral(_, _)
-    ) || matches!(expr, Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand }
-        if matches!(operand.node, Expr::IntLiteral(_) | Expr::FloatLiteral(_)))
+    use crate::ir::GlobalInit;
+    match expr {
+        Expr::IntLiteral(n) => Some(GlobalInit::Bytes(n.to_le_bytes().to_vec())),
+        Expr::FloatLiteral(f) => Some(GlobalInit::Bytes(f.to_le_bytes().to_vec())),
+        Expr::BoolLiteral(b) => Some(GlobalInit::Bytes(vec![if *b { 1 } else { 0 }])),
+        Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => match &operand.node {
+            Expr::IntLiteral(n) => Some(GlobalInit::Bytes((-(*n as i64)).to_le_bytes().to_vec())),
+            Expr::FloatLiteral(f) => Some(GlobalInit::Bytes((-f).to_le_bytes().to_vec())),
+            _ => None,
+        },
+        _ => None,
+    }
 }
+
+// `is_literal_arg` was the gate before the compound-literal path emitted
+// a string `RuntimeCall(...)`. The new `literal_to_global_init`
+// returns `None` directly for non-literals — the caller checks via
+// `Option::collect` instead, which makes `is_literal_arg` dead code.
 
 /// Extract the Nth generic argument's C type name (0-indexed).
 fn generic_nth_c_type(ty: &crate::parser::ast::Type, n: usize) -> String {

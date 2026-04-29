@@ -1039,8 +1039,13 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                     format!("{{ {} }}", ftypes.join(", "))
                 };
                 let field_vals: Vec<String> = fields.iter().enumerate().map(|(fi, init)| {
-                    let fty = if use_named && fi < sdef.fields.len() {
-                        llvm_type_full(&sdef.fields[fi].1, snames)
+                    let field_lir = if use_named && fi < sdef.fields.len() {
+                        Some(&sdef.fields[fi].1)
+                    } else {
+                        None
+                    };
+                    let fty = if let Some(t) = field_lir {
+                        llvm_type_full(t, snames)
                     } else {
                         match init {
                             LirGlobalInit::FuncAddr(_) => "ptr".to_string(),
@@ -1054,11 +1059,42 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                             format!("ptr @{fname}")
                         }
                         LirGlobalInit::Bytes(data) if data.len() <= 8 => {
-                            let mut val = 0i64;
-                            for (bi, &b) in data.iter().enumerate() {
-                                val |= (b as i64) << (bi * 8);
+                            // Bytes targeting a float field: use LLVM's hex
+                            // bit-pattern syntax. `double 1.5` is invalid
+                            // syntax at module scope; `double 0x3FF8000000000000`
+                            // is. (Compile-time `Struct`-with-float-fields
+                            // shows up after the compound-literal lift: e.g.
+                            // `static Vec3 v = Vec3(1.0, 2.0, 3.0)` lowers to
+                            // a `Struct` with three `Bytes(f64.to_le_bytes())`
+                            // fields.)
+                            match field_lir {
+                                Some(LirType::F64) if data.len() == 8 => {
+                                    let bits = u64::from_le_bytes([
+                                        data[0], data[1], data[2], data[3],
+                                        data[4], data[5], data[6], data[7],
+                                    ]);
+                                    format!("double 0x{bits:016X}")
+                                }
+                                Some(LirType::F32) if data.len() == 4 => {
+                                    // f32 globals are emitted with i64-shaped
+                                    // hex constants — LLVM accepts a `double`-
+                                    // shaped hex even for `float` fields when
+                                    // it's representable exactly. Use the
+                                    // double-precision representation of the
+                                    // f32 bit-pattern.
+                                    let bits = f32::from_le_bytes([
+                                        data[0], data[1], data[2], data[3],
+                                    ]) as f64;
+                                    format!("float 0x{:016X}", bits.to_bits())
+                                }
+                                _ => {
+                                    let mut val = 0i64;
+                                    for (bi, &b) in data.iter().enumerate() {
+                                        val |= (b as i64) << (bi * 8);
+                                    }
+                                    format!("{fty} {val}")
+                                }
                             }
-                            format!("{fty} {val}")
                         }
                         _ => format!("{fty} zeroinitializer"),
                     }
@@ -1235,10 +1271,6 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         let known_init_fns: std::collections::HashSet<&str> = runtime_init_fns.iter().map(|(n, _)| *n).collect();
         for global in &module.globals {
             if let crate::lir::LirGlobalInit::RuntimeCall(expr) = &global.init {
-                // Skip compound-literal init `(TypeName){f0,...}` — those are
-                // lowered inline at `emit_global_runtime_init` via FieldPtr +
-                // Store, not via a function call.
-                if parse_compound_literal(expr).is_some() { continue; }
                 if let Some(paren) = expr.find('(') {
                     let fn_name = &expr[..paren];
                     if !existing_externs.contains(fn_name) && !hof_names.contains(fn_name)
@@ -1636,33 +1668,11 @@ fn nth_printf_spec(fmt: &str, n: usize) -> Option<String> {
     None
 }
 
-/// Detect `(TypeName){args}` compound-literal init expressions emitted
-/// by `eval_static_init` in `src/ir/lowering/mod.rs`. Returns the type
-/// name and the comma-separated args between the braces, or `None` if
-/// the expression isn't shaped like a compound literal.
-fn parse_compound_literal(expr: &str) -> Option<(&str, &str)> {
-    let rest = expr.strip_prefix('(')?;
-    let close = rest.find(')')?;
-    let after = &rest[close + 1..];
-    let body = after.strip_prefix('{')?.strip_suffix('}')?;
-    let type_name = &rest[..close];
-    Some((type_name, body))
-}
-
-/// Parse a single compound-literal field value. Integers, floats, and
-/// boolean literals (already lowered to "0" / "1" by `eval_literal_arg`)
-/// are emitted as immediate operands. `fty` decides the textual format
-/// (hex bit-pattern for floats, decimal for ints).
-fn parse_compound_literal_field(raw: &str, fty: &LirType) -> String {
-    let s = raw.trim();
-    match fty {
-        LirType::F32 | LirType::F64 => s.parse::<f64>()
-            .map(|v| format!("0x{:016X}", v.to_bits()))
-            .unwrap_or_else(|_| "0.0".to_string()),
-        LirType::Bool => match s { "true" | "1" => "1".to_string(), _ => "0".to_string() },
-        _ => s.parse::<i64>().map(|n| n.to_string()).unwrap_or_else(|_| "0".to_string()),
-    }
-}
+// `parse_compound_literal` and `parse_compound_literal_field` were
+// removed — `eval_static_init` now emits compile-time `Struct`
+// initializers for `(T){f0, ...}` patterns, picked up at
+// `emit_globals` rather than reverse-engineered out of a string at
+// `emit_global_runtime_init`.
 
 fn parse_runtime_init_arg(s: &str) -> RuntimeInitArg {
     let s = s.trim();
@@ -1690,31 +1700,12 @@ fn parse_runtime_init_arg(s: &str) -> RuntimeInitArg {
 }
 
 fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &HashMap<u32, String>, module: &LirModule) {
-    // Compound-literal init `(TypeName){f0, f1, ...}` — emitted by
-    // `eval_static_init` for `static T x = T(args)` when callee == type
-    // and all args are literals (`src/ir/lowering/mod.rs:1875`). The C
-    // backend lets the C compiler accept this verbatim; LLVM has no
-    // compound-literal syntax — we lower it to an in-place
-    // FieldPtr+Store sequence against the global's slot.
-    if let Some((type_name, args_str)) = parse_compound_literal(expr) {
-        if let Some(global) = module.globals.get(gid) {
-            if let LirType::Struct(sid) = &global.ty {
-                let sdef = &module.structs[sid.0 as usize];
-                let parsed = split_top_level_args(args_str);
-                for (i, raw) in parsed.iter().enumerate() {
-                    if let Some((_, fty)) = sdef.fields.get(i) {
-                        let fty_str = llvm_type_full(fty, snames);
-                        let val = parse_compound_literal_field(raw, fty);
-                        let fp = format!("__ginit_{gid}_f{i}");
-                        writeln!(out, "  %{fp} = getelementptr %{type_name}, ptr @__lir_g{gid}, i32 0, i32 {i}").unwrap();
-                        writeln!(out, "  store {fty_str} {val}, ptr %{fp}").unwrap();
-                    }
-                }
-                return;
-            }
-        }
-        return;
-    }
+    // Compound-literal init `(TypeName){f0, ...}` used to ship through
+    // here as a `RuntimeCall` string the LLVM backend had to parse.
+    // Now `eval_static_init` emits compile-time `Struct` initializers
+    // for those, picked up at the global declaration in `emit_globals`
+    // (no main-prologue stores needed). This function only handles
+    // genuine extern-call inits like `gorget_dict_new(sizeof(K), ...)`.
 
     // Parse: "func_name(arg1, arg2, ...)" where args are sizeof(TYPE), numbers,
     // or `&(TYPE){VAL}` compound literal addresses.
