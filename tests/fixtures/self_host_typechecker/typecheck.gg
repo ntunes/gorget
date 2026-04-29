@@ -383,6 +383,22 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
         else:
             pass
 
+    # Fallback: if the scrutinee type didn't lead anywhere (e.g. shadowed
+    # binding obscures the real enum type), look up the qualified variant
+    # name directly in variant_field_types — works when the pattern uses
+    # `EnumName.Variant(args)` and the enum was registered earlier.
+    if result.len() == 0 and types.variant_field_types.contains(lookup_name):
+        int fb_vft = types.variant_field_types.get(lookup_name).unwrap()
+        if fb_vft >= 0 and fb_vft < types.types.len():
+            ResolvedType fb_vrt = get_rtype_at(types.types, fb_vft)
+            match fb_vrt:
+                case RTTuple(fb_elems):
+                    int fb_ei = 0
+                    while fb_ei < fb_elems.len():
+                        result.push(get_int_at(fb_elems, fb_ei))
+                        fb_ei = fb_ei + 1
+                else:
+                    result.push(fb_vft)
     return result
 
 # ── Extract element type from iterable type ───────────────
