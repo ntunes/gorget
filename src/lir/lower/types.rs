@@ -495,46 +495,61 @@ pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collect
                 fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64, struct_reg)).collect(),
             }
         }
-        ir::GlobalInit::RuntimeCall(expr) => {
-            // Try to parse the expression as a numeric constant.
-            // For float-typed globals, always parse as f64 to avoid
-            // integer-like values (e.g. "800" from 800.0) being stored
-            // as i64 bits instead of f64 bits.
+        ir::GlobalInit::Extern { name, args } => {
+            let lir_args: Vec<LirGlobalInitArg> = args.iter()
+                .map(lower_global_init_arg)
+                .collect();
+            // Concurrency-ctor remap: `Mutex__T__new(v)` → `gorget_mutex_new(sizeof(T), &(T){v})`.
+            // Same shape for `Shared__T__new` and `RWLock__T__new`. The runtime
+            // takes (size, ptr-to-initial-value); the AddrOfInline arg lets the
+            // backend allocate the temporary inline.
+            if let Some(mapped) = map_monomorphized_to_runtime(name) {
+                if matches!(mapped.as_str(), "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new") {
+                    let elem_type = name
+                        .strip_prefix("Mutex__").or_else(|| name.strip_prefix("Shared__"))
+                        .or_else(|| name.strip_prefix("RWLock__"))
+                        .and_then(|r| r.rsplit_once("__").map(|(t, _)| t))
+                        .unwrap_or("int64_t");
+                    let initial_value = lir_args.into_iter().next()
+                        .unwrap_or(LirGlobalInitArg::Int(0));
+                    return LirGlobalInit::Extern {
+                        name: mapped,
+                        args: vec![
+                            LirGlobalInitArg::Sizeof(elem_type.to_string()),
+                            LirGlobalInitArg::AddrOfInline {
+                                c_type: elem_type.to_string(),
+                                value: Box::new(initial_value),
+                            },
+                        ],
+                    };
+                }
+                return LirGlobalInit::Extern { name: mapped, args: lir_args };
+            }
+            // Type-targeted shortcut: a runtime ctor whose result is a primitive
+            // value (int / float) is constant-foldable when the only arg is a
+            // matching literal. Skips the runtime call entirely. Mainly useful
+            // for `static int x = some_const_extern()` patterns once they exist.
             if target_ty.is_float() {
-                if let Ok(v) = expr.parse::<f64>() {
-                    return LirGlobalInit::Bytes(v.to_le_bytes().to_vec());
+                if let Some(LirGlobalInitArg::Float(f)) = lir_args.first() {
+                    return LirGlobalInit::Bytes(f.to_le_bytes().to_vec());
                 }
             }
-            if let Ok(v) = expr.parse::<i64>() {
-                LirGlobalInit::Bytes(v.to_le_bytes().to_vec())
-            } else if let Ok(v) = expr.parse::<f64>() {
-                LirGlobalInit::Bytes(v.to_le_bytes().to_vec())
-            } else {
-                // Complex runtime call — remap function names to runtime equivalents.
-                let mut remapped = expr.clone();
-                if let Some(paren_pos) = remapped.find('(') {
-                    let func_name = &remapped[..paren_pos];
-                    if let Some(mapped) = map_monomorphized_to_runtime(func_name) {
-                        // Concurrency constructors need sizeof + address-of injected:
-                        // Mutex__T__new(val) → gorget_mutex_new(sizeof(T), &(T){val})
-                        if matches!(mapped.as_str(), "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new") {
-                            let args_str = &remapped[paren_pos + 1..remapped.len() - 1]; // strip parens
-                            let _elem_size = concurrency_elem_size(func_name, &[]).unwrap_or(8);
-                            // Use a compound literal with the element type for proper alignment
-                            let elem_type = func_name
-                                .strip_prefix("Mutex__").or_else(|| func_name.strip_prefix("Shared__"))
-                                .or_else(|| func_name.strip_prefix("RWLock__"))
-                                .and_then(|r| r.rsplit_once("__").map(|(t, _)| t))
-                                .unwrap_or("int64_t");
-                            remapped = format!("{mapped}(sizeof({elem_type}), &({elem_type}){{{args_str}}})");
-                        } else {
-                            remapped = format!("{mapped}{}", &remapped[paren_pos..]);
-                        }
-                    }
-                }
-                LirGlobalInit::RuntimeCall(remapped)
-            }
+            LirGlobalInit::Extern { name: name.clone(), args: lir_args }
         }
+    }
+}
+
+fn lower_global_init_arg(arg: &ir::GlobalInitArg) -> LirGlobalInitArg {
+    match arg {
+        ir::GlobalInitArg::Int(n) => LirGlobalInitArg::Int(*n),
+        ir::GlobalInitArg::Float(f) => LirGlobalInitArg::Float(*f),
+        ir::GlobalInitArg::Bool(b) => LirGlobalInitArg::Bool(*b),
+        ir::GlobalInitArg::Sizeof(t) => LirGlobalInitArg::Sizeof(t.clone()),
+        ir::GlobalInitArg::StrLit(s) => LirGlobalInitArg::StrLit(s.clone()),
+        ir::GlobalInitArg::AddrOfInline { c_type, value } => LirGlobalInitArg::AddrOfInline {
+            c_type: c_type.clone(),
+            value: Box::new(lower_global_init_arg(value)),
+        },
     }
 }
 

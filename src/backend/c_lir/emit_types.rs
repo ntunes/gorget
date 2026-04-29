@@ -784,8 +784,10 @@ pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty:
             }
             write!(out, "}}").unwrap();
         }
-        LirGlobalInit::RuntimeCall(_) => {
-            // Runtime calls are initialized separately in __gorget_init_globals.
+        LirGlobalInit::Extern { .. } => {
+            // Runtime-initialized globals are populated by a constructor
+            // call emitted at main()'s prologue. The compile-time
+            // declaration just zero-inits the slot.
             write!(out, "{{0}}").unwrap();
         }
     }

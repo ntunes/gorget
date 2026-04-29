@@ -152,7 +152,30 @@ fn print_global_init(out: &mut String, init: &GlobalInit) {
         }
         GlobalInit::FnRef(name) => write!(out, "@{}", name).unwrap(),
         GlobalInit::Bytes(bytes) => write!(out, "bytes[{}]", bytes.len()).unwrap(),
-        GlobalInit::RuntimeCall(expr) => write!(out, "runtime_call({expr})").unwrap(),
+        GlobalInit::Extern { name, args } => {
+            write!(out, "extern {name}(").unwrap();
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 { write!(out, ", ").unwrap(); }
+                print_global_init_arg(out, arg);
+            }
+            write!(out, ")").unwrap();
+        }
+    }
+}
+
+fn print_global_init_arg(out: &mut String, arg: &crate::ir::GlobalInitArg) {
+    use crate::ir::GlobalInitArg;
+    match arg {
+        GlobalInitArg::Int(n) => write!(out, "{n}").unwrap(),
+        GlobalInitArg::Float(x) => write!(out, "{x}").unwrap(),
+        GlobalInitArg::Bool(b) => write!(out, "{}", if *b { "true" } else { "false" }).unwrap(),
+        GlobalInitArg::Sizeof(t) => write!(out, "sizeof({t})").unwrap(),
+        GlobalInitArg::StrLit(s) => write!(out, "{:?}", s).unwrap(),
+        GlobalInitArg::AddrOfInline { c_type, value } => {
+            write!(out, "&({c_type}){{").unwrap();
+            print_global_init_arg(out, value);
+            write!(out, "}}").unwrap();
+        }
     }
 }
 

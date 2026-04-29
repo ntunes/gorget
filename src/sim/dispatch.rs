@@ -446,9 +446,9 @@ impl<'m> Interpreter<'m> {
                     .collect();
                 Value::Struct { type_name: type_name.clone(), fields: field_vals }
             }
-            GlobalInit::RuntimeCall(_) => {
-                // Runtime-initialized globals are not supported in the sim interpreter;
-                // return a zero value as a placeholder.
+            GlobalInit::Extern { .. } => {
+                // Runtime-initialized globals are not supported in the sim
+                // interpreter; return a zero value as a placeholder.
                 Value::zero_for_type(type_id, &self.module.type_registry)
             }
         }

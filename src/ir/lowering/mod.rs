@@ -1755,28 +1755,33 @@ fn lower_static_decl(
 /// Evaluate a static initializer expression into a GlobalInit value.
 /// Supports constructor calls for sync primitives that require heap allocation.
 fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Expr) -> crate::ir::GlobalInit {
-    use crate::ir::GlobalInit;
+    use crate::ir::{GlobalInit, GlobalInitArg};
     use crate::parser::ast::Expr;
 
-    // Handle primitive-type statics with literal initializers.
+    // Handle primitive-type statics with literal initializers. These are
+    // compile-time constants — encode as `Bytes` (8-byte LE for int / float;
+    // 1-byte for bool). String literals need a runtime call into
+    // `gorget_str_from_literal` to wrap raw text + length into a `Str`
+    // struct, so they go through the `Extern` path.
     match expr {
-        Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(n.to_string()),
-        Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("{f}")),
-        Expr::BoolLiteral(b) => return GlobalInit::RuntimeCall(if *b { "true" } else { "false" }.to_string()),
+        Expr::IntLiteral(n) => return GlobalInit::Bytes((*n as i64).to_le_bytes().to_vec()),
+        Expr::FloatLiteral(f) => return GlobalInit::Bytes(f.to_le_bytes().to_vec()),
+        Expr::BoolLiteral(b) => return GlobalInit::Bytes(vec![if *b { 1 } else { 0 }]),
         Expr::StringLiteral(s, _) => {
-            // Str is just {const char*, size_t} — no heap allocation needed.
+            // Str is `{ const char*, size_t }` — runtime wrapper turns
+            // the text + length pair into the static struct.
             let text = s.as_plain_text();
-            let escaped = text.replace('\\', "\\\\").replace('"', "\\\"")
-                .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
-            return GlobalInit::RuntimeCall(
-                format!("gorget_str_from_literal(\"{escaped}\", {})", text.len())
-            );
+            let len = text.len() as i64;
+            return GlobalInit::Extern {
+                name: "gorget_str_from_literal".to_string(),
+                args: vec![GlobalInitArg::StrLit(text), GlobalInitArg::Int(len)],
+            };
         }
         // Negative literals: parsed as UnaryOp { op: Neg, operand: IntLiteral/FloatLiteral }
         Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
             match &operand.node {
-                Expr::IntLiteral(n) => return GlobalInit::RuntimeCall(format!("-{n}")),
-                Expr::FloatLiteral(f) => return GlobalInit::RuntimeCall(format!("-{f}")),
+                Expr::IntLiteral(n) => return GlobalInit::Bytes((-(*n as i64)).to_le_bytes().to_vec()),
+                Expr::FloatLiteral(f) => return GlobalInit::Bytes((-f).to_le_bytes().to_vec()),
                 _ => {}
             }
         }
@@ -1791,84 +1796,115 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
 
     // Constructor syntax: TypeName(args...) is parsed as StructLiteral.
     // Fallback: plain function Call (e.g. from explicit call-style expressions).
-    let (callee_name, literal_args): (&str, Vec<String>) = match expr {
+    let (callee_name, arg_inits): (&str, Vec<GlobalInitArg>) = match expr {
         Expr::StructLiteral { name, args, .. } => {
-            let largs = args.iter().map(|a| eval_literal_arg(&a.node)).collect();
-            (name.node.as_str(), largs)
+            let inits = args.iter().filter_map(|a| literal_to_global_init_arg(&a.node)).collect();
+            (name.node.as_str(), inits)
         }
         Expr::Call { callee, args, .. } => {
             let cname = match &callee.node {
                 Expr::Identifier(n) => n.as_str(),
                 _ => return GlobalInit::Zeroed,
             };
-            let largs = args.iter().map(|a| eval_literal_arg(&a.node.value.node)).collect();
-            (cname, largs)
+            let inits = args.iter().filter_map(|a| literal_to_global_init_arg(&a.node.value.node)).collect();
+            (cname, inits)
         }
         _ => return GlobalInit::Zeroed,
     };
 
-    // Dispatch by type/callee name
-    let c_call = match type_name {
-        "AtomicInt" if callee_name == "AtomicInt" => {
-            let n = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
-            format!("gorget_atomic_int_new({n})")
-        }
+    // Dispatch by type/callee name. Each arm builds a typed `Extern { name, args }`
+    // — backends consume the structure directly. New runtime ctors plug in by
+    // adding a new arm; nothing here speaks C syntax.
+    let extern_init = match type_name {
+        "AtomicInt" if callee_name == "AtomicInt" => GlobalInit::Extern {
+            name: "gorget_atomic_int_new".to_string(),
+            args: vec![arg_inits.first().cloned().unwrap_or(GlobalInitArg::Int(0))],
+        },
         "AtomicBool" if callee_name == "AtomicBool" => {
-            let b = literal_args.first().map(|s| if s == "true" { "1" } else { "0" }.to_string())
-                          .unwrap_or_else(|| "0".to_string());
-            format!("gorget_atomic_bool_new({b})")
+            // `gorget_atomic_bool_new(int)` — backends render Bool as the
+            // matching 0/1 int literal.
+            let b = match arg_inits.first() {
+                Some(GlobalInitArg::Bool(true)) => GlobalInitArg::Int(1),
+                Some(GlobalInitArg::Bool(false)) | None => GlobalInitArg::Int(0),
+                Some(other) => other.clone(),
+            };
+            GlobalInit::Extern {
+                name: "gorget_atomic_bool_new".to_string(),
+                args: vec![b],
+            }
         }
-        "Barrier" if callee_name == "Barrier" => {
-            let n = literal_args.first().cloned().unwrap_or_else(|| "1".to_string());
-            format!("gorget_barrier_new({n})")
-        }
-        "CondVar" if callee_name == "CondVar" => {
-            "gorget_condvar_new()".to_string()
-        }
+        "Barrier" if callee_name == "Barrier" => GlobalInit::Extern {
+            name: "gorget_barrier_new".to_string(),
+            args: vec![arg_inits.first().cloned().unwrap_or(GlobalInitArg::Int(1))],
+        },
+        "CondVar" if callee_name == "CondVar" => GlobalInit::Extern {
+            name: "gorget_condvar_new".to_string(),
+            args: vec![],
+        },
         "Mutex" if callee_name == "Mutex" => {
-            // Determine element C type from the generic arg
             let elem_c = generic_elem_c_type(ty);
-            let v = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
-            format!("Mutex__{elem_c}__new({v})")
+            GlobalInit::Extern {
+                name: format!("Mutex__{elem_c}__new"),
+                args: vec![arg_inits.first().cloned().unwrap_or(GlobalInitArg::Int(0))],
+            }
         }
         "RWLock" if callee_name == "RWLock" => {
             let elem_c = generic_elem_c_type(ty);
-            let v = literal_args.first().cloned().unwrap_or_else(|| "0".to_string());
-            format!("RWLock__{elem_c}__new({v})")
+            GlobalInit::Extern {
+                name: format!("RWLock__{elem_c}__new"),
+                args: vec![arg_inits.first().cloned().unwrap_or(GlobalInitArg::Int(0))],
+            }
         }
         // Collections: Dict, HashMap, Vector need runtime heap allocation.
         "Dict" if callee_name == "Dict" => {
             let key_c = generic_elem_c_type(ty);
+            let val_c = generic_nth_c_type(ty, 1);
             if key_c == "GorgetString" {
-                // String-keyed dict uses the optimized str constructor
-                let val_c = generic_nth_c_type(ty, 1);
-                format!("gorget_dict_new_str(sizeof({val_c}))")
+                GlobalInit::Extern {
+                    name: "gorget_dict_new_str".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(val_c)],
+                }
             } else {
-                let val_c = generic_nth_c_type(ty, 1);
-                format!("gorget_dict_new(sizeof({key_c}), sizeof({val_c}))")
+                GlobalInit::Extern {
+                    name: "gorget_dict_new".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(key_c), GlobalInitArg::Sizeof(val_c)],
+                }
             }
         }
         "HashMap" if callee_name == "HashMap" => {
             let key_c = generic_elem_c_type(ty);
+            let val_c = generic_nth_c_type(ty, 1);
             if key_c == "GorgetString" {
-                let val_c = generic_nth_c_type(ty, 1);
-                format!("gorget_map_new_str(sizeof({val_c}))")
+                GlobalInit::Extern {
+                    name: "gorget_map_new_str".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(val_c)],
+                }
             } else {
-                let val_c = generic_nth_c_type(ty, 1);
-                format!("gorget_map_new(sizeof({key_c}), sizeof({val_c}))")
+                GlobalInit::Extern {
+                    name: "gorget_map_new".to_string(),
+                    args: vec![GlobalInitArg::Sizeof(key_c), GlobalInitArg::Sizeof(val_c)],
+                }
             }
         }
         "Vector" if callee_name == "Vector" => {
             let elem_c = generic_elem_c_type(ty);
-            format!("gorget_array_new(sizeof({elem_c}))")
+            GlobalInit::Extern {
+                name: "gorget_array_new".to_string(),
+                args: vec![GlobalInitArg::Sizeof(elem_c)],
+            }
         }
-        // Standard-handle getters from std.io — turn the zero-arg
-        // `_stdout_handle()` / `_stderr_handle()` / `_stdin_handle()`
-        // extern calls into their C-side emitters so the `File` static
-        // global gets a live `GorgetFile` at program start.
-        "File" if callee_name == "_stdout_handle" => "gorget_stdout_handle()".to_string(),
-        "File" if callee_name == "_stderr_handle" => "gorget_stderr_handle()".to_string(),
-        "File" if callee_name == "_stdin_handle"  => "gorget_stdin_handle()".to_string(),
+        // Standard-handle getters from std.io — zero-arg externs that the
+        // backends call at main()'s prologue to give the `File` global a
+        // live `GorgetFile` handle.
+        "File" if callee_name == "_stdout_handle" => GlobalInit::Extern {
+            name: "gorget_stdout_handle".to_string(), args: vec![],
+        },
+        "File" if callee_name == "_stderr_handle" => GlobalInit::Extern {
+            name: "gorget_stderr_handle".to_string(), args: vec![],
+        },
+        "File" if callee_name == "_stdin_handle" => GlobalInit::Extern {
+            name: "gorget_stdin_handle".to_string(), args: vec![],
+        },
         _ => {
             // Generic struct constructor: if callee matches the type name and all
             // args are literals, emit a typed compile-time `Struct` initializer
@@ -1902,26 +1938,30 @@ fn eval_static_init(ty: &crate::parser::ast::Type, expr: &crate::parser::ast::Ex
         }
     };
 
-    GlobalInit::RuntimeCall(c_call)
+    extern_init
 }
 
-/// Evaluate a simple literal expression to a C string for use in static initializers.
-fn eval_literal_arg(expr: &crate::parser::ast::Expr) -> String {
+// `eval_literal_arg` (string-based literal formatting) was retired
+// alongside `RuntimeCall(String)` — `literal_to_global_init_arg` now
+// produces typed `GlobalInitArg` values directly.
+
+/// Lower a literal expression to a `GlobalInitArg` for use in a typed
+/// `GlobalInit::Extern { name, args }`. Returns `None` for non-literal
+/// exprs (the constructor falls back to `GlobalInit::Zeroed` upstream).
+fn literal_to_global_init_arg(expr: &crate::parser::ast::Expr) -> Option<crate::ir::GlobalInitArg> {
     use crate::parser::ast::Expr;
+    use crate::ir::GlobalInitArg;
     match expr {
-        Expr::IntLiteral(n) => n.to_string(),
-        Expr::FloatLiteral(f) => f.to_string(),
-        Expr::BoolLiteral(b) => if *b { "1".to_string() } else { "0".to_string() },
-        Expr::StringLiteral(s, _) => format!("\"{}\"", s.as_plain_text()),
-        // Negative literals: -5, -3.14
-        Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => {
-            match &operand.node {
-                Expr::IntLiteral(n) => format!("-{n}"),
-                Expr::FloatLiteral(f) => format!("-{f}"),
-                _ => "0".to_string(),
-            }
-        }
-        _ => "0".to_string(),
+        Expr::IntLiteral(n) => Some(GlobalInitArg::Int(*n as i64)),
+        Expr::FloatLiteral(f) => Some(GlobalInitArg::Float(*f)),
+        Expr::BoolLiteral(b) => Some(GlobalInitArg::Bool(*b)),
+        Expr::StringLiteral(s, _) => Some(GlobalInitArg::StrLit(s.as_plain_text())),
+        Expr::UnaryOp { op: crate::parser::ast::UnaryOp::Neg, operand } => match &operand.node {
+            Expr::IntLiteral(n) => Some(GlobalInitArg::Int(-(*n as i64))),
+            Expr::FloatLiteral(f) => Some(GlobalInitArg::Float(-f)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

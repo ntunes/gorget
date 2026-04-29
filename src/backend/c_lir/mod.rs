@@ -62,6 +62,42 @@ const LIR_NAMED_STRUCTS: &[&str] = &[
 ];
 
 /// Maps LIR struct names to their runtime C names when they differ.
+/// Render a `LirGlobalInitArg` as a C expression. `orig_to_lir` remaps
+/// any user-type names embedded in `Sizeof` / `AddrOfInline` to their
+/// LIR-mangled spelling — `Counter` → `__gg_Counter` etc., consistent
+/// with the rest of the C-output type renaming.
+fn render_global_init_arg_c(
+    out: &mut String,
+    arg: &crate::lir::LirGlobalInitArg,
+    orig_to_lir: &[(String, String)],
+) {
+    use crate::lir::LirGlobalInitArg;
+    use std::fmt::Write;
+    let lir_name = |orig: &str| -> String {
+        orig_to_lir.iter().find(|(o, _)| o == orig).map(|(_, l)| l.clone())
+            .unwrap_or_else(|| orig.to_string())
+    };
+    match arg {
+        LirGlobalInitArg::Int(n) => write!(out, "{n}LL").unwrap(),
+        LirGlobalInitArg::Float(x) => write!(out, "{x}").unwrap(),
+        LirGlobalInitArg::Bool(b) => write!(out, "{}", if *b { "1" } else { "0" }).unwrap(),
+        LirGlobalInitArg::Sizeof(t) => write!(out, "sizeof({})", lir_name(t)).unwrap(),
+        LirGlobalInitArg::StrLit(s) => {
+            // Same escaping shape as `eval_static_init` used to apply
+            // before the typed lift — \\ first to avoid double-escaping.
+            let escaped = s
+                .replace('\\', "\\\\").replace('"', "\\\"")
+                .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t");
+            write!(out, "\"{escaped}\"").unwrap();
+        }
+        LirGlobalInitArg::AddrOfInline { c_type, value } => {
+            write!(out, "&({}){{", lir_name(c_type)).unwrap();
+            render_global_init_arg_c(out, value, orig_to_lir);
+            write!(out, "}}").unwrap();
+        }
+    }
+}
+
 fn lir_to_runtime_name(name: &str) -> Option<&'static str> {
     match name {
         "GorgetString" => Some("Str"),
@@ -1659,15 +1695,16 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             })
             .collect();
         for (gid, g) in module.globals.iter().enumerate() {
-            if let LirGlobalInit::RuntimeCall(expr) = &g.init {
-                let mut rewritten = expr.clone();
-                for (orig, lir_name) in &orig_to_lir {
-                    rewritten = rewritten.replace(
-                        &format!("({orig}){{"),
-                        &format!("({lir_name}){{"),
-                    );
+            if let LirGlobalInit::Extern { name, args } = &g.init {
+                let mut expr = String::new();
+                use std::fmt::Write;
+                write!(expr, "{name}(").unwrap();
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 { write!(expr, ", ").unwrap(); }
+                    render_global_init_arg_c(&mut expr, arg, &orig_to_lir);
                 }
-                writeln!(out, "    __lir_g{gid} = {rewritten};").unwrap();
+                write!(expr, ")").unwrap();
+                writeln!(out, "    __lir_g{gid} = {expr};").unwrap();
             }
         }
     }

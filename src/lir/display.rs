@@ -73,7 +73,14 @@ fn write_global_init(f: &mut fmt::Formatter<'_>, init: &LirGlobalInit) -> fmt::R
         LirGlobalInit::Zeroed => write!(f, " = zeroed"),
         LirGlobalInit::Bytes(bytes) => write!(f, " = bytes[{}]", bytes.len()),
         LirGlobalInit::FuncAddr(fid) => write!(f, " = {fid}"),
-        LirGlobalInit::RuntimeCall(expr) => write!(f, " = runtime_call({expr})"),
+        LirGlobalInit::Extern { name, args } => {
+            write!(f, " = extern {name}(")?;
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 { write!(f, ", ")?; }
+                write_global_init_arg(f, arg)?;
+            }
+            write!(f, ")")
+        }
         LirGlobalInit::Struct { struct_id, fields } => {
             write!(f, " = {struct_id} {{")?;
             for (i, field) in fields.iter().enumerate() {
@@ -83,6 +90,22 @@ fn write_global_init(f: &mut fmt::Formatter<'_>, init: &LirGlobalInit) -> fmt::R
                 write_global_init(f, field)?;
             }
             write!(f, " }}")
+        }
+    }
+}
+
+fn write_global_init_arg(f: &mut fmt::Formatter<'_>, arg: &crate::lir::LirGlobalInitArg) -> fmt::Result {
+    use crate::lir::LirGlobalInitArg;
+    match arg {
+        LirGlobalInitArg::Int(n) => write!(f, "{n}"),
+        LirGlobalInitArg::Float(x) => write!(f, "{x}"),
+        LirGlobalInitArg::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
+        LirGlobalInitArg::Sizeof(t) => write!(f, "sizeof({t})"),
+        LirGlobalInitArg::StrLit(s) => write!(f, "{:?}", s),
+        LirGlobalInitArg::AddrOfInline { c_type, value } => {
+            write!(f, "&({c_type}){{")?;
+            write_global_init_arg(f, value)?;
+            write!(f, "}}")
         }
     }
 }

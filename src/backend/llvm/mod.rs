@@ -1102,9 +1102,10 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 writeln!(out, "@__lir_g{i} = {linkage} {sty} {{ {} }} ; {}",
                     field_vals.join(", "), global.name).unwrap();
             }
-            LirGlobalInit::RuntimeCall(_expr) => {
-                // Runtime-initialized globals need a constructor. For now, zero-init
-                // and we'll add @llvm.global_ctors later.
+            LirGlobalInit::Extern { .. } => {
+                // Runtime-initialized globals are populated by a call
+                // emitted at main()'s prologue (`emit_global_runtime_init`).
+                // The declaration zero-inits the slot.
                 writeln!(out, "@__lir_g{i} = {linkage} {ty} zeroinitializer ; {} (runtime init)", global.name).unwrap();
             }
         }
@@ -1245,9 +1246,9 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         writeln!(out, "declare i32 @gorget_channel_recv_timeout(ptr, ptr, i64)").unwrap();
     }
     // Runtime constructors — used for static global initialization
-    // (LirGlobalInit::RuntimeCall). Only declare if not already in module.externs
+    // (LirGlobalInit::Extern). Only declare if not already in module.externs
     // or already declared above in hof_decls.
-    let has_runtime_init = module.globals.iter().any(|g| matches!(&g.init, crate::lir::LirGlobalInit::RuntimeCall(_)));
+    let has_runtime_init = module.globals.iter().any(|g| matches!(&g.init, crate::lir::LirGlobalInit::Extern { .. }));
     if has_runtime_init {
         let existing_externs: std::collections::HashSet<&str> = module.externs.iter().map(|e| e.name.as_str()).collect();
         let hof_names: std::collections::HashSet<&str> = hof_decls.iter().map(|(n, _)| *n).collect();
@@ -1260,29 +1261,31 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             ("gorget_dict_new_str",   "declare void @gorget_dict_new_str(ptr sret(%GorgetMap), i64)"),
             ("gorget_set_new",        "declare void @gorget_set_new(ptr sret(%GorgetSet), i64)"),
             ("gorget_set_new_str",    "declare void @gorget_set_new_str(ptr sret(%GorgetSet))"),
+            // String-from-literal: takes (const char* data, size_t len) and
+            // returns a 32-byte GorgetString via sret. Used by
+            // `static String s = "..."` inits.
+            ("gorget_str_from_literal", "declare void @gorget_str_from_literal(ptr sret(%GorgetString), ptr, i64)"),
         ];
         for (fn_name, decl) in runtime_init_fns {
             if !existing_externs.contains(*fn_name) && !hof_names.contains(*fn_name) {
                 writeln!(out, "{decl}").unwrap();
             }
         }
-        // Also declare any other functions referenced in RuntimeCall expressions
-        // that aren't already covered (e.g. gorget_mutex_new, gorget_atomic_int_new).
+        // Declare any other extern referenced in `Extern { name, args }`
+        // (gorget_mutex_new, gorget_atomic_int_new, gorget_str_from_literal,
+        // …). Default signature: `i64 fn(...args)` — backends downstream
+        // override return types via `ext.return_type` when there's a
+        // matching LirExtern.
         let known_init_fns: std::collections::HashSet<&str> = runtime_init_fns.iter().map(|(n, _)| *n).collect();
         for global in &module.globals {
-            if let crate::lir::LirGlobalInit::RuntimeCall(expr) = &global.init {
-                if let Some(paren) = expr.find('(') {
-                    let fn_name = &expr[..paren];
-                    if !existing_externs.contains(fn_name) && !hof_names.contains(fn_name)
-                        && !known_init_fns.contains(fn_name) {
-                        // Parse arg count from expression to determine declaration
-                        let args_str = &expr[paren+1..];
-                        let args_str = args_str.strip_suffix(')').unwrap_or(args_str);
-                        let n_args = if args_str.trim().is_empty() { 0 }
-                            else { args_str.split(',').count() };
-                        let params: Vec<&str> = (0..n_args).map(|_| "i64").collect();
-                        writeln!(out, "declare i64 @{fn_name}({})", params.join(", ")).unwrap();
-                    }
+            if let crate::lir::LirGlobalInit::Extern { name, args } = &global.init {
+                if !existing_externs.contains(name.as_str())
+                    && !hof_names.contains(name.as_str())
+                    && !known_init_fns.contains(name.as_str())
+                {
+                    let n_args = args.len();
+                    let params: Vec<&str> = (0..n_args).map(|_| "i64").collect();
+                    writeln!(out, "declare i64 @{name}({})", params.join(", ")).unwrap();
                 }
             }
         }
@@ -1565,43 +1568,13 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
 }
 
 // ── Global Runtime Init ───────────────────────────────────────────────────
-
-/// Emit LLVM IR to initialize a RuntimeCall global at the start of main().
-/// The C expression (e.g. "gorget_array_new(sizeof(int64_t))") is parsed to
-/// extract the function name and i64 sizeof arguments.
-/// A parsed arg from a RuntimeCall expression.
-enum RuntimeInitArg {
-    /// Plain i64 constant (from `sizeof(T)` or numeric literals).
-    Int(u64),
-    /// `&(T){val}` — address of an inline T holding `val`. Emits an alloca
-    /// of type T, stores val, passes the ptr. `type_name` is the C type.
-    AddrOfInline { type_name: String, value_expr: String },
-}
-
-/// Split `args_str` at top-level commas (ignoring those inside parens/braces).
-fn split_top_level_args(s: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0usize;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' | '{' | '[' => depth += 1,
-            ')' | '}' | ']' => depth -= 1,
-            ',' if depth == 0 => {
-                out.push(s[start..i].trim().to_string());
-                start = i + 1;
-            }
-            _ => {}
-        }
-    }
-    if start < s.len() {
-        let rest = s[start..].trim();
-        if !rest.is_empty() {
-            out.push(rest.to_string());
-        }
-    }
-    out
-}
+//
+// `LirGlobalInit::Extern { name, args }` is consumed directly here — no
+// string parsing of C expressions, no name extraction. The `args` slice
+// is iterated and each `LirGlobalInitArg` rendered to its LLVM IR form
+// via `emit_global_init_arg_llvm`. Sizeof / AddrOfInline / StrLit each
+// have their own materialization (constant fold, alloca-store, intern
+// into the module-level `@.str.N` table respectively).
 
 /// Pick the C-runtime arg-emitter helper name for a parameter type.
 /// Mirrors `c_lir::helpers::lir_trace_formatter` but routes through the
@@ -1661,99 +1634,59 @@ fn nth_printf_spec(fmt: &str, n: usize) -> Option<String> {
     None
 }
 
-// `parse_compound_literal` and `parse_compound_literal_field` were
-// removed — `eval_static_init` now emits compile-time `Struct`
-// initializers for `(T){f0, ...}` patterns, picked up at
-// `emit_globals` rather than reverse-engineered out of a string at
-// `emit_global_runtime_init`.
+// `parse_compound_literal`, `parse_compound_literal_field`,
+// `RuntimeInitArg`, `parse_runtime_init_arg`, and `split_top_level_args`
+// were all removed when `GlobalInit::RuntimeCall(String)` got replaced
+// with the typed `Extern { name, args }` shape. All consumed in
+// `emit_global_init_arg_llvm` directly off `LirGlobalInitArg`.
 
-fn parse_runtime_init_arg(s: &str) -> RuntimeInitArg {
-    let s = s.trim();
-    if let Some(inner) = s.strip_prefix("sizeof(").and_then(|s| s.strip_suffix(')')) {
-        return RuntimeInitArg::Int(c_sizeof_name(inner) as u64);
-    }
-    // `&(TYPE){VAL}` — compound literal address.
-    if let Some(rest) = s.strip_prefix("&(") {
-        if let Some(type_end) = rest.find(')') {
-            let type_name = rest[..type_end].to_string();
-            let rest = &rest[type_end + 1..];
-            if let Some(val) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-                return RuntimeInitArg::AddrOfInline {
-                    type_name,
-                    value_expr: val.trim().to_string(),
-                };
-            }
-        }
-    }
-    if let Ok(n) = s.parse::<u64>() {
-        return RuntimeInitArg::Int(n);
-    }
-    // Fallback — treat as i64 0 so we at least produce valid IR.
-    RuntimeInitArg::Int(0)
-}
-
-fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &HashMap<u32, String>, module: &LirModule) {
-    // Compound-literal init `(TypeName){f0, ...}` used to ship through
-    // here as a `RuntimeCall` string the LLVM backend had to parse.
-    // Now `eval_static_init` emits compile-time `Struct` initializers
-    // for those, picked up at the global declaration in `emit_globals`
-    // (no main-prologue stores needed). This function only handles
-    // genuine extern-call inits like `gorget_dict_new(sizeof(K), ...)`.
-
-    // Parse: "func_name(arg1, arg2, ...)" where args are sizeof(TYPE), numbers,
-    // or `&(TYPE){VAL}` compound literal addresses.
-    let (fn_name, args_str) = if let Some(paren) = expr.find('(') {
-        let name = &expr[..paren];
-        // Strip outer parentheses: "func(a, b)" → "a, b"
-        let rest = &expr[paren+1..];
-        let args = rest.strip_suffix(')').unwrap_or(rest);
-        (name, args)
-    } else {
-        return; // Can't parse, skip
-    };
-
-    let parsed_args: Vec<RuntimeInitArg> = split_top_level_args(args_str)
-        .iter()
-        .map(|a| parse_runtime_init_arg(a))
-        .collect();
-
-    // Emit any AddrOfInline prelude allocas + store, then build the arg list.
+fn emit_global_runtime_init(
+    out: &mut String,
+    gid: usize,
+    fn_name: &str,
+    args: &[crate::lir::LirGlobalInitArg],
+    snames: &HashMap<u32, String>,
+    module: &LirModule,
+    str_globals: &mut StrGlobals,
+) {
+    // Render each arg into LLVM IR. `AddrOfInline` allocates a temporary,
+    // stores the value, and passes its pointer; `StrLit` interns into the
+    // module-level `@.str.X` table and passes the address; everything
+    // else flows as an immediate operand.
     let mut arg_strs: Vec<String> = Vec::new();
-    for (i, arg) in parsed_args.iter().enumerate() {
-        match arg {
-            RuntimeInitArg::Int(n) => arg_strs.push(format!("i64 {n}")),
-            RuntimeInitArg::AddrOfInline { type_name, value_expr } => {
-                let ty = c_type_to_llvm(type_name);
-                let tmp = format!("__ginit_{gid}_a{i}");
-                writeln!(out, "  %{tmp} = alloca {ty}").unwrap();
-                // Parse value: integer or float literal.
-                let val_str = if ty.starts_with('i') {
-                    value_expr.parse::<i64>().map(|n| format!("{n}")).unwrap_or_else(|_| "0".to_string())
-                } else {
-                    // Float bit encoding — fadd-style hex constants.
-                    value_expr.parse::<f64>().map(|v| format!("0x{:016X}", v.to_bits())).unwrap_or_else(|_| "0.0".to_string())
-                };
-                writeln!(out, "  store {ty} {val_str}, ptr %{tmp}").unwrap();
-                arg_strs.push(format!("ptr %{tmp}"));
-            }
-        }
+    for (i, arg) in args.iter().enumerate() {
+        emit_global_init_arg_llvm(out, gid, i, arg, snames, str_globals, &mut arg_strs);
     }
 
-    // Determine return type from function name
-    let (ret_struct_name, ret_llvm) = if fn_name.contains("map") || fn_name.contains("dict") || fn_name.contains("set") {
+    // Determine return type from function name. Aggregate-returning ctors
+    // (`GorgetMap` / `GorgetArray` / `GorgetSet` / `GorgetString`) need
+    // sret + memcpy; scalar-returning ones (`gorget_atomic_int_new`,
+    // `gorget_stdout_handle`, `gorget_mutex_new`, …) call as `i64` and
+    // store the result directly. Heuristic: explicit allow-list for the
+    // canonical names, then suffix-based fallback for monomorphized
+    // wrappers (`Mutex__T__new` etc.).
+    let (ret_struct_name, ret_llvm) = if matches!(fn_name,
+        "gorget_dict_new" | "gorget_dict_new_str"
+        | "gorget_map_new"  | "gorget_map_new_str"
+        | "gorget_set_new"  | "gorget_set_new_str"
+    ) {
         ("GorgetMap", "%GorgetMap")
-    } else if fn_name.contains("array") {
+    } else if matches!(fn_name,
+        "gorget_array_new" | "gorget_array_with_capacity"
+    ) {
         ("GorgetArray", "%GorgetArray")
-    } else if fn_name.contains("string") {
+    } else if matches!(fn_name,
+        "gorget_str_from_literal" | "gorget_string_clone" | "gorget_int_to_str" | "gorget_float_to_str"
+    ) {
         ("GorgetString", "%GorgetString")
     } else {
-        // Unknown — just call it with raw i64 return
+        // Pointer-sized scalar return (handle, atomic, mutex, …).
         writeln!(out, "  %__ginit_{gid}_raw = call i64 @{fn_name}({})", arg_strs.join(", ")).unwrap();
         writeln!(out, "  store i64 %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
         return;
     };
 
-    // Emit sret call → memcpy to global
+    // sret-returning ctor: alloca + memcpy into the global slot.
     let sz = sizeof_struct_by_name(ret_struct_name, module, snames);
     writeln!(out, "  %__ginit_{gid} = alloca {ret_llvm}").unwrap();
     let sret_arg = format!("ptr sret({ret_llvm}) %__ginit_{gid}");
@@ -1764,6 +1697,49 @@ fn emit_global_runtime_init(out: &mut String, gid: usize, expr: &str, snames: &H
     };
     writeln!(out, "  call void @{fn_name}({all_args})").unwrap();
     writeln!(out, "  call ptr @memcpy(ptr @__lir_g{gid}, ptr %__ginit_{gid}, i64 {sz})").unwrap();
+}
+
+/// Render one `LirGlobalInitArg` into LLVM IR. Pushes the typed-arg
+/// fragment (e.g. `"i64 8"`, `"ptr %__ginit_0_a1"`, `"ptr @.str.N"`) into
+/// `arg_strs`. `AddrOfInline` requires writing prelude lines (alloca +
+/// store), `StrLit` interns into the module-level string table.
+fn emit_global_init_arg_llvm(
+    out: &mut String,
+    gid: usize,
+    i: usize,
+    arg: &crate::lir::LirGlobalInitArg,
+    _snames: &HashMap<u32, String>,
+    str_globals: &mut StrGlobals,
+    arg_strs: &mut Vec<String>,
+) {
+    use crate::lir::LirGlobalInitArg;
+    match arg {
+        LirGlobalInitArg::Int(n) => arg_strs.push(format!("i64 {n}")),
+        LirGlobalInitArg::Float(x) => arg_strs.push(format!("double 0x{:016X}", x.to_bits())),
+        LirGlobalInitArg::Bool(b) => arg_strs.push(format!("i64 {}", if *b { 1 } else { 0 })),
+        LirGlobalInitArg::Sizeof(t) => arg_strs.push(format!("i64 {}", c_sizeof_name(t))),
+        LirGlobalInitArg::StrLit(s) => {
+            // Intern into the module-level `@.str.N` table — it's already
+            // emitted at module-scope by `emit_string_globals`. Pass the
+            // address; the matching `Int(len)` arg from the producer
+            // carries the length.
+            let idx = str_globals.intern(s);
+            arg_strs.push(format!("ptr @.str.{idx}"));
+        }
+        LirGlobalInitArg::AddrOfInline { c_type, value } => {
+            let ty = c_type_to_llvm(c_type);
+            let tmp = format!("__ginit_{gid}_a{i}");
+            writeln!(out, "  %{tmp} = alloca {ty}").unwrap();
+            let val_str = match value.as_ref() {
+                LirGlobalInitArg::Int(n) => format!("{n}"),
+                LirGlobalInitArg::Float(f) => format!("0x{:016X}", f.to_bits()),
+                LirGlobalInitArg::Bool(b) => format!("{}", if *b { 1 } else { 0 }),
+                _ => "0".to_string(),
+            };
+            writeln!(out, "  store {ty} {val_str}, ptr %{tmp}").unwrap();
+            arg_strs.push(format!("ptr %{tmp}"));
+        }
+    }
 }
 
 /// Map a C type name to its LLVM type.
@@ -2272,8 +2248,8 @@ fn emit_function(
         // Emit runtime initializers for static globals that require constructor calls.
         // The C LIR backend emits these at the start of main(); LLVM does the same.
         for (gid, global) in module.globals.iter().enumerate() {
-            if let crate::lir::LirGlobalInit::RuntimeCall(expr) = &global.init {
-                emit_global_runtime_init(out, gid, expr, snames, module);
+            if let crate::lir::LirGlobalInit::Extern { name, args } = &global.init {
+                emit_global_runtime_init(out, gid, name, args, snames, module, str_globals);
             }
         }
     }
