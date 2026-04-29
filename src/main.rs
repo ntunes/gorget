@@ -1067,6 +1067,13 @@ fn compile_llvm_pipeline(
         || lir_module.externs.iter().any(|e| e.name.contains("gorget_bytes")) {
         runtime_src.push_str(c_runtime::BYTES_RUNTIME);
     }
+    // Trace runtime — needed when the LIR module carries a trace filename
+    // (set by `directive trace` or the `--trace` CLI flag). The C backend
+    // pulls this in through `emit_runtime_modules`; the LLVM build path
+    // composes its runtime manually here, so mirror that conditional.
+    if lir_module.trace_filename.is_some() {
+        runtime_src.push_str(c_runtime::TRACE_RUNTIME);
+    }
     let needs_sqlite = lir_module.externs.iter().any(|e| e.name.starts_with("gorget_sqlite_") || e.name == "sqlite_open");
     // Test/bench modules need the alloc report runtime for panic handler globals.
     if lir_module.is_test_module || !lir_module.test_fns.is_empty() || !lir_module.bench_fns.is_empty() {

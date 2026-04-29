@@ -1067,6 +1067,25 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare ptr @memcpy(ptr, ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_init_args(i32, ptr)").unwrap();
     writeln!(out, "declare void @gorget_panic(ptr)").unwrap();
+    // Trace runtime — declared unconditionally; the linker drops unused
+    // declares. Provides the envelope emitters used at function entry,
+    // block entry/exit, and branch/return points when `directive trace`
+    // or `--trace` is active. Defined in `c_runtime::TRACE_RUNTIME`,
+    // included in the LLVM build's runtime .c when `module.trace_filename`
+    // is set (`src/main.rs::compile_llvm_pipeline`).
+    if module.trace_filename.is_some() {
+        writeln!(out, "declare void @__gorget_trace_init(ptr)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_call_begin(ptr)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_call_end()").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_arg_int(ptr, i32, i64)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_arg_float(ptr, i32, double)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_arg_bool(ptr, i32, i32)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_arg_str(ptr, i32, ptr)").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_stmt_start()").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_stmt_end()").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_branch()").unwrap();
+        writeln!(out, "declare void @__gorget_trace_emit_return(ptr)").unwrap();
+    }
     // String comparison — declared with precise C ABI return types.
     // gorget_str_eq returns bool (i1), gorget_str_cmp returns int (i32, NOT i64!).
     // On aarch64, 'mov w0, -1' zero-extends to x0=0xFFFFFFFF; must call as i32 + sext.
@@ -1511,6 +1530,40 @@ fn split_top_level_args(s: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Pick the C-runtime arg-emitter helper name for a parameter type.
+/// Mirrors `c_lir::helpers::lir_trace_formatter` but routes through the
+/// bundled `__gorget_trace_emit_arg_*` helpers (defined in TRACE_RUNTIME)
+/// so each LLVM call site is a single `call void @...(name, first, val)`
+/// rather than a name-then-value pair.
+///
+/// Returns `(helper_name, llvm_arg_ty)`. `llvm_arg_ty` is the LLVM type
+/// the LLVM backend should pass the parameter as (e.g. `i64` for ints,
+/// `double` for floats, `ptr` for Str). Bool params come in as `i1`,
+/// the helper takes `int`, so the caller must `zext` first — caller
+/// inspects the type tag if the returned ty is `i32` to know to zext.
+fn trace_arg_emitter(ty: &LirType, snames: &HashMap<u32, String>) -> Option<(&'static str, &'static str)> {
+    match ty {
+        LirType::Bool => Some(("__gorget_trace_emit_arg_bool", "i32")),
+        LirType::F32 | LirType::F64 => Some(("__gorget_trace_emit_arg_float", "double")),
+        LirType::I8 | LirType::I16 | LirType::I32 | LirType::I64
+        | LirType::U8 | LirType::U16 | LirType::U32 | LirType::U64 => {
+            Some(("__gorget_trace_emit_arg_int", "i64"))
+        }
+        LirType::Struct(sid) | LirType::PtrTo(sid) => {
+            let sname = snames.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
+            if sname == "GorgetString" || sname == "Str" {
+                Some(("__gorget_trace_emit_arg_str", "ptr"))
+            } else {
+                // Non-Str aggregates aren't traceable as plain values;
+                // fall back to int (mirrors the C backend).
+                Some(("__gorget_trace_emit_arg_int", "i64"))
+            }
+        }
+        // Ptr / Void / FnPtr — fall back to int rendering.
+        _ => Some(("__gorget_trace_emit_arg_int", "i64")),
+    }
 }
 
 /// Return the `n`-th `%`-prefixed format specifier in a printf format
@@ -2243,12 +2296,72 @@ fn emit_function(
         }
     }
 
+    // Trace runtime: at main()'s prologue, open the trace file. Mirrors
+    // `c_lir/mod.rs:924-927` which emits the same call into the C `main`.
+    let tracing = module.trace_filename.is_some();
+    if tracing {
+        if is_main {
+            if let Some(path) = &module.trace_filename {
+                let path_idx = str_globals.intern(path);
+                writeln!(out, "  call void @__gorget_trace_init(ptr @.str.{path_idx})").unwrap();
+            }
+        }
+        // Function-entry call event — non-main only, mirroring
+        // `c_lir/mod.rs:947-966` which gates the emission on the
+        // `else` arm of `if func.name == "main"`. Display name comes from
+        // `func.display_name` (Gorget-level name, not C-mangled).
+        if !is_main {
+        if let Some(display_name) = &func.display_name {
+            let name_idx = str_globals.intern(display_name);
+            writeln!(out, "  call void @__gorget_trace_emit_call_begin(ptr @.str.{name_idx})").unwrap();
+            for (pi, pty) in func.params.iter().enumerate() {
+                let pname = func.param_names.get(pi)
+                    .and_then(|n| n.as_deref())
+                    .unwrap_or("_");
+                let pname_idx = str_globals.intern(pname);
+                let first = if pi == 0 { 1 } else { 0 };
+                let (helper, arg_ty) = match trace_arg_emitter(pty, snames) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                // Bool params come in as i1 — the helper takes i32, so zext.
+                let val_str = match (pty, arg_ty) {
+                    (LirType::Bool, "i32") => {
+                        let z = format!("trace.argz.{pi}");
+                        writeln!(out, "  %{z} = zext i1 %p{pi} to i32").unwrap();
+                        format!("%{z}")
+                    }
+                    _ => format!("%p{pi}"),
+                };
+                writeln!(out,
+                    "  call void @{helper}(ptr @.str.{pname_idx}, i32 {first}, {arg_ty} {val_str})").unwrap();
+            }
+            writeln!(out, "  call void @__gorget_trace_emit_call_end()").unwrap();
+        }
+        }
+    }
+
     writeln!(out, "  br label %bb0").unwrap();
     writeln!(out).unwrap();
 
     // Emit blocks
     // First, collect predecessor info for phi nodes
     let pred_map = build_predecessor_map(func);
+
+    // Trace: pre-collect which blocks are the `then` target of a Branch.
+    // Those get an extra `branch` event before `stmt_start`. Mirrors the
+    // C backend's `trace_then_blocks` (c_lir/mod.rs:1682).
+    let trace_then_blocks: std::collections::HashSet<u32> = if tracing {
+        func.blocks.iter().filter_map(|b| {
+            if let Term::Branch { then_block, .. } = &b.terminator {
+                Some(then_block.0)
+            } else {
+                None
+            }
+        }).collect()
+    } else {
+        std::collections::HashSet::new()
+    };
 
     // Pre-compute exit labels for each block. Only instructions that create
     // LLVM sub-blocks (overflow/bounds/div checks) change the exit label.
@@ -2491,6 +2604,18 @@ fn emit_function(
             }
         }
 
+        // Trace: branch + stmt_start events. `branch` fires when this block
+        // is the `then` arm of a conditional terminator; `stmt_start` fires
+        // at every block entry. Both emit AFTER phi nodes (LLVM requires
+        // phis to be the leading instructions of a block) and before user
+        // instructions. Mirrors `c_lir/mod.rs:1712-1720`.
+        if tracing && trace_then_blocks.contains(&bid) {
+            writeln!(out, "  call void @__gorget_trace_emit_branch()").unwrap();
+        }
+        if tracing {
+            writeln!(out, "  call void @__gorget_trace_emit_stmt_start()").unwrap();
+        }
+
         // Instructions
         // Track the "current label" — overflow/bounds checks emit internal sub-blocks,
         // changing the effective predecessor label for phi nodes in successor blocks.
@@ -2500,6 +2625,20 @@ fn emit_function(
         for inst in &block.insts {
             emit_inst(out, inst, func, module, snames, str_globals, &val_types, bid, &mut trap_counter, &mut current_label, &mut df_stack);
 
+        }
+
+        // Trace: stmt_end + return events. `stmt_end` fires at the end of
+        // every block; `return` fires before each Ret terminator (non-main
+        // only — main exits via the implicit `ret i32 0` we emit). Mirrors
+        // `c_lir/mod.rs:1750-1763`.
+        if tracing {
+            writeln!(out, "  call void @__gorget_trace_emit_stmt_end()").unwrap();
+            if !is_main && matches!(&block.terminator, Term::Ret(_) | Term::RetVoid) {
+                if let Some(display_name) = &func.display_name {
+                    let name_idx = str_globals.intern(display_name);
+                    writeln!(out, "  call void @__gorget_trace_emit_return(ptr @.str.{name_idx})").unwrap();
+                }
+            }
         }
 
         // Terminator — pre-emit any int-width casts needed for branch args

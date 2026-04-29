@@ -4668,8 +4668,6 @@ custom
 #[test]
 #[serial(trace_test_gg)]
 fn trace_directive() {
-    // Tracing instrumentation isn't wired into the LLVM pipeline yet.
-    if skip_under_llvm() { return; }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/trace_test.gg");
     let dir = fixture_path.parent().unwrap();
@@ -4740,7 +4738,6 @@ fn trace_directive() {
 #[test]
 #[serial(functions_gg)]
 fn trace_cli_flag() {
-    if skip_under_llvm() { return; }
     // Test --trace flag on a file WITHOUT the directive
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/functions.gg");
