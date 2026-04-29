@@ -2754,19 +2754,22 @@ equip Parser:
 
     # Parse a single meta-for loop variable: an identifier or a
     # type-keyword used as one (e.g. `T` is fine, `int` would be too).
+    # `keyword_tag` returns the underlying int — passing the Keyword
+    # enum directly to `*_keyword_name` works under the Rust-compiled
+    # build but emits incompatible-type C under the self-compiled
+    # bootstrap (Keyword is a tagged-union pointer there, not a raw int).
     String parse_meta_for_var_name(&self):
         SpannedToken st = self.advance()
         String n = token_ident(st.lex_token)
         if n != "":
             return n
-        match st.lex_token:
-            case TkKeyword(kw):
-                String tn = type_keyword_name(kw)
-                if tn != "":
-                    return tn
-                return non_type_keyword_name(kw)
-            else:
-                return ""
+        int kw = keyword_tag(st.lex_token)
+        if kw <= 0:
+            return ""
+        String tn = type_keyword_name(kw)
+        if tn != "":
+            return tn
+        return non_type_keyword_name(kw)
 
     Stmt parse_match_stmt(&self):
         int start = self.peek().lex_start

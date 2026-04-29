@@ -5,7 +5,7 @@ from types import TypeTable
 from resolve import resolve_module, ResolveContext
 from typecheck import type_check_module
 from derive import expand_derives
-from meta import expand_meta_types
+from meta import expand_meta_types, expand_meta_for_match
 from lower import lower_module
 from loader import load_imports
 from gir import GirModule
@@ -40,6 +40,7 @@ void main():
     scopes.init()
     TypeTable types = TypeTable.new_type_table()
     expand_meta_types(&m, &types)
+    expand_meta_for_match(&m)
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
