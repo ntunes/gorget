@@ -338,7 +338,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":
                 return types.int_id
-            if method_name == "to_string" or method_name == "to_str" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "slice" or method_name == "substr" or method_name == "format":
+            if method_name == "to_string" or method_name == "to_str" or method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "slice" or method_name == "substr" or method_name == "format" or method_name == "concat" or method_name == "trim_start" or method_name == "trim_end":
                 return types.string_id
             if method_name == "split":
                 int vec_def = scopes.lookup("Vector")
