@@ -1861,12 +1861,18 @@ impl<'a> FuncLowering<'a> {
         if is_map_ctor && is_dict_orig {
             let prefix = if original_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
             if let Some(rest) = original_name.strip_prefix(prefix) {
+                // Track whether this is the `_str` runtime variant — those
+                // ctors pre-wire `key_drop` / `key_clone` for the String
+                // key inside the runtime, so we must NOT emit our own.
+                let is_str_variant = rest.ends_with("__new_str");
                 let rest_stripped = rest.strip_suffix("__new_str")
                     .or_else(|| rest.strip_suffix("__new"))
                     .unwrap_or(rest);
                 if let Some(pos) = rest_stripped.find("__") {
+                    let key_type = &rest_stripped[..pos];
                     let val_type = &rest_stripped[pos + 2..];
-                    // GorgetMap offsets: val_drop=104, val_clone=112, val_materialize=136
+                    // GorgetMap offsets: val_drop=104, val_clone=112,
+                    // key_drop=120, key_clone=128, val_materialize=136.
                     // val_drop: built-in + user recursive types (see elem_drop comment).
                     if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type) {
                         stores.push((104, drop_fn));
@@ -1885,9 +1891,52 @@ impl<'a> FuncLowering<'a> {
                         let clone_name = format!("{val_type}__clone_inplace");
                         stores.push((112, clone_name));
                     }
+                    // key_drop / key_clone for user-defined keys with resource
+                    // fields (`@derive(Drop)` or transitive). Skipped on the
+                    // `_str` variant (runtime handles String key drop) and
+                    // for primitive keys (no `T__drop` exists). The gate
+                    // `recursive_drop_*.contains_key(key_type)` is exactly
+                    // "this user type has a generated `T__drop` function";
+                    // it returns false for `int64_t`, `String`, etc.
+                    if !is_str_variant
+                        && (self.recursive_drop_structs.contains_key(key_type)
+                            || self.recursive_drop_enums.contains_key(key_type))
+                    {
+                        stores.push((120, format!("{key_type}__drop")));
+                        stores.push((128, format!("{key_type}__clone_inplace")));
+                    }
                     if val_type == "GorgetString" {
                         stores.push((136, "gorget_string_materialize_inplace".into()));
                     }
+                }
+            }
+        }
+
+        // ── Set/HashSet constructors (GorgetSet is typedef'd to GorgetMap,
+        // so the same key_drop=120 / key_clone=128 offsets apply). The
+        // element IS the key. The `_str` variant pre-wires String key
+        // handling in the runtime; user-resource elements need explicit
+        // wiring so bucket eviction / set drop frees the held resources.
+        let is_set_ctor = emit_name.starts_with("gorget_set_new")
+            || emit_name.starts_with("gorget_ordered_set_new")
+            || emit_name == "gorget_set_with_capacity";
+        let is_set_orig = original_name.starts_with("Set__")
+            || original_name.starts_with("HashSet__");
+
+        if is_set_ctor && is_set_orig {
+            let prefix = if original_name.starts_with("Set__") { "Set__" } else { "HashSet__" };
+            if let Some(rest) = original_name.strip_prefix(prefix) {
+                let is_str_variant = rest.ends_with("__new_str");
+                let elem_type = rest.strip_suffix("__new_str")
+                    .or_else(|| rest.strip_suffix("__new"))
+                    .or_else(|| rest.strip_suffix("__with_capacity"))
+                    .unwrap_or(rest);
+                if !is_str_variant
+                    && (self.recursive_drop_structs.contains_key(elem_type)
+                        || self.recursive_drop_enums.contains_key(elem_type))
+                {
+                    stores.push((120, format!("{elem_type}__drop")));
+                    stores.push((128, format!("{elem_type}__clone_inplace")));
                 }
             }
         }

@@ -5,7 +5,6 @@ use super::*;
 /// Emit code for an `Inst::CallExtern` instruction.
 pub(super) fn emit_call_extern(
     out: &mut String,
-    inst: &Inst,
     dst: &Option<ValueId>,
     name: &str,
     args: &[ValueId],
@@ -23,8 +22,14 @@ pub(super) fn emit_call_extern(
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let _s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
-            let original_name = if let Inst::CallExtern { original_name, .. } = inst { original_name } else { &None };
-            let _emit_args = args;
+            // `original_name` is no longer consumed by the C backend's
+            // CallExtern arm — every collection-ctor side effect that used
+            // to depend on it (elem_drop / val_drop / hash_fn / key_drop / …)
+            // is now wired at LIR level. The field is still carried on
+            // `Inst::CallExtern` because the `wire_collection_bridges` pass
+            // and `infer_collection_elem_fns` consume it; we just don't
+            // need to read it here.
+            let _ = args;
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
 
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
@@ -1161,81 +1166,18 @@ pub(super) fn emit_call_extern(
                 }
             }
 
-            // Set elem_drop/val_drop on collection constructors.
-            // Vector/Deque elem_drop / elem_clone / elem_materialize are wired
-            // at LIR level by `infer_collection_elem_fns` + `emit_collection_fn_ptr_stores`
-            // (src/lir/lower/insts.rs) which emit NamedFuncAddr + ElemPtr + Store
-            // insts that compile uniformly in both backends. Dict val_drop /
-            // val_clone / val_materialize are also LIR-emitted. The Set / HashSet
-            // key_drop / key_clone wiring below is C-only for now (LLVM has no
-            // counterpart — see TODO 2026-04-30 on key_drop/key_clone parity).
-            // Uses original_name to determine element type from the monomorphized name.
-            if let Some(orig) = original_name.as_ref() {
-                if let Some(d) = dst {
-                    let dv = format!("__v{}", d.0);
-                    // Set/HashSet constructor: wire Hashable/Equatable bridges
-                    // + key_drop / key_clone for user-type elements. GorgetSet
-                    // is the same struct as GorgetMap with val_size=0, so the
-                    // same `hash_fn` / `eq_fn` / `key_*` fields apply. The
-                    // regular elem_drop/clone on the set's data array is
-                    // handled via the Dict-style wiring below since
-                    // `gorget_ordered_set_new` / `gorget_set_new` both return
-                    // a GorgetMap.
-                    if (name.starts_with("gorget_ordered_set_new") || name.starts_with("gorget_set_new"))
-                        && (orig.starts_with("Set__") || orig.starts_with("HashSet__"))
-                    {
-                        let prefix = if orig.starts_with("Set__") { "Set__" } else { "HashSet__" };
-                        if let Some(rest) = orig.strip_prefix(prefix) {
-                            // Set constructor mangling is `Set__T__new` /
-                            // `Set__T__new_str` / `Set__T__with_capacity` /
-                            // `Set__T` (bare). Strip the method suffix if
-                            // present; whatever remains is the element type.
-                            let elem_type = rest.strip_suffix("__new_str")
-                                .or_else(|| rest.strip_suffix("__new"))
-                                .or_else(|| rest.strip_suffix("__with_capacity"))
-                                .unwrap_or(rest);
-                            // hash_fn / eq_fn are wired by SetCollectionBridge
-                            // (LIR-level pass `wire_collection_bridges`).
-                            // Only key_drop / key_clone remain C-backend-only;
-                            // see TODO 2026-04-30 on the LLVM divergence.
-                            if is_user_hashable_key(elem_type, module)
-                                && (module.recursive_drop_structs.contains_key(elem_type)
-                                    || module.recursive_drop_enums.contains_key(elem_type))
-                            {
-                                write!(out, " {dv}.key_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
-                                write!(out, " {dv}.key_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
-                            }
-                        }
-                    }
-                    // Dict/HashMap constructor: val_drop / val_clone /
-                    // val_materialize are wired at LIR level by
-                    // `infer_collection_elem_fns` + `emit_collection_fn_ptr_stores`
-                    // (offsets 104 / 112 / 136 on GorgetMap). hash_fn / eq_fn
-                    // are wired by `SetCollectionBridge`. Only key_drop /
-                    // key_clone for user-resource keys remain C-backend-only;
-                    // see TODO 2026-04-30 on the LLVM divergence.
-                    if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
-                        && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))
-                    {
-                        let prefix = if orig.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
-                        if let Some(rest) = orig.strip_prefix(prefix) {
-                            let rest_stripped = rest.strip_suffix("__new_str")
-                                .or_else(|| rest.strip_suffix("__new"))
-                                .unwrap_or(rest);
-                            if let Some(pos) = rest_stripped.find("__") {
-                                let key_type = &rest_stripped[..pos];
-                                if is_user_hashable_key(key_type, module)
-                                    && (module.recursive_drop_structs.contains_key(key_type)
-                                        || module.recursive_drop_enums.contains_key(key_type))
-                                {
-                                    write!(out, " {dv}.key_drop = (__gorget_drop_fn){key_type}__drop;").unwrap();
-                                    write!(out, " {dv}.key_clone = (__gorget_drop_fn){key_type}__clone_inplace;").unwrap();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Collection constructor post-call wiring is now fully LIR-level.
+            // `infer_collection_elem_fns` + `emit_collection_fn_ptr_stores` in
+            // `src/lir/lower/insts.rs` emit `NamedFuncAddr + ElemPtr + Store`
+            // for all of:
+            //   - Vector/Deque: elem_drop=40, elem_clone=48, elem_materialize=56
+            //   - Dict/HashMap: val_drop=104, val_clone=112, key_drop=120,
+            //                   key_clone=128, val_materialize=136
+            //   - Set/HashSet:  key_drop=120, key_clone=128
+            //   - Hashable bridges (hash_fn=88, eq_fn=96): SetCollectionBridge
+            //     inst (`wire_collection_bridges` pass).
+            // Both backends compile those LIR insts uniformly.
+
 
             // Ownership transfer after consuming runtime calls is now always
             // emitted as a GIR `MoveZero` instruction at the lowering layer

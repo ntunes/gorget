@@ -3504,7 +3504,7 @@ fn emit_inst(
                 writeln!(out, "  call {ret_ty} @{}({})", call_name, arg_strs.join(", ")).unwrap();
             }
         }
-        Inst::CallExtern { dst, name, args, original_name, .. } => {
+        Inst::CallExtern { dst, name, args, .. } => {
             // ── Drop guards are now Inst::DropGuardOpen/Close (not CallExtern) ──
 
             // ── Closure dispatch is now Inst::CallClosure (not CallExtern) ──
