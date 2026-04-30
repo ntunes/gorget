@@ -26,6 +26,20 @@ cargo test               # all tests
 cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-$RANDOM.log
 ```
 
+**Testing the LLVM backend.** The harness reads `GG_BACKEND=llvm` and appends `--backend=llvm` to every fixture's `gg build` invocation (see `tests/integration.rs:29-48`). All-or-nothing per `cargo test` run; there's no per-test override.
+
+```bash
+# LLVM full sweep (sequential — see note below)
+GG_BACKEND=llvm cargo test --test integration --release -- --test-threads=1 2>&1 | tee /tmp/llvm-$RANDOM.log
+
+# LLVM single test
+GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
+```
+
+**Use `--test-threads=1` for LLVM full sweeps.** The parallel runner hits `cargo`-level rebuild races where the integration test binary gets recompiled mid-run, producing false-positive failures that vanish on rerun. Sequential is ~28 min for 1047 tests vs ~13 min parallel for C. Single-test invocations and small subsets are fine to run with the default `--test-threads=4`.
+
+Both backends should be at parity (1047/1047 as of 2026-04-30); a regression on one but not the other usually means the change touched a backend-specific path rather than shared LIR.
+
 ## Documentation
 
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience, not Gorget experience)
