@@ -2660,10 +2660,15 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry 
             lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
             ii += 1
 
-        # Lower terminator
+        # Lower terminator. Move the local LirTerm into the block —
+        # it's a non-Copy enum and `lir_term` is dead after the
+        # assignment. The Rust typechecker's FieldAccess fix
+        # (mod.rs::populate_def_field_types runs before typecheck +
+        # FieldAccess returns the actual field type instead of
+        # error_id) now catches the previously-silent copy.
         LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, &local_to_slot, &block_map)
         LirBlock final_blk = f.blocks.get(lir_bb).unwrap()
-        final_blk.term = lir_term
+        final_blk.term = !lir_term
         f.blocks.set(lir_bb, final_blk)
 
         bii += 1

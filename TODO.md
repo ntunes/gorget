@@ -2,7 +2,6 @@
 
 ## High
 
-- **Rust gorget compiler accepts implicit Keyword→int conversions silently** — surfaced 2026-04-29 while fixing the Keyword/int antipattern in self-host parser. The Rust-compiled gorget compiler accepts `type_keyword_name(kw)` where `type_keyword_name` takes `int` and `kw` is a `Keyword` enum variant; emits incompatible-type C downstream. The typechecker should reject the call at compile time rather than emit broken C. Same hole likely lets other enum→int silent conversions slip through. Closing this would catch the antipattern at definition time, not at the next time someone pushes Gorget's typechecker correctness up another notch (which is what exposed it this round, via the trait-bounded equip skip / impl-T un-demote work in df3a3a94). Test fixture: any function `void f(int x):` called with an enum-variant argument should fail typecheck. [added: 2026-04-29]
 
 
 - **Flaky test: `vector_task_get`** — fixture spawns 3 async increments against a shared `int counter` via `&counter` and asserts the final count is 3. The increments race without synchronization, so the post-await count is 1/2/3 randomly across runs. Caught during the 2026-04-27 self-host `remove` work (Monitor reported "expected 3, got 2"; manual rerun gave 1/3/3/1/3). Either fix the test (atomic counter, or thread-local accumulator + final reduce) or move it to a `#[ignore]`'d slot until the spawn ABI gives us happens-before across `await()`. [added: 2026-04-27]

@@ -1736,12 +1736,25 @@ impl<'a> TypeChecker<'a> {
             Expr::FieldAccess { object, field } => {
                 let object_type = self.infer_expr(object);
                 let resolved = self.resolve_type(object_type);
-                // Check if the field exists on the resolved type.
-                // Only check Defined (non-generic) structs to avoid false positives
-                // on wrapper/guard types like ReadGuard[T] that proxy field access.
+                // Check if the field exists on the resolved type AND
+                // return the field's actual type. Returning error_id
+                // here lets bogus calls slip through downstream — e.g.
+                // `match st.lex_token: case TkKeyword(kw): f(kw)` would
+                // type kw as <error> because the scrutinee's type was
+                // lost, and `<error>` silently accepts any concrete
+                // parameter type. Look up the field's TypeId via the
+                // struct's `field_types` (populated in
+                // populate_def_field_types).
                 if let ResolvedType::Defined(did) = self.types.get(resolved).clone() {
                     if let Some(sfi) = self.struct_fields.get(&did) {
-                        if !sfi.fields.iter().any(|(name, _)| name == &field.node) {
+                        if let Some(field_idx) = sfi.fields.iter().position(|(name, _)| name == &field.node) {
+                            // Field exists; return its type from DefInfo.field_types
+                            if let Some(field_tids) = &self.scopes.get_def(did).field_types {
+                                if let Some(&tid) = field_tids.get(field_idx) {
+                                    return tid;
+                                }
+                            }
+                        } else {
                             let type_name = self.describe_resolved_type(resolved);
                             self.error(
                                 SemanticErrorKind::NoFieldFound {

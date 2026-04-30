@@ -238,6 +238,14 @@ pub fn analyze_with_source_dir(
     // Pass 3.5: Validate @derive field types against trait requirements
     derive::validate_derive_field_traits(&derive_records, &trait_registry, &mut errors);
 
+    // Populate struct/enum field types on DefInfo BEFORE typecheck.
+    // typecheck's Expr::FieldAccess inference reads field_types to
+    // return the actual field type — without this, field access types
+    // as <error> and downstream Keyword→int (and similar enum→int)
+    // calls slip through silently. See populate_def_field_types
+    // header for details.
+    populate_def_field_types(module, &mut scopes, &mut types);
+
     // Pass 4: Type check everything
     let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = typecheck::check_module(
         module,
@@ -270,9 +278,6 @@ pub fn analyze_with_source_dir(
     if !inferred_call_targs.is_empty() {
         typecheck::apply_inferred_call_targs(module, &inferred_call_targs);
     }
-
-    // Populate struct/enum field types on DefInfo for is_copy_type.
-    populate_def_field_types(module, &mut scopes, &types);
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
     let (shared_bindings, warnings, fn_purity, borrow_deps) = safety::check_module(
@@ -308,26 +313,42 @@ pub fn analyze_with_source_dir(
 }
 
 /// Populate `field_types` and `variant_field_types` on DefInfo for structs/enums.
-/// This enables `is_copy_type` to transitively check if all fields are Copy.
-/// Populate `field_types` and `variant_field_types` on DefInfo for structs/enums.
-/// This enables `is_copy_type` to transitively check if all fields are Copy.
+/// Used by:
+/// - `is_copy_type` to transitively check if all fields are Copy.
+/// - `Expr::FieldAccess` typecheck to return the actual field type
+///   (instead of `error_id`, which silently accepts any downstream
+///   parameter type and was the root cause of `parse_meta_for_var_name`
+///   passing a `Keyword` payload to an `int` parameter without a
+///   typecheck error — the antipattern in self-host parser.gg).
+///
+/// Uses `ast_type_to_resolved` for full Named-type resolution (the
+/// previous `types.resolve_type` only handled primitives, dropping
+/// every Named-type field — including the critical `Token lex_token`
+/// case that exposed the FieldAccess hole). For fields whose type
+/// can't be resolved (e.g., references to types declared later or
+/// in unloaded modules), the slot is filled with `error_id` to keep
+/// vector indices aligned with field order.
 fn populate_def_field_types(
     module: &crate::parser::ast::Module,
     scopes: &mut scope::ScopeTable,
-    types: &types::TypeTable,
+    types: &mut types::TypeTable,
 ) {
     use crate::parser::ast::{Item, VariantFields};
     fn scan_items(
         items: &[crate::span::Spanned<Item>],
         scopes: &mut scope::ScopeTable,
-        types: &types::TypeTable,
+        types: &mut types::TypeTable,
     ) {
         for item in items {
             match &item.node {
                 Item::Struct(s) => {
                     if let Some(def_id) = scopes.lookup(&s.name.node) {
-                        let field_tids: Vec<_> = s.fields.iter()
-                            .filter_map(|f| types.resolve_type(&f.node.type_.node))
+                        let field_tids: Vec<TypeId> = s.fields.iter()
+                            .map(|f| {
+                                types::ast_type_to_resolved(
+                                    &f.node.type_.node, f.node.type_.span, scopes, types,
+                                ).unwrap_or_else(|_| types.error_id)
+                            })
                             .collect();
                         if !field_tids.is_empty() {
                             scopes.get_def_mut(def_id).field_types = Some(field_tids);
@@ -342,7 +363,11 @@ fn populate_def_field_types(
                                     VariantFields::Unit => Vec::new(),
                                     VariantFields::Tuple(fields) => {
                                         fields.iter()
-                                            .filter_map(|f| types.resolve_type(&f.node))
+                                            .map(|f| {
+                                                types::ast_type_to_resolved(
+                                                    &f.node, f.span, scopes, types,
+                                                ).unwrap_or_else(|_| types.error_id)
+                                            })
                                             .collect()
                                     }
                                 }
