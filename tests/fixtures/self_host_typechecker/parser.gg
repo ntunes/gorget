@@ -3272,6 +3272,24 @@ equip Parser:
             self.advance()
         SpannedToken name_tok = self.advance()
         String pname = token_ident(name_tok.lex_token)
+        # Fall back to keyword spelling when the param name is a
+        # keyword used as an identifier (e.g. `String on` in
+        # df_inner_join — `on` is KwOn). Without this fallback the
+        # param def is registered with empty name "", and the
+        # typechecker's `lookup_in_scope(body_scope, "")` finds
+        # nothing, so the param's type never makes it onto its
+        # DefInfo and TYPE entries for keyword-named params go
+        # missing. (See MEMORY.md: "New keywords in lexer can
+        # shadow identifiers — add to non_type_keyword_name() for
+        # field/method contexts".)
+        if pname == "":
+            match name_tok.lex_token:
+                case TkKeyword(kw):
+                    pname = type_keyword_name(kw)
+                    if pname == "":
+                        pname = non_type_keyword_name(kw)
+                else:
+                    pass
         # Skip optional default value: = expr
         if self.check_tok(TOK_EQ):
             self.advance()
