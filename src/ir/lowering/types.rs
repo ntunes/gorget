@@ -73,6 +73,14 @@ impl TypeMapper {
                     if (base == "Ref" || base == "MutRef") && generic_args.len() == 1 {
                         return None;
                     }
+                    // Callable/MutCallable/ConsumeCallable lower to FnPtr at locals
+                    // and to Named("Callable__…") inside collections. The mangled
+                    // name may have been cached as Named via resolve_inner_type
+                    // (Option__Ref__Callable__… unwrap path). For local declarations
+                    // we want a fresh FnPtr — return None to force the mut fallback.
+                    if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+                        return None;
+                    }
                     let mangled = mangle_generic_name(&name.node, generic_args);
                     return self.named_types.get(&mangled).copied();
                 }
@@ -129,8 +137,14 @@ impl TypeMapper {
                         return registry.insert(gir_ty);
                     }
                     let mangled = mangle_generic_name(&name.node, generic_args);
-                    if let Some(&id) = self.named_types.get(&mangled) {
-                        return id;
+                    // Callable/MutCallable/ConsumeCallable bypass named_types caching:
+                    // a Callable[T()] local declaration must always lower to GirType::FnPtr,
+                    // even after `Callable__GorgetClosure` was registered as Named via
+                    // resolve_inner_type for an Option__Ref__Callable__… unwrap path.
+                    if !matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+                        if let Some(&id) = self.named_types.get(&mangled) {
+                            return id;
+                        }
                     }
                     // Auto-register Option[T] and Result[T, E] types
                     if base == "Option" && generic_args.len() == 1 {

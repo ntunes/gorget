@@ -6544,6 +6544,13 @@ done");
 }
 
 #[test]
+fn vector_callable_two_locals() {
+    run_gg("vector_callable_two_locals.gg", "\
+1
+2");
+}
+
+#[test]
 fn generic_callable_ref() {
     run_gg("generic_callable_ref.gg", "\
 1
