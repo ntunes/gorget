@@ -79,6 +79,27 @@ fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     }
 }
 
+/// On x86_64 SysV, large aggregates (>16 bytes) passed by value go on the
+/// outgoing stack frame as a memory-class copy. On aarch64 AAPCS64 they are
+/// instead passed via an implicit pointer in a register, which is what the
+/// bare `ptr` IR emission already produces. So we emit `byval(...)` only on
+/// x86_64; on aarch64 (and other targets) the existing `ptr` matches the
+/// platform ABI. The annotation must be present on both the call site and
+/// the extern declaration — they are kept in sync via this single helper.
+///
+/// `GG_LLVM_FORCE_X86_64_ABI=1` forces the x86_64 path on a non-x86_64 host —
+/// dev-time affordance for inspecting the IR shape that an x86_64 build
+/// would emit (e.g. cross-target llc verification from an aarch64 box).
+fn large_agg_byval_attr(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+    let on_x86_64 = cfg!(target_arch = "x86_64")
+        || std::env::var_os("GG_LLVM_FORCE_X86_64_ABI").is_some();
+    if on_x86_64 {
+        format!("byval({}) align 8 ", llvm_type_full(ty, snames))
+    } else {
+        String::new()
+    }
+}
+
 /// C reserved keywords — function names clashing with these are prefixed with `__gg_`.
 /// Must match the C backend's `c_func_name()` in helpers.rs.
 const C_RESERVED: &[&str] = &[
@@ -1126,8 +1147,16 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // gorget_str_eq returns bool (i1), gorget_str_cmp returns int (i32, NOT i64!).
     // On aarch64, 'mov w0, -1' zero-extends to x0=0xFFFFFFFF; must call as i32 + sext.
     // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
-    writeln!(out, "declare i1 @gorget_str_eq(ptr, ptr)").unwrap();
-    writeln!(out, "declare i32 @gorget_str_cmp(ptr, ptr)").unwrap();
+    // Both take `Str` by value (32-byte struct); on x86_64 SysV that's memory
+    // class — annotate the declaration to match the C ABI gcc/clang compile.
+    let str_byval_attr = {
+        let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
+        sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), &snames)).unwrap_or_default()
+    };
+    let str_byval = str_byval_attr.trim_end();
+    let str_param = if str_byval.is_empty() { "ptr".to_string() } else { format!("ptr {str_byval}") };
+    writeln!(out, "declare i1 @gorget_str_eq({sp}, {sp})", sp = str_param).unwrap();
+    writeln!(out, "declare i32 @gorget_str_cmp({sp}, {sp})", sp = str_param).unwrap();
     // Runtime collection free/clone_inplace/materialize_inplace — always declared because
     // NamedFuncAddr instructions reference them for elem_drop/elem_clone fields.
     writeln!(out, "declare void @gorget_string_free(ptr)").unwrap();
@@ -1170,7 +1199,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     writeln!(out, "declare void @gorget_string_push_int(ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_string_push_float(ptr, double)").unwrap();
     writeln!(out, "declare void @gorget_string_push_bool(ptr, i1)").unwrap();
-    writeln!(out, "declare void @gorget_string_push_char(ptr, ptr)").unwrap();
+    // gorget_string_push_char(GorgetString* s, Str c) — second arg is Str by value.
+    writeln!(out, "declare void @gorget_string_push_char(ptr, {sp})", sp = str_param).unwrap();
     writeln!(out, "declare void @gorget_string_push_line_int(ptr, i64)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line_float(ptr, double)").unwrap();
     writeln!(out, "declare void @gorget_string_push_line_bool(ptr, i1)").unwrap();
@@ -1188,7 +1218,8 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // so use {i64, i64} / {double, i64} to match the C ABI on aarch64.
     writeln!(out, "declare {{i64, i64}} @gorget_try_parse_int(ptr, i64)").unwrap();
     writeln!(out, "declare {{double, i64}} @gorget_try_parse_float(ptr, i64)").unwrap();
-    writeln!(out, "declare ptr @gorget_str_to_cstr(ptr)").unwrap();
+    // gorget_str_to_cstr takes Str by value (32 bytes) — see str_byval handling above.
+    writeln!(out, "declare ptr @gorget_str_to_cstr({sp})", sp = str_param).unwrap();
     // CStr → GorgetString wrapping (for extern "C" return values)
     if !module.externs.iter().any(|e| e.name == "gorget_str_from_cstr") {
         writeln!(out, "declare void @gorget_str_from_cstr(ptr sret(%GorgetString), ptr)").unwrap();
@@ -1380,11 +1411,16 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 }
                 // Aggregate params: small structs (≤16 bytes) pass in registers (aarch64 ABI),
                 // large structs (>16 bytes) pass by indirect reference (ptr).
+                // On x86_64 SysV the C ABI for large aggregates by value is a
+                // memory-class copy on the outgoing stack frame, *not* a
+                // register pointer — annotate with `byval` so llc lowers it to
+                // the right convention. aarch64 stays bare `ptr` (AAPCS64
+                // implicit-pointer-in-register matches the existing emission).
                 if p.is_aggregate() {
                     if is_small_aggregate(p, &module.structs) {
                         return llvm_type_full(p, snames);
                     }
-                    return "ptr".to_string();
+                    return format!("ptr {}", large_agg_byval_attr(p, snames)).trim_end().to_string();
                 }
                 llvm_type_full(p, snames)
             })
@@ -3989,9 +4025,15 @@ fn emit_inst(
                         writeln!(out, "  %psl.data.{uid} = load ptr, ptr %v{}", args[1].0).unwrap();
                         writeln!(out, "  call void @gorget_string_push_line(ptr %v{}, ptr %psl.data.{uid})", args[0].0).unwrap();
                     } else {
-                        // gorget_string_push_char takes (GorgetString*, Str c) — Str is 32 bytes,
-                        // so on aarch64 it's passed by hidden pointer. Pass GorgetString* directly.
-                        writeln!(out, "  call void @gorget_string_push_char(ptr %v{}, ptr %v{})", args[0].0, args[1].0).unwrap();
+                        // gorget_string_push_char takes (GorgetString*, Str c) — Str is
+                        // 32 bytes. On aarch64 it's passed by hidden pointer (matches
+                        // bare `ptr`). On x86_64 SysV it's memory class on the stack —
+                        // emit `byval` so llc lowers it to bytes-on-stack.
+                        let str_attr_psc = {
+                            let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
+                            sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
+                        };
+                        writeln!(out, "  call void @gorget_string_push_char(ptr %v{}, ptr {}%v{})", args[0].0, str_attr_psc, args[1].0).unwrap();
                     }
                     return;
                 }
@@ -4010,7 +4052,13 @@ fn emit_inst(
                 let arg0 = args[0].0;
                 let cstr_name = format!("fopenr.{block_id}.{}", *trap_counter - 1);
                 // Use gorget_str_to_cstr: ensures null termination even for views.
-                writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{arg0})").unwrap();
+                // gorget_str_to_cstr takes Str by value — annotate with byval on x86_64
+                // so the C runtime gets the bytes via memory class on the stack.
+                let str_attr_local = {
+                    let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
+                    sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
+                };
+                writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{arg0})", str_attr_local).unwrap();
                 if let Some(d) = dst {
                     // Use the extern's declared return type (not val_types — val_types[d]
                     // may be PtrTo(File) from an earlier SlotAddr instruction that was
@@ -5314,8 +5362,16 @@ fn emit_inst(
                             let expects_agg = expected.map_or(false, |t| t.is_aggregate());
                             let is_ptr = actual.map_or(false, |t| t.is_ptr());
                             if expects_agg && is_ptr {
-                                // Aggregate params are declared as ptr in extern (C ABI)
-                                format!("ptr %v{}", a.0)
+                                // Aggregate params are declared as ptr in extern (C ABI).
+                                // For large aggregates (>16 bytes) on x86_64,
+                                // attach `byval(...)` so the call matches the
+                                // SysV memory-class C convention.
+                                let attr = if expected.map_or(false, |t| !is_small_aggregate(t, &module.structs)) {
+                                    large_agg_byval_attr(expected.unwrap(), snames)
+                                } else {
+                                    String::new()
+                                };
+                                format!("ptr {}%v{}", attr, a.0)
                             } else if expects_ptr && !is_ptr && actual.is_some() {
                                 let alty = llvm_arg_type(actual.unwrap(), snames);
                                 let sn = format!("{pfx}.spill.{i}");
@@ -5380,15 +5436,23 @@ fn emit_inst(
             // x0 to 0xFFFFFFFF (not 0xFFFFFFFFFFFFFFFF). Must call as i32 and sext to i64
             // so the LIR I64 result has the correct sign.
             if name == "gorget_str_cmp" {
+                // Both args are Str-by-value (32-byte struct). On x86_64 SysV
+                // these go via memory class — annotate with `byval` so llc
+                // copies the bytes onto the outgoing stack frame; bare `ptr`
+                // would put pointers in registers and the C side would read
+                // garbage.
+                let str_attr = if let Some(sid) = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None }) {
+                    large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames)
+                } else { String::new() };
                 if let Some(d) = dst {
                     let uid = *trap_counter;
                     *trap_counter += 1;
                     let pfx = format!("strcmp32.{block_id}.{uid}");
-                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr %v{}", a.0)).collect();
+                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr {}%v{}", str_attr, a.0)).collect();
                     writeln!(out, "  %{pfx}.raw = call i32 @gorget_str_cmp({})", arg_strs.join(", ")).unwrap();
                     writeln!(out, "  %v{} = sext i32 %{pfx}.raw to i64", d.0).unwrap();
                 } else {
-                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr %v{}", a.0)).collect();
+                    let arg_strs: Vec<String> = args.iter().map(|a| format!("ptr {}%v{}", str_attr, a.0)).collect();
                     writeln!(out, "  call i32 @gorget_str_cmp({})", arg_strs.join(", ")).unwrap();
                 }
                 return;
@@ -5535,7 +5599,12 @@ fn emit_inst(
                     // C string content — garbled output for write_stdin etc.
                     if is_str_to_cstr {
                         let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
-                        spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr %v{})", a.0));
+                        // gorget_str_to_cstr takes Str by value — see large_agg_byval_attr.
+                        let str_attr_call = {
+                            let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
+                            sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
+                        };
+                        spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{})", str_attr_call, a.0));
                         format!("ptr %{cstr_name}")
                     } else if param_abi == crate::ir::abi::AbiKind::Ptr && expects_agg && is_ptr {
                         // The extern declares the param as a pointer (`T*` in
@@ -5553,7 +5622,13 @@ fn emit_inst(
                         format!("{agg_ty} %{load_name}")
                     } else if expects_agg && is_ptr {
                         // Large aggregate (>16 bytes): pass pointer (indirect C ABI).
-                        format!("ptr %v{}", a.0)
+                        // x86_64 SysV needs `byval(...)` so llc lowers it to a
+                        // memory-class stack copy at the call site — matches
+                        // the C-side `Str s` parameter that gcc/clang compile
+                        // as stack-passed bytes. aarch64 leaves it bare `ptr`
+                        // (AAPCS64 implicit-pointer convention).
+                        let attr = large_agg_byval_attr(expected_ty.unwrap(), snames);
+                        format!("ptr {}%v{}", attr, a.0)
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
                         let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames);
