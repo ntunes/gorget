@@ -1187,6 +1187,7 @@ fn compile_llvm_pipeline(
     ll_cmd
         .arg("-filetype=obj")
         .arg("-O0")
+        .arg("-relocation-model=pic")
         .arg("-o").arg(&ll_o_path)
         .arg(ll_path);
     // LLVM 14 (Debian oldstable) defaults to typed pointers and needs the
