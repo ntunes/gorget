@@ -1,17 +1,19 @@
 # Test: Vector[Task[void]] with move semantics.
 # Uses remove().unwrap() to take tasks out of the vector and await them.
+# Uses an atomic counter so the post-await total is deterministic — the
+# point of this fixture is move-out-of-collection semantics, not a race.
 
 from std.conv import int_to_str
 
-async void increment(int &counter):
-    counter = counter + 1
+async void increment(AtomicInt counter):
+    counter.add(1)
 
 async void main():
-    shared int counter = 0
+    shared(atomic) int counter = 0
     Vector[Task[void]] tasks = Vector[Task[void]]()
-    tasks.push(!spawn increment(&counter))
-    tasks.push(!spawn increment(&counter))
-    tasks.push(!spawn increment(&counter))
+    tasks.push(!spawn increment(counter))
+    tasks.push(!spawn increment(counter))
+    tasks.push(!spawn increment(counter))
     Task[void] t2 = tasks.remove(2).unwrap()
     Task[void] t1 = tasks.remove(1).unwrap()
     Task[void] t0 = tasks.remove(0).unwrap()
