@@ -17,6 +17,8 @@ String main():
     match p1.color:
         case Some(c):
             print(f"{c.r}")
+        case None():
+            pass
     Pixel p2 = Pixel(0, 0, None)
     match p2.color:
         case Some(c):

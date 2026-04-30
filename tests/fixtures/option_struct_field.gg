@@ -9,10 +9,14 @@ String describe(Greeting g):
     match g.message:
         case Some(m):
             msg = m
+        case None():
+            pass
     String pri = "no priority"
     match g.priority:
         case Some(p):
             pri = f"{p}"
+        case None():
+            pass
     return f"{msg} ({pri})"
 
 String main():
