@@ -1460,6 +1460,11 @@ static inline GorgetString gorget_string_adopt(char* s) {
 static inline void gorget_string_free(void* p) {
     GorgetString* s = (GorgetString*)p;
     if (s->cap == 0) { *s = (Str){0}; return; }  // view — nothing to free
+    // Owned (cap > 0) requires a live allocator. A NULL alloc here means
+    // either (a) a CoW-demoted string left a stale alloc cleared without
+    // resetting cap to 0, or (b) the value was never properly initialized.
+    // Both are silent corruption without this check.
+    if (!s->alloc) { fprintf(stderr, "gorget: panic: gorget_string_free invariant: cap=%zu but alloc=NULL\n", s->cap); exit(1); }
     __gorget_string_free_count++;
     s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
     *s = (Str){0};
@@ -5335,7 +5340,13 @@ static inline void gorget_array_free(void* p) {
             arr->elem_drop((char*)arr->data + i * arr->elem_size);
         }
     }
-    if (arr->data) arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
+    if (arr->data) {
+        // Owned data requires a live allocator. A NULL alloc here would deref
+        // through it on dealloc — silent corruption that the cap=0 view check
+        // doesn't catch (cap may be nonzero on a partially-constructed array).
+        if (!arr->alloc) { fprintf(stderr, "gorget: panic: gorget_array_free invariant: data=%p but alloc=NULL (cap=%zu, len=%zu)\n", arr->data, arr->cap, arr->len); exit(1); }
+        arr->alloc->dealloc(arr->alloc->ctx, arr->data, arr->cap * arr->elem_size);
+    }
     arr->data = NULL;
     arr->len = 0;
     arr->cap = 0;
