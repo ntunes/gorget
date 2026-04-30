@@ -334,6 +334,34 @@ bool should_auto_load_std_iter(Module m):
         return false
     return ast_mentions_std_iter_need(m.items)
 
+# ── std.hash auto-load on @derive(Hashable) ─────────────────
+# Mirrors Rust's `module_uses_hashable_derive` (src/loader.rs:95):
+# any struct or enum with Hashable in its derives list pulls in
+# std.hash so that the synthesized `void hash(self, FxHasher &h)`
+# methods can resolve FxHasher / write_int / write_string / finish.
+
+bool module_uses_hashable_derive(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item item = m.items.get(i).unwrap()
+        match item:
+            case IStruct(s):
+                int di = 0
+                while di < s.derives.len():
+                    if s.derives.get(di).unwrap() == "Hashable":
+                        return true
+                    di += 1
+            case IEnum(e):
+                int di = 0
+                while di < e.derives.len():
+                    if e.derives.get(di).unwrap() == "Hashable":
+                        return true
+                    di += 1
+            else:
+                pass
+        i += 1
+    return false
+
 # ── Path resolution ─────────────────────────────────────────
 
 String resolve_module_path(String base_dir, String module_path):
@@ -400,6 +428,14 @@ void load_all(Module &entry, String entry_path, String lib_dir):
         if not string_in(loaded, "std.iter"):
             queue.push("std.iter")
             loaded.push("std.iter")
+
+    # Auto-load std.hash when @derive(Hashable) appears anywhere in the
+    # entry — derived `equip T with Hashable: void hash(self, FxHasher &h)`
+    # references std.hash's FxHasher / write_int / write_string / finish.
+    if module_uses_hashable_derive(entry):
+        if not string_in(loaded, "std.hash"):
+            queue.push("std.hash")
+            loaded.push("std.hash")
 
     # BFS over the queue: resolve, parse, collect items + sub-imports
     int qi = 0
