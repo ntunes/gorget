@@ -5,6 +5,7 @@
 
 pub mod display;
 pub mod drop_elab;
+pub mod runtime;
 mod integration;
 pub mod lower;
 pub mod optimize;
