@@ -1437,6 +1437,7 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
         }
         Inst::Call { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
         Inst::CallExtern { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
+        Inst::CallRuntime { args, .. } => { for a in args { *a = next(&uses, &mut idx); } }
         Inst::CallPtr { callee, args, .. } => {
             *callee = next(&uses, &mut idx); for a in args { *a = next(&uses, &mut idx); }
         }

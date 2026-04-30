@@ -509,7 +509,9 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
             sub(src_ptr);
             sub(size);
         }
-        Inst::Call { args, .. } | Inst::CallExtern { args, .. } => {
+        Inst::Call { args, .. }
+        | Inst::CallExtern { args, .. }
+        | Inst::CallRuntime { args, .. } => {
             for a in args.iter_mut() {
                 sub(a);
             }

@@ -94,6 +94,7 @@ fn validate_function(func: &LirFunction, module: &LirModule, errors: &mut Vec<Li
         for inst in &block.insts {
             check_slot_refs(inst, num_slots, func, block.id, errors);
             check_struct_refs(inst, module, func, block.id, errors);
+            check_runtime_call(inst, func, block.id, errors);
         }
 
         // Validate terminator
@@ -104,6 +105,47 @@ fn validate_function(func: &LirFunction, module: &LirModule, errors: &mut Vec<Li
             num_blocks,
             errors,
         );
+    }
+}
+
+/// Type-check `Inst::CallRuntime` against the static signature of the called
+/// `RuntimeFn` variant. Catches mismatched arg counts at LIR validation time.
+///
+/// Doesn't enforce per-arg `LirType` matching yet — that requires full
+/// `value_types` lookup which the current validator doesn't take. (Plan: B1
+/// adds a typed cross-check once the runtime declaration table is canonical.)
+fn check_runtime_call(
+    inst: &Inst,
+    func: &LirFunction,
+    block: BlockId,
+    errors: &mut Vec<LirError>,
+) {
+    if let Inst::CallRuntime { callee, args, arg_abis, .. } = inst {
+        let sig = callee.signature();
+        if args.len() != sig.params.len() {
+            errors.push(LirError {
+                func: func.name.clone(),
+                block: Some(block),
+                message: format!(
+                    "CallRuntime {:?} expects {} arg(s) per signature, got {}",
+                    callee,
+                    sig.params.len(),
+                    args.len(),
+                ),
+            });
+        }
+        if arg_abis.len() != sig.params.len() {
+            errors.push(LirError {
+                func: func.name.clone(),
+                block: Some(block),
+                message: format!(
+                    "CallRuntime {:?}: arg_abis has {} tag(s) but signature has {} param(s)",
+                    callee,
+                    arg_abis.len(),
+                    sig.params.len(),
+                ),
+            });
+        }
     }
 }
 

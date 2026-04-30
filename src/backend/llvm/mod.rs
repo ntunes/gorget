@@ -2779,6 +2779,24 @@ fn emit_inst(
     current_label: &mut String,
     df_stack: &mut Vec<u32>,
 ) {
+    // BIR lowering normally rewrites CallRuntime → CallExtern. Per-function
+    // debug emit (`Backend::emit_function`) bypasses BIR and may hand us a
+    // CallRuntime; synthesize a CallExtern locally so the rest of this
+    // dispatcher (including its many name-based scans) sees a uniform shape.
+    let _synthesized_callextern;
+    let inst = if let Inst::CallRuntime { dst, callee, args, arg_abis, original_name } = inst {
+        _synthesized_callextern = Inst::CallExtern {
+            dst: *dst,
+            name: callee.c_name().to_string(),
+            args: args.clone(),
+            arg_abis: arg_abis.clone(),
+            original_name: original_name.clone(),
+        };
+        &_synthesized_callextern
+    } else {
+        inst
+    };
+
     match inst {
         // ── Slot Access ─────────────────────────────────────────────
         Inst::SlotStore { slot, value, is_move } => {
@@ -6242,6 +6260,12 @@ fn emit_inst(
         // ── Nop ─────────────────────────────────────────────────────
         Inst::Nop => {
             // nothing
+        }
+
+        // ── Should never reach here — normalized to CallExtern at top ──
+        Inst::CallRuntime { .. } => {
+            unreachable!("CallRuntime should have been normalized to CallExtern \
+                at the top of emit_inst — see the shadowing rebind above.");
         }
     }
 }

@@ -2467,6 +2467,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::CallExtern { dst, name, args, arg_abis, .. } => {
             emit_call_extern::emit_call_extern(out, dst, name, args, arg_abis, ctx);
         }
+        Inst::CallRuntime { dst, callee, args, arg_abis, .. } => {
+            // BIR lowering normally rewrites CallRuntime → CallExtern (see
+            // `bir::lower::expand_func`); this arm covers the per-function
+            // debug emit path (`Backend::emit_function`) which bypasses BIR.
+            // Both backends carry an equivalent fallback.
+            let name = callee.c_name().to_string();
+            emit_call_extern::emit_call_extern(out, dst, &name, args, arg_abis, ctx);
+        }
         Inst::CallPtr { dst, callee, args, ret_ty: call_ret_ty } => {
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();

@@ -777,6 +777,21 @@ fn expand_func(
                     //    vs Ptr-to-aggregate), matching StructInit/EnumInit.
                     new_insts.push(Inst::Store { ptr: dst, value });
                 }
+                Inst::CallRuntime { dst, callee, args, arg_abis, original_name } => {
+                    // CallRuntime is a typed-callee form of CallExtern; the
+                    // backends still pattern-match on `name` (A3/B1 will lift
+                    // them to enum-aware). Rewrite to CallExtern using the
+                    // variant's stable C symbol name. The `original_name`
+                    // breadcrumb passes through unchanged so element-type
+                    // inference in the C backend still has its hint.
+                    new_insts.push(Inst::CallExtern {
+                        dst,
+                        name: callee.c_name().to_string(),
+                        args,
+                        original_name,
+                        arg_abis,
+                    });
+                }
                 other => new_insts.push(other),
             }
         }
@@ -3516,6 +3531,7 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::HofExpand { .. }
                     | Inst::AddressOf { .. }
                     | Inst::BoxAlloc { .. }
+                    | Inst::CallRuntime { .. }
             ) {
                 return true;
             }

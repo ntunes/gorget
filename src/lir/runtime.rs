@@ -648,6 +648,40 @@ impl RuntimeFn {
     }
 }
 
+// ── Module pass: promote CallExtern → CallRuntime ───────────────────────────
+
+/// Walk every `Inst::CallExtern` in `module` and convert to `Inst::CallRuntime`
+/// whenever the called name matches a known [`RuntimeFn`] variant.
+///
+/// Run after [`crate::lir::types::wire_collection_bridges`] (which still scans
+/// `CallExtern { name, original_name }` shape) and before BIR lowering (which
+/// rewrites `CallRuntime` back into `CallExtern` for backend uniformity).
+/// The window between is where the validator + optimizer + future
+/// CollectionCtor lowering see the typed form.
+///
+/// Idempotent: a second call is a no-op (already-converted `CallRuntime`s
+/// don't match the `if let CallExtern` arm).
+pub fn promote_runtime_calls(module: &mut crate::lir::LirModule) {
+    use crate::lir::Inst;
+    for func in &mut module.functions {
+        for block in &mut func.blocks {
+            for inst in &mut block.insts {
+                if let Inst::CallExtern { dst, name, args, original_name, arg_abis } = inst {
+                    if let Some(callee) = RuntimeFn::from_c_name(name) {
+                        *inst = Inst::CallRuntime {
+                            dst: *dst,
+                            callee,
+                            args: std::mem::take(args),
+                            arg_abis: std::mem::take(arg_abis),
+                            original_name: original_name.take(),
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

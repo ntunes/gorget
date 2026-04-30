@@ -314,6 +314,14 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write_value_list(f, args)?;
             write!(f, ")")
         }
+        Inst::CallRuntime { dst, callee, args, .. } => {
+            if let Some(d) = dst {
+                write!(f, "{d} = ")?;
+            }
+            write!(f, "call_runtime {:?}(", callee)?;
+            write_value_list(f, args)?;
+            write!(f, ")")
+        }
         Inst::CallPtr { dst, callee, args, ret_ty: _ } => {
             if let Some(d) = dst {
                 write!(f, "{d} = ")?;
