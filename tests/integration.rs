@@ -6067,6 +6067,14 @@ zero hex: 0",
 }
 
 #[test]
+fn fstring_unicode_passthrough() {
+    run_gg(
+        "fstring_unicode_passthrough.gg",
+        "// ── Function Definitions ──\n29",
+    );
+}
+
+#[test]
 fn char_str_coerce() {
     run_gg("char_str_coerce.gg", "A\ntrue\nA");
 }

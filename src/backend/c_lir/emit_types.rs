@@ -728,8 +728,9 @@ pub(super) fn rewrite_inline_c_locals(code: &str, func: &LirFunction) -> String 
                 continue;
             }
         }
-        result.push(bytes[i] as char);
-        i += 1;
+        let ch = code[i..].chars().next().unwrap();
+        result.push(ch);
+        i += ch.len_utf8();
     }
     result
 }

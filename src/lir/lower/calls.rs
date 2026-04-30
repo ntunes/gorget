@@ -71,8 +71,9 @@ pub fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
             result.push_str(&fmt[start..i]);
             arg_idx += 1;
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            let ch = fmt[i..].chars().next().unwrap();
+            result.push(ch);
+            i += ch.len_utf8();
         }
     }
     result

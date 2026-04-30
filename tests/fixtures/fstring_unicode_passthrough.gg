@@ -1,0 +1,12 @@
+# f-string literal segments preserve UTF-8 multi-byte chars as-is. Before the
+# fix, fix_printf_format walked the format string byte-by-byte and pushed each
+# byte cast as char, double-encoding multi-byte UTF-8 sequences (each ─ went
+# from 0xE2 0x94 0x80 → 0xC3 0xA2 0xC2 0x94 0xC2 0x80). The bug surfaced in
+# self-host stage-1 output where comment headers like `// ── Function
+# Definitions ──` got garbled.
+
+void main():
+    String name = "Function Definitions"
+    String header = f"// ── {name} ──"
+    print(header)
+    print(header.len())
