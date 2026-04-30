@@ -2065,20 +2065,23 @@ fn lower_match_expr(
         builder.switch_to(arm_body_bb);
         super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
         let arm_val = lower_expr(ctx, builder, &arm.body);
-        builder.assign(Place::local(result_local), arm_val);
-        builder.jump(merge_bb);
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_local), arm_val);
+            builder.jump(merge_bb);
+        }
 
-        builder.switch_to(next_test_bb);
+        if next_test_bb != merge_bb {
+            builder.switch_to(next_test_bb);
+        }
     }
 
-    // Else arm
     if let Some(else_expr) = else_arm {
         let else_val = lower_expr(ctx, builder, else_expr);
-        builder.assign(Place::local(result_local), else_val);
-    } else {
-        builder.assign(Place::local(result_local), Operand::Constant(Constant::Unit));
+        if !builder.is_terminated() {
+            builder.assign(Place::local(result_local), else_val);
+            builder.jump(merge_bb);
+        }
     }
-    builder.jump(merge_bb);
 
     builder.switch_to(merge_bb);
     FunctionBuilder::copy(result_local)

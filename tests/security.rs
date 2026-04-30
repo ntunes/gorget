@@ -892,20 +892,14 @@ fn sec_80_char_construction_edges() {
 
 #[test]
 fn sec_81_match_expr_some_arm_dropped() {
-    // BUG: `x = match o: case Some(n): compute(n); else: 0` silently
-    // discards the Some-arm value; x always equals the else-arm value.
-    // Traced in codegen: bb_some computes `__v45 = compute(n)` then
-    // `goto exit`, but the exit block unconditionally re-emits the
-    // literal `0` as the match result — the Some arm's value is never
-    // merged into the match's result slot. A 1+2+3 list sum returns 1.
-    security_known_unsafe(
-        "attack_81_self_referential_struct",
-        KnownBug::SilentlyProduces("1"),
-        "Match-expression drops Some-arm value when used in assignment. \
-         `x = match o: case Some(n): f(n); else: 0` — the Some arm's \
-         computed value isn't stored into x; x always gets the else-arm \
-         value (0). Silent wrong-result bug, not memory-unsafe.",
-    );
+    // Fixed 2026-04-30. `lower_match_expr` was always switching to the
+    // last arm's `next_test_bb` (which equals `merge_bb` when there's
+    // no else), then writing `Constant::Unit` into the merge block —
+    // overwriting whichever arm value the arms had just stored. The
+    // sibling `lower_match_stmt_as_expr` already had the right shape:
+    // gate the `switch_to` on `next_test_bb != merge_bb`, and only
+    // emit a fallback assignment when there's an actual else arm.
+    security_safe("attack_81_self_referential_struct", "6");
 }
 
 #[test]
