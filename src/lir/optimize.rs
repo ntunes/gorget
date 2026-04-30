@@ -237,6 +237,17 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
                         }
                     }
                 }
+                // Same logic for CallRuntime — runtime callees rarely overlap
+                // with module function names, but the lookup is cheap and
+                // protects against edge cases (e.g. a module that re-exports
+                // a runtime-named symbol).
+                if let Inst::CallRuntime { callee, .. } = inst {
+                    if let Some(&ref_fid) = name_to_fid.get(callee.c_name()) {
+                        if live.insert(ref_fid) {
+                            worklist.push(ref_fid);
+                        }
+                    }
+                }
             }
         }
     }
@@ -253,11 +264,21 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
 /// hash paths are handled by dedicated runtime helpers.
 fn find_hashable_key_types(module: &LirModule) -> HashSet<String> {
     let mut types: HashSet<String> = HashSet::new();
+    // Collect (name, original_name) tuples from both CallExtern (post-BIR
+    // form) and CallRuntime (pre-BIR form). The optimizer runs in both
+    // contexts (integration test path uses LIR directly; main pipeline runs
+    // it post-BIR after the CallRuntime → CallExtern rewrite), so we accept
+    // either shape uniformly.
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                if let Inst::CallExtern { name, original_name, .. } = inst {
-                    let (is_mapped, lookup) = match (name.as_str(), original_name) {
+                let (name_str, original_name): (&str, &Option<String>) = match inst {
+                    Inst::CallExtern { name, original_name, .. } => (name.as_str(), original_name),
+                    Inst::CallRuntime { callee, original_name, .. } => (callee.c_name(), original_name),
+                    _ => continue,
+                };
+                {
+                    let (is_mapped, lookup) = match (name_str, original_name) {
                         ("gorget_dict_new", Some(o))
                         | ("gorget_map_new", Some(o))
                         | ("gorget_dict_new_str", Some(o))
@@ -266,7 +287,7 @@ fn find_hashable_key_types(module: &LirModule) -> HashSet<String> {
                         | ("gorget_set_with_capacity", Some(o))
                         | ("gorget_ordered_set_new", Some(o))
                         | ("gorget_ordered_set_new_str", Some(o)) => (true, o.as_str()),
-                        _ => (false, name.as_str()),
+                        _ => (false, name_str),
                     };
                     let (prefix, is_set) = if lookup.starts_with("Dict__") {
                         ("Dict__", false)
