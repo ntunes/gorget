@@ -527,12 +527,25 @@ impl ModuleLoader {
     /// Returns `(path, logical_path, source, module)` quads for all loaded files, with the
     /// entry first. `logical_path` is the import path segments (e.g. `["xtd", "csv"]`); empty
     /// for the entry module.
+    /// Load the entry module and all its transitive imports, returning each
+    /// loaded module along with the global byte offset the loader assigned
+    /// it. Spans in the AST are global byte offsets across the entire merged
+    /// source; the offsets returned here let the diagnostic reporter map a
+    /// span back to its originating file without re-deriving the offsets
+    /// (which silently drifts past synthetic / empty-source modules — see
+    /// the multi-file diagnostic-routing fix on 2026-04-30).
+    ///
+    /// Each tuple element is `(canonical_path, logical_segments, source,
+    /// module, base_offset)`. Synthetic modules (no source text) carry a
+    /// `base_offset` equal to `next_offset` at the time they were pushed —
+    /// they don't claim any byte range and the reporter should filter them
+    /// out before binary-search by checking `source.is_empty()`.
     pub fn load_all(
         &mut self,
         entry: &Path,
         entry_source: String,
         entry_module: Module,
-    ) -> Result<Vec<(PathBuf, Vec<String>, String, Module)>, LoadError> {
+    ) -> Result<Vec<(PathBuf, Vec<String>, String, Module, usize)>, LoadError> {
         let canonical = entry
             .canonicalize()
             .map_err(|e| LoadError::Io {
@@ -572,8 +585,8 @@ impl ModuleLoader {
             crate::parser::ast::Item::Directive(d) if d.name == "hot-reload"
         ));
 
-        // Entry module has an empty logical path.
-        results.push((canonical.clone(), Vec::new(), entry_source, entry_module));
+        // Entry module has an empty logical path. Loaded at offset 0.
+        results.push((canonical.clone(), Vec::new(), entry_source, entry_module, 0));
 
         if uses_hashable_derive && !is_hot_reload {
             let hash_segments = vec!["std".to_string(), "hash".to_string()];
@@ -615,7 +628,7 @@ impl ModuleLoader {
         // import checks avoid collisions with fixtures that define
         // their own iterator types.
         let auto_load_iter = results.last()
-            .map(|(_, _, _, m)| module_should_auto_load_std_iter(m))
+            .map(|(_, _, _, m, _)| module_should_auto_load_std_iter(m))
             .unwrap_or(false);
         if auto_load_iter {
             let iter_segments = vec!["std".to_string(), "iter".to_string()];
@@ -635,7 +648,7 @@ impl ModuleLoader {
         &mut self,
         base_dir: &Path,
         segments: &[String],
-        results: &mut Vec<(PathBuf, Vec<String>, String, Module)>,
+        results: &mut Vec<(PathBuf, Vec<String>, String, Module, usize)>,
     ) -> Result<(), LoadError> {
         // Intercept virtual built-in modules (std.* and gg.*) before filesystem resolution
         if crate::stdlib::is_builtin_module(segments) {
@@ -644,10 +657,13 @@ impl ModuleLoader {
                 return Ok(());
             }
 
-            // Try synthetic (compiler-generated) module first
+            // Try synthetic (compiler-generated) module first.
+            // No source text → no spans of its own → no byte range claimed.
+            // We carry `next_offset` as the recorded base so the tuple shape
+            // is uniform, but the reporter filters these out via empty source.
             if let Some(module) = crate::stdlib::generate_builtin_module(segments) {
                 self.loaded.insert(virtual_path.clone());
-                results.push((virtual_path, segments.to_vec(), String::new(), module));
+                results.push((virtual_path, segments.to_vec(), String::new(), module, self.next_offset));
                 return Ok(());
             }
 
@@ -673,7 +689,7 @@ impl ModuleLoader {
                 for (segs, _span) in imports {
                     self.load_recursive(base_dir, &segs, results)?;
                 }
-                results.push((virtual_path.clone(), segments.to_vec(), source.to_string(), module));
+                results.push((virtual_path.clone(), segments.to_vec(), source.to_string(), module, offset));
 
                 self.load_stack.pop();
                 return Ok(());
@@ -749,9 +765,9 @@ impl ModuleLoader {
             error: e,
         })?;
 
-        let offset = self.next_offset;
-        self.next_offset = offset + source.len() + 1;
-        let mut parser = Parser::new_with_offset(&source, offset);
+        let module_base_offset = self.next_offset;
+        self.next_offset = module_base_offset + source.len() + 1;
+        let mut parser = Parser::new_with_offset(&source, module_base_offset);
         let module = parser.parse_module();
 
         if !parser.errors.is_empty() {
@@ -773,7 +789,7 @@ impl ModuleLoader {
         for (segs, _span) in imports {
             self.load_recursive(&this_dir, &segs, results)?;
         }
-        results.push((canonical.clone(), segments.to_vec(), source, module));
+        results.push((canonical.clone(), segments.to_vec(), source, module, module_base_offset));
 
         self.load_stack.pop();
         Ok(())
@@ -1223,10 +1239,10 @@ fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>)
 /// are wrapped in an `Item::Module { path, items }` node that preserves module
 /// identity through the semantic pipeline. This allows the resolver to enforce
 /// per-module scoping and `private` visibility.
-pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module)>) -> Module {
+pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module, usize)>) -> Module {
     if modules.len() == 1 {
         // Single-file: build variant map from this module and qualify in-place.
-        let (_path, _logical, _source, mut module) = modules.into_iter().next().unwrap();
+        let (_path, _logical, _source, mut module, _offset) = modules.into_iter().next().unwrap();
         let vm = build_variant_map_from_module(&module);
         qualify_module_with_map(&mut module, &vm);
         return module;
@@ -1235,13 +1251,13 @@ pub fn merge_modules(modules: Vec<(PathBuf, Vec<String>, String, Module)>) -> Mo
     // Multi-file: build a global variant map from ALL modules for cross-module qualification.
     // The variant map needs the raw (PathBuf, String, Module) triples, so extract them.
     let raw_for_vm: Vec<(PathBuf, String, Module)> = modules.iter()
-        .map(|(p, _, s, m)| (p.clone(), s.clone(), m.clone()))
+        .map(|(p, _, s, m, _)| (p.clone(), s.clone(), m.clone()))
         .collect();
     let global_vm = build_variant_map_from_all(&raw_for_vm);
 
     let mut all_items: Vec<Spanned<Item>> = Vec::new();
 
-    for (i, (_path, logical_path, _source, mut module)) in modules.into_iter().enumerate() {
+    for (i, (_path, logical_path, _source, mut module, _offset)) in modules.into_iter().enumerate() {
         // Apply global qualification to every module (including entry).
         qualify_module_with_map(&mut module, &global_vm);
         if i == 0 {

@@ -57,16 +57,25 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
             process::exit(1);
         });
 
-    // Build file info for each module: (display_name, source, base_offset).
-    // Offsets match the loader's assignment: entry at 0, each subsequent module
-    // at previous_end + 1 (the +1 gap matches the loader's separator).
-    let mut file_infos: Vec<FileInfo> = Vec::new();
-    let mut offset = 0usize;
-    for (path, _segments, src, _module) in &modules {
-        let display_name = path.display().to_string();
-        file_infos.push((display_name, src.clone(), offset));
-        offset += src.len() + 1; // +1 for separator gap
-    }
+    // Build file info for each module using the offsets the loader assigned.
+    // Returning offsets directly (instead of reconstructing them by iterating
+    // and bumping +1 per module) eliminates a class of drift bugs: synthetic
+    // modules (gen_metal_module, gen_gl_module, …) push an entry into
+    // `modules` without claiming a byte range, so the older reconstruction
+    // path silently shifted every subsequent file's offset by +1 per
+    // synthetic module. Drift accumulated past several synthetic modules
+    // (Arena loads gg.metal + gg.gl + gg.sdl) misrouted spans across files
+    // — diagnostic warnings about identifiers in `backend.gg` were landing
+    // on `md3.gg`'s line numbers. Loader-supplied offsets are authoritative.
+    //
+    // Filter out empty-source modules: synthetic modules carry the same
+    // base_offset as the next real module, so leaving them in `file_ranges`
+    // would make the reporter's binary search non-deterministic at that
+    // boundary.
+    let file_infos: Vec<FileInfo> = modules.iter()
+        .filter(|(_path, _seg, src, _mod, _off)| !src.is_empty())
+        .map(|(path, _seg, src, _mod, offset)| (path.display().to_string(), src.clone(), *offset))
+        .collect();
 
     (loader::merge_modules(modules), file_infos)
 }
