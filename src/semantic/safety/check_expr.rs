@@ -209,6 +209,16 @@ impl<'a> BorrowChecker<'a> {
                                                             .map_or(false, |s| s.contains(&var_def_id))
                                                         && self.in_return_expr;
                                                     if !skip_implicit_move {
+                                                        // Mark the consumed variable as used —
+                                                        // implicit move into a constructor field
+                                                        // is a real use site. Without this, the
+                                                        // unused-variable warning fires a false
+                                                        // positive on `String x = ...; T(x)`
+                                                        // (the `continue` below skips the
+                                                        // `check_expr` that normally marks uses).
+                                                        if let Some(entry) = self.local_var_usage.get_mut(&var_def_id) {
+                                                            entry.2 = true;
+                                                        }
                                                         self.check_move(var_def_id, arg.span);
                                                         continue;
                                                     }
@@ -869,6 +879,16 @@ impl<'a> BorrowChecker<'a> {
                                                     .map_or(false, |s| s.contains(&var_def_id))
                                                 && self.in_return_expr;
                                             if !skip_implicit_move {
+                                                // Mark consumed variable as used —
+                                                // implicit move into a struct field
+                                                // is a real use site. Without this,
+                                                // `String x = ...; T(x)` (struct ctor)
+                                                // false-positives on unused-variable
+                                                // because the `continue` skips the
+                                                // `check_expr` that marks uses.
+                                                if let Some(entry) = self.local_var_usage.get_mut(&var_def_id) {
+                                                    entry.2 = true;
+                                                }
                                                 self.check_move(var_def_id, arg.span);
                                                 continue;
                                             }
