@@ -1274,6 +1274,51 @@ done",
 }
 
 #[test]
+fn drop_early_return() {
+    run_gg(
+        "drop_early_return.gg",
+        "\
+drop alpha
+a=1
+using alpha
+drop alpha
+b=2",
+    );
+}
+
+#[test]
+fn drop_match_partial_init() {
+    run_gg(
+        "drop_match_partial_init.gg",
+        "\
+consume r1
+after-match
+---
+keep r2
+after-match
+drop r2
+---
+default r3
+after-match
+drop r3",
+    );
+}
+
+#[test]
+fn drop_loop_reinit() {
+    run_gg(
+        "drop_loop_reinit.gg",
+        "\
+consume iter-0
+drop iter-1
+consume iter-2
+drop iter-3
+consume iter-4
+done",
+    );
+}
+
+#[test]
 fn drop_dict_loop() {
     run_gg(
         "drop_dict_loop.gg",

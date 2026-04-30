@@ -357,14 +357,33 @@ fn insert_drop_flags(
         slot_to_flag.insert(*slot, flag_id);
     }
 
-    // 2. Insert flag initialization (`true`) at the start of the entry block (bb0).
+    // 2. Insert flag initialization (`false`) at the start of the entry block.
+    //
+    //   Why `false` (the slot is dead by default) and not `true`:
+    //   the flag must reflect whether the slot CURRENTLY holds an owned
+    //   resource. At function entry no user-level slot has yet been
+    //   stored to (function parameters are stored via explicit SlotStore
+    //   at bb0 by `lir/lower::lower()`; locals are stored at their
+    //   `let`-binding sites). The instrumentation below transitions the
+    //   flag to `true` after each SlotStore and back to `false` after
+    //   each MoveSlot / Memset, so the run-time value always tracks the
+    //   true ownership state.
+    //
+    //   The previous contract (bb0 := true) was correct in the
+    //   common case where the slot was initialized at declaration and
+    //   never re-initialized after a move. It silently broke for the
+    //   loop-reinit pattern: iter N moves the slot (flag := false),
+    //   iter N+1 stores a fresh resource via SlotStore (flag stayed
+    //   false), so the end-of-body drop guard skipped the live
+    //   resource — leak with no observable signal except clone-stats.
+    //   See `drop_loop_reinit.gg` for the regression fixture.
     {
         let mut inits: Vec<Inst> = Vec::with_capacity(sorted_slots.len() * 2);
         for slot in &sorted_slots {
             let flag_slot = slot_to_flag[slot];
-            let v_true = func.next_value();
-            inits.push(Inst::BoolConst { dst: v_true, value: true });
-            inits.push(Inst::SlotStore { slot: flag_slot, value: v_true, is_move: false });
+            let v_false = func.next_value();
+            inits.push(Inst::BoolConst { dst: v_false, value: false });
+            inits.push(Inst::SlotStore { slot: flag_slot, value: v_false, is_move: false });
         }
         // Prepend to bb0 so the flags are initialized before any other code.
         let mut combined = inits;
@@ -372,26 +391,49 @@ fn insert_drop_flags(
         func.blocks[0].insts = combined;
     }
 
-    // 3. After each MoveSlot / Memset that moves a flagged slot, insert `flag := false`.
+    // 3. Instrument flag transitions:
+    //   * After each SlotStore that writes a flagged slot → flag := true.
+    //   * After each MoveSlot / Memset that empties a flagged slot → flag := false.
+    //
+    //   The SlotStore arm covers re-initialization across iterations
+    //   (the loop-reinit pattern that the prior bb0-only init missed)
+    //   AND the function-param case (params get SlotStored at bb0 by
+    //   `lir/lower::lower()`, so their flag transitions to true there).
+    //
+    //   We must avoid instrumenting the SlotStore that writes the FLAG
+    //   itself — the flag slot is in `slot_to_flag.values()`, never in
+    //   `slot_to_flag.keys()`. Looking up the flag-store's slot in
+    //   `slot_to_flag` returns None, so the SlotStore arm naturally
+    //   skips its own writes.
+    let flag_slots: HashSet<SlotId> = slot_to_flag.values().copied().collect();
     for bi in 0..func.blocks.len() {
         let old_insts = std::mem::take(&mut func.blocks[bi].insts);
         let mut new_insts: Vec<Inst> = Vec::with_capacity(old_insts.len());
         for inst in old_insts {
-            let flag_slot = if let Inst::MoveSlot { slot } = &inst {
-                slot_to_flag.get(slot).copied()
-            } else if let Inst::Memset { ptr, .. } = &inst {
-                // Projected MoveZero (field-level moves) still emits Memset.
-                val_to_slot.get(ptr)
-                    .and_then(|s| slot_to_flag.get(s))
-                    .copied()
-            } else {
-                None
+            let (flag_slot, new_flag_value) = match &inst {
+                // SlotStore to a flagged user slot → flag := true (init / re-init).
+                // Skip stores to flag slots themselves (we emit those here).
+                Inst::SlotStore { slot, .. } if !flag_slots.contains(slot) => {
+                    (slot_to_flag.get(slot).copied(), true)
+                }
+                // MoveSlot annotation → flag := false (moved out).
+                Inst::MoveSlot { slot } => {
+                    (slot_to_flag.get(slot).copied(), false)
+                }
+                // Projected MoveZero (field-level moves) emits Memset.
+                Inst::Memset { ptr, .. } => {
+                    let s = val_to_slot.get(ptr)
+                        .and_then(|s| slot_to_flag.get(s))
+                        .copied();
+                    (s, false)
+                }
+                _ => (None, false),
             };
             new_insts.push(inst);
             if let Some(fs) = flag_slot {
-                let v_false = func.next_value();
-                new_insts.push(Inst::BoolConst { dst: v_false, value: false });
-                new_insts.push(Inst::SlotStore { slot: fs, value: v_false, is_move: false });
+                let v = func.next_value();
+                new_insts.push(Inst::BoolConst { dst: v, value: new_flag_value });
+                new_insts.push(Inst::SlotStore { slot: fs, value: v, is_move: false });
             }
         }
         func.blocks[bi].insts = new_insts;
