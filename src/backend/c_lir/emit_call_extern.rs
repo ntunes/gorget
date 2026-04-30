@@ -1162,38 +1162,17 @@ pub(super) fn emit_call_extern(
             }
 
             // Set elem_drop/val_drop on collection constructors.
+            // Vector/Deque elem_drop / elem_clone / elem_materialize are wired
+            // at LIR level by `infer_collection_elem_fns` + `emit_collection_fn_ptr_stores`
+            // (src/lir/lower/insts.rs) which emit NamedFuncAddr + ElemPtr + Store
+            // insts that compile uniformly in both backends. Dict val_drop /
+            // val_clone / val_materialize are also LIR-emitted. The Set / HashSet
+            // key_drop / key_clone wiring below is C-only for now (LLVM has no
+            // counterpart — see TODO 2026-04-30 on key_drop/key_clone parity).
             // Uses original_name to determine element type from the monomorphized name.
             if let Some(orig) = original_name.as_ref() {
                 if let Some(d) = dst {
                     let dv = format!("__v{}", d.0);
-                    // Vector/Array constructor: set elem_drop
-                    if (name.starts_with("gorget_array_new") || name == "gorget_array_with_capacity")
-                        && (orig.starts_with("Vector__") || orig.starts_with("Deque__"))
-                    {
-                        let raw_elem = orig.strip_prefix("Vector__")
-                            .or_else(|| orig.strip_prefix("Deque__"))
-                            .unwrap_or("");
-                        let elem_type = raw_elem.strip_suffix("__new")
-                            .or_else(|| raw_elem.strip_suffix("__with_capacity"))
-                            .unwrap_or(raw_elem);
-                        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){drop_fn};").unwrap();
-                        } else if module.recursive_drop_structs.contains_key(elem_type)
-                            || module.recursive_drop_enums.contains_key(elem_type)
-                        {
-                            write!(out, " {dv}.elem_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
-                        }
-                        if let Some(clone_fn) = elem_clone_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){clone_fn};").unwrap();
-                        } else if module.recursive_drop_structs.contains_key(elem_type)
-                            || module.recursive_drop_enums.contains_key(elem_type)
-                        {
-                            write!(out, " {dv}.elem_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
-                        }
-                        if let Some(mat_fn) = elem_materialize_fn_for_c_type(elem_type) {
-                            write!(out, " {dv}.elem_materialize = (__gorget_drop_fn){mat_fn};").unwrap();
-                        }
-                    }
                     // Set/HashSet constructor: wire Hashable/Equatable bridges
                     // + key_drop / key_clone for user-type elements. GorgetSet
                     // is the same struct as GorgetMap with val_size=0, so the
