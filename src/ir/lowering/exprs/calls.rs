@@ -405,6 +405,23 @@ pub(super) fn lower_call(
                 tid
             };
             let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
+            // Box() is a consuming position: the runtime's `*p = val` shallow-
+            // copies the value into the heap, so resource-typed values whose
+            // source is borrowed (bare param, non-last-use local, Ref, etc.)
+            // would alias the box's interior with the caller's data —
+            // identical pattern to push/put/insert. Apply the standard
+            // consuming-arg ownership shim before the alloc call so a clone
+            // is inserted when the source can't be moved. Without this, code
+            // like `parse_function_type(named_ty, ...)` ends up with the
+            // returned TFunction's box and the caller's named_ty sharing the
+            // same Vector data — a use-after-free that, on this specific
+            // shape, manifests as infinite Type__clone recursion.
+            val_op = ctx.ensure_owned_at_consuming_arg(
+                builder,
+                val_op,
+                &args[0].node.value,
+                crate::ir::ImplicitCloneReason::ConsumingArg,
+            );
             // Unregister source — Box takes ownership, source must not be dropped.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
                 if place.projections.is_empty() {
