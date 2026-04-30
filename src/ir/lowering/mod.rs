@@ -692,12 +692,13 @@ pub fn lower_module(
         // Handle extern blocks: register each function + derive ABI from block's ABI string.
         // extern "C": → String params → CStr
         // extern "Gorget": → String params → GorgetString
+        // bare extern: → defaults to Gorget (matches the inline `extern void f(...)`
+        //   form's default — every gorget_* runtime function takes Str by value).
         if let Item::ExternBlock(ext) = &item.node {
             use crate::ir::abi::AbiKind;
             let string_abi = match ext.abi.as_ref().map(|a| a.node.as_str()) {
                 Some("C") => AbiKind::CStr,
-                Some("Gorget") => AbiKind::GorgetString,
-                _ => AbiKind::Auto,
+                _ => AbiKind::GorgetString,
             };
 
             for func_spanned in &ext.items {
@@ -748,7 +749,7 @@ pub fn lower_module(
                             AbiKind::Ptr
                         } else if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             AbiKind::CStr
-                        } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
+                        } else if ctx.type_mapper.is_string_type(tid) {
                             string_abi
                         } else if !ctx.type_mapper.is_string_type(tid) && ctx.type_registry.is_resource_type(tid) {
                             // Resource types (collections, opaque handles) are passed by pointer in C
@@ -917,6 +918,14 @@ pub fn lower_module(
 
                         // Derive param ABI from inline extern's language tag or explicit cstr types.
                         // Prepend Auto for implicit self (always position 0 in C call).
+                        //
+                        // Note: bare `extern` here intentionally stays `Auto` (unlike inline
+                        // top-level / extern-block bare extern, which default to Gorget).
+                        // The hardcoded fn_extern_abi_kinds inserts at line 824-839 (e.g.
+                        // `gorget_process_write_stdin → [Auto, CStr]`) cover the C-symbol
+                        // names that bare equip externs bind to — and the `any(!= Auto)`
+                        // guard below means an all-Auto vector here leaves those overrides
+                        // intact. Promoting bare to Gorget would clobber them.
                         use crate::ir::abi::AbiKind;
                         let string_abi = match method_def.extern_abi.as_deref() {
                             Some("C") => AbiKind::CStr,

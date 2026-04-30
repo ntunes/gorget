@@ -100,6 +100,25 @@ fn large_agg_byval_attr(ty: &LirType, snames: &HashMap<u32, String>) -> String {
     }
 }
 
+/// Reverse-lookup a struct id by its sanitized name (the form stored in
+/// `snames`). Linear scan, but `snames` is small (~tens of entries per
+/// module) so this is cheap.
+fn struct_sid_by_name(snames: &HashMap<u32, String>, name: &str) -> Option<u32> {
+    snames.iter().find_map(|(k, v)| if v == name { Some(*k) } else { None })
+}
+
+/// Byval attribute for a Str/GorgetString-by-value param. Resolves the
+/// `GorgetString` struct id once and formats the x86_64 `byval(...) align 8 `
+/// prefix (with a trailing space ready to splice before `%vN`). Empty on
+/// non-x86_64 — `large_agg_byval_attr` handles the platform check. Returns
+/// empty if `GorgetString` isn't registered (defensive — the runtime always
+/// emits it, but bail rather than crash if a future refactor changes that).
+fn gorget_string_byval_attr(snames: &HashMap<u32, String>) -> String {
+    struct_sid_by_name(snames, "GorgetString")
+        .map(|sid| large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames))
+        .unwrap_or_default()
+}
+
 /// C reserved keywords — function names clashing with these are prefixed with `__gg_`.
 /// Must match the C backend's `c_func_name()` in helpers.rs.
 const C_RESERVED: &[&str] = &[
@@ -1149,10 +1168,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
     // Both take `Str` by value (32-byte struct); on x86_64 SysV that's memory
     // class — annotate the declaration to match the C ABI gcc/clang compile.
-    let str_byval_attr = {
-        let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-        sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), &snames)).unwrap_or_default()
-    };
+    let str_byval_attr = gorget_string_byval_attr(&snames);
     let str_byval = str_byval_attr.trim_end();
     let str_param = if str_byval.is_empty() { "ptr".to_string() } else { format!("ptr {str_byval}") };
     writeln!(out, "declare i1 @gorget_str_eq({sp}, {sp})", sp = str_param).unwrap();
@@ -1403,9 +1419,14 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         // a byval(...) override, llc emits a pointer-in-register and the
         // C side reads garbage. Resolve the suffix → struct id and treat
         // the param as the actual inner type for ABI purposes.
+        //
+        // Primitive inners (`__gorget_box_alloc_int64_t`, `_double`, etc.)
+        // don't match a struct in `snames`, so this lookup returns None and
+        // the standard scalar-spill path at the call site (`expects_ptr &&
+        // !is_ptr`) handles them. Only struct inners need the override.
         let box_alloc_inner: Option<u32> = ext.name
             .strip_prefix("__gorget_box_alloc_")
-            .and_then(|suffix| snames.iter().find_map(|(k, v)| if v == suffix { Some(*k) } else { None }));
+            .and_then(|suffix| struct_sid_by_name(snames, suffix));
         let params: Vec<String> = ext.params.iter().enumerate()
             .map(|(i, p)| {
                 // Void params are invalid in LLVM — replace with ptr (typically closure env)
@@ -1439,12 +1460,11 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 let force_str_byval = matches!(param_abi,
                     crate::ir::abi::AbiKind::GorgetString | crate::ir::abi::AbiKind::ByValue
                 );
-                if force_str_byval {
-                    let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                    if let Some(sid) = sid {
-                        let ty = LirType::Struct(StructId(sid));
-                        return format!("ptr {}", large_agg_byval_attr(&ty, snames)).trim_end().to_string();
-                    }
+                if force_str_byval && struct_sid_by_name(snames, "GorgetString").is_some() {
+                    // On x86_64 the helper produces `byval(%GorgetString) align 8 `;
+                    // on other targets it returns "" and we emit bare `ptr` (matches AAPCS64).
+                    let attr = gorget_string_byval_attr(snames);
+                    return format!("ptr {attr}").trim_end().to_string();
                 }
                 // Aggregate params: small structs (≤16 bytes) pass in registers (aarch64 ABI),
                 // large structs (>16 bytes) pass by indirect reference (ptr).
@@ -1565,10 +1585,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         // module.externs entry, so we land here. The C runtime defines
                         // these as `Str f(Str s)` — 1 Str arg by value (byval on x86_64)
                         // and Str return via sret (32-byte aggregate).
-                        let str_attr = {
-                            let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                            sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
-                        };
+                        let str_attr = gorget_string_byval_attr(snames);
                         writeln!(out, "declare void @{name}(ptr sret(%GorgetString), ptr {str_attr})").unwrap();
                     } else {
                         // Truly unknown — no LirExtern declared and not a locally-defined
@@ -4081,10 +4098,7 @@ fn emit_inst(
                         // 32 bytes. On aarch64 it's passed by hidden pointer (matches
                         // bare `ptr`). On x86_64 SysV it's memory class on the stack —
                         // emit `byval` so llc lowers it to bytes-on-stack.
-                        let str_attr_psc = {
-                            let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                            sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
-                        };
+                        let str_attr_psc = gorget_string_byval_attr(snames);
                         writeln!(out, "  call void @gorget_string_push_char(ptr %v{}, ptr {}%v{})", args[0].0, str_attr_psc, args[1].0).unwrap();
                     }
                     return;
@@ -4106,10 +4120,7 @@ fn emit_inst(
                 // Use gorget_str_to_cstr: ensures null termination even for views.
                 // gorget_str_to_cstr takes Str by value — annotate with byval on x86_64
                 // so the C runtime gets the bytes via memory class on the stack.
-                let str_attr_local = {
-                    let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                    sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
-                };
+                let str_attr_local = gorget_string_byval_attr(snames);
                 writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{arg0})", str_attr_local).unwrap();
                 if let Some(d) = dst {
                     // Use the extern's declared return type (not val_types — val_types[d]
@@ -5498,9 +5509,7 @@ fn emit_inst(
                 // copies the bytes onto the outgoing stack frame; bare `ptr`
                 // would put pointers in registers and the C side would read
                 // garbage.
-                let str_attr = if let Some(sid) = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None }) {
-                    large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames)
-                } else { String::new() };
+                let str_attr = gorget_string_byval_attr(snames);
                 if let Some(d) = dst {
                     let uid = *trap_counter;
                     *trap_counter += 1;
@@ -5623,10 +5632,12 @@ fn emit_inst(
                 // how the LIR registered the param (typically Ptr because the SSA
                 // operand holds a pointer to the inner). Without this, the call site
                 // would lower the second-arg branch as plain `ptr` instead of the
-                // byval/small-agg ABI required on x86_64 SysV.
+                // byval/small-agg ABI required on x86_64 SysV. Primitive inners
+                // (int64_t/double/etc.) miss the snames lookup and fall through to
+                // the scalar-spill path below — same as the decl emitter.
                 let box_alloc_inner_call: Option<LirType> = name
                     .strip_prefix("__gorget_box_alloc_")
-                    .and_then(|suffix| snames.iter().find_map(|(k, v)| if v == suffix { Some(*k) } else { None }))
+                    .and_then(|suffix| struct_sid_by_name(snames, suffix))
                     .map(|sid| LirType::Struct(StructId(sid)));
                 let arg_strs: Vec<String> = args.iter().enumerate().map(|(i, a)| {
                     let expected_ty = if let (0, Some(inner)) = (i, &box_alloc_inner_call) {
@@ -5669,10 +5680,7 @@ fn emit_inst(
                     if is_str_to_cstr {
                         let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
                         // gorget_str_to_cstr takes Str by value — see large_agg_byval_attr.
-                        let str_attr_call = {
-                            let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                            sid.map(|s| large_agg_byval_attr(&LirType::Struct(StructId(s)), snames)).unwrap_or_default()
-                        };
+                        let str_attr_call = gorget_string_byval_attr(snames);
                         spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{})", str_attr_call, a.0));
                         format!("ptr %{cstr_name}")
                     } else if matches!(param_abi,
@@ -5682,13 +5690,8 @@ fn emit_inst(
                         // SSA operand is the address of a strlit struct). Force byval
                         // so x86_64 SysV emits a memory-class stack copy instead of
                         // a bare pointer-in-register.
-                        let sid = snames.iter().find_map(|(k, v)| if v == "GorgetString" { Some(*k) } else { None });
-                        if let Some(sid) = sid {
-                            let attr = large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames);
-                            format!("ptr {}%v{}", attr, a.0)
-                        } else {
-                            format!("ptr %v{}", a.0)
-                        }
+                        let attr = gorget_string_byval_attr(snames);
+                        format!("ptr {}%v{}", attr, a.0)
                     } else if param_abi == crate::ir::abi::AbiKind::Ptr && expects_agg && is_ptr {
                         // The extern declares the param as a pointer (`T*` in
                         // Gorget extern syntax). LIR keeps the type as the
