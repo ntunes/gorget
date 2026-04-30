@@ -3475,6 +3475,16 @@ equip Parser:
                 self.advance()
                 if self.check_tok(TOK_STRING):
                     self.advance()
+                # `extern blocking Result[...] accept()` —  std.net.socket /
+                # std.net.tls etc. mark blocking-mode externs with the
+                # `blocking` modifier between the optional ABI string and
+                # the return type. Self-host's lexer treats `blocking` as
+                # a bare identifier, so skip it explicitly. Same shape as
+                # `parse_extern_block` (line ~3654). Without this, the
+                # blocking ident is parsed as the return type and the
+                # method signature comes out garbled.
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                    self.advance()
             # Skip 'async' modifier before method def
             if self.check_kw(KW_ASYNC):
                 self.advance()
