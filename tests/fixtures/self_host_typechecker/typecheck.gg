@@ -202,9 +202,13 @@ int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
 # Recurses through container types (RTGeneric, RTTuple, RTArray,
 # RTSlice, RTRef) so `Pair[T, U]` becomes `Pair[<error>, <error>]`
 # and `Vector[T]` becomes `Vector[<error>]` at binding sites.
-# Does NOT descend into RTFunction / RTCallableTrait / RTBoxedCallable —
-# those are signature-shaped types and Rust keeps `T` inside them
-# (e.g. `Callable[T(int)]` stays `Callable[T(int)]`).
+# Also descends into Callable WRAPPERS (RTCallableTrait,
+# RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable) and
+# rewrites the wrapped function's params/return — Rust renders
+# `Callable[T(int)]` at a binding as `Callable[<error>(int)]`.
+# Does NOT descend into bare RTFunction (only the Callable wrapper
+# triggers descent) — bare function types are signature-shaped and
+# Rust keeps `T` there.
 int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types):
     if type_id < 0:
         return type_id
@@ -271,6 +275,56 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
             int new_inner_tid = demote_generic_param_to_var(inner_tid, scopes, &types)
             if new_inner_tid != inner_tid:
                 return types.add_type(RTRef(new_inner_tid))
+            return type_id
+        case RTCallableTrait(func_id):
+            int new_func_id = demote_through_function_type(func_id, scopes, &types)
+            if new_func_id != func_id:
+                return types.add_type(RTCallableTrait(new_func_id))
+            return type_id
+        case RTMutCallableTrait(func_id):
+            int new_func_id = demote_through_function_type(func_id, scopes, &types)
+            if new_func_id != func_id:
+                return types.add_type(RTMutCallableTrait(new_func_id))
+            return type_id
+        case RTConsumeCallableTrait(func_id):
+            int new_func_id = demote_through_function_type(func_id, scopes, &types)
+            if new_func_id != func_id:
+                return types.add_type(RTConsumeCallableTrait(new_func_id))
+            return type_id
+        case RTBoxedCallable(kind_name, func_id):
+            int new_func_id = demote_through_function_type(func_id, scopes, &types)
+            if new_func_id != func_id:
+                return types.add_type(RTBoxedCallable(kind_name, new_func_id))
+            return type_id
+        else:
+            return type_id
+
+# Helper: demote generic params inside the params/return of an
+# RTFunction. Only invoked when we know the function is wrapped in
+# a Callable trait — bare RTFunction values keep `T`.
+int demote_through_function_type(int type_id, ScopeTable scopes, TypeTable &types):
+    if type_id < 0:
+        return type_id
+    if type_id >= types.types.len():
+        return type_id
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTFunction(params, ownerships, ret_id):
+            Vector[int] new_params = Vector[int]()
+            bool any_changed = false
+            int i = 0
+            while i < params.len():
+                int p_id = get_int_at(params, i)
+                int new_p_id = demote_generic_param_to_var(p_id, scopes, &types)
+                if new_p_id != p_id:
+                    any_changed = true
+                new_params.push(new_p_id)
+                i = i + 1
+            int new_ret_id = demote_generic_param_to_var(ret_id, scopes, &types)
+            if new_ret_id != ret_id:
+                any_changed = true
+            if any_changed:
+                return types.add_type(RTFunction(new_params, ownerships, new_ret_id))
             return type_id
         else:
             return type_id
