@@ -171,8 +171,16 @@ fn meet_states(a: &SlotStates, b: &SlotStates, n_slots: usize) -> SlotStates {
 /// Find the index of the matching `DropGuardClose` for the guard open at
 /// `open_idx`, handling nested guard pairs correctly.
 ///
-/// Returns `insts.len()` (past-the-end) if no matching close is found (which
-/// indicates malformed LIR — shouldn't happen in well-formed output).
+/// Panics if no matching close is found within the same block. Drop-guard
+/// open/close pairs are emitted in matched form by `lir/lower/drops.rs`;
+/// any LIR pass that reorders, deletes, or splits guards across blocks
+/// MUST preserve nesting, or this assertion fires.
+///
+/// Hard error rather than silent skip: a missing close means an earlier
+/// pass corrupted the LIR. Silently passing through would leave a runtime
+/// guard the elaborator promised to optimize away (leak), or worse, leave
+/// a stale `DropGuardClose` that paints a later open's drop as ours
+/// (silent miscompile). Panic up-front so the responsible pass surfaces.
 fn find_matching_close(insts: &[Inst], open_idx: usize) -> usize {
     let mut depth = 1usize;
     for i in (open_idx + 1)..insts.len() {
@@ -187,8 +195,14 @@ fn find_matching_close(insts: &[Inst], open_idx: usize) -> usize {
             _ => {}
         }
     }
-    // No matching close found — past-the-end signals caller to skip elaboration.
-    insts.len()
+    panic!(
+        "drop_elab: orphan DropGuardOpen at index {open_idx} in {}-inst block — \
+         no matching DropGuardClose. nesting depth at end-of-block: {depth}. \
+         opens/closes must stay paired through every LIR pass; check the \
+         most recent pre-elaboration transform for a deletion that took an \
+         open without its close (or vice versa).",
+        insts.len()
+    );
 }
 
 // ── Per-block elaboration ─────────────────────────────────────────────────────
@@ -227,36 +241,35 @@ fn elaborate_block(
                 let guarded_slot = val_to_slot.get(value).copied();
 
                 if let Some(slot) = guarded_slot {
+                    // `find_matching_close` panics on orphan opens — no need to
+                    // re-check the result against `insts.len()`.
                     let close_idx = find_matching_close(insts, i);
-                    // Only act if we found a valid matching close.
-                    if close_idx < insts.len() {
-                        let state = current_state
-                            .get(&slot)
-                            .copied()
-                            .unwrap_or(InitState::MaybeInitialized);
+                    let state = current_state
+                        .get(&slot)
+                        .copied()
+                        .unwrap_or(InitState::MaybeInitialized);
 
-                        match state {
-                            InitState::Uninitialized => {
-                                // Delete the entire guard sequence: open + body + close.
-                                // The drop is provably dead — the slot was zeroed on all paths.
-                                to_delete.extend(i..=close_idx);
-                                // Record that this slot's guard (including the drop call) was
-                                // eliminated; companion Memsets for this slot can be removed too.
-                                deleted_slots.insert(slot);
-                                i = close_idx + 1;
-                                continue;
-                            }
-                            InitState::Initialized => {
-                                // Drop is unconditionally live — remove the guard wrapper,
-                                // keep the inner drop calls.
-                                to_delete.insert(i);        // delete open
-                                to_delete.insert(close_idx); // delete close
-                                // Fall through to process the inner instructions normally.
-                            }
-                            InitState::MaybeInitialized => {
-                                // Record for Phase 3 (bool drop flag insertion).
-                                maybe_init_slots.insert(slot);
-                            }
+                    match state {
+                        InitState::Uninitialized => {
+                            // Delete the entire guard sequence: open + body + close.
+                            // The drop is provably dead — the slot was zeroed on all paths.
+                            to_delete.extend(i..=close_idx);
+                            // Record that this slot's guard (including the drop call) was
+                            // eliminated; companion Memsets for this slot can be removed too.
+                            deleted_slots.insert(slot);
+                            i = close_idx + 1;
+                            continue;
+                        }
+                        InitState::Initialized => {
+                            // Drop is unconditionally live — remove the guard wrapper,
+                            // keep the inner drop calls.
+                            to_delete.insert(i);        // delete open
+                            to_delete.insert(close_idx); // delete close
+                            // Fall through to process the inner instructions normally.
+                        }
+                        InitState::MaybeInitialized => {
+                            // Record for Phase 3 (bool drop flag insertion).
+                            maybe_init_slots.insert(slot);
                         }
                     }
                 }
