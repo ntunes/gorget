@@ -356,11 +356,28 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
         int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
         param_type_ids.push(p_type_id)
         param_ownerships.push(p.ownership)
-        if has_body_scope:
-            int param_def = scopes.lookup_in_scope(body_scope, p.param_name)
-            if param_def >= 0:
-                int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
-                scopes.set_def_type(param_def, binding_type_id)
+        # Set param type in EVERY body scope that matches this fn name and
+        # contains this param. Handles duplicate extern declarations across
+        # files (e.g. `__bytes_to_str_raw(b64_buf)` in std.bytes vs
+        # `__bytes_to_str_raw(data)` in std.io): self-host's flat-merge
+        # loader keeps both bodies but only the first wins the module-scope
+        # name; without iterating, the second's params never get typed.
+        int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
+        int fsi = 0
+        while fsi < ctx.fn_scope_names.len():
+            String fs_name = ctx.fn_scope_names.get(fsi).unwrap()
+            if fs_name == func.name:
+                int bs = ctx.fn_scope_ids.get(fsi).unwrap()
+                int bp = scopes.scope_parent_of(bs)
+                bool ok = bp == parent_scope
+                if not ok and bp >= 0:
+                    int bgp = scopes.scope_parent_of(bp)
+                    ok = bgp == parent_scope
+                if ok:
+                    int param_def = scopes.lookup_in_scope(bs, p.param_name)
+                    if param_def >= 0:
+                        scopes.set_def_type(param_def, binding_type_id)
+            fsi = fsi + 1
         pi = pi + 1
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
