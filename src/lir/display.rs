@@ -202,11 +202,11 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         Inst::CowClone { dst, src, ty } => {
             write!(f, "{dst}: {ty} = cow_clone {src}")
         }
-        Inst::TraitCall { dst, object, trait_name, method, args, ret_ty, .. } => {
+        Inst::TraitCall { dst, object, trait_obj_struct, method_idx, args, ret_ty, .. } => {
             if let Some(d) = dst {
-                write!(f, "{d}: {ret_ty} = trait_call {object}, {trait_name}::{method}(")?;
+                write!(f, "{d}: {ret_ty} = trait_call {object}, {trait_obj_struct}.method[{method_idx}](")?;
             } else {
-                write!(f, "trait_call {object}, {trait_name}::{method}(")?;
+                write!(f, "trait_call {object}, {trait_obj_struct}.method[{method_idx}](")?;
             }
             for (i, a) in args.iter().enumerate() {
                 if i > 0 { write!(f, ", ")?; }

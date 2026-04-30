@@ -457,8 +457,19 @@ pub enum Inst {
     TraitCall {
         dst: Option<ValueId>,
         object: ValueId,
-        trait_name: String,
-        method: String,
+        /// StructId of the `{Trait}_TraitObj` struct (the runtime-typed
+        /// shape of the self pointer: `{data: ptr, vtable: ptr}`).
+        /// Resolved at LIR construction time in `try_emit_trait_call`.
+        /// The trait's display name is recovered from
+        /// `module.structs[trait_obj_struct.0].name` (stripping the
+        /// `_TraitObj` suffix); the matching VTable struct is looked
+        /// up by `{trait_name}_VTable`.
+        trait_obj_struct: StructId,
+        /// Index into the VTable struct's fields. Resolved at LIR
+        /// construction time. The method's display name is recovered
+        /// from `module.structs[<vtable_sid>].fields[method_idx].0`
+        /// when needed (e.g., synth helper-fn name formation).
+        method_idx: u32,
         args: Vec<ValueId>,
         arg_abis: Vec<crate::ir::abi::AbiKind>,
         /// Method's user-param LIR types, resolved at emit time from the

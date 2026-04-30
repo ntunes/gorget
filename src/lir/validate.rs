@@ -163,6 +163,33 @@ fn check_struct_refs(
         // the validator double-checks the index didn't go stale through a
         // later struct-removing pass (DCE, etc.).
         Inst::SetCollectionBridge { key_struct, .. } => Some(*key_struct),
+        // TraitCall's trait_obj_struct is resolved at LIR construction time
+        // in `try_emit_trait_call`. The method_idx is checked against the
+        // matching `*_VTable` struct's field count below.
+        Inst::TraitCall { trait_obj_struct, method_idx, .. } => {
+            // Locate the paired VTable struct by name and bound-check
+            // method_idx against its field count. A stale index would
+            // point past the vtable's last method slot.
+            if let Some(obj_def) = module.structs.get(trait_obj_struct.0 as usize) {
+                if let Some(trait_name) = obj_def.name.strip_suffix("_TraitObj") {
+                    let vtable_name = format!("{trait_name}_VTable");
+                    if let Some(vtable_def) = module.structs.iter().find(|s| s.name == vtable_name) {
+                        if *method_idx as usize >= vtable_def.fields.len() {
+                            errors.push(LirError {
+                                func: func.name.clone(),
+                                block: Some(block),
+                                message: format!(
+                                    "method index {method_idx} out of range for {vtable_name} \
+                                     (has {} fields)",
+                                    vtable_def.fields.len()
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Some(*trait_obj_struct)
+        }
         _ => None,
     };
 

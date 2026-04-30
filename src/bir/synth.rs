@@ -90,8 +90,11 @@ pub(crate) fn closure_call_sig_of(module: &LirModule, name: &str) -> Option<Clos
 /// one-helper-per-pair guarantee the plan promises.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct TraitHelperKey {
-    pub trait_name: String,
-    pub method: String,
+    pub trait_obj_struct: StructId,
+    pub method_idx: u32,
+    /// Same-trait-method instances may differ in concrete user-param /
+    /// return types after monomorphization, so the signature mangle
+    /// stays in the key.
     pub sig_mangle: String,
 }
 
@@ -225,12 +228,16 @@ impl SynthPool {
         fid
     }
 
-    /// Request (and if necessary emit) a trait-dispatch helper for
-    /// `{trait_name}::{method}` with the given user-param and return LIR
-    /// types. Callers use this to replace inline vtable dispatch with a
-    /// single `Call` to a dedup'd helper; the helper's body contains the
-    /// `FieldPtr+Load×3 + CallPtr` chain (same shape as the legacy inline
-    /// expansion in `bir::lower`).
+    /// Request (and if necessary emit) a trait-dispatch helper for the
+    /// method at `method_idx` of the given trait. Callers use this to
+    /// replace inline vtable dispatch with a single `Call` to a dedup'd
+    /// helper; the helper's body contains the `FieldPtr+Load×3 + CallPtr`
+    /// chain (same shape as the legacy inline expansion in `bir::lower`).
+    ///
+    /// `trait_obj_struct` points to `{Trait}_TraitObj`; `method_idx` is
+    /// the method's slot in `{Trait}_VTable`. The cache is keyed on the
+    /// resolved IDs (plus the user signature mangle), so the dedup is
+    /// invariant under the trait's name.
     ///
     /// Signature: `fn(self: Ptr, ...user_params) -> ret_ty`. The `self`
     /// param is the `{Trait}_TraitObj*`; user params are the method's
@@ -239,8 +246,8 @@ impl SynthPool {
     pub fn get_or_emit_trait_helper(
         &mut self,
         structs: &[StructDef],
-        trait_name: &str,
-        method: &str,
+        trait_obj_struct: StructId,
+        method_idx: u32,
         user_param_tys: &[LirType],
         ret_ty: &LirType,
     ) -> FuncId {
@@ -249,15 +256,29 @@ impl SynthPool {
             .collect::<Vec<_>>()
             .join("_");
         let key = TraitHelperKey {
-            trait_name: trait_name.to_string(),
-            method: method.to_string(),
+            trait_obj_struct,
+            method_idx,
             sig_mangle,
         };
         if let Some(&fid) = self.trait_cache.get(&key) {
             return fid;
         }
 
-        let fname = format!("{SYNTH_PREFIX}trait_{trait_name}_{method}");
+        // Recover trait + method names from the LIR for diagnostic-quality
+        // helper-fn naming. The `_TraitObj` suffix is invariant (registered
+        // by GIR lowering); the matching VTable carries the method slot.
+        let trait_obj_name = &structs[trait_obj_struct.0 as usize].name;
+        let trait_name = trait_obj_name
+            .strip_suffix("_TraitObj")
+            .expect("TraitCall trait_obj_struct must point to a `*_TraitObj` struct");
+        let vtable_name = format!("{trait_name}_VTable");
+        let vtable_sid = structs.iter().position(|s| s.name == vtable_name)
+            .unwrap_or_else(|| panic!(
+                "trait helper: missing `{vtable_name}` struct (paired with `{trait_obj_name}`)"
+            ));
+        let method_name = &structs[vtable_sid].fields[method_idx as usize].0;
+
+        let fname = format!("{SYNTH_PREFIX}trait_{trait_name}_{method_name}");
         let mut params = Vec::with_capacity(1 + user_param_tys.len());
         params.push(LirType::Ptr);
         params.extend(user_param_tys.iter().cloned());
@@ -267,7 +288,7 @@ impl SynthPool {
             .collect();
         func.const_params = vec![false; func.params.len()];
 
-        emit_trait_helper_body(&mut func, structs, trait_name, method, user_param_tys, ret_ty);
+        emit_trait_helper_body(&mut func, structs, trait_name, method_name, user_param_tys, ret_ty);
 
         let fid = FuncId(self.base_func_count + self.new_fns.len() as u32);
         self.trait_cache.insert(key, fid);
@@ -1840,7 +1861,6 @@ mod tests {
             computed_c_size: Some(16),
             computed_c_align: Some(8),
         });
-        let _ = trait_obj_sid;
         // Greeter_VTable { greet: Ptr } — single method slot at index 0.
         let vtable_sid = module.add_struct(StructDef {
             name: "Greeter_VTable".into(),
@@ -1866,8 +1886,8 @@ mod tests {
         caller.block_mut(bb0).insts.push(Inst::TraitCall {
             dst: Some(result),
             object: obj,
-            trait_name: "Greeter".into(),
-            method: "greet".into(),
+            trait_obj_struct: trait_obj_sid,
+            method_idx: 0, // Greeter_VTable.greet at index 0
             args: vec![],
             arg_abis: vec![AbiKind::Ptr],
             param_tys: vec![],
@@ -1878,8 +1898,8 @@ mod tests {
         caller.block_mut(bb0).insts.push(Inst::TraitCall {
             dst: Some(result2),
             object: obj,
-            trait_name: "Greeter".into(),
-            method: "greet".into(),
+            trait_obj_struct: trait_obj_sid,
+            method_idx: 0,
             args: vec![],
             arg_abis: vec![AbiKind::Ptr],
             param_tys: vec![],

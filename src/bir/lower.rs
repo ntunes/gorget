@@ -203,8 +203,8 @@ fn expand_func(
                 Inst::TraitCall {
                     dst,
                     object,
-                    trait_name,
-                    method,
+                    trait_obj_struct,
+                    method_idx,
                     args,
                     arg_abis: _,
                     param_tys,
@@ -212,11 +212,12 @@ fn expand_func(
                 } => {
                     // Rewrite the TraitCall into `Call(helper)` where
                     // `helper` is a synth'd function (one per unique
-                    // `(trait, method, signature)`) whose body carries
-                    // the vtable dispatch chain (FieldPtr+Load×3 +
-                    // CallPtr). The helper has a typed signature, so
-                    // backend Call coercion handles aggregate args
-                    // without the CallPtr arg-ABI ambiguity.
+                    // `(trait_obj_struct, method_idx, signature)`)
+                    // whose body carries the vtable dispatch chain
+                    // (FieldPtr+Load×3 + CallPtr). The helper has a
+                    // typed signature, so backend Call coercion
+                    // handles aggregate args without the CallPtr
+                    // arg-ABI ambiguity.
                     //
                     // `param_tys` carries the method's user-param LIR
                     // types as resolved at emit time from the VTable
@@ -226,8 +227,8 @@ fn expand_func(
                     // `try_emit_trait_call` in `lir::lower::insts`.
                     let fid = pool.get_or_emit_trait_helper(
                         structs,
-                        &trait_name,
-                        &method,
+                        trait_obj_struct,
+                        method_idx,
                         &param_tys,
                         &ret_ty,
                     );

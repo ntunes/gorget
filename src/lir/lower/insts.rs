@@ -2159,11 +2159,39 @@ impl<'a> FuncLowering<'a> {
         // Allocate a ValueId for the result if the call produces one.
         let dst_val = dst.map(|_| self.lir_func.next_value());
 
+        // Resolve trait-name + method-name to typed IDs at construction
+        // time. The `{Trait}_TraitObj` and `{Trait}_VTable` structs are
+        // emitted by GIR lowering's trait-object pass before LIR
+        // lowering walks the function bodies, so they're guaranteed to
+        // exist in `self.module_structs` here. A missing struct or
+        // method would be a GIR-pass bug; panic with the (trait, method)
+        // pair so the responsible pass surfaces.
+        let trait_obj_name = format!("{trait_name}_TraitObj");
+        let trait_obj_struct = match self.module_structs.iter().position(|s| s.name == trait_obj_name) {
+            Some(idx) => crate::lir::StructId(idx as u32),
+            None => panic!(
+                "TraitCall lowering: missing `{trait_obj_name}` struct (trait `{trait_name}`, \
+                 method `{method}`). GIR lowering's trait-object pass must register the \
+                 `_TraitObj` struct before LIR lowering walks call sites."
+            ),
+        };
+        let vtable_name = format!("{trait_name}_VTable");
+        let vtable_sid = self.module_structs.iter().position(|s| s.name == vtable_name)
+            .unwrap_or_else(|| panic!(
+                "TraitCall lowering: missing `{vtable_name}` struct (trait `{trait_name}`, \
+                 method `{method}`)."
+            ));
+        let method_idx = self.module_structs[vtable_sid].fields.iter()
+            .position(|(n, _)| n == method)
+            .unwrap_or_else(|| panic!(
+                "TraitCall lowering: method `{method}` not found in `{vtable_name}` (trait `{trait_name}`)."
+            )) as u32;
+
         self.lir_func.block_mut(bb).insts.push(Inst::TraitCall {
             dst: dst_val,
             object: self_val,
-            trait_name: trait_name.to_string(),
-            method: method.to_string(),
+            trait_obj_struct,
+            method_idx,
             args: user_args,
             arg_abis,
             param_tys: user_param_tys,
