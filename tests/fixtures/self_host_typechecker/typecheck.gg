@@ -277,30 +277,23 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
 
 # ── Type-check a function definition ────────────────────────
 
-void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
+# Register a function's signature on its DefInfo without walking the
+# body. Used as a pre-pass in type_check_module so callers can resolve
+# `auto x = some_fn()` against `some_fn`'s declared return type even
+# when `some_fn` appears later in the merged-module item order than
+# the caller. Mirror of Rust's `register_function_signature`.
+void register_function_signature(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
     bool is_generic = func.type_params.len() > 0
-    # Look up the function's body scope from the resolve context
     int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
     bool has_body_scope = body_scope >= 0
     if not has_body_scope:
         if ctx.function_body_scopes.contains(func.name):
             body_scope = ctx.function_body_scopes.get(func.name).unwrap()
             has_body_scope = true
-
-    # Generic functions need their type params in scope when resolving
-    # the param/return types — body_scope has them defined. Switch the
-    # current scope to body_scope for the duration of signature
-    # resolution so `ast_type_to_resolved` sees T / U / etc. as
-    # DkGenericParam defs (matches Rust's per-call-site fresh-scope
-    # approach in register_function_signature).
     int saved_scope = scopes.current_scope()
     if is_generic and has_body_scope:
         scopes.set_current(body_scope)
-
-    # Resolve return type
     int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
-
-    # Resolve parameter types and assign type IDs to param defs
     Vector[int] param_type_ids = Vector[int]()
     Vector[int] param_ownerships = Vector[int]()
     int pi = 0
@@ -309,43 +302,40 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
         param_type_ids.push(p_type_id)
         param_ownerships.push(p.ownership)
-        # Look up param def in the function body scope. The signature
-        # slot (param_type_ids above) keeps the original RTDefined for
-        # generic params, but the BINDING is demoted to a fresh tagged
-        # RTVar so it renders as "<error>" — matching Rust's two-tier
-        # signature/binding representation.
         if has_body_scope:
             int param_def = scopes.lookup_in_scope(body_scope, p.param_name)
             if param_def >= 0:
                 int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
                 scopes.set_def_type(param_def, binding_type_id)
         pi = pi + 1
-
-    # Restore scope before searching for fn_def in parent scope.
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
-
-    # Build RTFunction type for the function itself
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
-
-    # Find function's def_id and assign type. Generic functions get
-    # registered too — Rust's typechecker registers them with type
-    # placeholders (T → DkGenericParam DefId via the body-scope lookup
-    # above).
     int fn_def = -1
-    # For equip methods, look up in the def scope (pass-1 equip scope)
     if def_scope >= 0:
         fn_def = scopes.lookup_in_scope(def_scope, func.name)
-    # Try parent scope next
     if fn_def < 0:
         fn_def = scopes.lookup_in_scope(parent_scope, func.name)
-    # Fall back to scanning all defs
     if fn_def < 0:
         fn_def = find_def_by_name(scopes, func.name, true)
     if fn_def >= 0:
         scopes.set_def_type(fn_def, fn_type_id)
 
+void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
+    # Register the signature first (idempotent — running it twice for
+    # IFunction items already pre-passed in type_check_module just
+    # overwrites with the same value). Equip methods aren't pre-passed
+    # so they need this call. Generic functions and impl methods need
+    # the body-scope signature dance too.
+    register_function_signature(func, parent_scope, &scopes, &types, ctx, def_scope)
+
     # Walk body for VarDecl types
+    int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
+    bool has_body_scope = body_scope >= 0
+    if not has_body_scope:
+        if ctx.function_body_scopes.contains(func.name):
+            body_scope = ctx.function_body_scopes.get(func.name).unwrap()
+            has_body_scope = true
     if has_body_scope:
         type_check_stmts(func.body, body_scope, &scopes, &types, ctx)
 
@@ -1271,6 +1261,23 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
     # equip-block self types and method sigs which `ast_type_to_resolved`
     # can compute from the resolved scope tree.
     types.trait_registry = build_trait_registry(module, &scopes, &types)
+    # Pre-pass: register all function signatures (sets def.type_id for
+    # IFunction items) before walking any bodies. Without this, when
+    # main's body uses `auto x = imported_fn()` and imported_fn comes
+    # later in the merged-module item order, infer_expr_type's
+    # EIdentifier lookup reads imported_fn's def.type_id while it's
+    # still -1 — and the auto-typed binding fails to resolve. Mirrors
+    # Rust's `register_signatures_recursive` (typecheck.rs:5273) which
+    # runs before the body-walk pass for exactly this reason.
+    int rs = 0
+    while rs < module.items.len():
+        Item r_item = get_item_at(module.items, rs)
+        match r_item:
+            case IFunction(r_func):
+                register_function_signature(r_func, module_scope, &scopes, &types, ctx, -1)
+            else:
+                pass
+        rs = rs + 1
     int i = 0
     while i < module.items.len():
         Item item = get_item_at(module.items, i)
