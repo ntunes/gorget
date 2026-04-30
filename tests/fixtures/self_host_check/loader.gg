@@ -136,7 +136,10 @@ bool expr_mentions_iter(SpannedExpr sexpr):
         case EIdentifier(name):
             return is_iter_trigger_name(name)
         case EMethodCall(obj, method_name, args, _):
-            if method_name == "iter":
+            # `.iter()` triggers loading std.iter (Iterable trait + adapters).
+            # `.drain()` does the same (Drainable trait + drain iterators).
+            # Mirrors src/loader.rs:315.
+            if method_name == "iter" or method_name == "drain":
                 return true
             if expr_mentions_iter(SpannedExpr((*obj).expr, (*obj).span)):
                 return true

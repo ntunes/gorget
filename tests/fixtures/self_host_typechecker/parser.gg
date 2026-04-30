@@ -1286,6 +1286,17 @@ equip Parser:
                     if self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                         return fn_ty
                     self.pos = saved
+                # Postfix `*` — contextual extern-pointer syntax (Rust gorget
+                # only accepts this inside `extern "C"`; self-host doesn't
+                # track that flag, but parse_type only fires in type
+                # positions where `*` can't be multiplication, so it's safe
+                # to consume unconditionally and elide the pointer-ness
+                # in the AST. Without this, `extern int f(BigNum* p) =
+                # "..."` parses as f(BigNum, ...) and the leftover `*` and
+                # `p` derail the rest of the param list. See
+                # docs/internals/project_ptr_syntax_extern.md.
+                if self.check_tok(TOK_STAR):
+                    self.advance()
                 return named_ty
             # Check for function type: Name(params) — only in contexts where followed by ) ] , or name
             if self.check_tok(TOK_LPAREN):
@@ -1296,6 +1307,9 @@ equip Parser:
                 if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                     return fn_ty
                 self.pos = saved
+            # Postfix `*` — see comment above on the bracketed branch.
+            if self.check_tok(TOK_STAR):
+                self.advance()
             return self.mk_type(TNamed(name, Vector[SpannedType]()), start)
 
         # Fallback: error
