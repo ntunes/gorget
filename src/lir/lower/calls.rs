@@ -207,6 +207,18 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_chars" => {
             sig(vec![s()], arr_ty(), _s1())
         }
+        // ── StringBuilder thunks: shim wrappers around gorget_string_* ──
+        // The C runtime defines these as `(GorgetString* s, Str chunk) → void`
+        // (see emit_types.rs line 2316). Without a sig entry the call-site
+        // type inference reads the 2nd arg as Ptr (from the strlit's ptr
+        // operand) → ABI tag = default → LLVM x86_64 emits bare `ptr` instead
+        // of `ptr byval(%GorgetString) align 8`, so the runtime reads the
+        // 32-byte struct from the wrong location and prints garbage / crashes.
+        "gorget_str_push" | "gorget_str_push_char" | "gorget_str_push_line" => {
+            sig(vec![LirType::Ptr, s()], LirType::Void, vec![Ptr, GorgetString])
+        }
+        "gorget_str_clear" => sig(vec![LirType::Ptr], LirType::Void, vec![Ptr]),
+        "gorget_str_capacity" => sig(vec![LirType::Ptr], LirType::I64, vec![Ptr]),
         // ── gorget_string_* — take GorgetString* by pointer ──────────
         // gorget_string_new(const char*) — arg is already const char* in LIR
         "gorget_string_new" => sig(vec![LirType::Ptr], g(), vec![Opaque]),

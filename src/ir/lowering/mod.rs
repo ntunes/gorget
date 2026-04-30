@@ -638,16 +638,23 @@ pub fn lower_module(
                 // extern "C" → String params become CStr (same as extern "C": blocks).
                 {
                     use crate::ir::abi::AbiKind;
+                    // Bare `extern` (no `extern "C"`/`extern "Gorget"` annotation) defaults
+                    // to Gorget — String params cross the FFI as a 32-byte `Str` struct by
+                    // value, matching the convention every gorget_* runtime function uses.
+                    // Without this default, the LIR registers String params as Auto, which
+                    // the LLVM x86_64 backend can't distinguish from "pass a pointer", so
+                    // it omits the byval(...) attr and the C side reads the Str struct
+                    // from the wrong place. (aarch64 large-aggregate-by-value happens to
+                    // be compatible with bare `ptr` IR, hiding the bug there.)
                     let string_abi = match func.extern_abi.as_deref() {
                         Some("C") => AbiKind::CStr,
-                        Some("Gorget") => AbiKind::GorgetString,
-                        _ => AbiKind::Auto,
+                        _ => AbiKind::GorgetString,
                     };
                     let abis: Vec<AbiKind> = func.params.iter().map(|p| {
                         let tid = ctx.type_mapper.map_ast_type(&p.node.type_.node);
                         if matches!(p.node.type_.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             AbiKind::CStr
-                        } else if string_abi != AbiKind::Auto && ctx.type_mapper.is_string_type(tid) {
+                        } else if ctx.type_mapper.is_string_type(tid) {
                             string_abi
                         } else if ctx.type_registry.is_resource_type(tid) && !ctx.type_mapper.is_string_type(tid) {
                             AbiKind::Ptr
