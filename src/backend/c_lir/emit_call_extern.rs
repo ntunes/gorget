@@ -1194,19 +1194,26 @@ pub(super) fn emit_call_extern(
                                 .or_else(|| rest.strip_suffix("__new"))
                                 .or_else(|| rest.strip_suffix("__with_capacity"))
                                 .unwrap_or(rest);
-                            if is_user_hashable_key(elem_type, module) {
-                                write!(out, " {dv}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{elem_type};").unwrap();
-                                write!(out, " {dv}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{elem_type};").unwrap();
-                                if module.recursive_drop_structs.contains_key(elem_type)
-                                    || module.recursive_drop_enums.contains_key(elem_type)
-                                {
-                                    write!(out, " {dv}.key_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
-                                    write!(out, " {dv}.key_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
-                                }
+                            // hash_fn / eq_fn are wired by SetCollectionBridge
+                            // (LIR-level pass `wire_collection_bridges`).
+                            // Only key_drop / key_clone remain C-backend-only;
+                            // see TODO 2026-04-30 on the LLVM divergence.
+                            if is_user_hashable_key(elem_type, module)
+                                && (module.recursive_drop_structs.contains_key(elem_type)
+                                    || module.recursive_drop_enums.contains_key(elem_type))
+                            {
+                                write!(out, " {dv}.key_drop = (__gorget_drop_fn){elem_type}__drop;").unwrap();
+                                write!(out, " {dv}.key_clone = (__gorget_drop_fn){elem_type}__clone_inplace;").unwrap();
                             }
                         }
                     }
-                    // Dict/HashMap constructor: set val_drop + val_clone
+                    // Dict/HashMap constructor: val_drop / val_clone /
+                    // val_materialize are wired at LIR level by
+                    // `infer_collection_elem_fns` + `emit_collection_fn_ptr_stores`
+                    // (offsets 104 / 112 / 136 on GorgetMap). hash_fn / eq_fn
+                    // are wired by `SetCollectionBridge`. Only key_drop /
+                    // key_clone for user-resource keys remain C-backend-only;
+                    // see TODO 2026-04-30 on the LLVM divergence.
                     if (name.starts_with("gorget_dict_new") || name.starts_with("gorget_map_new"))
                         && (orig.starts_with("Dict__") || orig.starts_with("HashMap__"))
                     {
@@ -1217,42 +1224,12 @@ pub(super) fn emit_call_extern(
                                 .unwrap_or(rest);
                             if let Some(pos) = rest_stripped.find("__") {
                                 let key_type = &rest_stripped[..pos];
-                                let val_type = &rest_stripped[pos + 2..];
-                                if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
-                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){drop_fn};").unwrap();
-                                } else if module.recursive_drop_structs.contains_key(val_type)
-                                    || module.recursive_drop_enums.contains_key(val_type)
+                                if is_user_hashable_key(key_type, module)
+                                    && (module.recursive_drop_structs.contains_key(key_type)
+                                        || module.recursive_drop_enums.contains_key(key_type))
                                 {
-                                    write!(out, " {dv}.val_drop = (__gorget_drop_fn){val_type}__drop;").unwrap();
-                                }
-                                if let Some(clone_fn) = elem_clone_fn_for_c_type(val_type) {
-                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){clone_fn};").unwrap();
-                                } else if module.recursive_drop_structs.contains_key(val_type)
-                                    || module.recursive_drop_enums.contains_key(val_type)
-                                {
-                                    write!(out, " {dv}.val_clone = (__gorget_drop_fn){val_type}__clone_inplace;").unwrap();
-                                }
-                                if val_type == "GorgetString" {
-                                    write!(out, " {dv}.val_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;").unwrap();
-                                }
-                                // User-type key with Hashable+Equatable: wire the
-                                // runtime bridges so Dict membership uses the user's
-                                // hash/eq rather than byte-FNV/memcmp (see
-                                // `emit_hashable_key_bridges` in c_lir/mod.rs).
-                                if is_user_hashable_key(key_type, module) {
-                                    write!(out, " {dv}.hash_fn = (__gorget_hash_fn)__gorget_ktable_hash__{key_type};").unwrap();
-                                    write!(out, " {dv}.eq_fn = (__gorget_eq_fn)__gorget_ktable_eq__{key_type};").unwrap();
-                                    // User key types often hold resource fields
-                                    // (String / Vector / …). Wire the same
-                                    // clone/drop the Dict uses for values so the
-                                    // key slot is reclaimed on remove/drop and
-                                    // duplicated on put.
-                                    if module.recursive_drop_structs.contains_key(key_type)
-                                        || module.recursive_drop_enums.contains_key(key_type)
-                                    {
-                                        write!(out, " {dv}.key_drop = (__gorget_drop_fn){key_type}__drop;").unwrap();
-                                        write!(out, " {dv}.key_clone = (__gorget_drop_fn){key_type}__clone_inplace;").unwrap();
-                                    }
+                                    write!(out, " {dv}.key_drop = (__gorget_drop_fn){key_type}__drop;").unwrap();
+                                    write!(out, " {dv}.key_clone = (__gorget_drop_fn){key_type}__clone_inplace;").unwrap();
                                 }
                             }
                         }

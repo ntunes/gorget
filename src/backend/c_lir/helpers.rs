@@ -784,30 +784,11 @@ pub(super) fn elem_drop_fn_for_c_type(c_type: &str) -> Option<&'static str> {
     }
 }
 
-pub(super) fn elem_clone_fn_for_c_type(c_type: &str) -> Option<String> {
-    if c_type.starts_with("GorgetArray") || c_type.starts_with("Vector__") {
-        Some("gorget_array_clone_inplace".into())
-    } else if c_type.starts_with("GorgetMap") || c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
-        Some("gorget_map_clone_inplace".into())
-    } else if c_type.starts_with("GorgetSet") || c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
-        Some("gorget_set_clone_inplace".into())
-    } else if c_type == "GorgetString" {
-        Some("gorget_string_clone_inplace".into())
-    } else if c_type == "GorgetClosure"
-        || c_type.starts_with("Callable__")
-        || c_type.starts_with("MutCallable__")
-        || c_type.starts_with("ConsumeCallable__")
-    {
-        // `Vector[Callable].clone()` deep-clones each element so the new
-        // vector's closures own independent envs.
-        Some("gorget_closure_clone_inplace".into())
-    } else {
-        // User struct/enum clone functions are set via dv.elem_clone = ...
-        // at the specific call sites where we know the type has a __clone function.
-        // Don't guess here — return None for unknown types.
-        None
-    }
-}
+// `elem_clone_fn_for_c_type` is gone — its only callers (Vector / Dict
+// post-call wiring in `emit_call_extern.rs`) were retired now that
+// `infer_collection_elem_fns` (in `lir/lower/insts.rs`) emits the
+// equivalent FieldStore insts via `super::types::elem_clone_fn_for_type`
+// at the LIR layer. The LIR-level helper covers the same type set.
 
 pub(super) fn emit_collection_constructor(
     out: &mut String,
