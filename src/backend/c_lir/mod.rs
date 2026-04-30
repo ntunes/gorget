@@ -1954,7 +1954,6 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         | Inst::EnumCheck { .. }
         | Inst::EnumExtract { .. }
         | Inst::StructInit { .. }
-        | Inst::NamedFieldPtr { .. }
         | Inst::CowClone { .. }
         | Inst::TraitCall { .. }
         | Inst::HofExpand { .. }

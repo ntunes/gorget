@@ -8,9 +8,9 @@
 //! ```
 //!
 //! BIR is a newtype wrapper around [`LirModule`] that **guarantees** any
-//! canonical-level high-level ops in LIR (future `HofExpand`, `EnumInit`,
-//! `TraitCall`, `StructInit`, `SizeOf`, `NamedFieldPtr`, `CowClone`) have
-//! been expanded to primitive instructions. Backends take `&BirModule` and
+//! canonical-level high-level ops in LIR (`HofExpand`, `EnumInit`,
+//! `TraitCall`, `StructInit`, `SizeOf`, `CowClone`, `AddressOf`,
+//! `BoxAlloc`) have been expanded to primitive instructions. Backends take `&BirModule` and
 //! the Rust type system prevents them from ever receiving an unlowered
 //! `LirModule`.
 //!

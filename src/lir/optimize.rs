@@ -1462,7 +1462,6 @@ fn subst_inst_uses(inst: &mut Inst, subst: &std::collections::HashMap<ValueId, V
             *target = next(&uses, &mut idx);
             for (_, v) in fields.iter_mut() { *v = next(&uses, &mut idx); }
         }
-        Inst::NamedFieldPtr { base, .. } => { *base = next(&uses, &mut idx); }
         Inst::CowClone { src, .. } => { *src = next(&uses, &mut idx); }
         Inst::TraitCall { object, args, .. } => {
             *object = next(&uses, &mut idx);

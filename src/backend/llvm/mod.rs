@@ -2802,7 +2802,6 @@ fn emit_inst(
         | Inst::EnumCheck { .. }
         | Inst::EnumExtract { .. }
         | Inst::StructInit { .. }
-        | Inst::NamedFieldPtr { .. }
         | Inst::CowClone { .. }
         | Inst::TraitCall { .. }
         | Inst::HofExpand { .. }

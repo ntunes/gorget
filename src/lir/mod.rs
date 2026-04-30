@@ -421,21 +421,6 @@ pub enum Inst {
         fields: Vec<(u32, ValueId)>,
     },
 
-    /// Canonical-op: symbolic access to a named field on an opaque runtime
-    /// struct (e.g. `Str.data`, `Str.len`, `GorgetArray.cap`).
-    ///
-    /// Resolves through the shared runtime-layout table during BIR lowering
-    /// so backends don't hardcode `getelementptr i8, ptr %x, i64 8`-style
-    /// offsets. Expanded into `FieldPtr { field: <resolved-index> }`.
-    ///
-    /// Step 5 of the BIR lift plan.
-    NamedFieldPtr {
-        dst: ValueId,
-        base: ValueId,
-        struct_name: String,
-        field_name: String,
-    },
-
     /// Canonical-op: explicit copy-on-write materialization for a string
     /// or other cap-0 view type.
     ///
@@ -750,7 +735,6 @@ impl Inst {
             | Inst::SizeOf { dst, .. }
             | Inst::EnumCheck { dst, .. }
             | Inst::EnumExtract { dst, .. }
-            | Inst::NamedFieldPtr { dst, .. }
             | Inst::CowClone { dst, .. }
             | Inst::FuncAddr { dst, .. }
             | Inst::NamedFuncAddr { dst, .. }
@@ -877,7 +861,6 @@ impl Inst {
                 for (_, val) in fields { v.push(*val); }
                 v
             }
-            Inst::NamedFieldPtr { base, .. } => vec![*base],
             Inst::CowClone { src, .. } => vec![*src],
             Inst::TraitCall { object, args, .. } => {
                 let mut v = vec![*object];

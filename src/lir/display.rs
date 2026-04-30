@@ -199,9 +199,6 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             }
             write!(f, "]")
         }
-        Inst::NamedFieldPtr { dst, base, struct_name, field_name } => {
-            write!(f, "{dst}: ptr = named_field_ptr {base}, {struct_name}.{field_name}")
-        }
         Inst::CowClone { dst, src, ty } => {
             write!(f, "{dst}: {ty} = cow_clone {src}")
         }

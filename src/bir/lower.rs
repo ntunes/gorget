@@ -17,8 +17,7 @@
 //! - `EnumExtract { dst, value, struct_id, payload_field, ty }` →
 //!   `FieldPtr`(payload) + `Load`.
 //!
-//! Future canonical ops (`StructInit`, `NamedFieldPtr`, `HofExpand`, …) get
-//! expanded here in subsequent steps.
+//! Future canonical ops added to LIR get expanded here in subsequent steps.
 
 use crate::bir::BirError;
 use crate::lir::lower::types::c_sizeof_lir_type;
@@ -200,23 +199,6 @@ fn expand_func(
                         });
                         new_insts.push(Inst::Store { ptr: fptr, value });
                     }
-                }
-                Inst::NamedFieldPtr { dst, base, struct_name, field_name } => {
-                    // Resolve via the opaque runtime layout table. If the struct
-                    // has no known layout, fall through to looking up field index
-                    // in the module's struct registry by field name.
-                    let field_idx = lookup_named_field_index(&struct_name, &field_name, structs);
-                    let struct_id = structs
-                        .iter()
-                        .position(|s| s.name == struct_name)
-                        .map(|i| crate::lir::StructId(i as u32))
-                        .unwrap_or(crate::lir::StructId(0));
-                    new_insts.push(Inst::FieldPtr {
-                        dst,
-                        base,
-                        struct_id,
-                        field: field_idx,
-                    });
                 }
                 Inst::TraitCall {
                     dst,
@@ -3517,35 +3499,6 @@ fn lookup_struct_id(structs: &[StructDef], name: &str) -> Option<StructId> {
         .map(|i| StructId(i as u32))
 }
 
-/// Canonical field-index table for opaque runtime structs.
-///
-/// Must match the C runtime layouts in `src/backend/c/c_runtime.rs` and
-/// `opaque_runtime_size`. Any discrepancy would be a data-layout bug.
-fn lookup_named_field_index(struct_name: &str, field_name: &str, structs: &[StructDef]) -> u32 {
-    // First, try the struct's LIR fields (for non-opaque types, this is
-    // authoritative).
-    if let Some(sd) = structs.iter().find(|s| s.name == struct_name) {
-        if let Some(idx) = sd.fields.iter().position(|(n, _)| n == field_name) {
-            return idx as u32;
-        }
-    }
-    // Opaque runtime types follow the uniform view-discriminator layout:
-    //   GorgetString { data, cap, len, alloc }
-    //   GorgetArray  { data, cap, len, elem_size, ... }
-    // Use the canonical ordering from `docs/internals/thin-pointer-string.md`.
-    match (struct_name, field_name) {
-        ("GorgetString" | "Str", "data") => 0,
-        ("GorgetString" | "Str", "cap") => 1,
-        ("GorgetString" | "Str", "len") => 2,
-        ("GorgetString" | "Str", "alloc") => 3,
-        ("GorgetArray", "data") => 0,
-        ("GorgetArray", "cap") => 1,
-        ("GorgetArray", "len") => 2,
-        ("GorgetArray", "elem_size") => 3,
-        _ => 0,
-    }
-}
-
 /// Cheap scan: true iff any instruction in `func` is a canonical op.
 fn func_needs_expansion(func: &LirFunction) -> bool {
     for block in &func.blocks {
@@ -3557,7 +3510,6 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::EnumCheck { .. }
                     | Inst::EnumExtract { .. }
                     | Inst::StructInit { .. }
-                    | Inst::NamedFieldPtr { .. }
                     | Inst::CowClone { .. }
                     | Inst::TraitCall { .. }
                     | Inst::HofExpand { .. }

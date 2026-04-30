@@ -554,7 +554,6 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
             sub(target);
             for (_, v) in fields.iter_mut() { sub(v); }
         }
-        Inst::NamedFieldPtr { base, .. } => sub(base),
         Inst::CowClone { src, .. } => sub(src),
         Inst::TraitCall { object, args, .. } => {
             sub(object);
