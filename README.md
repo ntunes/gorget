@@ -40,7 +40,7 @@ $ gg run mail.gg
 | Error model | Auto-propagating `throws` | `Result` + `?` at every call | `if err != nil` | Exceptions |
 | Null safety | `Option[T]` — no nulls | `Option<T>` — no nulls | Nil pointers | `None` everywhere |
 | Concurrency | Compiler-checked `shared` | `Send`/`Sync` traits | Goroutines + channels | GIL |
-| Compile target | C → native binary | LLVM → native binary | Go toolchain | Interpreted |
+| Compile target | C or LLVM → native binary | LLVM → native binary | Go toolchain | Interpreted |
 | Syntax | Indentation-based | Braces | Braces | Indentation-based |
 | Generics | Monomorphized | Monomorphized | Type-erased | Dynamic |
 
@@ -55,6 +55,7 @@ We think safe languages shouldn't have to be verbose. Here's what that means in 
 - **Rich static analysis** — warns on unchecked `.unwrap()`, variables that could be `const`, unnecessarily mutable borrows, unused imports, unreachable code, and suggests corrections for typos.
 - **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library.
 - **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg sim`, `gg add`. No external build system, no formatter choice, no test framework decision.
+- **Two backends** — C (default) and LLVM IR (`gg build --backend=llvm`). Both pass the same integration suite and produce equivalent runtime behavior; pick LLVM when you want LLVM-native tooling (LTO, IR-level analysis, integration with other LLVM-IR pipelines).
 
 ## A Taste of the Language
 
@@ -350,9 +351,11 @@ Integration tests live in `tests/fixtures/*.gg` — each is a self-contained pro
 | Lexer | `src/lexer/` | Logos-based tokenizer with indentation tracking |
 | Parser | `src/parser/` | Recursive descent parser producing AST |
 | Semantic analysis | `src/semantic/` | Name resolution, type checking, traits, borrow checking |
-| IR lowering | `src/ir/` | Monomorphization, drop insertion, closure conversion |
-| C backend | `src/backend/c/` | GIR to C code generation |
-| LIR backend | `src/backend/c_lir/` | SSA-based backend (next-gen, in A/B testing) |
+| GIR lowering | `src/ir/` | Monomorphization, drop insertion, closure conversion |
+| LIR | `src/lir/` | SSA-form low-level IR with shared optimization, drop elaboration, and value-type passes |
+| C backend | `src/backend/c_lir/` | LIR to C code generation |
+| LLVM backend | `src/backend/llvm/` | LIR to LLVM IR (`.ll`) generation |
+| C runtime | `src/backend/c/` | Hand-written C runtime header (allocator, strings, collections, async, FFI) — linked by both backends |
 | Formatter | `src/formatter/` | Source formatter (`gg fmt`) |
 | Simulator | `src/sim/` | Interpreter with runtime safety checks (`gg sim`) |
 
