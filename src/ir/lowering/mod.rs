@@ -2832,6 +2832,7 @@ mod tests {
         for func in &mut lir_module.functions {
             crate::lir::ssa::construct_ssa(func);
         }
+        crate::lir::types::wire_collection_bridges(&mut lir_module);
         crate::lir::types::compute_module_value_types(&mut lir_module);
         let mut bir_module = crate::bir::BirModule::from_lir(lir_module)
             .expect("BIR lowering failed in gir_to_lir_c test helper");

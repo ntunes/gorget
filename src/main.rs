@@ -1316,6 +1316,7 @@ fn try_profile(
 
     // Phase 8a: LIR value-types (pre-BIR) — optimize moves to post-BIR
     // so synth fns benefit from DCE/fold/CSE.
+    gorget::lir::types::wire_collection_bridges(&mut lir_module);
     gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_pointee_types(&mut lir_module);
     let lir_functions = lir_module.functions.len();
