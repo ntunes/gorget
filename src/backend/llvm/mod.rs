@@ -1508,8 +1508,9 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                if let Inst::SetCollectionBridge { key_type, .. } = inst {
-                    bridge_keys.insert(key_type.clone());
+                if let Inst::SetCollectionBridge { key_struct, .. } = inst {
+                    let name = &module.structs[key_struct.0 as usize].name;
+                    bridge_keys.insert(name.clone());
                 }
             }
         }
@@ -6065,16 +6066,17 @@ fn emit_inst(
         }
 
         // ── Bridge wiring ──────────────────────────────────────────
-        Inst::SetCollectionBridge { collection, is_set: _, key_type } => {
+        Inst::SetCollectionBridge { collection, is_set: _, key_struct } => {
             // GorgetMap layout: hash_fn at field 11, eq_fn at field 12.
             // GorgetSet aliases GorgetMap, so the same offsets apply.
             // Bridge symbols (`__gorget_ktable_hash__T` /
             // `__gorget_ktable_eq__T`) are forward-declared at module
             // prologue from a scan over `SetCollectionBridge` insts.
+            let key_name = &module.structs[key_struct.0 as usize].name;
             writeln!(out, "  %v{0}.hash_fp = getelementptr %GorgetMap, ptr %v{0}, i32 0, i32 11", collection.0).unwrap();
-            writeln!(out, "  store ptr @__gorget_ktable_hash__{key_type}, ptr %v{0}.hash_fp", collection.0).unwrap();
+            writeln!(out, "  store ptr @__gorget_ktable_hash__{key_name}, ptr %v{0}.hash_fp", collection.0).unwrap();
             writeln!(out, "  %v{0}.eq_fp = getelementptr %GorgetMap, ptr %v{0}, i32 0, i32 12", collection.0).unwrap();
-            writeln!(out, "  store ptr @__gorget_ktable_eq__{key_type}, ptr %v{0}.eq_fp", collection.0).unwrap();
+            writeln!(out, "  store ptr @__gorget_ktable_eq__{key_name}, ptr %v{0}.eq_fp", collection.0).unwrap();
         }
 
         // ── Nop ─────────────────────────────────────────────────────

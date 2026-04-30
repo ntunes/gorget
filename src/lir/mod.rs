@@ -714,10 +714,14 @@ pub enum Inst {
         /// and so the C backend can pick the right `__gorget_ktable_*`
         /// helper signature.
         is_set: bool,
-        /// User key type name (`Named`, `Person`, …). Backends form the
-        /// bridge symbol by prepending `__gorget_ktable_hash__` /
-        /// `__gorget_ktable_eq__`.
-        key_type: String,
+        /// Resolved StructId for the user key type. Backends look up
+        /// the struct's name via `module.structs[id.0].name` to form
+        /// the bridge symbol (`__gorget_ktable_hash__<name>` /
+        /// `__gorget_ktable_eq__<name>`). Resolved at insertion time
+        /// (in `wire_collection_bridges`) so the LIR has no stringly-
+        /// typed user-key surface, and `validate_module` can bound-check
+        /// against `module.structs.len()`.
+        key_struct: StructId,
     },
 
     // ── No-op (source mapping placeholder) ──────────────────────────

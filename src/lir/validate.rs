@@ -159,6 +159,10 @@ fn check_struct_refs(
             }
             Some(*struct_id)
         }
+        // Bridge inst's key_struct is resolved by `wire_collection_bridges`;
+        // the validator double-checks the index didn't go stale through a
+        // later struct-removing pass (DCE, etc.).
+        Inst::SetCollectionBridge { key_struct, .. } => Some(*key_struct),
         _ => None,
     };
 

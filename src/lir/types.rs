@@ -539,10 +539,25 @@ pub fn wire_collection_bridges(module: &mut LirModule) {
                         None => continue,
                     };
                     if !queries::is_user_hashable_key(&key_type, module) { continue; }
+                    // Resolve the parsed key-type name to a StructId. User
+                    // hashable keys (struct or enum) always have a StructDef
+                    // in module.structs (enums lower to struct shapes too).
+                    // is_user_hashable_key already filtered primitives and
+                    // mono'd wrappers; if the name still isn't here, an
+                    // earlier lowering pass dropped the StructDef and we
+                    // want a hard error rather than a silent no-bridge.
+                    let key_struct = match module.structs.iter().position(|s| s.name == key_type) {
+                        Some(idx) => crate::lir::StructId(idx as u32),
+                        None => panic!(
+                            "wire_collection_bridges: user hashable key `{}` has no \
+                             matching StructDef in module.structs (function `{}`, block {}, inst {})",
+                            key_type, func.name, bi, ii,
+                        ),
+                    };
                     to_insert.push((fi, bi, ii + 1, Inst::SetCollectionBridge {
                         collection: *d,
                         is_set,
-                        key_type,
+                        key_struct,
                     }));
                 }
             }
