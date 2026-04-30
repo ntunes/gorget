@@ -5366,10 +5366,28 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
                 }
             }
             Item::ConstDecl(c) => {
-                checker.infer_expr(&c.value);
+                let value_ty = checker.infer_expr(&c.value);
+                // Set DefInfo.type_id so format_types_canonical surfaces
+                // the const's type. Without this, top-level constants like
+                // `const float PI = 3.14...` don't appear in TYPE output.
+                if let Some(def_id) = checker.scopes.lookup_def_by_span(&c.name.node, c.name.span) {
+                    let declared = types::ast_type_to_resolved(
+                        &c.type_.node, c.type_.span, checker.scopes, checker.types,
+                    ).unwrap_or(value_ty);
+                    checker.scopes.get_def_mut(def_id).type_id = Some(declared);
+                }
             }
             Item::StaticDecl(s) => {
-                checker.infer_expr(&s.value);
+                let value_ty = checker.infer_expr(&s.value);
+                // Same as ConstDecl above: surface the static's type so
+                // top-level decls like `public static File stdin = ...`
+                // appear in TYPE output.
+                if let Some(def_id) = checker.scopes.lookup_def_by_span(&s.name.node, s.name.span) {
+                    let declared = types::ast_type_to_resolved(
+                        &s.type_.node, s.type_.span, checker.scopes, checker.types,
+                    ).unwrap_or(value_ty);
+                    checker.scopes.get_def_mut(def_id).type_id = Some(declared);
+                }
             }
             Item::Test(t) => {
                 checker.current_return_type = Some(checker.types.void_id);
