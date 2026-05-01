@@ -1057,10 +1057,17 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         // NOTE: Option/Result fields are intentionally NOT dropped here — they
         // have DropStrategy::None to avoid double-free with match/unwrap paths.
         // The clone function DOES deep-copy them to prevent CoW aliasing.
-        writeln!(out, "static inline void {drop_fn_name}({c_name}* self) {{").unwrap();
+        // Signature is `void(void*)`, not `void(T*)`, so storing the function
+        // pointer in a runtime drop slot (typed `void(*)(void*)` — element /
+        // value / key drop in GorgetArray / GorgetMap) and dispatching through
+        // it round-trips per C11 6.3.2.3p8. Direct-call sites pass `&parent->field`
+        // (typed `T*`) which implicitly converts to `void*` at the parameter,
+        // so this signature change is callwise-compatible.
+        writeln!(out, "static inline void {drop_fn_name}(void* __p) {{").unwrap();
+        writeln!(out, "    {c_name}* self = ({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
             if drop_fn.starts_with("__clone_only:") { continue; }
-            writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
+            writeln!(out, "    {drop_fn}((void*)&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();
