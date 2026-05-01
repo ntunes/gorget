@@ -7131,6 +7131,10 @@ static inline const char* gorget_platform(void) {
 #endif
 }
 
+static inline _Noreturn void gorget_exit(int64_t code) {
+    exit((int)code);
+}
+
 "#;
 
 /// Interactive I/O, random, time, datetime, line input.

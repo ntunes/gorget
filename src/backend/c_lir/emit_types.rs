@@ -1880,7 +1880,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
 
     // Environment
     if has(&|n| n == "gorget_getenv" || n == "gorget_setenv" || n == "gorget_getcwd"
-        || n == "gorget_platform") {
+        || n == "gorget_platform" || n == "gorget_exit") {
         out.push_str(crate::backend::c::c_runtime::RUNTIME_ENV);
     }
 
