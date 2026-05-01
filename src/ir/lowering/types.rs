@@ -631,18 +631,20 @@ pub(super) fn register_collection_alias(
     mangled_name: &str,
 ) {
     // All collection instances are structurally identical at runtime.
-    // We register them as named types without a TypeDef — the C backend handles
-    // collection_type_alias for the actual C type name.
+    // The C backend handles collection_type_alias for the actual C type name.
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
 
-    // Collection types are registered WITHOUT TypeDefs. Drops are handled by:
-    //   - needs_drop() → name-based detection for direct collection locals
-    //   - infer_drop_strategy() → name-based fallback in LIR lowering
-    // NOT registering TypeDefs prevents the struct field scan from detecting
-    // collection fields as "droppable", which would transitively upgrade structs
-    // (like CliParser, HttpServer) to Recursive drop. Those structs often return
-    // shallow copies of their collection fields → double-free if both are dropped.
+    // Phase A: register a TypeDef with full metadata so consumers can read
+    // drop_strategy / clone_fn / clone_inplace_fn from the protocol table
+    // instead of falling back to name-prefix matching.
+    //
+    // Historical note: an earlier comment claimed registering TypeDefs here
+    // would transitively upgrade containing structs (CliParser, HttpServer)
+    // to Recursive drop and cause double-frees on shallow-copy returns. The
+    // upgrade scan (`upgrade_types_from_fields` in lowering/mod.rs) already
+    // detects collection fields via `is_collection_type_name(field_type_name)`
+    // regardless of TypeDef presence — so the upgrade fires either way.
     if base_name == "Box" {
         let inner_type = mapper.map_ast_type(&_type_args[0].node);
         let type_def = TypeDef {
@@ -656,6 +658,29 @@ pub(super) fn register_collection_alias(
                 copy_semantics: CopySemantics::Resource,
                 drop_strategy: DropStrategy::Trivial("free".to_string()),
                 ..Default::default()
+            },
+        };
+        registry.add_type_def(type_def);
+    } else if let Some(protocol) = builtins::lookup_protocol(base_name) {
+        // Vector / Dict / HashMap / Set / HashSet — pull metadata from the
+        // protocol so the same fields populate as in map_ast_type_mut.
+        let drop_strat = match protocol.drop_fn {
+            Some(f) => DropStrategy::Trivial(f.to_string()),
+            None => DropStrategy::None,
+        };
+        let type_def = TypeDef {
+            name: mangled_name.to_string(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                size: None,
+                align: None,
+                copy_semantics: protocol.copy_semantics,
+                drop_strategy: drop_strat,
+                clone_fn: protocol.clone_fn.map(String::from),
+                clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
+                materialize_fn: protocol.materialize_fn.map(String::from),
+                collection_kind: protocol.collection_kind,
+                enum_category: None,
             },
         };
         registry.add_type_def(type_def);
