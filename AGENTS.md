@@ -130,6 +130,17 @@ The exception: at the C-emit boundary you have to spell the runtime symbol (the 
 
 If the metadata genuinely doesn't exist yet, **add it** rather than fishing for the answer in a name. CoW, ownership boundaries, ABI kinds, view-vs-owned, fresh-vs-borrowed: these are language rules — they should work declaratively, not by enumerating call sites.
 
+## Layering discipline
+
+"No name matching" is one rule of a broader discipline that governs how information crosses IR layer boundaries (AST → GIR → LIR → backend). The full rules live in [`docs/internals/layering-discipline.md`](docs/internals/layering-discipline.md); the four-line summary:
+
+1. **Lossless on invariants, lossy on syntax.** Each layer may resolve abstractions (generics, methods, traits) and add information (control flow, SSA). It may not drop semantic invariants (ownership, drop strategy, view-vs-owned, ABI, copy semantics, borrow provenance). Invariants accumulate; abstractions evaporate.
+2. **Typed metadata, not name-matched.** Facts cross boundaries as typed fields on structs — never as name prefixes, sentinel values, or runtime-symbol conventions. ("No name matching" is this rule applied at the runtime-symbol boundary.)
+3. **One source of truth per axis.** For each kind of information, exactly one piece of metadata at exactly one location, read through one accessor. No parallel sidecar maps.
+4. **Resolve once, write through.** When a pass resolves an abstraction, the result writes into the next layer's typed metadata. Downstream doesn't redo the work and doesn't get to disagree.
+
+**Litmus test:** if a downstream pass reconstructs information from names, sentinel values, or shape heuristics, the boundary upstream was drawn wrong. The fix is always upstream — add the field, write it at the source, read it at the consumer. Cite the doc in PRs that touch IR layer boundaries.
+
 ## Task Continuity
 
 Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
