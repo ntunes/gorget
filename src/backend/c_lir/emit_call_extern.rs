@@ -869,16 +869,20 @@ pub(super) fn emit_call_extern(
             // `printf(str_arg)` with no format string. macOS clang rejects this
             // under -Wformat-security, and under 32-byte Str the arg is a struct,
             // not a char*, so we emit the decomposed form directly and return.
+            // For `print(..., file=stderr)`, the fast path must emit
+            // `fprintf(stderr, "%.*s", ...)` — the FILE* is not in `emit_args`
+            // (it's the Null placeholder that was stripped at line 559).
             let printf_needs_fmt_guard = is_printf && emit_args.len() == 1;
             if printf_needs_fmt_guard {
                 let a = emit_args[0];
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_gs_struct = matches!(arg_ty, Some(LirType::Struct(sid))
                     if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                let stderr_prefix = if is_stderr_print { "stderr, " } else { "" };
                 if is_gs_struct {
                     // `print(str)` → `__gorget_printf("%.*s", (int)str.len, (const char*)str.data);`
-                    writeln!(out, "{}(\"%.*s\", (int){vv}.len, (const char*){vv}.data);",
-                        emit_name, vv = v(a)).unwrap();
+                    writeln!(out, "{}({}\"%.*s\", (int){vv}.len, (const char*){vv}.data);",
+                        emit_name, stderr_prefix, vv = v(a)).unwrap();
                     return;
                 }
                 // Ptr(Str) fallback: deref the pointer and use struct fields.
@@ -887,8 +891,8 @@ pub(super) fn emit_call_extern(
                         .and_then(|p| p.as_ref())
                         .map_or(false, |p| is_str_struct(p, module));
                 if pointee_is_str || is_str_ptr_opt(arg_ty, module) {
-                    writeln!(out, "{}(\"%.*s\", (int)((Str*){vv})->len, (const char*)((Str*){vv})->data);",
-                        emit_name, vv = v(a)).unwrap();
+                    writeln!(out, "{}({}\"%.*s\", (int)((Str*){vv})->len, (const char*)((Str*){vv})->data);",
+                        emit_name, stderr_prefix, vv = v(a)).unwrap();
                     return;
                 }
                 // Rare non-Str path (shouldn't normally happen) — fall through to raw call.
