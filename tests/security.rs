@@ -32,16 +32,29 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 /// Sanitize builds are slower than the integration suite's, so the default
-/// is higher (180 vs 120). Override with GG_BUILD_TIMEOUT_SECS for shared /
-/// loaded hosts. The env var supplies the same number to both suites — set
-/// it generously when running both.
+/// is higher (180 vs 120). Override with GG_BUILD_TIMEOUT_SECS for full
+/// manual control. When unset, auto-scales by /proc/loadavg /
+/// available_parallelism so the gate doesn't spuriously trip on shared /
+/// loaded hosts.
 fn build_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("GG_BUILD_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(180),
-    )
+    Duration::from_secs(env_or_load_adjusted_secs("GG_BUILD_TIMEOUT_SECS", 180))
+}
+
+/// Same shape as integration.rs's helper. Linux only — falls back to
+/// `base` when `/proc/loadavg` isn't readable.
+fn env_or_load_adjusted_secs(var: &str, base: u64) -> u64 {
+    if let Some(secs) = std::env::var(var).ok().and_then(|s| s.parse::<u64>().ok()) {
+        return secs;
+    }
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get() as f64)
+        .unwrap_or(1.0);
+    let ratio = (load / cpus).max(1.0);
+    ((base as f64) * ratio).ceil() as u64
 }
 
 fn test_binary_timeout() -> Duration {

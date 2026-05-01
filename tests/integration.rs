@@ -14,16 +14,29 @@ use gorget::span::Spanned;
 /// machine). Disk-contended CI environments can inflate wall time
 /// significantly, so we keep a comfortable margin. If a build actually
 /// hangs indefinitely the outer cargo test deadline still catches it.
-/// Override with GG_BUILD_TIMEOUT_SECS env var for shared / loaded hosts
-/// (e.g. multi-agent dev boxes where DEBUG `gg build` against
-/// `self_host_lowerer/driver.gg` can drift past the default).
+/// Override with GG_BUILD_TIMEOUT_SECS for full manual control. When
+/// unset, auto-scales by /proc/loadavg / available_parallelism so the
+/// gate doesn't spuriously trip on shared / loaded hosts.
 fn build_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("GG_BUILD_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(120),
-    )
+    Duration::from_secs(env_or_load_adjusted_secs("GG_BUILD_TIMEOUT_SECS", 120))
+}
+
+/// Read `var` if set; otherwise return `base` scaled by the host's load
+/// pressure (`loadavg(1m) / available_parallelism`), floor 1.0. Linux
+/// only — falls back to `base` when `/proc/loadavg` isn't readable.
+fn env_or_load_adjusted_secs(var: &str, base: u64) -> u64 {
+    if let Some(secs) = std::env::var(var).ok().and_then(|s| s.parse::<u64>().ok()) {
+        return secs;
+    }
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get() as f64)
+        .unwrap_or(1.0);
+    let ratio = (load / cpus).max(1.0);
+    ((base as f64) * ratio).ceil() as u64
 }
 /// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
 /// for slower environments (e.g. CI).
