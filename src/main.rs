@@ -2743,7 +2743,23 @@ fn main() {
             let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, false, clone_stats, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
+                    // Forward positional args that appear AFTER the script filename
+                    // to the running program. Anything starting with `--` and any
+                    // flag-with-value pair is treated as belonging to gg itself.
+                    let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report",
+                        "--output", "-o", "--feature", "--backend", "--target"];
+                    let mut script_args: Vec<&String> = Vec::new();
+                    let mut seen_filename = false;
+                    let mut skip_next = false;
+                    for arg in args.iter().skip(2) {
+                        if skip_next { skip_next = false; continue; }
+                        if flags_with_values.contains(&arg.as_str()) { skip_next = true; continue; }
+                        if arg.starts_with("--") { continue; }
+                        if !seen_filename && arg == filename { seen_filename = true; continue; }
+                        if seen_filename { script_args.push(arg); }
+                    }
                     let status = Command::new(&exe_path)
+                        .args(&script_args)
                         .status()
                         .unwrap_or_else(|e| {
                             eprintln!("Failed to execute {}: {e}", exe_path.display());
