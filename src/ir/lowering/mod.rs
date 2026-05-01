@@ -383,28 +383,39 @@ pub fn lower_module(
 
     // Register typed vector aliases AFTER generic monomorphization so we reuse
     // any TypeIds already created by the generic collector (e.g., Vector__Str from
-    // explicit Vector[str] usage in source code).
-    for (name, gir_name) in &[
-        ("Vector__Str", "Vector__Str"),
-        ("Vector__uint8_t", "Vector__uint8_t"),
-        ("Vector__int64_t", "Vector__int64_t"),
-    ] {
-        if !type_mapper.named_types.contains_key(*name) {
-            if !module.type_registry.has_type_def(gir_name) {
-                module.type_registry.add_type_def(TypeDef {
-                    name: gir_name.to_string(),
-                    kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                    metadata: TypeMetadata {
-                        size: None,
-                        align: None,
-                        drop_strategy: DropStrategy::Trivial("gorget_array_free".to_string()),
-                        copy_semantics: CopySemantics::Resource,
-                        ..Default::default()
-                    },
-                });
+    // explicit Vector[str] usage in source code). Phase A: pull metadata from
+    // BuiltinTypeProtocol so clone_fn is populated.
+    if let Some(vector_protocol) = builtins::lookup_protocol("Vector") {
+        let drop_strat = match vector_protocol.drop_fn {
+            Some(f) => DropStrategy::Trivial(f.to_string()),
+            None => DropStrategy::None,
+        };
+        for (name, gir_name) in &[
+            ("Vector__Str", "Vector__Str"),
+            ("Vector__uint8_t", "Vector__uint8_t"),
+            ("Vector__int64_t", "Vector__int64_t"),
+        ] {
+            if !type_mapper.named_types.contains_key(*name) {
+                if !module.type_registry.has_type_def(gir_name) {
+                    module.type_registry.add_type_def(TypeDef {
+                        name: gir_name.to_string(),
+                        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                        metadata: TypeMetadata {
+                            size: None,
+                            align: None,
+                            drop_strategy: drop_strat.clone(),
+                            copy_semantics: vector_protocol.copy_semantics,
+                            clone_fn: vector_protocol.clone_fn.map(String::from),
+                            clone_inplace_fn: vector_protocol.clone_inplace_fn.map(String::from),
+                            materialize_fn: vector_protocol.materialize_fn.map(String::from),
+                            collection_kind: vector_protocol.collection_kind,
+                            enum_category: None,
+                        },
+                    });
+                }
+                let tid = module.type_registry.insert(GirType::Named(gir_name.to_string()));
+                type_mapper.register_named(name.to_string(), tid);
             }
-            let tid = module.type_registry.insert(GirType::Named(gir_name.to_string()));
-            type_mapper.register_named(name.to_string(), tid);
         }
     }
 
