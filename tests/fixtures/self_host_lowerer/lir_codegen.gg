@@ -3521,6 +3521,18 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 String v_tyname = rest_kv.slice(sep_pos + 9, rest_kv.len())
                 String k_c_tname = resolve_sizeof_c_type(k_tyname, &m, &sn)
                 String v_c_tname = resolve_sizeof_c_type(v_tyname, &m, &sn)
+                # String keys must route to `gorget_map_new_str` so the
+                # runtime wires up `__gorget_str_key_hash` /
+                # `__gorget_str_key_eq` / `key_materialize`. Without that,
+                # hash_fn stays NULL and the map falls back to byte-FNV
+                # on the 32-byte Str struct (data ptr + cap + len) —
+                # different String instances of the same content hash
+                # differently and `contains` lies after `put`. This was
+                # the actual "Dict[String, _] state-loss" bug: empty
+                # `{}` literals with a `Dict[String, _]` hint went
+                # through this magic-name path that ignored key type.
+                if k_c_tname == "Str" or k_c_tname == "GorgetString":
+                    return v(dst) + " = gorget_map_new_str(sizeof(" + v_c_tname + "));"
                 return v(dst) + " = gorget_map_new(sizeof(" + k_c_tname + "), sizeof(" + v_c_tname + "));"
         return ";"
 

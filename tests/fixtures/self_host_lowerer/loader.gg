@@ -42,18 +42,6 @@ String mangle_prefix(String module_path):
     # "std.conv" → "std__conv___"
     return module_path.replace(".", "__") + "___"
 
-# Linear-scan string-set containment. Avoids Dict[String, bool].contains
-# which doesn't reliably see prior `put`s when the lookup is driven by a
-# self-host compiled driver binary.
-bool loaded_contains(Vector[String] v, String s):
-    int i = 0
-    while i < v.len():
-        String cur = v.get(i).unwrap()
-        if cur == s:
-            return true
-        i += 1
-    return false
-
 # Last-write-wins put into the Module's parallel cr_keys/cr_vals.
 # Mirrors Dict.put semantics deterministically — used alongside the
 # Dict puts in load_imports so the lowerer can read this state without
@@ -73,12 +61,21 @@ void cr_put_module(Module &m, String key, String val):
 
 Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len):
     String base_dir = parent_dir(entry_path)
-    # Linear-scan dedup — the self-host compiled Dict[String, bool]
-    # does not reliably persist `put` / `contains` across iterations
-    # (stage-1 loaded `std.collections` 286× when `loaded` was a Dict).
-    # A Vector linear scan is O(N²) but N is small (~20 modules), and it
-    # actually works.
-    Vector[String] loaded = []
+    # PROOF-OF-FIX: this used to be `Vector[String] loaded = []` with a
+    # linear-scan `loaded_contains` helper, working around an alleged
+    # "Dict[String, bool] state-loss" — `std.collections` getting
+    # re-loaded 286× because contains-after-put returned false. The
+    # actual root cause was twofold: (1) cross-file span collision in
+    # the resolver's `Dict[int, int] resolution_map` (now fixed by per-
+    # module `parse_source_with_offset`), and (2) `EDictLiteral` (`{}`)
+    # for `Dict[String, _]` lowered to `__gorget_map_new_sized_K__GGSEP__V`
+    # which the codegen ALWAYS expanded to `gorget_map_new(sizeof(K),
+    # sizeof(V))` — never `gorget_map_new_str(sizeof(V))` — so for
+    # String-keyed maps the runtime had `hash_fn = NULL` and the
+    # fallback byte-FNV on the 32-byte `Str` struct (data ptr + cap +
+    # len) gave different hashes for content-equal keys with different
+    # data pointers. Both fixed now; Dict-backed dedup works.
+    Dict[String, bool] loaded = {}
     Dict[String, String] call_redirects = {}
 
     # Cumulative span offset for imported modules: every module's spans
@@ -99,10 +96,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
         Item item = m.items.get(ii).unwrap()
         match item:
             case IImport(imp):
-                if not loaded_contains(loaded, imp.module_path):
+                if not loaded.contains(imp.module_path):
                     import_paths.push(imp.module_path.clone())
                     import_mod_paths.push(imp.module_path.clone())
-                    loaded.push(imp.module_path.clone())
+                    loaded.put(imp.module_path.clone(), true)
             else:
                 pass
         ii += 1
@@ -131,10 +128,10 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                 match imp_item:
                     case IImport(sub_imp):
                         # Recursively discover imports from the imported module
-                        if not loaded_contains(loaded, sub_imp.module_path):
+                        if not loaded.contains(sub_imp.module_path):
                             import_paths.push(sub_imp.module_path.clone())
                             import_mod_paths.push(sub_imp.module_path.clone())
-                            loaded.push(sub_imp.module_path.clone())
+                            loaded.put(sub_imp.module_path.clone(), true)
                     case IFunction(fdef):
                         # Aliased extern stub: body is one of SExpr(EStringLiteral)
                         # or SReturn(Some(EStringLiteral)) depending on how the
