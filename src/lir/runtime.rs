@@ -666,14 +666,13 @@ pub fn promote_runtime_calls(module: &mut crate::lir::LirModule) {
     for func in &mut module.functions {
         for block in &mut func.blocks {
             for inst in &mut block.insts {
-                if let Inst::CallExtern { dst, name, args, original_name, arg_abis } = inst {
+                if let Inst::CallExtern { dst, name, args, arg_abis, .. } = inst {
                     if let Some(callee) = RuntimeFn::from_c_name(name) {
                         *inst = Inst::CallRuntime {
                             dst: *dst,
                             callee,
                             args: std::mem::take(args),
                             arg_abis: std::mem::take(arg_abis),
-                            original_name: original_name.take(),
                         };
                     }
                 }
@@ -924,7 +923,6 @@ pub fn promote_collection_ctors(module: &mut crate::lir::LirModule) {
                 arg_abis,
                 with_capacity,
                 str_keyed,
-                original_name: Some(original_name),
             };
         }
     }

@@ -919,7 +919,8 @@ impl<'a> FuncLowering<'a> {
             dst: None,
             name: "memset".to_string(),
             args: vec![slot_addr, zero_byte, size_val],
-            original_name: None, arg_abis: abis,
+            original_name: None,
+            arg_abis: abis,
         });
 
         // 2. Emit canonical `Inst::EnumInit` for the Ok(val) / Some(val) wrap.

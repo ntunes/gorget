@@ -487,43 +487,24 @@ pub fn compute_module_value_types(module: &mut LirModule) {
     }
 }
 
-/// Insert `Inst::SetCollectionBridge` after each `gorget_dict_new` /
-/// `gorget_set_new` (etc.) call whose key type is a user
-/// `@derive(Hashable, Equatable)` struct. The IR-level distinction
-/// between user-keyed and primitive-keyed collections is preserved as
-/// an explicit instruction so backends compile it 1:1 instead of
-/// scanning `original_name` strings to recover the key type.
+/// Insert `Inst::SetCollectionBridge` after each typed `Inst::CollectionCtor`
+/// whose key type is a user `@derive(Hashable, Equatable)` struct. The
+/// IR-level distinction between user-keyed and primitive-keyed collections
+/// is preserved as an explicit instruction so backends compile it 1:1
+/// instead of scanning string-typed metadata.
 ///
 /// Walks each function's blocks and inserts the new inst immediately
-/// after the matching `Inst::CallExtern`. The collection's `ValueId`
-/// is the same as the call's `dst`. The pass is idempotent — guards on
-/// `dst` being defined and on the original-name → key-type parse
-/// succeeding (both are a no-op for non-collection-ctor calls).
+/// after the matching `Inst::CollectionCtor`. The collection's `ValueId`
+/// is the same as the ctor's `dst`. The pass is idempotent — guards on
+/// the user-hashable check (vector/deque/primitive-key cases trivially
+/// short-circuit).
 ///
-/// Must run after `lower_module` (so `original_name` is preserved) and
-/// before SSA construction or BIR lowering (so the inst exists when
-/// they iterate). Mirrors the C backend's `emit_collection_constructor`
-/// post-call hook and the LLVM backend's `emit_user_key_bridge_wiring`
-/// — both of which become no-ops once this pass runs.
+/// Must run after `lir::runtime::promote_collection_ctors` (so the typed
+/// CollectionCtor inst exists) and before BIR lowering (so the bridge
+/// instruction is in place when BIR lowers CollectionCtor → CallExtern).
 pub fn wire_collection_bridges(module: &mut LirModule) {
-    use crate::lir::Inst;
+    use crate::lir::{CollectionCtorKind, ElemMeta, Inst};
     use crate::lir::queries;
-
-    // Parse `Dict__K__V__new` / `Set__T__new` / etc. to recover the
-    // user key type from the LIR's preserved `original_name` field.
-    fn parse_key(orig: &str) -> Option<(String, bool)> {
-        let (rest, is_set) = if let Some(r) = orig.strip_prefix("Dict__") { (r, false) }
-            else if let Some(r) = orig.strip_prefix("HashMap__") { (r, false) }
-            else if let Some(r) = orig.strip_prefix("Set__") { (r, true) }
-            else if let Some(r) = orig.strip_prefix("HashSet__") { (r, true) }
-            else { return None; };
-        let rest = rest.strip_suffix("__new_str")
-            .or_else(|| rest.strip_suffix("__new"))
-            .or_else(|| rest.strip_suffix("__with_capacity"))
-            .unwrap_or(rest);
-        let key = if is_set { rest } else { rest.splitn(2, "__").next()? };
-        Some((key.to_string(), is_set))
-    }
 
     // Two passes — first scan, then mutate. Mutating mid-iteration
     // would invalidate the index into `block.insts`.
@@ -532,34 +513,37 @@ pub fn wire_collection_bridges(module: &mut LirModule) {
     for (fi, func) in module.functions.iter().enumerate() {
         for (bi, block) in func.blocks.iter().enumerate() {
             for (ii, inst) in block.insts.iter().enumerate() {
-                if let Inst::CallExtern { dst: Some(d), name, original_name: Some(orig), .. } = inst {
-                    if !queries::is_user_keyable_collection_ctor(name) { continue; }
-                    let (key_type, is_set) = match parse_key(orig) {
-                        Some(p) => p,
-                        None => continue,
-                    };
-                    if !queries::is_user_hashable_key(&key_type, module) { continue; }
-                    // Resolve the parsed key-type name to a StructId. User
-                    // hashable keys (struct or enum) always have a StructDef
-                    // in module.structs (enums lower to struct shapes too).
-                    // is_user_hashable_key already filtered primitives and
-                    // mono'd wrappers; if the name still isn't here, an
-                    // earlier lowering pass dropped the StructDef and we
-                    // want a hard error rather than a silent no-bridge.
-                    let key_struct = match module.structs.iter().position(|s| s.name == key_type) {
-                        Some(idx) => crate::lir::StructId(idx as u32),
-                        None => panic!(
-                            "wire_collection_bridges: user hashable key `{}` has no \
-                             matching StructDef in module.structs (function `{}`, block {}, inst {})",
-                            key_type, func.name, bi, ii,
-                        ),
-                    };
-                    to_insert.push((fi, bi, ii + 1, Inst::SetCollectionBridge {
-                        collection: *d,
-                        is_set,
-                        key_struct,
-                    }));
-                }
+                let Inst::CollectionCtor { dst, kind, elem_or_key, str_keyed, .. } = inst
+                else { continue; };
+                // Only map-like / set-like collections need bridges; vectors
+                // / deques don't dispatch by key.
+                let is_set = match kind {
+                    CollectionCtorKind::Vector | CollectionCtorKind::Deque => continue,
+                    CollectionCtorKind::Set | CollectionCtorKind::HashSet => true,
+                    CollectionCtorKind::Dict | CollectionCtorKind::HashMap => false,
+                };
+                // `_str` runtime variants pre-wire the String key bridges;
+                // we MUST NOT emit user-side bridges for those.
+                if *str_keyed { continue; }
+                // Only `UserType` keys need bridges. Primitive (int/bool/…)
+                // and Resource (GorgetString / nested collection) keys use
+                // their own runtime paths.
+                let key_struct = match elem_or_key {
+                    ElemMeta::UserType(sid) => *sid,
+                    _ => continue,
+                };
+                // Verify the user type carries hash + eq impls. If not,
+                // that's a Hashable-derive error caught upstream — skip
+                // silently here (no bridge to wire).
+                let key_name = module.structs.get(key_struct.0 as usize)
+                    .map(|s| s.name.as_str())
+                    .unwrap_or("");
+                if !queries::is_user_hashable_key(key_name, module) { continue; }
+                to_insert.push((fi, bi, ii + 1, Inst::SetCollectionBridge {
+                    collection: *dst,
+                    is_set,
+                    key_struct,
+                }));
             }
         }
     }

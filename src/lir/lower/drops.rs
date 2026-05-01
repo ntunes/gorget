@@ -122,7 +122,8 @@ impl<'a> FuncLowering<'a> {
                     let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                     if conditional {
                         self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
@@ -175,7 +176,8 @@ impl<'a> FuncLowering<'a> {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![data_val],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                            original_name: None,
+                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
                     } else {
                         // Fallback: just free the whole value
@@ -187,7 +189,8 @@ impl<'a> FuncLowering<'a> {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![val],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                            original_name: None,
+                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
                     }
                 } else {
@@ -221,7 +224,8 @@ impl<'a> FuncLowering<'a> {
                             } else {
                                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                     dst: None, name: drop_fn, args: vec![box_val],
-                                    original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                                    original_name: None,
+                                    arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                 });
                             }
                         }
@@ -245,7 +249,8 @@ impl<'a> FuncLowering<'a> {
                         dst: None,
                         name: free_fn,
                         args: vec![val],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 }
                 if conditional {
@@ -271,7 +276,8 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![drop_addr],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 }
                 if conditional {
@@ -297,7 +303,8 @@ impl<'a> FuncLowering<'a> {
                     let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 } else {
                     // Fallback: call user fn + inline field drops
@@ -309,7 +316,8 @@ impl<'a> FuncLowering<'a> {
                     } else {
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: None, name: fn_name.clone(), args: vec![addr2],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                            original_name: None,
+                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
                     }
                     self.lower_field_drops(place, &type_name, bb);
@@ -336,7 +344,8 @@ impl<'a> FuncLowering<'a> {
                     let addr2 = self.lower_place_addr(place, bb);
                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
-                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 } else {
                     // Fallback: enum dispatch or inline field drops
@@ -349,7 +358,8 @@ impl<'a> FuncLowering<'a> {
                         let addr2 = self.lower_place_addr(place, bb);
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: None, name: drop_fn, args: vec![addr2],
-                            original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                            original_name: None,
+                            arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
                     } else {
                         self.lower_field_drops(place, &type_name, bb);
@@ -462,7 +472,8 @@ impl<'a> FuncLowering<'a> {
                             } else {
                                 self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                     dst: None, name: drop_fn_name, args: vec![field_ptr],
-                                    original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                                    original_name: None,
+                                    arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                 });
                             }
                         } else if matches!(&field_drop, DropStrategy::Recursive) {
@@ -507,7 +518,8 @@ impl<'a> FuncLowering<'a> {
                                                 } else {
                                                     self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                                                         dst: None, name: sub_fn, args: vec![sub_ptr],
-                                                        original_name: None, arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                                                        original_name: None,
+                                                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                                     });
                                                 }
                                             }

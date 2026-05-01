@@ -263,85 +263,21 @@ fn find_live_functions(module: &LirModule) -> HashSet<FuncId> {
 /// primitives (int64_t, GorgetString, etc.) are excluded because their
 /// hash paths are handled by dedicated runtime helpers.
 fn find_hashable_key_types(module: &LirModule) -> HashSet<String> {
+    // Iterate `Inst::SetCollectionBridge` insts — `wire_collection_bridges`
+    // already filtered to user-keyed Dict / HashMap / Set / HashSet
+    // constructors; their `key_struct: StructId` field names the user
+    // type whose `__hash` / `__eq` methods must stay live. This is a
+    // strict superset of what the previous string-parse path produced
+    // (it doesn't miss any user-key shape `wire_collection_bridges`
+    // recognized) and is typed end-to-end.
     let mut types: HashSet<String> = HashSet::new();
-    // Collect (name, original_name) tuples from both CallExtern (post-BIR
-    // form) and CallRuntime (pre-BIR form). The optimizer runs in both
-    // contexts (integration test path uses LIR directly; main pipeline runs
-    // it post-BIR after the CallRuntime → CallExtern rewrite), so we accept
-    // either shape uniformly.
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                let (name_str, original_name): (&str, &Option<String>) = match inst {
-                    Inst::CallExtern { name, original_name, .. } => (name.as_str(), original_name),
-                    Inst::CallRuntime { callee, original_name, .. } => (callee.c_name(), original_name),
-                    _ => continue,
-                };
-                {
-                    let (is_mapped, lookup) = match (name_str, original_name) {
-                        ("gorget_dict_new", Some(o))
-                        | ("gorget_map_new", Some(o))
-                        | ("gorget_dict_new_str", Some(o))
-                        | ("gorget_map_new_str", Some(o))
-                        | ("gorget_set_new", Some(o))
-                        | ("gorget_set_with_capacity", Some(o))
-                        | ("gorget_ordered_set_new", Some(o))
-                        | ("gorget_ordered_set_new_str", Some(o)) => (true, o.as_str()),
-                        _ => (false, name_str),
-                    };
-                    let (prefix, is_set) = if lookup.starts_with("Dict__") {
-                        ("Dict__", false)
-                    } else if lookup.starts_with("HashMap__") {
-                        ("HashMap__", false)
-                    } else if lookup.starts_with("Set__") {
-                        ("Set__", true)
-                    } else if lookup.starts_with("HashSet__") {
-                        ("HashSet__", true)
-                    } else {
-                        continue;
-                    };
-                    let rest = match lookup.strip_prefix(prefix) {
-                        Some(r) => r,
-                        None => continue,
-                    };
-                    let rest = if is_mapped {
-                        rest.strip_suffix("__new_str")
-                            .or_else(|| rest.strip_suffix("__new"))
-                            .or_else(|| rest.strip_suffix("__with_capacity"))
-                            .unwrap_or(rest)
-                    } else {
-                        // Pre-map constructor names end in a primitive type
-                        // segment; method calls (`Dict__K__V__put`) don't.
-                        let last = rest.rsplit("__").next().unwrap_or("");
-                        if !matches!(last,
-                            "int64_t" | "int32_t" | "int16_t" | "int8_t"
-                            | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
-                            | "double" | "float" | "bool" | "GorgetString"
-                            | "GorgetArray" | "GorgetMap" | "GorgetSet" | "void"
-                            | "T" | "U" | "V")
-                        {
-                            continue;
-                        }
-                        rest
-                    };
-                    let key = if is_set {
-                        rest.to_string()
-                    } else {
-                        rest.splitn(2, "__").next().unwrap_or("").to_string()
-                    };
-                    if key.is_empty() { continue; }
-                    // Skip primitives / runtime types — their hashing is handled
-                    // by runtime helpers, not by user `__hash` methods.
-                    if matches!(key.as_str(),
-                        "int64_t" | "int32_t" | "int16_t" | "int8_t"
-                        | "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t"
-                        | "double" | "float" | "bool" | "_Bool"
-                        | "Str" | "GorgetString")
-                    {
-                        continue;
+                if let Inst::SetCollectionBridge { key_struct, .. } = inst {
+                    if let Some(sd) = module.structs.get(key_struct.0 as usize) {
+                        types.insert(sd.name.clone());
                     }
-                    if key.contains("__") { continue; }
-                    types.insert(key);
                 }
             }
         }

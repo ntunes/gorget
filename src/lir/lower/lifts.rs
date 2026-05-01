@@ -154,7 +154,8 @@ impl<'a> FuncLowering<'a> {
                 dst: Some(cloned),
                 name: clone_fn,
                 args: vec![raw_in_some],
-                original_name: None, arg_abis: abis,
+                original_name: Some(original_name.to_string()),
+                arg_abis: abis,
             });
             if payload_ty.is_aggregate() {
                 // Clone returns an aggregate by value — stash in a slot so
@@ -266,7 +267,8 @@ impl<'a> FuncLowering<'a> {
             dst: Some(wrapped),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![raw_ptr],
-            original_name: None, arg_abis: abis,
+            original_name: Some(original_name.to_string()),
+            arg_abis: abis,
         });
         let wrapped_slot = self.lir_func.add_slot(str_ty.clone(), None);
         self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
@@ -334,7 +336,8 @@ impl<'a> FuncLowering<'a> {
             dst: Some(err_ptr),
             name: err_fn_name.to_string(),
             args: vec![],
-            original_name: None, arg_abis: err_abis,
+            original_name: Some(original_name.to_string()),
+            arg_abis: err_abis,
         });
 
         // 3. Slot address + zero
@@ -374,7 +377,8 @@ impl<'a> FuncLowering<'a> {
             dst: Some(err_str),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![err_ptr],
-            original_name: None, arg_abis: abis,
+            original_name: Some(original_name.to_string()),
+            arg_abis: abis,
         });
         let err_slot = self.lir_func.add_slot(str_ty.clone(), None);
         self.lir_func.block_mut(err_bb).insts.push(Inst::SlotStore {
@@ -711,7 +715,8 @@ impl<'a> FuncLowering<'a> {
             dst: None,
             name: "memset".to_string(),
             args: vec![ptr, zero_byte, size_val],
-            original_name: None, arg_abis: abis,
+            original_name: None,
+            arg_abis: abis,
         });
     }
 

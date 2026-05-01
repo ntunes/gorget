@@ -2784,13 +2784,13 @@ fn emit_inst(
     // CallRuntime; synthesize a CallExtern locally so the rest of this
     // dispatcher (including its many name-based scans) sees a uniform shape.
     let _synthesized_callextern;
-    let inst = if let Inst::CallRuntime { dst, callee, args, arg_abis, original_name } = inst {
+    let inst = if let Inst::CallRuntime { dst, callee, args, arg_abis } = inst {
         _synthesized_callextern = Inst::CallExtern {
             dst: *dst,
             name: callee.c_name().to_string(),
             args: args.clone(),
+            original_name: None,
             arg_abis: arg_abis.clone(),
-            original_name: original_name.clone(),
         };
         &_synthesized_callextern
     } else {

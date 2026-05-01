@@ -695,8 +695,6 @@ pub enum Inst {
     /// Direct call to a known function.
     Call { dst: Option<ValueId>, func: FuncId, args: Vec<ValueId> },
     /// Call to an external (C) function by name. **User-declared externs only.**
-    /// `original_name` preserves the pre-mapping GIR name (e.g., "Vector__GorgetArray__push")
-    /// so the C backend can determine element types for drop function assignment.
     ///
     /// Calls to known Gorget runtime functions go through `Inst::CallRuntime`
     /// instead — see [`crate::lir::runtime::RuntimeFn`]. `emit_extern_call`
@@ -704,22 +702,33 @@ pub enum Inst {
     /// the call site emits `CallRuntime`. This keeps `CallExtern` for the
     /// open-ended user-extern case (SDL, crypto bindings, etc.) where no
     /// typed signature is known at LIR-construction time.
-    CallExtern { dst: Option<ValueId>, name: String, args: Vec<ValueId>, original_name: Option<String>, arg_abis: Vec<crate::ir::abi::AbiKind> },
+    ///
+    /// `original_name` preserves the pre-mapping monomorphized GIR name
+    /// (`Vector__T__push`, `Dict__K__V__new`, …) — used today only by the
+    /// `promote_collection_ctors` pass to derive the typed
+    /// [`CollectionCtorKind`] / [`ElemMeta`] for `Inst::CollectionCtor`.
+    /// All three previous "downstream" readers (`wire_collection_bridges`,
+    /// `find_hashable_key_types`, `emit_hashable_key_bridges`) migrated to
+    /// `Inst::CollectionCtor` / `Inst::SetCollectionBridge` in A3 commit 2;
+    /// retire this field once the LIR construction site emits CollectionCtor
+    /// directly (planned alongside B1).
+    CallExtern {
+        dst: Option<ValueId>,
+        name: String,
+        args: Vec<ValueId>,
+        original_name: Option<String>,
+        arg_abis: Vec<crate::ir::abi::AbiKind>,
+    },
     /// Call to a known Gorget runtime function. Typed dispatch via
     /// [`crate::lir::runtime::RuntimeFn`] — the validator can type-check
     /// arg counts against the signature, the optimizer can read the
     /// side-effects classification, and backends can pattern-match on the
     /// enum without string compares.
-    ///
-    /// `original_name` keeps the pre-mapping GIR name (same role as on
-    /// `CallExtern`) so element-type inference in the lowering pass still
-    /// has the breadcrumb. A3 (CollectionCtor) retires it.
     CallRuntime {
         dst: Option<ValueId>,
         callee: crate::lir::runtime::RuntimeFn,
         args: Vec<ValueId>,
         arg_abis: Vec<crate::ir::abi::AbiKind>,
-        original_name: Option<String>,
     },
     /// Indirect call through a function pointer.
     /// `ret_ty` is explicit so backends pick the right return-type cast
@@ -828,12 +837,6 @@ pub enum Inst {
         /// hash/eq/drop in the constructor so callers must NOT emit user-
         /// side bridges for the key.
         str_keyed: bool,
-        /// Pre-promote monomorphized GIR name (`Dict__K__V__new`, …).
-        /// Preserved so post-BIR consumers (`find_hashable_key_types` in
-        /// the optimizer) can keep their existing string-parse path while
-        /// commit 2 migrates them to read the typed `kind` / `elem_or_key` /
-        /// `val` fields. Retired when commit 2 lands.
-        original_name: Option<String>,
     },
 
     /// Wire `collection.hash_fn` / `collection.eq_fn` to user-derived

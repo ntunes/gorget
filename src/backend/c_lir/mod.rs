@@ -187,6 +187,27 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
     use std::fmt::Write;
     use crate::lir::Inst;
     let mut key_types: BTreeSet<String> = BTreeSet::new();
+    // The post-LIR-lower `wire_collection_bridges` pass (lir::types) emits
+    // an `Inst::SetCollectionBridge` for every user-keyed collection ctor
+    // it finds — its `key_struct: StructId` directly names the user type
+    // we need a bridge for. Iterate those (typed) and skip the legacy
+    // string-parse of CallExtern names.
+    for func in &module.functions {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                if let Inst::SetCollectionBridge { key_struct, .. } = inst {
+                    if let Some(sd) = module.structs.get(key_struct.0 as usize) {
+                        key_types.insert(sd.name.clone());
+                    }
+                }
+            }
+        }
+    }
+    // The original CallExtern-based scan loop is preserved below as a
+    // dead branch under `cfg(any())` for one merge cycle, in case any
+    // subset (e.g. via-delegation stubs) escapes the SetCollectionBridge
+    // emission window. Delete in B1 once the new path is proven.
+    #[cfg(any())]
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {

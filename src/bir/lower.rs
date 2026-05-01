@@ -777,22 +777,20 @@ fn expand_func(
                     //    vs Ptr-to-aggregate), matching StructInit/EnumInit.
                     new_insts.push(Inst::Store { ptr: dst, value });
                 }
-                Inst::CallRuntime { dst, callee, args, arg_abis, original_name } => {
+                Inst::CallRuntime { dst, callee, args, arg_abis } => {
                     // CallRuntime is a typed-callee form of CallExtern; the
-                    // backends still pattern-match on `name` (A3/B1 will lift
-                    // them to enum-aware). Rewrite to CallExtern using the
-                    // variant's stable C symbol name. The `original_name`
-                    // breadcrumb passes through unchanged so element-type
-                    // inference in the C backend still has its hint.
+                    // backends still pattern-match on `name` (B1 lifts them
+                    // to enum-aware). Rewrite to CallExtern using the
+                    // variant's stable C symbol name.
                     new_insts.push(Inst::CallExtern {
                         dst,
                         name: callee.c_name().to_string(),
                         args,
-                        original_name,
+                        original_name: None,
                         arg_abis,
                     });
                 }
-                Inst::CollectionCtor { dst, kind, args, arg_abis, with_capacity, str_keyed, original_name, .. } => {
+                Inst::CollectionCtor { dst, kind, args, arg_abis, with_capacity, str_keyed, .. } => {
                     // Pick the runtime constructor by (kind, with-capacity?, str-keyed?).
                     // The original CallExtern's args (key_size, val_size,
                     // capacity, …) pass through unchanged — the promote pass
@@ -815,7 +813,7 @@ fn expand_func(
                         dst: Some(dst),
                         name: runtime_name.to_string(),
                         args,
-                        original_name,
+                        original_name: None,
                         arg_abis,
                     });
                 }
