@@ -1,5 +1,21 @@
 # Dict[String, _] state-loss investigation
 
+> **STATUS: CLOSED 2026-05-01 (Session 2)** — DoD met.
+>
+> **Definition of done (from user):**
+> - ✅ Bug fixed (codegen, not C runtime as TODO hypothesized).
+> - ✅ One of six lowerer Vector workarounds reverted (`loaded` Dict).
+> - ✅ `cli_basic.gg` and `encoding_basic.gg` pass `check_comparison`.
+>
+> **Two distinct bugs both fixed:**
+> 1. Span collision in `resolution_map` — fixed by `parse_source_with_offset`
+>    plumbing (commit `ed348009`).
+> 2. `__gorget_map_new_sized_` codegen ignored key type — fixed by routing
+>    K=Str/GorgetString to `gorget_map_new_str` (commit `6e76b13c`).
+>
+> Five other Vector workarounds are likely redundant now; deferred to
+> follow-up.
+
 > **Goal:** root-cause and fix the runtime / codegen bug behind TODO.md's
 > "Self-host Dict[String, _] state-loss" item, then revert one of the six
 > parallel-Vector workarounds as proof.
@@ -184,30 +200,69 @@ both attributed to "Dict[String, _] state-loss":
    work correctly at small scale). Likely requires the specific call
    pattern + scale of the actual lowerer driver to surface.
 
-### Session 2 — TBD — Dict[String, bool] state-loss
+### Session 2 — 2026-05-01 — Dict[String, bool] state-loss closed
 
-The remaining bug. Plan:
+**Plan:** re-revert `loaded` Dict in `self_host_lowerer/loader.gg`, add
+debug prints, run on small input to see if put-then-contains lies.
 
-1. Re-revert the `loaded` Dict in `self_host_lowerer/loader.gg`.
-2. Add `print()` calls inside the `if not loaded.contains(...): loaded.put(...)` branch logging the key, current size, and a put-counter.
-3. Build stage-0 driver, run on a tiny test fixture (not driver.gg)
-   that imports a few modules. Look for cases where the same key gets
-   `put` more than once.
-4. If reproducible at small scale: extract the minimal failing pattern
-   into a focused Rust-compiled fixture; that's the C-level repro.
-5. If only reproducible at full driver.gg scale: instrument the runtime
-   `gorget_map_put` / `gorget_map_get` (`__gorget_str_key_hash`) with
-   a `GG_TRACE_DICT=1` env-gated logger that prints every key's hash,
-   bucket index, found state. Diff between the working (Vector) and
-   broken (Dict) runs to find the divergence.
-6. Root-cause and fix at the appropriate layer. Likely candidates:
-   - `__gorget_str_key_hash` reads beyond `len`? — checked; it doesn't.
-   - `gorget_map_grow` mis-rehashes some key shape? — read the code,
-     looks correct.
-   - String key materialize fails for some specific pattern (cap=0
-     vs cap>0 boundary)?
-   - GorgetMap's `hash_fn` field gets clobbered by an unrelated write
-     elsewhere (e.g. struct-field write that overshoots)?
+**Diagnostic prints in lowerer's loader.gg** showed: with the Dict revert
+AND span-collision fix in place, the driver runs `driver.gg` to completion
+on its own — 27 puts, 167 contains=true (correct), no runaway re-loading.
+So the `loaded.contains` worked correctly when the prints were on.
+
+**But removing the prints and running the bootstrap test** (`stage-1 → stage-2.c`):
+stage-1 timed out at 300s. The driver hung when run on driver.gg without
+prints.
+
+That's strange — adding prints "fixed" the bug? That hinted at print I/O
+flushing affecting timing... but also at something more fundamental being
+broken when the driver emits its OUTPUT C.
+
+**Inspected stage-1's emitted C** (`stage1.c`) and found the smoking gun:
+- 34 calls to `gorget_map_new(sizeof(Str), sizeof(...))` ← BROKEN
+- 0 calls to `gorget_map_new_str(sizeof(...))` ← MISSING
+
+The Rust-emitted C (stage-0 driver) had 42 `gorget_map_new_str` calls.
+But the self-host's emitted C had ZERO.
+
+**Root cause located:** `lir_codegen.gg:3515` `__gorget_map_new_sized_`
+branch ALWAYS expanded to `gorget_map_new(sizeof(K), sizeof(V))` without
+checking K type. Empty-literal `Dict[String, _] x = {}` lowered through
+this magic-name path, bypassing the explicit `Dict__GorgetString__V__new`
+routing in `map_monomorphized_to_runtime` (which DID check K and route
+to `gorget_dict_new_str`).
+
+Without `_str`, `hash_fn = NULL`, runtime falls back to byte-FNV on the
+32-byte `Str` struct (data ptr + cap + len + alloc). Different `String`
+instances of "std.collections" had different `data` pointers, hashed to
+different buckets, contains=false after put.
+
+**Fix:** in the `__gorget_map_new_sized_` codegen branch, check resolved
+K c-type name; if `Str` or `GorgetString`, emit `gorget_map_new_str(sizeof(V))`.
+Single change in `lir_codegen.gg` (12 lines added).
+
+**Validation after fix:**
+- stage1.c: 0 raw `gorget_map_new(sizeof(Str), ...)` (was 34), 35
+  `gorget_map_new_str(sizeof(...))` calls.
+- `self_host_bootstrap` AND `self_host_bootstrap_fixed_point`: BOTH PASS.
+- Reverted `Vector[String] loaded` to `Dict[String, bool] loaded` in
+  `self_host_lowerer/loader.gg` as proof-of-fix; removed dead
+  `loaded_contains` helper. Stage-1 still works.
+- `check_comparison`: 904 exact, 11 mismatches, 0 crashes (unchanged).
+- Full integration sweep: **1052/1052 PASS, 0 failures**.
+
+**Stage-1 mono-gen hang at mi=64/73 was the same bug.** With the codegen
+emitting raw `gorget_map_new` (no hash), the various Dict[String, _]
+sites in lower.gg / gir.gg / lir_lower.gg also failed to dedup, causing
+infinite-progress loops. The fix at the codegen layer cascades to all
+of them.
+
+**Remaining workarounds (now likely redundant):** five other
+parallel-Vector workarounds in self_host_lowerer (LowerCtx.named_locals,
+GirModule.const_decls / none_decls / enum_names, seen_instances,
+fn_templates) faced the same bug. Reverting them is a follow-up commit
+for code cleanliness; the stage-1 binary now passes bootstrap with the
+codegen fix even with these workarounds in place.
 
 ## Files
 
