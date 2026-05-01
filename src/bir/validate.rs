@@ -101,6 +101,11 @@ fn check_inst(inst: &Inst, fn_name: &str, block_id: u32) -> Result<(), BirError>
             block_id,
             opcode: "BoxAlloc",
         }),
+        Inst::CollectionCtor { .. } => Err(BirError::UnloweredCanonicalOp {
+            fn_name: fn_name.to_string(),
+            block_id,
+            opcode: "CollectionCtor",
+        }),
 
         // === Primitives — the catch-all (default) ===
         _ => Ok(()),

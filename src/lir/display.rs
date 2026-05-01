@@ -322,6 +322,22 @@ fn write_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
             write_value_list(f, args)?;
             write!(f, ")")
         }
+        Inst::CollectionCtor { dst, kind, elem_or_key, val, args, with_capacity, str_keyed, .. } => {
+            write!(f, "{dst} = collection_ctor {:?}<{:?}", kind, elem_or_key)?;
+            if let Some(v) = val {
+                write!(f, ", {:?}", v)?;
+            }
+            write!(f, ">(")?;
+            write_value_list(f, args)?;
+            write!(f, ")")?;
+            if *with_capacity {
+                write!(f, " with_capacity")?;
+            }
+            if *str_keyed {
+                write!(f, " str_keyed")?;
+            }
+            Ok(())
+        }
         Inst::CallPtr { dst, callee, args, ret_ty: _ } => {
             if let Some(d) = dst {
                 write!(f, "{d} = ")?;

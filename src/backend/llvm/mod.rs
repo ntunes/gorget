@@ -6267,6 +6267,10 @@ fn emit_inst(
             unreachable!("CallRuntime should have been normalized to CallExtern \
                 at the top of emit_inst — see the shadowing rebind above.");
         }
+        Inst::CollectionCtor { .. } => {
+            unreachable!("CollectionCtor reached LLVM backend; BIR lowering \
+                should have expanded it.");
+        }
     }
 }
 

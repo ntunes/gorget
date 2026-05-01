@@ -2475,6 +2475,16 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let name = callee.c_name().to_string();
             emit_call_extern::emit_call_extern(out, dst, &name, args, arg_abis, ctx);
         }
+        Inst::CollectionCtor { .. } => {
+            // CollectionCtor is a canonical-op; BIR lowering expands it into
+            // a CallExtern (or CallRuntime) before backends ever see it.
+            // Emit-function debug paths bypass BIR but never traverse a
+            // collection ctor (those tests target lower-level instructions).
+            unreachable!(
+                "CollectionCtor reached backend; BIR lowering should have \
+                 expanded it. Check that `bir::lower::expand_func` ran."
+            );
+        }
         Inst::CallPtr { dst, callee, args, ret_ty: call_ret_ty } => {
             if let Some(d) = dst {
                 write!(out, "{} = ", v(*d)).unwrap();

@@ -516,6 +516,11 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
                 sub(a);
             }
         }
+        Inst::CollectionCtor { args, .. } => {
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
         Inst::CallPtr { callee, args, .. } => {
             sub(callee);
             for a in args.iter_mut() {

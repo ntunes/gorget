@@ -525,6 +525,7 @@ fn try_build_ir(
                 stats.drop_flags_inserted, stats.move_slots_removed);
         }
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
@@ -551,6 +552,7 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
@@ -579,6 +581,7 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);

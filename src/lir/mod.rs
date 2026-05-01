@@ -309,6 +309,75 @@ pub enum ClosureDispatchKind {
     EscapedClosure,
 }
 
+// ── Collection constructor metadata ─────────────────────────────────────────
+
+/// Which collection shape an `Inst::CollectionCtor` constructs.
+///
+/// Used to select the runtime constructor at BIR-lowering time and to gate
+/// downstream wiring (key-bridges fire only on Dict/HashMap/Set/HashSet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CollectionCtorKind {
+    /// Ordered dynamic array (`Vector[T]`).
+    Vector,
+    /// Double-ended queue (`Deque[T]`).
+    Deque,
+    /// Insertion-ordered map (`Dict[K, V]`).
+    Dict,
+    /// Unordered map (`HashMap[K, V]`).
+    HashMap,
+    /// Insertion-ordered set (`Set[T]`).
+    Set,
+    /// Unordered set (`HashSet[T]`).
+    HashSet,
+}
+
+impl CollectionCtorKind {
+    /// True if this collection shape is map-like (carries key + value).
+    pub fn is_map(self) -> bool {
+        matches!(self, CollectionCtorKind::Dict | CollectionCtorKind::HashMap)
+    }
+
+    /// True if this collection shape is set-like (carries element only,
+    /// element IS the key).
+    pub fn is_set(self) -> bool {
+        matches!(self, CollectionCtorKind::Set | CollectionCtorKind::HashSet)
+    }
+}
+
+/// Per-element type metadata for an `Inst::CollectionCtor`.
+///
+/// Captures enough information for downstream passes to make typed
+/// decisions: which user struct to look up, whether the type carries a
+/// runtime-side drop function, what byte-size to pass to the runtime
+/// constructor.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ElemMeta {
+    /// Primitive scalar — stored inline in the collection.
+    Primitive(LirType),
+    /// Built-in resource type with runtime drop/clone functions.
+    Resource(ResourceKind),
+    /// User-defined struct or enum (the struct's `StructId` in the LIR).
+    UserType(StructId),
+}
+
+/// Categorical name for a built-in resource type.
+///
+/// These types have runtime-managed drop/clone semantics (vs. user types
+/// which use generated `T__drop` / `T__clone_inplace` functions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceKind {
+    /// `String` — Gorget's owned string (`GorgetString` 32-byte struct).
+    GorgetString,
+    /// `Vector[U]`/`Deque[U]` — `GorgetArray` 64-byte struct.
+    GorgetArray,
+    /// `Dict[K, V]`/`HashMap[K, V]` — `GorgetMap` struct.
+    GorgetMap,
+    /// `Set[T]`/`HashSet[T]` — `GorgetSet` struct (typedef-aliased to GorgetMap).
+    GorgetSet,
+    /// Closure (`Callable[T(...)]` / `MutCallable[...]` / `ConsumeCallable[...]`).
+    GorgetClosure,
+}
+
 // ── Drop guard kind ───────────────────────────────────────────────────────
 
 /// Condition kind for conditional drop guard blocks.
@@ -715,6 +784,58 @@ pub enum Inst {
     /// pure dataflow annotation consumed by the drop elaboration pass.
     MoveSlot { slot: SlotId },
 
+    /// Canonical-op: typed collection constructor.
+    ///
+    /// Replaces the `CallExtern { name: "gorget_dict_new", original_name: "Dict__K__V__new" }`
+    /// pattern with a structured form that carries kind + element/key/value
+    /// metadata directly. The three passes that today string-parse the
+    /// `original_name` field — `wire_collection_bridges`,
+    /// `find_hashable_key_types`, `infer_collection_elem_fns` — read the
+    /// structured fields instead. After A3's full migration the
+    /// `original_name` field deletes (audit's #4).
+    ///
+    /// BIR lowering expands this into a `CallExtern` to the matching runtime
+    /// constructor (`gorget_dict_new` etc.), choosing between `_new` /
+    /// `_with_capacity` / `_new_str` based on the `capacity` and `str_keyed`
+    /// fields. Backends see the same `CallExtern` they did before.
+    ///
+    /// WASM-specific (roadmap §A3): `ElemMeta` lets the WASM backend
+    /// compute the linear-memory allocation size at lowering time without
+    /// needing a runtime symbol-name parser.
+    CollectionCtor {
+        dst: ValueId,
+        kind: CollectionCtorKind,
+        /// For Vector / Deque / Set / HashSet: element type.
+        /// For Dict / HashMap: KEY type.
+        elem_or_key: ElemMeta,
+        /// For Dict / HashMap: value type. None otherwise.
+        val: Option<ElemMeta>,
+        /// Runtime call args — `(key_size, val_size)` for maps,
+        /// `(elem_size)` for vectors / sets, plus an optional final
+        /// capacity arg. Preserved from the original `CallExtern.args`
+        /// during the promote pass so BIR-lowering passes them through
+        /// verbatim. A follow-up (B1 / A3 part-2) will derive them at
+        /// BIR time from `elem_or_key` / `val` + `with_capacity` and
+        /// drop these slots.
+        args: Vec<ValueId>,
+        /// `arg_abis` matching `args` (all `Scalar` for size/capacity).
+        arg_abis: Vec<crate::ir::abi::AbiKind>,
+        /// True if the call used the `_with_capacity` form (final `args`
+        /// element is a runtime capacity).
+        with_capacity: bool,
+        /// True for the runtime fast-path `_new_str` variants where the key
+        /// type is known to be `String`. The runtime pre-wires the Str
+        /// hash/eq/drop in the constructor so callers must NOT emit user-
+        /// side bridges for the key.
+        str_keyed: bool,
+        /// Pre-promote monomorphized GIR name (`Dict__K__V__new`, …).
+        /// Preserved so post-BIR consumers (`find_hashable_key_types` in
+        /// the optimizer) can keep their existing string-parse path while
+        /// commit 2 migrates them to read the typed `kind` / `elem_or_key` /
+        /// `val` fields. Retired when commit 2 lands.
+        original_name: Option<String>,
+    },
+
     /// Wire `collection.hash_fn` / `collection.eq_fn` to user-derived
     /// `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` bridges so a
     /// `Dict[T, V]` / `Set[T]` keyed by a `@derive(Hashable, Equatable)`
@@ -759,6 +880,7 @@ impl Inst {
             | Inst::DropGuardOpen { .. } | Inst::DropGuardClose | Inst::Nop
             | Inst::EnumInit { .. } | Inst::StructInit { .. }
             | Inst::SetCollectionBridge { .. } => None,
+            Inst::CollectionCtor { dst, .. } => Some(*dst),
             Inst::InlineC { dst, .. } => *dst,
 
             Inst::SlotLoad { dst, .. }
@@ -912,6 +1034,7 @@ impl Inst {
             Inst::AddressOf { value, .. } => vec![*value],
             Inst::BoxAlloc { value, .. } => vec![*value],
             Inst::SetCollectionBridge { collection, .. } => vec![*collection],
+            Inst::CollectionCtor { args, .. } => args.clone(),
         }
     }
 }

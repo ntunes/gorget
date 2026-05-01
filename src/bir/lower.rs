@@ -792,6 +792,33 @@ fn expand_func(
                         arg_abis,
                     });
                 }
+                Inst::CollectionCtor { dst, kind, args, arg_abis, with_capacity, str_keyed, original_name, .. } => {
+                    // Pick the runtime constructor by (kind, with-capacity?, str-keyed?).
+                    // The original CallExtern's args (key_size, val_size,
+                    // capacity, …) pass through unchanged — the promote pass
+                    // captured them verbatim. A follow-up will derive sizes
+                    // from `elem_or_key` / `val` at this layer.
+                    use crate::lir::CollectionCtorKind as K;
+                    let runtime_name = match (kind, with_capacity, str_keyed) {
+                        (K::Vector, false, _) | (K::Deque, false, _) => "gorget_array_new",
+                        (K::Vector, true, _)  | (K::Deque, true, _)  => "gorget_array_with_capacity",
+                        (K::Dict, _, false) => "gorget_dict_new",
+                        (K::Dict, _, true)  => "gorget_dict_new_str",
+                        (K::HashMap, _, false) => "gorget_map_new",
+                        (K::HashMap, _, true)  => "gorget_map_new_str",
+                        (K::Set, _, false) => "gorget_ordered_set_new",
+                        (K::Set, _, true)  => "gorget_ordered_set_new_str",
+                        (K::HashSet, _, false) => "gorget_set_new",
+                        (K::HashSet, _, true)  => "gorget_set_new_str",
+                    };
+                    new_insts.push(Inst::CallExtern {
+                        dst: Some(dst),
+                        name: runtime_name.to_string(),
+                        args,
+                        original_name,
+                        arg_abis,
+                    });
+                }
                 other => new_insts.push(other),
             }
         }
@@ -3532,6 +3559,7 @@ fn func_needs_expansion(func: &LirFunction) -> bool {
                     | Inst::AddressOf { .. }
                     | Inst::BoxAlloc { .. }
                     | Inst::CallRuntime { .. }
+                    | Inst::CollectionCtor { .. }
             ) {
                 return true;
             }
