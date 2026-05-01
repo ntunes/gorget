@@ -1,21 +1,24 @@
 # Unified Resource Model and LIR Correctness Roadmap
 
-> **Status:** Proposed (2026-04-28). Revised 2026-05-01 to add Phase D (the IR-side counterpart to Phase A), §8 (sequencing alongside self-host + contract evolution discipline), and to merge in the LIR correctness roadmap — folding overlapping items into Phases A/B/C/D and adding Tier E for residual LIR-only hygiene work. This document supersedes `lir-correctness-roadmap.md`.
+> **Status:** Proposed (2026-04-28). Revised 2026-05-01 to add Phase D (the IR-side counterpart to Phase A), §9 (sequencing alongside self-host + contract evolution discipline), and to merge in the LIR correctness roadmap — folding overlapping items into Phases A/C/D and adding Tier E for residual LIR-only hygiene work. Revised same day to **defer Phase B entirely** to a documented fallback (see §4) — the cost-benefit reads net-negative once Phase C is on the road. This document supersedes `lir-correctness-roadmap.md`.
 > **Authors:** opus-4.7 session.
 > **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`, `layering-discipline.md`.
 > **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4); the seven sidecar maps in `LoweringContext` enumerated in §6.1.
 
-This document proposes a four-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time. It also folds in the residual LIR-correctness work (Tier E) that doesn't touch resources directly but is part of the same "make the IR correct by construction" agenda.
+This document proposes a three-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time. It also folds in the residual LIR-correctness work (Tier E) that doesn't touch resources directly but is part of the same "make the IR correct by construction" agenda.
 
-The changes are:
+The active plan is:
 
 - **Phase A — Unified resource metadata.** Replace the parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. Includes the typed runtime function table (`RuntimeFn` enum + signature data — `RuntimeFn` already shipped, the declaration table extends it). All consumers read from one accessor. Adding a new resource type or runtime fn touches one declaration site. *Type-axis consolidation.*
 - **Phase D — Local-state consolidation and borrow provenance.** The IR-side mirror of Phase A. Replace the seven parallel sidecar maps in `LoweringContext` with a single typed `LocalOwnership` field on every `Local`, including a first-class `BorrowOrigin` that persists from GIR through LIR. Subsumes the LIR roadmap's per-value origin metadata refactor — same pattern at the LIR layer. *Local-axis consolidation.* Without this, Phase C is intractable.
-- **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses to every resource type, with one rule: **first 8 bytes == 0 ⇒ view**. Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. Shallow copies become safe at runtime: only the owner ever frees, every other holder is a view that no-ops on drop. Co-designed with `LirType::FuncRef` (typed function references) so Phase B's closure layout change and the typed FuncRef land together. Defends in depth against bugs that escape Phase C.
-- **Phase C — Strict move/clone validation.** Make every read of a resource-typed value an explicit `Move` / `Clone` / `Borrow`. Reject any IR that produces a shallow alias of an owned resource. Plugs into the LIR's per-pass validator framework (Tier E §7.3) — Phase C is one validator entry; the framework hosts it and other invariant checks.
-- **Tier E — LIR/SSA hygiene.** Residual correctness work that doesn't touch resources: drop-flag dataflow init, critical-edge splitting + post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint. Independent of the resource-model phases; runs in parallel.
+- **Phase C — Strict move/clone validation.** Make every read of a resource-typed value an explicit `Move` / `Clone` / `Borrow`. Reject any IR that produces a shallow alias of an owned resource. Plugs into the LIR's per-pass validator framework (Tier E §8.3) — Phase C is one validator entry; the framework hosts it and other invariant checks.
+- **Tier E — LIR-side correctness and shape work.** Independent items from the LIR audit: drop-flag dataflow init, critical-edge splitting + post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint, typed `LirType::FuncRef`. Independent of A/D/C; runs in parallel.
 
-The phases compose: A and D are refactors that unblock the others (A on the type axis, D on the local axis); B is a runtime safety net that ships fast and catches bugs while C is being built; C is the compile-time guarantee that the bug class can't recur. Tier E proceeds independently throughout.
+**Deferred fallback (not on the active road):**
+
+- **Phase B — Universal view/owner discrimination at runtime.** Originally proposed as a runtime safety net while Phase C was being built. Deferred 2026-05-01 because the permanent ABI cost (`Box[T]` 8→16 B, `GorgetClosure` 16→24 B, `Task[T]` 16→24 B) is decisively net-negative once Phase C is on the road. Documented in §4 as a complete design so a future contributor doesn't have to re-derive it if Phase C ever stalls and the runtime backstop is genuinely needed.
+
+The phases compose: A and D are refactors that unblock C (A on the type axis, D on the local axis); C is the compile-time guarantee that the bug class can't recur. Tier E proceeds independently throughout.
 
 **Already shipped** (subsets of Phase A, delivered by the LIR audit): `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2 — typed runtime call boundary), `Inst::CollectionCtor` (LIR A3 — typed collection ctor with `ElemMeta` replacing `original_name` parsing in three downstream passes). What's left of Phase A is the GIR-side type-metadata consolidation and the runtime declaration table extension.
 
@@ -251,32 +254,30 @@ The Rust struct `RuntimeDecl` shown above is the *deserialization target*, not t
 
 From the resulting `RUNTIME_DECLS` const, the C backend emits `extern` declarations, the LLVM backend emits `declare`s, the (future) WASM backend emits `(import …)` statements. The hand-written C runtime header is auto-generated from the same source, so the runtime and the frontend can never disagree on a signature.
 
-Crucially, `RuntimeDecl.params` and `RuntimeDecl.ret` reference *resource types by their `ResourceMetadata` entry* — so layout changes from Phase B propagate automatically to runtime signatures. One source of truth covers both axes (types and functions).
+Crucially, `RuntimeDecl.params` and `RuntimeDecl.ret` reference *resource types by their `ResourceMetadata` entry* — so any future layout change (e.g., a Phase B revival, §4) propagates automatically to runtime signatures. One source of truth covers both axes (types and functions).
 
-Estimated effort: 3-4 weeks (the bulk of "what's left of Phase A"). Cost concentrates on the TOML schema design, the `build.rs` emitters, and the migration of the existing hand-written `runtime_extern_sig` function in `src/lir/lower/calls.rs`. **Co-dependent with Phase B's layout changes** — see §4.8.
+Estimated effort: 3-4 weeks (the bulk of "what's left of Phase A"). Cost concentrates on the TOML schema design, the `build.rs` emitters, and the migration of the existing hand-written `runtime_extern_sig` function in `src/lir/lower/calls.rs`.
 
 ---
 
-## 4. Phase B — Universal view/owner discrimination
+## 4. Phase B — Universal view/owner discrimination *(deferred fallback)*
 
-### 4.1 Why this is a runtime safety net, not just a refactor
+> **Status: documented, not scheduled for implementation.** Phase B was originally proposed as a runtime safety net while Phase C (compile-time validation) was being built. The cost-benefit reads net-negative once Phase C is on the road: permanent ABI growth (`Box[T]` 8→16 B, `GorgetClosure` 16→24 B, `Task[T]` 16→24 B) for transitional protection that becomes redundant in steady state. Reviewed 2026-05-01: **deferred entirely**, not piecewise. The active plan bets on Phase C; this section preserves the design and rationale so a future contributor doesn't have to re-derive it if Phase C ever stalls and the runtime backstop is genuinely needed.
 
-Phase A makes every consumer agree about what a type is. It doesn't change the runtime behaviour where two values share a heap allocation. The Dict[K, Callable] bug landed two days ago because:
+### 4.1 The original case
 
-- `Dict.get(key).unwrap()` returned a Callable VALUE (not a Ref).
-- The IR registered the unwrap result for drop (since Callable is now `needs_drop`).
-- The Dict slot also registers drop via `val_drop`.
-- Both pointed at the same heap env. Both dropped. Double-free.
+The bug class Phase B uniquely catches: shallow-copy double-free at runtime, regardless of whether the IR tracked ownership correctly. `String` already has this property (`gorget_string_free` checks `cap == 0` and no-ops on views) and the bug never bites for strings. Generalising the same pattern to every resource type would make shallow-copy double-free physically impossible at runtime — the runtime equivalent of Phase C's compile-time guarantee.
 
-String has the same shape but doesn't bite because `gorget_string_free` checks `cap == 0` and no-ops on views. Whichever copy still has `cap > 0` becomes the owner; everyone else is a view that no-ops on drop.
+Concrete bugs it would close:
+- `Dict[K, Callable]` double-free (view bit on `.get().unwrap()` result; slot stays owner).
+- `routes.put(key, h)` double-free (slot owner, post-put `h` drop is no-op).
+- `Vector[Callable]` env leak from intermediate locals.
 
-**Generalising this to every resource type makes shallow-copy double-free physically impossible**, regardless of whether the IR tracks ownership correctly.
+Roughly half the SECURITY-tagged TODOs in §1's table fall into this class. **Phase D + Phase C close them at compile time** (the local-state consolidation makes the source-of-shallow-aliases impossible to express in the IR; the validator rejects what's left). Phase B is the runtime backstop if compile-time fails.
 
-### 4.2 One rule for every resource
+### 4.2 The design (if revived)
 
-The earlier draft of this section had three view-discriminator schemes (per-type sentinel fields, leading-header word, pointer-bit tagging) chosen for ABI preservation. That preservation isn't worth the maintenance debt — bit-stealing on `env` size prefixes and pointer alignment bits is exactly the kind of clever-now-cursed-later trick this whole document is supposed to eliminate.
-
-The right design: **every resource type's first 8 bytes are the discriminator. `0` ⇒ view, anything non-zero ⇒ owner. One rule, one runtime check.**
+**One rule:** every resource type's first 8 bytes are the discriminator. `0` ⇒ view, non-zero ⇒ owner.
 
 ```c
 static inline bool __gorget_is_view(const void* p) {
@@ -284,119 +285,36 @@ static inline bool __gorget_is_view(const void* p) {
 }
 ```
 
-For collections this is *already true* if we move the existing `cap` field from offset 8 to offset 0 — `cap == 0` already coincides with "view" (a borrowed buffer with no allocated capacity of its own). The 2026-04-12 layout decision (cap at offset 8 / field index 1) was the project's first attempt at a uniform discriminator location; this is the second attempt that picks the *useful* location instead of the merely consistent one.
+Layouts:
 
-For non-collections (`GorgetClosure`, `Box[T]`, `Task[T]`), we prepend an 8-byte `flags` header. Bit 0 = `OWNED`. Other bits reserved for future use (refcounted, frozen, thread-shared, etc. — all the things we'll inevitably want to add later). The "extra" 8 bytes is honest cost for a uniform safe scheme; trying to avoid it via bit-stealing is the trap.
-
-### 4.3 Layouts after convergence
-
-| Type | Today | After Phase B | Δ |
+| Type | Today | If revived | Δ |
 |---|---|---|---|
-| `GorgetString` | `{data, cap, len, alloc}` 32 B (cap at offset 8) | `{cap, data, len, alloc}` 32 B (cap at offset 0) | reorder only, same size |
-| `GorgetArray` | `{data, cap, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize}` 64 B | `{cap, data, len, elem_size, alloc, elem_drop, elem_clone, elem_materialize}` 64 B | reorder only |
-| `GorgetMap` / `GorgetSet` | cap at field index 1 | cap at field index 0, all other fields shift left | reorder only |
-| `GorgetClosure` | `{fn_ptr, env}` 16 B | `{flags, fn_ptr, env}` 24 B | +8 B (50%) |
-| `Box[T]` | `T*` 8 B | `{flags, T*}` 16 B | +8 B (100%) |
-| `Task[T]` | `{task_ptr, drop_fn}` 16 B | `{flags, task_ptr, drop_fn}` 24 B | +8 B (50%) |
-| Opaque handles (Socket, Mutex, …) | bare `int64_t`-sized | unchanged | 0 — these set `has_view_header: false` in the metadata and stay FFI-shaped |
+| `GorgetString` | `{data, cap, len, alloc}` 32 B (cap at offset 8) | `{cap, data, len, alloc}` 32 B (cap at offset 0) | reorder, same size |
+| `GorgetArray` | `{data, cap, len, …}` 64 B | `{cap, data, len, …}` 64 B | reorder |
+| `GorgetMap` / `GorgetSet` | cap at field index 1 | cap at field index 0 | reorder |
+| `GorgetClosure` | `{fn_ptr, env}` 16 B | `{flags, fn_ptr, env}` 24 B | **+8 B (50 %)** |
+| `Box[T]` | `T*` 8 B | `{flags, T*}` 16 B | **+8 B (100 %)** |
+| `Task[T]` | `{task_ptr, drop_fn}` 16 B | `{flags, task_ptr, drop_fn}` 24 B | **+8 B (50 %)** |
+| Opaque handles (Socket, Mutex, …) | bare `int64_t`-sized | unchanged | 0 |
 
-The cost concentrates on small/hot types. For collections it's free (just a field-index renumber). For Box, Closure, Task it's an honest +8 bytes — paid for runtime safety, debuggability, and the elimination of bit-stealing tricks.
+Drop functions become uniform: every `*_free` checks `__gorget_is_view(p)` first; the body is otherwise type-specific (allocator, elem-drop callbacks, etc.). Post-drop, the function zeros the first 8 bytes so subsequent drops are idempotent no-ops.
 
-Cache impact of moving `cap` to offset 0 is essentially zero: `cap` and `data` always live in the same 64-byte cache line, so the access order doesn't change cache misses. If anything it helps — the discriminator-first layout lets the CPU's branch predictor speculate the view-vs-owner check before the data load completes.
+### 4.3 Why deferred
 
-### 4.4 Drop functions become uniform
+- **Permanent ABI growth, transitional protection.** Box doubles, Closure +50 %, Task +50 %. Once shipped, can't be undone without another ABI break. Phase C makes the protection redundant in steady state — we'd be paying the ABI cost forever for a safety net that catches nothing once C is sound.
+- **Forced lockstep window with self-host.** The cap-reorder + the prepend together require both compilers to agree byte-for-byte. The only synchronised cutover in an otherwise-parallel plan; eliminating it removes ~1 week of freeze.
+- **Cosmetic uniformity, not real consolidation.** `__gorget_is_view(p)` is a 1-line save in front of still-type-specific drop bodies. Every type's drop function still has to know its own allocator, elem-drop callbacks, etc. The "uniform check" is real but small.
+- **Identity signal.** Gorget's pitch is "Rust-grade safety without runtime tax." Pre-allocating 8 bytes per `Box[T]` because we don't trust the compile-time discipline is admitting we don't. Either Phase C is the destination or it isn't.
+- **No piecewise rollout.** The cap-reorder alone (without the prepend) is cosmetic — today's drop functions check `cap` at offset 8 and work fine; renumbering to offset 0 only buys a uniform `__gorget_is_view` helper, which doesn't justify the lockstep cost on its own. Doing the reorder *as preparation* for the prepend is paying for the prepend's setup without committing to the prepend; if revival never happens the work is wasted. Either revive the whole design (reorder + prepend together) or leave both alone.
 
-```c
-// Before:
-static inline void gorget_string_free(void* p) {
-    GorgetString* s = (GorgetString*)p;
-    if (s->cap == 0) { *s = (Str){0}; return; }
-    s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
-    *s = (Str){0};
-}
+### 4.4 What would trigger revival
 
-// After (uniform check, type-specific free):
-static inline void gorget_string_free(void* p) {
-    if (__gorget_is_view(p)) { return; }   // first 8 bytes == 0 ⇒ view
-    GorgetString* s = (GorgetString*)p;
-    s->alloc->dealloc(s->alloc->ctx, s->data, s->cap);
-    *(uint64_t*)p = 0;                      // mark as view post-drop (idempotent)
-}
+Concrete signals, not "just in case":
+- Phase C migration stalls for >3 months without convergence on the hard cases.
+- Production users hit shallow-alias bugs that the IR validator demonstrably missed.
+- A specific bug class proves cheaper to backstop at runtime than to fix in the validator.
 
-static inline void gorget_closure_free(void* p) {
-    if (__gorget_is_view(p)) { return; }
-    GorgetClosure* c = (GorgetClosure*)p;
-    if (c->env) free((char*)c->env - sizeof(size_t));  // env still uses size prefix
-    *(uint64_t*)p = 0;
-}
-
-static inline void gorget_box_free(void* p) {
-    if (__gorget_is_view(p)) { return; }
-    GorgetBox* b = (GorgetBox*)p;
-    free(b->data);
-    *(uint64_t*)p = 0;
-}
-```
-
-Same shape every time. The post-drop `*(uint64_t*)p = 0` makes free idempotent — repeated drops of the same slot are no-ops. That's the same property `gorget_string_free` already gets accidentally from setting `*s = (Str){0}`; we make it uniform and explicit.
-
-### 4.5 When does the view bit get set?
-
-Any runtime path that produces a shallow copy of an owned resource sets the view bit on either the source or the destination. The two specific cases:
-
-1. **`Dict.get(key).unwrap()` for `Dict[K, Callable]`** (today's known double-free). The unwrap result reads the slot's GorgetClosure value. The IR emits a `mark_view` on the unwrap result; the Dict slot stays owner. View-result drop is no-op; slot drop frees as normal.
-
-2. **Field projections of a resource-typed struct field.** Reading `s.field` where field is resource produces a view of the field's data. The struct stays the owner.
-
-Once Phase C lands, both of these become impossible to *write* in the IR — the only way to read a resource value is `Move`, `Clone`, or `Borrow`. The view-bit machinery becomes the runtime safety net under Phase C, only relevant if Phase C has bugs.
-
-### 4.6 What this saves
-
-Every "shallow copy and both drop" bug class. Concretely, after Phase B:
-- `Dict[K, Callable]` double-free → impossible (view bit on unwrap result).
-- `routes.put(key, h)` double-free → impossible (slot stays owner; h's post-put drop is no-op).
-- `Vector[Callable]` env leak from intermediate locals → impossible.
-- The `__gorget_drop_fn` UBSan trip stays (separate type-system issue).
-- Dropped match-arm value stays (separate IR-lowering issue).
-
-Phase B closes ~half the SECURITY-tagged TODOs and prevents future ones in that class.
-
-### 4.7 Migration plan for Phase B
-
-Stage B1: Reorder collection structs to put `cap` at offset 0. Update positional struct initializers in `c_runtime.rs` (~20-30 sites — most use designated initializers and are robust). Renumber LIR `FieldPtr` indices: `cap` was index 1, becomes 0; `data` was 0, becomes 1; rest of fields renumber accordingly. Audit hardcoded field-offset assumptions in self-host (project memory documents these — must move in lockstep).
-
-Stage B2: Add `__gorget_is_view(void*)` runtime helper. Update every `*_free` runtime function (string, array, map, set) to check it first. Add idempotent post-drop zeroing.
-
-Stage B3: Prepend `uint64_t flags` to `GorgetClosure`, `Box[T]`, `Task[T]`. Update the matching `*_free` and `*_clone` functions. Wire the LIR sites that allocate / pack these to set `flags = GORGET_OWNED`. Update every site that assumes `sizeof(GorgetClosure) == 16` (probably ~10-20 sites; mechanical).
-
-Stage B4: For user-defined Resource structs, the auto-generated `T__drop` prepends a `__gorget_is_view` check. The struct itself either gets a generated `flags: u64` field at offset 0 (mandated by the resource registration), or — if the user already declared a leading 8-byte field that's never zero in practice — reuse that offset.
-
-Stage B5: Audit all custom drop functions for runtime types to confirm they all check the view marker first. Add a compile-time assertion that every `ResourceMetadata.drop_fn` starts with the view check (sanity-checked via a runtime preamble that wraps each registered drop_fn).
-
-Stage B6: Wire the IR sites that produce shallow copies of resources (Dict.get unwrap, field projection of resource fields) to emit a `mark_view` LIR instruction on the result.
-
-Estimated effort: 2 weeks (revised from 1.5 — the field-reorder ripples are real, especially for self-host parity). Risk: medium. Each resource type can be migrated independently, but the field-reorder needs the whole runtime + self-host moved in one synchronised change.
-
-### 4.8 Companion: typed function references (`LirType::FuncRef`)
-
-Today `Inst::FuncAddr { dst, func: FuncId }` produces a `Ptr` value. That works for C (any function pointer is `void(*)`) and LLVM (any function pointer is `ptr`). It does NOT work for WASM, which uses table indices, not pointers — and it conflates "raw function pointer" with "boxed closure" semantically.
-
-Long-term shape:
-
-```rust
-// New LirType variant.
-LirType::FuncRef
-// Inst::FuncAddr's dst becomes LirType::FuncRef instead of Ptr.
-Inst::CallByRef { dst, fref: ValueId, args }  // call-via-table-or-pointer
-```
-
-Backends:
-- C/LLVM: lower `FuncRef` to `void*` / `ptr`, `CallByRef` to indirect call.
-- WASM (future): lower `FuncRef` to a table index, `CallByRef` to `call_indirect`.
-
-This properly types `GorgetClosure` as `{ flags: u64, fn_ptr: FuncRef, env: Ptr }` — including Phase B's flags header at offset 0. **Co-design with Phase B is mandatory:** A5's typed shape and B's flags-header layout edit the same struct. Land them in the same window so the closure layout flips once, not twice.
-
-Estimated effort: 3-5 days standalone, folded into Phase B's window so the cost is mostly already counted.
+If revived: ~2 weeks of focused work, one synchronised cutover with self-host. The design above is the implementation plan — no further design needed.
 
 ---
 
@@ -486,13 +404,11 @@ Stage C3: Once the warning count is below ~10, audit the remaining cases. Either
 
 Stage C4: Promote `validate_resource_moves` from warning to compile error. Lock the invariant.
 
-Stage C5: Optional — once Phase C is proven sound across the integration suite, deprecate Phase B's runtime view-checks. They're now a defence-in-depth net for bugs Phase C can't catch.
+Estimated effort: ~1 week with Phase D in place (collapses to a typed-match validator over `LocalOwnership`). The original 3-week estimate assumed Phase D wasn't done first. Risk: low-medium — the upstream lowering changes already happened in Phase D.
 
-Estimated effort: 3 weeks. Risk: medium-high. The validation pass is small; the upstream lowering changes are widespread. Worth doing because it's the only change that *prevents the bug class entirely* rather than catching it after the fact.
+### 5.7 What Phase C catches that the deferred Phase B would have
 
-### 5.7 What Phase C catches that Phase B doesn't
-
-Phase B turns shallow-copy double-free into a no-op on the view side. The free still happens once (on the owner). But there's a *correctness* issue Phase B can't fix:
+Reading §4 in reverse: with Phase B deferred, the runtime backstop isn't there. Phase C has to catch *both* the shallow-copy double-free (which Phase B would have caught at runtime) *and* the aliased-mutable-state class (which Phase B couldn't catch even if shipped). Concretely:
 
 - Caller has a Callable with env = {captured_state: 5}.
 - Caller passes Callable to callee by shallow copy. View bit set on caller's copy.
@@ -500,15 +416,15 @@ Phase B turns shallow-copy double-free into a no-op on the view side. The free s
 - Callee returns. Callee's view-bit copy goes out of scope, no-op drop.
 - Caller now sees env = {captured_state: <mutated>}.
 
-This is an aliased mutable state bug — the caller's "I have my own closure" expectation is violated. Phase B doesn't catch it because both copies are physically valid; the bug is semantic.
+This is an aliased mutable state bug — the caller's "I have my own closure" expectation is violated. Phase B couldn't catch it even if shipped, because both copies are physically valid; the bug is semantic.
 
 Phase C catches it by requiring the caller's `f(handler)` either Move (caller doesn't keep handler) or Clone (callee gets independent copy). Aliased mutable state becomes impossible.
 
-This is why Phase C is the actual safety guarantee, not just defence in depth.
+This is why Phase C is the principled fix — it's the only one that prevents *both* shallow-copy double-free *and* aliased-mutable-state at compile time. Phase B's deferred design only addressed the first half; Phase C addresses both.
 
 ### 5.8 Hosting in the validator framework
 
-`validate_resource_moves` doesn't need its own pass infrastructure — Tier E's per-pass validator framework (§7.3) hosts it. Phase C's contribution is one entry in the validator registry; the framework provides the "run after every pass" plumbing. Phase C lands as: define the rule, register it, done.
+`validate_resource_moves` doesn't need its own pass infrastructure — Tier E's per-pass validator framework (§8.3) hosts it. Phase C's contribution is one entry in the validator registry; the framework provides the "run after every pass" plumbing. Phase C lands as: define the rule, register it, done.
 
 ---
 
@@ -717,27 +633,27 @@ Estimated effort: 2 commits, folded into Phase D's overall window. Subsumes A4 e
 
 ## 7. The composition
 
-| Bug class | Phase A | Phase B | Phase C | Phase D |
+| Bug class | Phase A | Phase C | Phase D | Phase B *(deferred)* |
 |---|---|---|---|---|
 | Forgotten lookup table for new resource type | **Fixed** | — | — | — |
 | Two parts of pipeline disagree on size/ABI | **Fixed** | — | — | — |
-| Shallow copy → both drop, double-free | — | **Fixed (runtime no-op)** | **Fixed (compile error)** | Enables Phase C |
-| Shallow copy → aliased mutable state | — | — | **Fixed** | Enables Phase C |
-| Use-after-free from outliving source | — | Partial (drop is no-op so use sees stale data) | **Fixed (borrow checker rejects)** | Enables Phase C |
-| Type-erased function-pointer ABI mismatch | — | — | Partial (separate UBSan-shim issue) | — |
-| Sidecar maps drift (`local_ownership` vs `string_borrow_sources` vs `cow_ptr_params`) | — | — | — | **Fixed** |
-| Provenance lost between GIR and LIR | — | — | — | **Fixed** |
-| `lower_var_decl` 12-predicate decision tree | — | — | — | **Fixed (collapses to typed match)** |
+| Shallow copy → both drop, double-free | — | **Fixed (compile error)** | Enables Phase C | (Would fix at runtime; not needed if C lands) |
+| Shallow copy → aliased mutable state | — | **Fixed** | Enables Phase C | — |
+| Use-after-free from outliving source | — | **Fixed (borrow checker rejects)** | Enables Phase C | — |
+| Type-erased function-pointer ABI mismatch | — | Partial (separate UBSan-shim issue) | — | — |
+| Sidecar maps drift (`local_ownership` vs `string_borrow_sources` vs `cow_ptr_params`) | — | — | **Fixed** | — |
+| Provenance lost between GIR and LIR | — | — | **Fixed** | — |
+| `lower_var_decl` 12-predicate decision tree | — | — | **Fixed (collapses to typed match)** | — |
 
-Phase A unblocks B, C, and D — all need authoritative metadata. Phase B is faster to land and gives immediate runtime safety. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the real fix and supersedes B over time.
+Phase A unblocks D and C — both need authoritative metadata. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the principled fix for the entire shallow-alias bug class. Phase B (deferred, §4) would be the runtime backstop *if* Phase C ever stalls — not part of the active plan.
 
-Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable. Tier E (§8) proceeds in parallel throughout. §9 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
+Active landing order: **A → D → C**. (D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a ~1-week typed-match walker.) Each phase is independently shippable. Tier E (§8) proceeds in parallel throughout. §9 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
 
 ---
 
-## 8. Tier E — LIR/SSA hygiene
+## 8. Tier E — LIR-side correctness and shape work
 
-Residual correctness work from the LIR audit that doesn't touch resources directly. Independent of Phases A/B/C/D — runs in parallel throughout. Listed here so the unified roadmap is complete; sequenced with the resource phases in §9.
+LIR-layer items from the audit that don't touch resources directly: drop-flag hygiene, SSA invariants, optimizer convergence, typed function references, validator framework. Independent of Phases A/D/C — runs in parallel throughout. Listed here so the unified roadmap is complete; sequenced with the resource phases in §9.
 
 ### 8.1 Drop-flag init from dataflow
 
@@ -772,7 +688,28 @@ Estimate: 1 commit.
 
 The LIR optimizer is intra-block CSE + intra-block constant folding today. Cross-block passes — constant propagation, global value numbering, loop-invariant code motion — are textbook but lower priority while LLVM's `clang -O2` does most of this on the C backend's output, and LLVM's own optimizer does it on the LLVM backend's output. The LIR optimizer matters most for WASM (where downstream optimization is weaker). **Defer until WASM ships.**
 
-### 8.6 Already shipped
+### 8.6 Typed function references (`LirType::FuncRef`)
+
+Today `Inst::FuncAddr { dst, func: FuncId }` produces a `Ptr` value. That works for C (any function pointer is `void(*)`) and LLVM (any function pointer is `ptr`). It does NOT work for WASM, which uses table indices, not pointers — and it conflates "raw function pointer" with "boxed closure" semantically.
+
+Long-term shape:
+
+```rust
+// New LirType variant.
+LirType::FuncRef
+// Inst::FuncAddr's dst becomes LirType::FuncRef instead of Ptr.
+Inst::CallByRef { dst, fref: ValueId, args }  // call-via-table-or-pointer
+```
+
+Backends:
+- C/LLVM: lower `FuncRef` to `void*` / `ptr`, `CallByRef` to indirect call.
+- WASM (future): lower `FuncRef` to a table index, `CallByRef` to `call_indirect`.
+
+Originally framed as a co-design with Phase B's closure layout (because both edited `GorgetClosure`). With Phase B deferred, FuncRef stands alone — pure typed-IR refactor, no ABI implications, can land independently whenever convenient.
+
+Estimate: 3-5 days. Independent.
+
+### 8.7 Already shipped
 
 For completeness: `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2) and `Inst::CollectionCtor` (LIR A3) shipped from the audit and are subsets of Phase A's typed-metadata story (see §3.1, §3.6). No further work needed on those.
 
@@ -780,7 +717,7 @@ For completeness: `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2) and `Inst::
 
 ## 9. Sequencing and contract discipline
 
-A four-phase plan is only useful if the phases can land without blocking unrelated work, and if the contracts each phase exposes don't drift once implementation begins. Self-host (`tests/fixtures/self_host_lowerer/`) is the most relevant other-track — it mirrors the Rust implementation and is currently at 845/861 typechecker drift. This section describes how to sequence the four phases alongside self-host work, and the discipline that keeps shared contracts (metadata schemas, IR shapes, runtime layouts) stable while migrations are in flight.
+A multi-phase plan is only useful if the phases can land without blocking unrelated work, and if the contracts each phase exposes don't drift once implementation begins. Self-host (`tests/fixtures/self_host_lowerer/`) is the most relevant other-track — it mirrors the Rust implementation and is currently at 845/861 typechecker drift. This section describes how to sequence the active phases (A → D → C) alongside self-host work, and the discipline that keeps shared contracts (metadata schemas, IR shapes) stable while migrations are in flight.
 
 ### 9.1 Per-phase contract surfaces
 
@@ -790,10 +727,10 @@ Each phase has a *contract surface* — the typed metadata, schema files, or lay
 |---|---|---|
 | A | `resources.toml` (canonical) + the `ResourceMetadata` / `RuntimeDecl` struct definitions (§3.2, §3.6) it deserializes into. Generated artifacts for Rust, self-host, and the C runtime header. | **Yes** — both compilers regenerate from the same TOML. |
 | D | `LocalOwnership` enum (§6.2), `BorrowOrigin` enum (§6.3), `ReadMode` enum (§6.4). | No — internal IR shape per compiler. |
-| B | Field offsets for every resource type (§4.3). The full runtime ABI. | **Yes** — both compilers emit code that agrees byte-for-byte. |
 | C | The `validate_read()` rule (§5.4 / §6.4). Internal pass. | No — consumers don't see it. |
+| B *(deferred)* | Field offsets for every resource type (§4.2). Full runtime ABI. | **Yes** — would force a lockstep window if revived. |
 
-Phases A and B touch contracts that bridge Rust and self-host. Phases C and D are internal to whichever compiler implements them — self-host adopts them at its own pace.
+Only Phase A touches a contract that bridges Rust and self-host in the active plan. Phases C and D are internal to whichever compiler implements them — self-host adopts them at its own pace. Phase B's contract is documented for completeness but not on the road; revival would re-introduce the only forced sync window.
 
 ### 9.2 The single canonical metadata source
 
@@ -833,7 +770,7 @@ side_effects      = "Allocates"
 …
 ```
 
-Cost: ~1 week on top of Phase A's 2-week estimate (build script + the schema design + ~10-12 resource entries + ~80 runtime-fn entries). Pays back across Phase B (one TOML edit moves `cap` to offset 0 for every consumer), future resource additions (one row, all consumers regenerate), and self-host parity (zero hand-mirrored data).
+Cost: ~1 week on top of Phase A's 2-week estimate (build script + the schema design + ~10-12 resource entries + ~80 runtime-fn entries). Pays back across future resource additions (one row, all consumers regenerate), self-host parity (zero hand-mirrored data), and any future layout change including a hypothetical Phase B revival (one TOML edit reaches every consumer).
 
 **Why TOML, not const Rust data.** An earlier draft of this section proposed `pub static RESOURCES: &[ResourceMetadata] = &[…]` with the C header and self-host form generated *from the Rust source*. That privileges Rust unnecessarily — if any consumer requires generation (and self-host does), the build-script cost is already paid; generating *every* consumer from a neutral source is symmetric and avoids the implicit hierarchy. TOML is the right neutral source: both Rust (`toml` + `serde`) and self-host (small Gorget parser, or just emit Gorget literals) can read it trivially. The `ResourceMetadata` struct definition still lives in Rust; the TOML just populates it via `serde`.
 
@@ -848,12 +785,13 @@ This satisfies Rule 3 of the layering discipline (`layering-discipline.md`) — 
 | 1 | ~3 weeks | continues unblocked | Phase A + declarative-source tooling | Self-host PRs that touch the lookup-table sites are deferred until 1.5 |
 | 1.5 | ~2 days | adopts the generated `lib/std/gen/resources.gg` | (idle on this track) | Small follow-up PR; mechanical |
 | 2 | ~2 weeks | continues unblocked | Phase D | Internal IR; self-host adopts later as a separate task |
-| 3 | ~2 weeks | **frozen on layout-touching changes** | Phase B (lockstep with self-host's runtime emit) | The only forced sync window |
-| 4 | ~1 week | continues unblocked | Phase C (validator only) | No self-host impact |
+| 3 | ~1 week | continues unblocked | Phase C (validator over Phase D's typed state) | No self-host impact |
 
-Total elapsed: ~7 weeks. Stage 3 is the only forced sync window: B's field reorders + flags-header prepends require both compilers to agree byte-for-byte. Outside Stage 3, self-host's typechecker work, fixture additions, and bug fixes proceed without coordination.
+Total elapsed: ~6 weeks, fully parallel with self-host. **No forced sync window** — Phase B (which would have provided the only lockstep stage) is deferred. Self-host's typechecker work, fixture additions, and bug fixes proceed without coordination throughout.
 
-Phase D shrinks Phase C from 3 weeks to ~1 (§6.7) — the validator collapses to a single rule once `LocalOwnership` is the source of truth. That's where the time savings come from. The naive ordering (A → B → C, no D) costs more in absolute weeks *and* leaves more sidecar fragmentation behind.
+Phase D shrinks Phase C from the original 3-week estimate to ~1 week (§6.7) — the validator collapses to a single rule once `LocalOwnership` is the source of truth. That's where the time savings come from.
+
+If Phase B is ever revived (§4.4), it adds a forced ~2-week sync window with self-host. Counted as deferred, not active.
 
 ### 9.4 Contract evolution discipline
 
@@ -895,30 +833,31 @@ The same shape applies to internal-only contracts (Phase D's enums): version the
 
 ### 10.1 ABI breaks
 
-- Phase A: none — purely a refactor.
-- Phase B grows `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). Real ABI break — every site that assumes `sizeof(GorgetClosure) == 16` needs to update. Bounded though: ~10-20 sites in the runtime + LIR codegen, all mechanical. The earlier-draft pointer-tagging alternative was rejected as too clever (see §4.2).
-- Phase C: none — the IR pass is internal.
+- Phase A: none — purely a refactor (the TOML and generated artifacts are tooling, not ABI).
 - Phase D: none — internal IR shape only. `Local` grows by one enum field (~16 bytes); `Slot` grows by one `Option<BorrowOrigin>` (~16 bytes). No runtime ABI impact.
+- Phase C: none — the IR pass is internal.
+- Phase B *(deferred)*: would grow `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). The principal reason it's deferred — see §4.3.
+
+**Net effect of the active plan: zero runtime ABI changes.** That's the whole point of deferring B.
 
 ### 10.2 Performance
 
 - Phase A: zero cost — just better organised code.
-- Phase B: one bitwise check per drop. Negligible. View-vs-owner tracking also avoids unnecessary deep clones in some hot paths.
-- Phase C: depends on how many shallow copies become Clones vs Moves. Liveness analysis already in place; should be a wash or net improvement (fewer clones because Move is preferred at last use).
 - Phase D: net **win** at compile time. Eliminates the 12-predicate query in `lower_var_decl` and the alias-chain walks in `cow_before_mutation`. Adds ~16 bytes per local in the IR (memory, not runtime). Net runtime: zero.
+- Phase C: depends on how many shallow copies become Clones vs Moves. Liveness analysis already in place; should be a wash or net improvement (fewer clones because Move is preferred at last use).
+- Phase B *(if revived)*: one bitwise check per drop (negligible) and ~+8 B per `Box[T]` / `GorgetClosure` / `Task[T]` instance (memory cost, not runtime). The memory cost is the principal reason for deferral.
 
 ### 10.3 User-facing language changes
 
 - Phase A: none.
-- Phase B: none — runtime detail.
 - Phase C: stricter compile-time checking. Users may see new errors on previously-accepted code that was silently wrong. The errors are diagnosable (point at the shallow-copy site, suggest `!` or `.clone()`). README already promises this style of safety.
 - Phase D: none. Better diagnostics indirectly — error messages can name the borrow origin ("borrowed from `outer` at line 42, invalidated by mutation at line 47") because the origin is now structurally available.
+- Phase B *(if revived)*: none — runtime detail.
 
 ### 10.4 Test surface
 
 Each phase has a clear validation point:
 - A: existing test suite (~2000 tests) must stay green at every stage.
-- B: each migrated resource gets a focused fixture exercising its view-vs-owner discipline.
 - C: each warning fixed in C1 → C2 prevents regression by adding the case to a `validate_resource_moves` test.
 - D: stage D2's "both write the new field and the old map" gives a free cross-check — assert at end of lowering that the typed field and the legacy sidecars agree. Failure means a write-site was missed; fix before promoting.
 
@@ -926,18 +865,18 @@ The validation pass in C is itself a test mechanism — once it's a hard error, 
 
 ### 10.5 Migration cost
 
-- A: 2 weeks. Refactor with strong tests as safety net. Mostly mechanical.
-- B: 1.5 weeks. Runtime + LIR. Requires careful audit of each resource's drop function.
-- C: 3 weeks → reduced to ~1 week if D lands first. The validator collapses to a single rule once `LocalOwnership` is the source of truth.
+- A: ~3 weeks (2 weeks of consolidation + 1 week for the TOML build-script tooling). Refactor with strong tests as safety net. Mostly mechanical.
 - D: 2 weeks. IR refactor, sidecar deletion is the dangerous part. Strong existing test coverage (~2000 tests) is the safety net.
+- C: ~1 week (down from 3 because D supplies the typed state the validator reads). Risk: low — most of the upstream lowering changes already happened in D.
+- B *(deferred)*: 2 weeks if ever revived, with a forced lockstep window with self-host. Not on the active road.
 
-Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for itself by shrinking C). Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
+Total active work: ~6 weeks for A → D → C, fully parallel with self-host. Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
 
 ---
 
 ## 11. Open questions
 
-1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-04-28: yes.** The full first 8 bytes of every resource are the discriminator (`0` ⇒ view, non-zero ⇒ owner). Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. See §4.2-4.3 for the converged design. The cost (Box/Closure/Task gain 8 bytes each) is paid for: a single `__gorget_is_view` function works on any resource pointer, no metadata-dispatch needed in the hot drop path, no bit-stealing on `env` size prefixes or pointer alignment bits.
+1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-05-01: moot — Phase B is deferred entirely (§4).** The active plan bets on Phase C as the principled fix. If Phase B is ever revived, §4.2 records the converged design (offset 0, reorder + prepend together) so the question doesn't have to be re-litigated.
 
 2. **How does Phase C handle generic `T: Resource` parameters?** When the body calls `T.clone()` it should resolve via the unified metadata (Phase A). When it does `move_only T x = y`, the validation pass needs to know T is Resource even before monomorphisation. Probably need a `Resource` trait bound that's checked at the generic-fn level.
 
@@ -969,17 +908,17 @@ These continue to be addressed individually.
 
 ## 13. Summary
 
-We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Four** structural changes close the recurring class, plus a **fifth** track of independent LIR hygiene work:
+We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Three** structural changes close the recurring class, plus a parallel track of independent LIR hygiene work, plus a documented runtime fallback we explicitly hope never to ship:
 
 - **Phase A** — consolidate type-axis metadata (one `ResourceMetadata`, sixteen lookup sites collapse to one). Includes the `RUNTIME_DECLS` runtime-function table. Partly shipped via the LIR audit (`Inst::CallRuntime`, `Inst::CollectionCtor`).
 - **Phase D** — consolidate local-axis state (one `LocalOwnership` with first-class `BorrowOrigin`, seven sidecar maps collapse to one field). The IR-side mirror of Phase A. Subsumes the LIR roadmap's per-value origin metadata refactor — same pattern at the LIR layer.
-- **Phase B** — universal view/owner discrimination at runtime (one bit per resource, shallow-copy double-free becomes physically impossible). Co-designed with `LirType::FuncRef` so closure layout flips once.
-- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible). Plugs into Tier E's per-pass validator framework.
-- **Tier E** — LIR/SSA hygiene (drop-flag dataflow init, critical-edge splitting, post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint). Independent of resources; runs in parallel.
+- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible). Plugs into Tier E's per-pass validator framework. ~1 week of work once Phase D's typed state is in place.
+- **Tier E** — LIR-side correctness and shape work (drop-flag dataflow init, critical-edge splitting, post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint, typed `LirType::FuncRef`). Independent of resources; runs in parallel.
+- **Phase B *(deferred fallback)*** — universal view/owner discrimination at runtime. Documented in §4 with full design and revival triggers, but not on the active road. The permanent ABI cost (`Box[T]` doubles, closures and tasks +50 %) is decisively net-negative once Phase C lands; we bet on Phase C and keep Phase B as recorded fallback if that bet ever fails.
 
-Recommended path: **A → D → B → C**, with Tier E running throughout. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. B is the runtime safety net that ships fast. C is the compile-time guarantee that supersedes B over time, and is small once D is in place. Tier E shrinks the failure surface independently.
+Active path: **A → D → C**, with Tier E running throughout, fully parallel with self-host. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. C is the compile-time guarantee — small once D is in place, since the validator collapses to a typed-match rule over `LocalOwnership`.
 
-Total cost: ~6.5 weeks for Phases A-D plus ~1 week of Tier E hygiene that can land in spare cycles. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
+Total active cost: ~6 weeks for A → D → C, plus ~1 week of Tier E hygiene that can land in spare cycles. **Zero forced sync windows with self-host.** Zero permanent ABI growth. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
 
 The metadata source is one canonical `resources.toml`; every consumer (Rust compiler, self-host, C runtime header) gets a generated artifact, version-stamped. No language is privileged; drift between Rust and self-host is mechanically impossible.
 
