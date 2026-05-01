@@ -900,7 +900,12 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     }
 
     // Forward-declare enum drop and clone functions (needed when enum A's
-    // drop/clone calls B__drop/B__clone before B's definition).
+    // drop/clone calls B__drop/B__clone before B's definition). Also
+    // forward-declare the matching `_inplace` clone wrappers — recursive
+    // enum/struct clone bodies emit `T__clone_inplace(box_field)` calls in
+    // the body that defines `T__clone` itself, so without this declaration
+    // the C compiler treats `_inplace` as an implicit-int-returning function
+    // (warning + undefined behavior on mismatched signature).
     for (idx, sdef) in module.structs.iter().enumerate() {
         if module.recursive_drop_enums.contains_key(sdef.name.as_str()) {
             let c_name = struct_names.get(&(idx as u32)).cloned().unwrap_or_else(|| sdef.name.clone());
@@ -911,6 +916,13 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             let clone_fn = format!("{}__clone", sdef.name);
             if !module.functions.iter().any(|f| f.name == clone_fn) {
                 writeln!(out, "{c_name} {clone_fn}(void*);").unwrap();
+                writeln!(out, "void {clone_fn}_inplace(void*);").unwrap();
+            }
+        }
+        if module.recursive_drop_structs.contains_key(sdef.name.as_str()) {
+            let clone_fn = format!("{}__clone", sdef.name);
+            if !module.functions.iter().any(|f| f.name == clone_fn) {
+                writeln!(out, "void {clone_fn}_inplace(void*);").unwrap();
             }
         }
     }
@@ -929,6 +941,10 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
     }
     emit_enum_drop_fns(&mut out, module, &struct_names);
     emit_type_drop_fns(&mut out, module, &struct_names);
+    // Box wrappers MUST emit after the per-type T__drop fns above so the
+    // wrappers' inner-recursion targets are defined when the C compiler
+    // sees them. Forward declarations are emitted in emit_runtime_helpers.
+    emit_box_drop_wrappers(&mut out, module);
 
     // ── Runtime Hashable/Equatable key bridges ───────────────────
     //

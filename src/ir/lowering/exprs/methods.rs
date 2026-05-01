@@ -83,58 +83,29 @@ pub(super) fn lower_method_call(
                     return val;
                 }
 
-                // Box.new is a consuming position (like Vector.push / enum variant init).
-                // The pre-existing behavior MoveZero's the source's named-local slot
-                // unconditionally, which is correct for bare params (the load_ref
-                // already produced an owned temp that alloc_fn will consume) but
-                // UNSOUND for owned named locals whose identifier is used downstream —
-                // the borrow checker never sees the consumption, lowering MoveZeros,
-                // and the GIR validator then either catches a use-after-MoveZero
-                // (compiler panic on valid source) or, if the validator is weakened,
-                // the binary reads zeroed heap-backed collections at runtime.
+                // Box.new(value) is a consuming position (like Vector.push,
+                // enum variant init, and the bare-name `Box(value)` ctor).
+                // Apply the standard consuming-arg ownership shim, then
+                // unregister the source from drops — the box's heap region
+                // shallow-copies `val` and now owns the bytes; any scope-exit
+                // drop on the source would double-free with the box's own
+                // recursive drop chain (case-c of TODO Box[T] item).
                 //
-                // Rule: if the source is an owned named local AND this use is not
-                // its last-use (i.e. the identifier is read downstream), insert a
-                // clone of the *derefed* value before boxing. Leave the bare-param
-                // path alone.
-                let needs_clone_guard = if let Expr::Identifier(arg_name) = &args[0].node.value.node {
-                    if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
-                        let is_owned_named_resource = ctx.is_named_local(local_id)
-                            && is_resource_type_local(local_id, builder, &ctx.type_registry)
-                            && !ctx.is_bare_param(local_id);
-                        let not_last_use = !ctx.is_last_use_at(arg_name, args[0].node.value.span);
-                        is_owned_named_resource && not_last_use
-                    } else {
-                        false
+                // This mirrors the bare-name `Box(value)` ctor at
+                // `src/ir/lowering/exprs/calls.rs:419-430` exactly. Both
+                // entry points should produce identical IR for the same
+                // semantic operation.
+                val = ctx.ensure_owned_at_consuming_arg(
+                    builder,
+                    val,
+                    &args[0].node.value,
+                    crate::ir::ImplicitCloneReason::ConsumingArg,
+                );
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                    if place.projections.is_empty() {
+                        ctx.drops.unregister(place.local);
                     }
-                } else {
-                    false
-                };
-                let clone_inserted = if needs_clone_guard {
-                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
-                        ctx.warn_implicit_clone(
-                            args[0].node.value.span,
-                            inner_type,
-                            crate::ir::ImplicitCloneReason::ConsumingArg,
-                        );
-                        let clone_src = if let Operand::Copy(ref place) = val {
-                            let ptr_type = ctx.register_ptr_type(inner_type);
-                            let ptr = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr, place.clone());
-                            FunctionBuilder::copy(ptr)
-                        } else {
-                            val.clone()
-                        };
-                        let cloned = builder.call(&clone_fn, vec![clone_src], inner_type);
-                        ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
-                        val = FunctionBuilder::copy(cloned);
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                }
 
                 let box_type_name = format!("Box__{inner_c}");
                 let box_type = if let Some(tid) = ctx.type_mapper.lookup_named(&box_type_name) {
@@ -148,20 +119,6 @@ pub(super) fn lower_method_call(
                 };
                 let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
                 let dst = builder.call(alloc_fn, vec![val], box_type);
-                // MoveZero the source slot only when no clone was inserted — otherwise
-                // the identifier is still live and MoveZero'ing it would UAF the
-                // downstream read that triggered the clone.
-                if !clone_inserted {
-                    if let Expr::Identifier(arg_name) = &args[0].node.value.node {
-                        if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
-                            if ctx.is_named_local(local_id)
-                                && is_resource_type_local(local_id, builder, &ctx.type_registry)
-                            {
-                                ctx.move_zero_and_mark(builder, local_id);
-                            }
-                        }
-                    }
-                }
                 return FunctionBuilder::copy(dst);
             }
 

@@ -98,6 +98,15 @@ pub(super) fn elem_drop_fn_for_type(elem_type: &str) -> Option<String> {
         // Closures stored in collections own a heap-alloc'd env (packed by
         // `wrap_closure_args_at_void_elem`); container drop must free it.
         Some("gorget_closure_free".into())
+    } else if elem_type.starts_with("Box__") {
+        // Vector[Box[T]] / Dict[K, Box[T]] / Set[Box[T]] etc.: route per-element
+        // drop through the per-type Box wrapper so the boxed allocation gets
+        // freed AND any inner T resources are recursively dropped. The wrapper
+        // is emitted by `emit_box_drop_wrappers` in the C backend; trait boxes
+        // (Box[Trait]) don't go through `__gorget_box_alloc_T` and thus don't
+        // get a wrapper — they're not currently supported as collection
+        // elements (would need their 16-byte trait-obj layout handled).
+        Some(format!("{elem_type}__drop"))
     } else {
         None
     }

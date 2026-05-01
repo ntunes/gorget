@@ -409,9 +409,10 @@ impl<'a> LoweringContext<'a> {
                     Some(GirType::Named(n)) => n.clone(),
                     _ => continue,
                 };
-                // Option/Result fields: skip for DROP (double-free risk from
-                // match extraction without MoveZero), include for CLONE if they
-                // wrap resource types (deep copy must be independent).
+                // Option/Result fields: skip for DROP (avoid double-free with
+                // match/unwrap and shallow-copy collection-get patterns —
+                // see the matching enum-variant comment below). Include for
+                // CLONE only if they wrap resource types.
                 if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
                     let field_strat = self.infer_drop_strategy(&field_type_name);
                     if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
@@ -469,7 +470,16 @@ impl<'a> LoweringContext<'a> {
                         _ => continue,
                     };
                     // Option/Result variant fields: skip for DROP, include for
-                    // CLONE if they wrap resource types.
+                    // CLONE if they wrap resource types. The skip is INTENTIONAL
+                    // and load-bearing for self-host correctness — the resolver's
+                    // hot path (resolve_stmt over Stmt-with-Option[SpannedExpr])
+                    // shallow-copies via `v.get(i).unwrap()` and then takes a
+                    // SpannedExpr-typed binding; both copy and source drop, and
+                    // dropping the Option[SpannedExpr] inside Stmt would
+                    // double-free the SpannedExpr's interior boxes/strings that
+                    // the standalone SpannedExpr__drop already freed. Until
+                    // collection-get auto-clones for resource elements (TODO
+                    // separately), keep the skip.
                     if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
                         let field_strat = self.infer_drop_strategy(&field_type_name);
                         if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
@@ -609,6 +619,24 @@ impl<'a> LoweringContext<'a> {
     /// for collection types that don't have TypeDefs in the registry.
     fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
         use crate::ir::types::DropStrategy;
+        // Box[T] is special: the registered TypeDef has DropStrategy::Trivial("free")
+        // (a historical convention), but the recursive-drop emitters need to call the
+        // per-type Box__T__drop wrapper so inner T's resources get freed and the
+        // tracked __gorget_box_free_T accounts for the dealloc. Detect the Box
+        // shape FIRST and route to the wrapper, except for trait-object boxes
+        // (Box__Trait where {Trait}_TraitObj is registered) which use a 16-byte
+        // {data, vtable} layout and are handled inline by drops.rs.
+        if let Some(inner) = type_name.strip_prefix("Box__") {
+            let trait_obj = format!("{inner}_TraitObj");
+            let is_trait_box = self.gir.type_registry.get_type_def(&trait_obj).is_some();
+            if !is_trait_box {
+                return DropStrategy::Trivial(format!("Box__{inner}__drop"));
+            }
+            // Trait box: keep the legacy "free" marker; emit_recursive_struct_drops
+            // and emit_enum_drop_fns will route through the existing inline-handling
+            // code. (TODO: full trait-box-as-field/variant support.)
+            return DropStrategy::Trivial("free".to_string());
+        }
         // First try the type registry
         if let Some(td) = self.gir.type_registry.get_type_def(type_name) {
             return td.metadata.drop_strategy.clone();
@@ -622,9 +650,6 @@ impl<'a> LoweringContext<'a> {
         }
         if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") {
             return DropStrategy::Trivial("gorget_set_free".to_string());
-        }
-        if type_name.starts_with("Box__") {
-            return DropStrategy::Trivial("free".to_string());
         }
         DropStrategy::None
     }
@@ -695,8 +720,40 @@ impl<'a> LoweringContext<'a> {
             // Regular Box[T] is a heap pointer wrapper with a single `_0` field.
             // Hardcode _0: Ptr to break recursive type cycles (e.g., Expr →
             // Box__SpannedExpr → SpannedExpr → Expr). Trait boxes (Box[dyn Trait])
-            // have data/vtable fields and go through normal two-pass registration.
+            // get the TraitObj layout (data + vtable, 16 bytes) — detected by
+            // the matching `{Inner}_TraitObj` in the GIR registry. The trait
+            // path runs FIRST and replaces any synthesized `_0` placeholder
+            // from `monomorphize_struct` (which can't see trait registration
+            // because monomorphization runs before trait collection).
             if def.name.starts_with("Box__") {
+                let inner_name = &def.name["Box__".len()..];
+                let is_trait_box = self.gir.type_registry
+                    .get_type_def(&format!("{inner_name}_TraitObj"))
+                    .is_some();
+                if is_trait_box {
+                    // Trait box: register with the canonical trait-obj layout
+                    // (data + vtable, 16 bytes) directly. We don't alias to the
+                    // matching `{Inner}_TraitObj` because iteration order isn't
+                    // guaranteed to register the trait-obj struct first; pinning
+                    // the layout here keeps every Box[Trait] sized correctly even
+                    // before the trait obj struct itself shows up. The C backend
+                    // re-typedefs `Box__Inner` to `__gg_Inner_TraitObj` later
+                    // (`emit_monomorphized_typedefs`), so layout-equality is
+                    // preserved at the C call site.
+                    let sid = self.module.add_struct(StructDef {
+                        name: def.name.clone(),
+                        fields: vec![
+                            ("data".into(), LirType::Ptr),
+                            ("vtable".into(), LirType::Ptr),
+                        ],
+                        enum_kind: EnumKind::NotEnum,
+                        is_union_layout: false,
+                        computed_c_size: Some(16),
+                        computed_c_align: Some(8),
+                    });
+                    self.struct_reg.register(&def.name, sid);
+                    continue;
+                }
                 let is_regular_box = match &def.kind {
                     gir_types::TypeDefKind::Struct(sdef) => {
                         sdef.fields.len() == 1 && sdef.fields[0].name == "_0"

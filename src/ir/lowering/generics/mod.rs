@@ -2277,6 +2277,49 @@ fn monomorphize_struct(
         });
     }
 
+    // Box[T] in std/collections.gg is declared as `struct Box[T]: pass` — its
+    // real layout (heap pointer wrapping a T) is compiler-magic. Synthesize the
+    // canonical `_0: T` field here so downstream sizing (`c_sizeof_with_structs`
+    // → `c_sizeof_struct_def`) sees a non-empty struct and the LIR pre-pass can
+    // recognize it as a regular box (`is_regular_box` check in
+    // `src/lir/lower/mod.rs:lower_type_defs`) and register it with the
+    // hardcoded `_0: Ptr` (8-byte pointer) layout. Without this, the
+    // monomorphized Box[T] ends up as a 0-field struct and any caller that
+    // sizes its element via `c_sizeof_with_structs` (e.g.,
+    // `gorget_array_new(elem_size)` for `Vector[Box[T]]`) gets `0`, producing
+    // a 0-byte heap buffer that aliases other allocations on push.
+    //
+    // Skip this for trait boxes (Box[Trait] where {Trait}_TraitObj exists) —
+    // they get a different layout via the LIR's standard two-pass struct
+    // registration so the {data, vtable} fields land on the LIR struct.
+    if template.name.node == "Box" && !type_args.is_empty() && fields.is_empty() {
+        // A trait inner can present several ways: (a) the bare trait name
+        // (`Greeter`) — `Greeter_TraitObj` is registered in the GIR registry;
+        // (b) the trait-obj struct already (`Greeter_TraitObj`) — name ends
+        // in `_TraitObj`; (c) an unresolved trait the mapper falls back to
+        // `Unit` for — detected from the AST `Named.name` node (most common
+        // since trait types aren't first-class in the type mapper). All three
+        // patterns mean "don't synthesize `_0` — let the LIR handle the
+        // 16-byte trait-obj layout".
+        let ast_inner_name: Option<&str> = match &type_args[0].node {
+            ast::Type::Named { name, .. } => Some(name.node.as_str()),
+            _ => None,
+        };
+        let trait_via_ast = ast_inner_name
+            .map(|n| {
+                n.ends_with("_TraitObj")
+                    || registry.get_type_def(&format!("{n}_TraitObj")).is_some()
+            })
+            .unwrap_or(false);
+        if !trait_via_ast {
+            let inner_type = mapper.map_ast_type(&type_args[0].node);
+            fields.push(StructField {
+                name: "_0".to_string(),
+                type_id: inner_type,
+            });
+        }
+    }
+
     // Box types need Move + Trivial("free") drop metadata for RAII.
     // ReadGuard[T] / WriteGuard[T] need Move + Trivial drop to release the pthread rwlock.
     // Collection types (Vector, Dict, etc.) get their own drop strategies.
