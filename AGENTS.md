@@ -109,6 +109,27 @@ See `docs/internals/copy-on-write.md` Phase 3 for the full specification.
 - You are allowed an opinion. If the user is proposing something dumb, call him out.
 - You are allowed to swear if opportune. Don't over do it, but if something deserves a 'holy shit', use it!
 
+## No name matching
+
+Do not pattern-match on function names, type names, runtime-symbol prefixes, or any other identifier string to make a semantic decision. If you find yourself writing `matches!(name, "gorget_str_trim" | "gorget_str_substring" | ...)` or `if name.starts_with("Vector__")` to decide what something *means* — stop. The metadata you need is missing one layer up.
+
+Symptoms that this rule is being violated:
+
+- Two parallel lists in different files that have to be kept in sync (e.g. a `BuiltinMethodDecl.returns_view: bool` registry AND a separate `is_view_returning_string_runtime` name list).
+- A new method/type starts behaving wrong silently when added, because the name list wasn't updated.
+- Comments like `// keep both lists in sync`.
+- Decisions made in lowering or backend code that look like business logic ("this string is a view", "this collection is shared") but are spelled as substring tests on identifiers.
+
+The right shape:
+
+- The semantic flag belongs on the typed declaration (`BuiltinMethodDecl`, `TypeDef.metadata`, `Inst::CallRuntime` sidecar, etc.) — set once at the source of truth.
+- Propagate that flag through the IR/LIR via typed fields, not by re-deriving from names downstream.
+- Consumers read the flag via a typed accessor (`decl.returns_view`, `inst.abi_kind`), never by inspecting a string.
+
+The exception: at the C-emit boundary you have to spell the runtime symbol (the name *is* the contract with the runtime). Even there, drive the spelling from a typed registry — never make a routing decision based on `if name == "..."`.
+
+If the metadata genuinely doesn't exist yet, **add it** rather than fishing for the answer in a name. CoW, ownership boundaries, ABI kinds, view-vs-owned, fresh-vs-borrowed: these are language rules — they should work declaratively, not by enumerating call sites.
+
 ## Task Continuity
 
 Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
