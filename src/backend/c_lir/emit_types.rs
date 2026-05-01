@@ -1324,7 +1324,7 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 if *drop_fn == "free" {
                     write!(out, "free(self->{access}); ").unwrap();
                 } else {
-                    write!(out, "{drop_fn}(&self->{access}); ").unwrap();
+                    write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
                 }
             }
             writeln!(out, "break;").unwrap();
@@ -1389,7 +1389,7 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                         if *drop_fn == "free" {
                             write!(out, "free(self->{access}); ").unwrap();
                         } else {
-                            write!(out, "{drop_fn}(&self->{access}); ").unwrap();
+                            write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
                         }
                     }
                     writeln!(out, "break;").unwrap();
