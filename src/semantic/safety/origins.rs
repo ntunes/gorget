@@ -445,6 +445,21 @@ impl<'a> BorrowChecker<'a> {
             }
         }
 
+        // `.clone()` on any resource value produces an independently-allocated
+        // copy — String / Array / Map / Set / Closure all route through their
+        // matching runtime `*_clone` (or `*_clone_to_owned`) helper which
+        // breaks the receiver's borrow chain. Use `Static` (escape-safe) not
+        // `Owned` (which `contains_local()` flags as local lifetime) because
+        // the cloned value can outlive the receiver: it's a fresh heap
+        // allocation with no provenance back to the function's locals. Without
+        // this rule the borrow checker flagged `return f` after
+        // `Callable f = vec.get(i).unwrap().clone()` as borrowing from `vec`,
+        // because the receiver chain propagates `vec`'s origin through
+        // `.get`/`.unwrap` and `.clone` was treated as a passthrough.
+        if method.node.as_str() == "clone" {
+            return BorrowOrigin::Static;
+        }
+
         // Fallback: conservatively propagate receiver origin
         self.compute_expr_origin(receiver)
     }

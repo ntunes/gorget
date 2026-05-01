@@ -17100,6 +17100,11 @@ fn closure_iife_tuple_param() {
 }
 
 #[test]
+fn clone_breaks_borrow_chain() {
+    run_gg("clone_breaks_borrow_chain.gg", "20");
+}
+
+#[test]
 fn closure_partial_application() {
     run_gg(
         "closure_partial_application.gg",
