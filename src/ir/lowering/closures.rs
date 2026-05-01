@@ -154,7 +154,18 @@ impl ClosureLowering {
             .enumerate()
             .map(|(i, p)| {
                 if let Some(ref ty) = p.node.type_ {
-                    ctx.type_mapper.map_ast_type(&ty.node)
+                    // map_ast_type (immutable) returns UNIT_TYPE for types
+                    // that aren't yet registered, which silently breaks
+                    // closures whose params reference compound types — most
+                    // visibly Tuple/Array/Slice that haven't been monomorphized
+                    // yet because the closure is the first place they appear.
+                    // Example: `(((int, int) p): p._0 + p._1)((3, 4))` (IIFE)
+                    // had no other site introducing `Tuple__int64_t__int64_t`
+                    // to the registry before the closure was lowered, so the
+                    // param ended up `unit` and the body folded to `add unit
+                    // const unit, const unit`. Fall through to the mutable
+                    // mapper so the type registers on first use.
+                    ctx.type_mapper.map_ast_type_mut(&ty.node, &mut ctx.type_registry)
                 } else if i < ctx.func_state.closure_param_type_hints.len() {
                     // Use hint from enclosing higher-order method call (e.g., filter/map/fold)
                     ctx.func_state.closure_param_type_hints[i]

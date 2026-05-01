@@ -17095,6 +17095,11 @@ fn closure_block_tail_expr() {
 }
 
 #[test]
+fn closure_iife_tuple_param() {
+    run_gg("closure_iife_tuple_param.gg", "7");
+}
+
+#[test]
 fn closure_partial_application() {
     run_gg(
         "closure_partial_application.gg",

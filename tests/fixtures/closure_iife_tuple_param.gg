@@ -1,0 +1,10 @@
+# IIFE with tuple-typed param + tuple literal arg. Before the fix the
+# closure's param type resolved to `unit` because the immutable
+# `map_ast_type` couldn't register the tuple type on first use, and no
+# other site in the program introduced `Tuple__int64_t__int64_t` to the
+# registry before the closure was lowered. The body then folded to
+# `add unit const unit, const unit` and the call returned 0.
+
+void main():
+    int r = (((int, int) p): p._0 + p._1)((3, 4))
+    print(r)
