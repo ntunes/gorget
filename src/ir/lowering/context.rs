@@ -1557,7 +1557,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Decide whether this local is a borrow that needs materializing.
-        // - Tracked ref state (Ref, CowBorrow, CollectionRef, BareParam, Alias)
+        // - Tracked ref state (Ref, CowBorrow, CollectionRef, BareParam, Alias, ViewOf)
         // - Bare params (caller owns the data)
         //
         // Note: we intentionally DON'T treat "not drop-registered" as a proxy for

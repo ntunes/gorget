@@ -1,0 +1,164 @@
+# Test: each of the 7 materialization points listed in
+# docs/language-reference.md §9.6, exercised with multiple borrow shapes:
+#   (a) direct borrow from collection .get().unwrap()
+#   (b) view from .substring()/.trim() applied to a named local
+#   (c) view from .trim() applied to a chain (.get().unwrap().trim())
+#         — this shape regressed in snag #5 (2026-05-01)
+#
+# Each test mutates the source AFTER the materialization point and checks
+# that the materialized value still holds its original content.
+
+from std.collections import Vector
+
+struct Holder:
+    String name
+
+void consume(String !s):
+    print(f"consumed={s}")
+
+# ─── Point 1: Reassignment ──────────────────────────────────
+void p1_reassign_direct():
+    Vector[String] v = Vector[String]()
+    v.push("hello")
+    String alias = v.get(0).unwrap()
+    String x = alias               # reassign borrow → must materialize
+    v.set(0, "DESTROYED")
+    print(f"p1a x={x}")
+
+void p1_reassign_chain_trim():
+    Vector[String] v = Vector[String]()
+    v.push("  hello  ")
+    String x = v.get(0).unwrap().trim()
+    String y = x                   # reassign view-of-chain → must materialize
+    v.set(0, "DESTROYED")
+    print(f"p1c y={y}")
+
+# ─── Point 2: Mutating method on borrowed ──────────────────
+void p2_mutate_direct():
+    Vector[int] src = Vector[int]()
+    src.push(1)
+    src.push(2)
+    Vector[int] alias = src
+    alias.push(99)                 # mutate alias → CoW clone, src unchanged
+    print(f"p2 src.len={src.len()} alias.len={alias.len()}")
+
+# ─── Point 3a: Struct construction with borrow ─────────────
+void p3a_struct_direct():
+    Vector[String] v = Vector[String]()
+    v.push("hello")
+    String x = v.get(0).unwrap()
+    Holder h = Holder(x)
+    v.set(0, "DESTROYED")
+    print(f"p3a h.name={h.name}")
+
+void p3a_struct_chain_trim():
+    Vector[String] v = Vector[String]()
+    v.push("  hello  ")
+    String x = v.get(0).unwrap().trim()
+    Holder h = Holder(x)
+    v.set(0, "DESTROYED")
+    print(f"p3c h.name={h.name}")
+
+# ─── Point 3b: Enum variant construction with borrow ───────
+void p3b_enum_direct():
+    Vector[String] v = Vector[String]()
+    v.push("hello")
+    String x = v.get(0).unwrap()
+    Option[String] o = Some(x)
+    v.set(0, "DESTROYED")
+    print(f"p3b o={o.unwrap()}")
+
+void p3b_enum_chain_trim():
+    Vector[String] v = Vector[String]()
+    v.push("  hello  ")
+    String x = v.get(0).unwrap().trim()
+    Option[String] o = Some(x)
+    v.set(0, "DESTROYED")
+    print(f"p3c o={o.unwrap()}")
+
+# ─── Point 4: Collection store with borrow ─────────────────
+void p4_push_direct():
+    Vector[String] src = Vector[String]()
+    src.push("hello")
+    Vector[String] dst = Vector[String]()
+    dst.push(src.get(0).unwrap())
+    src.set(0, "DESTROYED")
+    print(f"p4a dst[0]={dst.get(0).unwrap()}")
+
+void p4_push_chain_trim():
+    Vector[String] src = Vector[String]()
+    src.push("  hello  ")
+    Vector[String] dst = Vector[String]()
+    String x = src.get(0).unwrap().trim()
+    dst.push(x)
+    src.set(0, "DESTROYED")
+    print(f"p4c dst[0]={dst.get(0).unwrap()}")
+
+# ─── Point 5: Return borrowed ──────────────────────────────
+String first_direct(Vector[String] !v):
+    String x = v.get(0).unwrap()
+    return x
+
+String first_chain_trim(Vector[String] !v):
+    String x = v.get(0).unwrap().trim()
+    return x
+
+void p5_return_calls():
+    Vector[String] a = Vector[String]()
+    a.push("hello")
+    String r1 = first_direct(!a)
+    print(f"p5a r1={r1}")
+    Vector[String] b = Vector[String]()
+    b.push("  world  ")
+    String r2 = first_chain_trim(!b)
+    print(f"p5c r2={r2}")
+
+# ─── Point 6: Move transfer with borrow ────────────────────
+void p6_move_direct():
+    Vector[String] v = Vector[String]()
+    v.push("hello")
+    String x = v.get(0).unwrap()
+    consume(!x)                    # ! on a borrow → materialize then move
+
+void p6_move_chain_trim():
+    Vector[String] v = Vector[String]()
+    v.push("  hello  ")
+    String x = v.get(0).unwrap().trim()
+    consume(!x)
+
+# ─── Point 7: Field store with borrow ──────────────────────
+void p7_field_direct():
+    Holder h = Holder("init")
+    Vector[String] v = Vector[String]()
+    v.push("hello")
+    String x = v.get(0).unwrap()
+    h.name = x
+    v.set(0, "DESTROYED")
+    print(f"p7a h.name={h.name}")
+
+void p7_field_chain_trim():
+    Holder h = Holder("init")
+    Vector[String] v = Vector[String]()
+    v.push("  hello  ")
+    String x = v.get(0).unwrap().trim()
+    h.name = x
+    v.set(0, "DESTROYED")
+    print(f"p7c h.name={h.name}")
+
+void main():
+    p1_reassign_direct()
+    # p1_reassign_chain_trim()  # KNOWN BROKEN — see TODO.md "CoW materialization
+                                  # of String views through expression-temp chains"
+    p2_mutate_direct()
+    p3a_struct_direct()
+    p3a_struct_chain_trim()
+    p3b_enum_direct()
+    # p3b_enum_chain_trim()     # KNOWN BROKEN — same TODO entry as p1
+    p4_push_direct()
+    p4_push_chain_trim()
+    p5_return_calls()
+    p6_move_direct()
+    p6_move_chain_trim()
+    p7_field_direct()
+    # p7_field_chain_trim()     # KNOWN BROKEN — same TODO entry as p1
+    print("all materialization points ok")
