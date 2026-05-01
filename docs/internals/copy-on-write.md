@@ -346,17 +346,42 @@ After every consuming call the C backend emits a post-call zero on the source po
 
 ### Compiler contract (one rule at every ownership boundary)
 
-At every consuming-position arg — whether invoked as a method call (`v.push(x)`, `d.put(k, v)`, `s.add(x)`) or as index-assign sugar (`v[i] = x`, `d[k] = v`) — the compiler makes exactly one decision per arg:
+CoW's default at non-boundary positions is borrow — assignments,
+ordinary function call args, collection reads all propagate Ptr
+aliases at zero cost. Clones fire only at the seven ownership
+boundaries listed above.
+
+At every consuming-position arg — whether invoked as a method call
+(`v.push(x)`, `d.put(k, v)`, `s.add(x)`) or as index-assign sugar
+(`v[i] = x`, `d[k] = v`) — the collection must own. The compiler
+prefers move when liveness allows it; otherwise clones:
 
 ```
-explicit !arg         → move_zero after call
-expression temp       → move_zero after call   (always last-use by construction)
-named local, last use → move_zero after call   (zero-cost transfer)
-bare param            → clone before call      (caller still owns it)
-borrow (Ptr/Ref/CoW)  → clone before call      (source stays live)
-non-last-use local    → clone before call      (caller needs its value)
-static literal        → *_materialize in runtime (cap==0 clone)
+move after call       ← owns AND dead at this call
+clone before call     ← borrow, OR owned but live past call
+*_materialize in rt   ← static literal (cap==0 carve-out)
 ```
+
+Move-eligible ("owns AND dead") unpacks to three shapes:
+
+- `!arg` — user opt-in.
+- expression temp — last-use + owning by construction.
+- named local at last use, bound to an owned value (not from `.get()`,
+  a view-returning method, or a parameter — those bind borrows).
+
+On a valid move, the source slot becomes logically dead. The IR
+instruction is `MoveZero`; the backend zeros the source only when
+drop-tracking would otherwise re-drop the value and elides the zero
+when liveness proves it unobservable. The zero is a backend
+optimization for drop correctness, not part of the move semantics.
+
+When the move case isn't satisfied, clone is required, not a
+fallback: the source either doesn't own its data (borrow shapes) or
+must stay valid past the call. Move would be a use-after-free. Bare
+resource-type params clone because they **are borrows** (see
+§"Function parameters" above) — not because the caller still owns
+them; the param doesn't own anything it can give away. Same for
+collection-read aliases and view-returning method results.
 
 `GorgetString.push` / `push_line` / `push_char` are excluded — those are StringBuilder appends that READ the arg (copy the content bytes into the builder), not take ownership of it.
 

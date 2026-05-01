@@ -83,23 +83,42 @@ Both backends should be at parity (1047/1047 as of 2026-04-30); a regression on 
 
 ## Ownership at Consuming Positions (push/put/set/insert/send)
 
-Collections always own their items. The compiler decides per-arg at each
-consuming position (`push`, `put`, `set`, `insert`, `send`, `v[i] = x`):
+CoW's default everywhere is **borrow** — assignments, regular function
+call args, collection reads all propagate Ptr aliases at zero cost.
+Clones happen only at ownership boundaries, where the destination must
+own (collection puts, returns, struct/enum field init, closure
+captures). Even there, the compiler prefers move when liveness allows
+it.
 
-| Argument shape        | Action              | Rationale                          |
-|-----------------------|---------------------|------------------------------------|
-| `!arg` (explicit)     | move_zero after call| Caller opted in — source is dead   |
-| expression temp       | move_zero after call| Always last-use by construction    |
-| named local, last use | move_zero after call| Zero-cost transfer                 |
-| bare param            | clone before call   | Caller still owns it               |
-| borrow (Ptr/Ref/CoW)  | clone before call   | Source stays live                   |
-| non-last-use local    | clone before call   | Caller needs its value             |
-| static literal        | runtime materialize | cap==0 clone                       |
+At each consuming position (`push`, `put`, `set`, `insert`, `send`,
+`v[i] = x`) the collection must own. The compiler picks per-arg from
+typed ownership state (Phase D's `LocalOwnership`):
 
-**This is the compiler contract — not a suggestion.** If an arg is non-last-use,
-it MUST be cloned before the call, not zeroed after it. Post-call zeroing is only
-correct for the three move cases (explicit `!`, expression temp, named last-use).
-See `docs/internals/copy-on-write.md` Phase 3 for the full specification.
+| Source                                            | Action                |
+|---------------------------------------------------|-----------------------|
+| Owns AND dead at this call                        | move after call       |
+| Borrow, OR owned but live past this call          | clone before call     |
+| Static literal                                    | runtime *_materialize |
+
+The three move-eligible shapes are: `!arg` (user opt-in), expression
+temp (last-use + owning by construction), and named local at last use,
+bound to an owned value (not from `.get()`, a view-returning method,
+or a parameter — those bind borrows).
+
+On a valid move, the source slot becomes logically dead. The IR
+instruction is `MoveZero`; the backend zeros the source only when
+drop-tracking would otherwise re-drop the value, and elides the
+zero when liveness proves it unobservable. The zero is a backend
+optimization for drop correctness, not part of the move semantics.
+
+The clone case is required, not a fallback: the source either doesn't
+own its data or must stay valid past the call; move would be a
+use-after-free. The decision is mechanical, not heuristic.
+
+**This is the compiler contract — not a suggestion.** Post-call
+zeroing (when emitted) is correct only for the move-eligible shapes.
+See `docs/internals/copy-on-write.md` Phase 3 for the full
+specification.
 
 ## Solution Quality
 

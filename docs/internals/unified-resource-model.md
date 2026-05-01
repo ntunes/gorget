@@ -322,15 +322,45 @@ If revived: ~2 weeks of focused work, one synchronised cutover with self-host. T
 
 ### 5.1 The compile-time guarantee
 
-Phase B catches double-frees at runtime via a no-op-on-view check. Phase C makes the IR refuse to *produce* a shallow alias of an owned resource in the first place.
+Phase C makes the IR refuse to *produce* a shallow alias of an owned
+resource in the first place. The semantic spec is the CoW contract
+from [`copy-on-write.md` §Phase 3](copy-on-write.md) — that document
+is authoritative. CoW's default is borrow at zero cost; Phase C
+enforces that only valid moves and necessary clones replace borrow
+when an ownership boundary requires it.
 
-Rule: every read of a resource-typed value (a Place dereference, an Operand::Copy, a Field projection) emits one of:
+The contract in one sentence: at every read of a resource-typed
+value, a move is valid IFF the source **owns its data AND is dead at
+that read**. Otherwise, it must be a clone or a borrow.
 
-- `MoveZero`: source becomes invalid, destination owns. Only when the source is dead after this read (last use, or `!source` annotation).
-- `Clone`: explicit deep-copy via the type's `clone_fn`. Source stays live.
-- `Borrow`: destination has type `Ref[T]`/`MutPtr<T>` and never gets a drop registered. Source stays the owner.
+The IR encodes three valid outcomes:
 
-Any other read of a resource value is a compile error (or at minimum a hard validation panic in debug, a `Drop::Unknown` strategy in release).
+- `Move` — source becomes logically dead, destination owns. Only
+  when the source both owns and is dead after this read. The IR
+  instruction is `MoveZero`; the backend zeros the source slot only
+  when drop-tracking would otherwise re-drop the value and elides
+  the zero when liveness proves it unobservable.
+- `Clone` — explicit deep-copy via the type's `clone_fn`. Source
+  stays live (or, equivalently, the source was never owning to begin
+  with).
+- `Borrow` — destination has type `Ref[T]` / `Ptr<T>` and never gets
+  a drop registered. Source stays the owner.
+
+Any other read of a resource value is a compile error.
+
+**Two consequences worth pinning, because the IR violates them today:**
+
+- Bare resource-type parameters are borrows (see
+  `copy-on-write.md` §"Function parameters"). They don't own data the
+  function body can give away. Reads of a param at a consuming
+  position must produce `Clone` (or `Borrow` if the destination is
+  itself a Ptr) — never `Copy`, never `Move`.
+- Collection-read aliases (`vec.get(0).unwrap()`) and view-returning
+  method results (`s.trim()`, `s[1..3]`) are also borrows. Same rule.
+
+There is no "Param-bound locals" special case to carve out. One rule
+applies everywhere; Phase D's `LocalOwnership` lets the validator
+ask "is this a borrow?" with one typed match.
 
 ### 5.2 What's already done
 
@@ -386,13 +416,36 @@ The IR-lowering passes that today emit `AssignMode::Copy` for resource sources n
 
 ### 5.5 The cost
 
-Every shallow alias of a resource value must become an explicit Move, Clone, or Borrow. This means:
-- `T x = y` where `y` is a Param of resource type and is used after this point → must Clone. Today silent shallow copy + double-free.
-- `T x = struct.field` where field is resource → must Borrow (returns `Ref[T]`) or Clone.
-- `return y` where `y` is a resource local → must Move.
-- `f(y)` where the param expects `T` (resource) and `y` is used after the call → must Clone.
+Every read of a resource value must resolve to one of `Move`,
+`Clone`, or `Borrow`. In CoW terms: assignments and reads default to
+borrow (zero-cost); clones fire at ownership boundaries (returns,
+struct fields, collection puts, function-call args where the
+collection-must-own contract requires it); moves fire only when the
+source both owns and is dead.
 
-Most of these the compiler can decide automatically based on the existing liveness analysis. Some require the user to be explicit (`!y` for move, `y.clone()` for clone). The README explicitly endorses this — "Borrows and moves are marked at call sites" — so it's not a language change, just enforcement.
+Concrete examples and the validator's decision:
+
+- `T x = y` where `y` is a Param of resource type → `x` becomes a
+  borrow alias of `y`. Mode: `Borrow`. No clone, no move. (Clone
+  fires later if `x` crosses an ownership boundary.) Today many
+  lowering sites emit `AssignMode::Copy` here — that's the bug
+  Phase C catches.
+- `T x = struct.field` where field is resource → `x` is a borrow of
+  the field. Mode: `Borrow`.
+- `return y` where `y` is a resource local that owns its data →
+  `Move` (return is always last-use). If `y` is a borrow,
+  `Clone` (return is an ownership boundary).
+- `coll.push(y)` where `y` is a resource local → `Move` if `y` owns
+  AND is at last use; `Clone` otherwise — including when `y` is a
+  bare param or any other borrow shape.
+
+Most of these the compiler decides automatically from liveness +
+ownership state (Phase D's `LocalOwnership`). Some require the user
+to be explicit: `!y` for move when liveness can't prove last-use,
+`y.clone()` to defeat borrow propagation when the user wants an
+independent owned copy. The README endorses this — "Borrows and
+moves are marked at call sites" — so it's not a language change,
+just enforcement.
 
 ### 5.6 Migration plan for Phase C
 
@@ -406,21 +459,24 @@ Stage C4: Promote `validate_resource_moves` from warning to compile error. Lock 
 
 Estimated effort: ~1 week with Phase D in place (collapses to a typed-match validator over `LocalOwnership`). The original 3-week estimate assumed Phase D wasn't done first. Risk: low-medium — the upstream lowering changes already happened in Phase D.
 
-### 5.7 What Phase C catches that the deferred Phase B would have
+### 5.7 Why Phase C suffices on its own
 
-Reading §4 in reverse: with Phase B deferred, the runtime backstop isn't there. Phase C has to catch *both* the shallow-copy double-free (which Phase B would have caught at runtime) *and* the aliased-mutable-state class (which Phase B couldn't catch even if shipped). Concretely:
+With Phase B deferred, Phase C is the sole guarantee against shallow
+aliasing of resources. Under CoW, the IR shouldn't emit shallow
+copies at all — every read defaults to borrow, every ownership
+boundary materializes a clone. Phase C catches the sites where
+today's lowering *does* emit shallow copies despite the CoW intent:
+`AssignMode::Copy` on resource sources, field projections that don't
+propagate borrow, return paths that bit-copy, intermediate temps in
+method-call chains. Each is a CoW violation that produces a
+double-free or aliased-mutable-state defect at runtime; the
+validator rejects them at compile time.
 
-- Caller has a Callable with env = {captured_state: 5}.
-- Caller passes Callable to callee by shallow copy. View bit set on caller's copy.
-- Callee mutates env via a captured state mutation (FnMut-equivalent).
-- Callee returns. Callee's view-bit copy goes out of scope, no-op drop.
-- Caller now sees env = {captured_state: <mutated>}.
-
-This is an aliased mutable state bug — the caller's "I have my own closure" expectation is violated. Phase B couldn't catch it even if shipped, because both copies are physically valid; the bug is semantic.
-
-Phase C catches it by requiring the caller's `f(handler)` either Move (caller doesn't keep handler) or Clone (callee gets independent copy). Aliased mutable state becomes impossible.
-
-This is why Phase C is the principled fix — it's the only one that prevents *both* shallow-copy double-free *and* aliased-mutable-state at compile time. Phase B's deferred design only addressed the first half; Phase C addresses both.
+Phase B's deferred design (§4) would have caught the double-free
+half at runtime via a no-op-on-view drop, and would not have caught
+aliased-mutable-state at all — both copies in that scenario are
+physically valid; the bug is semantic. Phase C addresses both
+classes at compile time, which is why it suffices on its own.
 
 ### 5.8 Hosting in the validator framework
 
