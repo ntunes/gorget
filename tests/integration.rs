@@ -11924,7 +11924,11 @@ fn self_host_bootstrap() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap stage-1 → stage-2 body",
-        Duration::from_secs(120),
+        // Auto-scale the stage-1 execution timeout the same way build_timeout()
+        // does. On loaded multi-agent boxes the binary's wall time can balloon
+        // far past its ~40s user CPU; on idle hosts 120s is plenty.
+        // Override with GG_STAGE1_TIMEOUT_SECS.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 120)),
     );
     assert!(
         stage1_run_out.status.success(),

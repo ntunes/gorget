@@ -355,27 +355,35 @@ pub fn lower_module(
         if !matches!(kind, generics::TemplateKind::Struct | generics::TemplateKind::Enum) {
             continue;
         }
-        let is_collection = matches!(base_name.as_str(),
-            "Vector" | "Dict" | "HashMap" | "Set" | "HashSet");
-        if is_collection && !type_mapper.named_types.contains_key(mangled_name) {
-            let drop_fn = match base_name.as_str() {
-                "Dict" | "HashMap" => "gorget_map_free",
-                "Set" | "HashSet" => "gorget_set_free",
-                _ => "gorget_array_free",
-            };
-            module.type_registry.add_type_def(TypeDef {
-                name: mangled_name.clone(),
-                kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
-                metadata: TypeMetadata {
-                    size: None,
-                    align: None,
-                    drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
-                    copy_semantics: CopySemantics::Resource,
-                    ..Default::default()
-                },
-            });
-            let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
-            type_mapper.register_named(mangled_name.clone(), tid);
+        // Phase A: pull metadata from BuiltinTypeProtocol so the same fields
+        // populate as in map_ast_type_mut and register_collection_alias —
+        // single source of truth via the protocol table.
+        if let Some(protocol) = builtins::lookup_protocol(base_name.as_str()) {
+            if protocol.collection_kind.is_some()
+                && !type_mapper.named_types.contains_key(mangled_name)
+            {
+                let drop_strat = match protocol.drop_fn {
+                    Some(f) => DropStrategy::Trivial(f.to_string()),
+                    None => DropStrategy::None,
+                };
+                module.type_registry.add_type_def(TypeDef {
+                    name: mangled_name.clone(),
+                    kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                    metadata: TypeMetadata {
+                        size: None,
+                        align: None,
+                        drop_strategy: drop_strat,
+                        copy_semantics: protocol.copy_semantics,
+                        clone_fn: protocol.clone_fn.map(String::from),
+                        clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
+                        materialize_fn: protocol.materialize_fn.map(String::from),
+                        collection_kind: protocol.collection_kind,
+                        enum_category: None,
+                    },
+                });
+                let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
+                type_mapper.register_named(mangled_name.clone(), tid);
+            }
         }
     }
 
