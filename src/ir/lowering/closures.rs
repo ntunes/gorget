@@ -16,7 +16,6 @@ use crate::span::Spanned;
 
 use super::context::{LoweringContext, ParamABI};
 use super::exprs::lower_expr;
-use super::stmts::lower_block;
 
 /// How a variable is captured by a closure.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -382,73 +381,46 @@ pub fn emit_closure_call_function(
     let prev_expected = ctx.func_state.expected_type;
     ctx.func_state.expected_type = closure.expected_type;
 
-    // Lower the closure body
+    // Lower the closure body. Both the expression-body case (`(x): x + 1`)
+    // and the block-with-tail-expression case (`(x):\n    let y = ...\n    x + y`)
+    // funnel through `emit_implicit_return` so the trailing expression's
+    // value reaches LocalId(0). A block whose tail isn't an expression
+    // (or whose only statements terminate explicitly) falls through to
+    // the default `ret` emission below.
+    let mut tail_handled = false;
     match &closure.body.node {
         Expr::Block(block) => {
-            lower_block(ctx, &mut builder, block);
-            let last_block_idx = builder.current_block.0 as usize;
-            if builder.blocks[last_block_idx].terminator.is_none() {
-                if closure.return_type == UNIT_TYPE {
-                    builder.ret(FunctionBuilder::const_unit());
+            let stmts = &block.stmts;
+            if !stmts.is_empty() {
+                for stmt in &stmts[..stmts.len() - 1] {
+                    super::stmts::lower_stmt(ctx, &mut builder, stmt);
+                }
+                let last = &stmts[stmts.len() - 1];
+                if let ast::Stmt::Expr(e) = &last.node {
+                    let result = lower_expr(ctx, &mut builder, e);
+                    emit_implicit_return(ctx, &mut builder, closure, result, e.span);
+                    tail_handled = true;
                 } else {
-                    builder.ret(FunctionBuilder::copy(LocalId(0)));
+                    super::stmts::lower_stmt(ctx, &mut builder, last);
                 }
             }
         }
         _ => {
-            // Expression body
+            // Bare-expression body: `(x): x + 1`.
             let body_span = closure.body.span;
-            let mut result = lower_expr(ctx, &mut builder, &closure.body);
-            // Ownership boundary: closure returns must produce independently owned data.
-            // Closure params are by-value shallow copies sharing heap data with the caller.
-            // ensure_owned_at_boundary clones non-Owned operands (Ref, MaybeBorrowed, params).
-            result = ctx.ensure_owned_at_boundary(&mut builder, result, body_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-            // Re-infer return type from the actual body result (the pre-inference
-            // may have returned I64_TYPE for variant constructors like Some(x+1))
-            let actual_type = super::exprs::infer_operand_type_full(ctx, &result, &builder);
-            // Override return type only when meaningful — skip GorgetString→Str confusion
-            // (f-strings produce GorgetString in IR but Str is the public type) and skip
-            // when expected_type provided a better answer (e.g., Result type from and_then).
-            let should_override = actual_type != closure.return_type
-                && actual_type != UNIT_TYPE
-                && !(actual_type == ctx.type_mapper.owned_string_type
-                     && closure.return_type == ctx.type_mapper.owned_string_type);
-            if should_override {
-                builder.locals[0].type_id = actual_type;
-            }
-            // Identify the returned local (to exclude from scope-exit drops).
-            let returned_local = match &result {
-                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
-                _ => None,
-            };
-            // Use Move for resource types: transfers ownership to the return slot
-            // without cloning. The source is zeroed, so scope-exit drops are no-ops.
-            // Copy would shallow-copy collections (sharing the buffer), and then
-            // scope-exit drops would free the shared buffer → use-after-free.
-            let use_move = if let Some(local) = returned_local {
-                ctx.type_registry.needs_drop(builder.local_type(local))
-            } else { false };
-            if use_move {
-                builder.assign_mode(
-                    crate::ir::instructions::AssignMode::Move,
-                    Place::local(LocalId(0)),
-                    result.clone(),
-                );
-                if let Some(local) = returned_local {
-                    ctx.move_zero_and_mark(&mut builder, local);
-                }
+            let result = lower_expr(ctx, &mut builder, &closure.body);
+            emit_implicit_return(ctx, &mut builder, closure, result, body_span);
+            tail_handled = true;
+        }
+    }
+    if !tail_handled {
+        let last_block_idx = builder.current_block.0 as usize;
+        if builder.blocks[last_block_idx].terminator.is_none() {
+            if closure.return_type == UNIT_TYPE {
+                builder.ret(FunctionBuilder::const_unit());
             } else {
-                builder.assign(Place::local(LocalId(0)), result);
+                builder.ret(FunctionBuilder::copy(LocalId(0)));
             }
-            // Emit cleanup drops for all locals before returning.
-            // The returned local is excluded — its data was moved to the return slot.
-            ctx.drops.emit_early_exit_drops(
-                &mut builder,
-                &ctx.type_registry,
-                super::drops::DropScopeKind::Function,
-                returned_local,
-            );
-            builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
     }
 
@@ -465,6 +437,62 @@ pub fn emit_closure_call_function(
         func.return_type = actual_ret;
     }
     func
+}
+
+/// Emit ownership-boundary clone, return-type override, move/copy assign
+/// to LocalId(0), scope-exit drops, and the terminating `ret`. Shared by
+/// both the bare-expression body (`(x): x + 1`) and the block-tail-
+/// expression body (`(x):\n    let y = ...\n    x + y`). Without this
+/// helper, the block path used to leave LocalId(0) uninitialized and the
+/// SSA validator (or downstream codegen) tripped on the bare ret.
+fn emit_implicit_return(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    closure: &LiftedClosure,
+    result: Operand,
+    body_span: crate::span::Span,
+) {
+    let mut result = ctx.ensure_owned_at_boundary(
+        builder,
+        result,
+        body_span,
+        crate::ir::ImplicitCloneReason::ReturnFromBorrow,
+    );
+    let actual_type = super::exprs::infer_operand_type_full(ctx, &result, builder);
+    let should_override = actual_type != closure.return_type
+        && actual_type != UNIT_TYPE
+        && !(actual_type == ctx.type_mapper.owned_string_type
+             && closure.return_type == ctx.type_mapper.owned_string_type);
+    if should_override {
+        builder.locals[0].type_id = actual_type;
+    }
+    let returned_local = match &result {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+        _ => None,
+    };
+    let use_move = if let Some(local) = returned_local {
+        ctx.type_registry.needs_drop(builder.local_type(local))
+    } else { false };
+    if use_move {
+        let r = std::mem::replace(&mut result, Operand::Constant(Constant::Unit));
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(LocalId(0)),
+            r,
+        );
+        if let Some(local) = returned_local {
+            ctx.move_zero_and_mark(builder, local);
+        }
+    } else {
+        builder.assign(Place::local(LocalId(0)), result);
+    }
+    ctx.drops.emit_early_exit_drops(
+        builder,
+        &ctx.type_registry,
+        super::drops::DropScopeKind::Function,
+        returned_local,
+    );
+    builder.ret(FunctionBuilder::copy(LocalId(0)));
 }
 
 /// Collect free variables referenced in a closure body.

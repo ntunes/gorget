@@ -1,0 +1,18 @@
+# Block-bodied closure whose final statement is a bare expression — the
+# expression's value should flow to the closure's return slot the same way
+# a single-line `(int a, int b): a + b` body does. Before the fix,
+# `emit_closure_call_function` for the Block branch lowered every stmt
+# (including the trailing bare-expr) and discarded its value, then emitted
+# `ret LocalId(0)` against an uninitialized return slot — tripping the
+# SSA validator (or, post-LIR, an out-of-bounds index in c_lir).
+
+void main():
+    int(int, int) f = (int a, int b):
+        a + b
+    print(f(3, 4))
+
+    # Multi-statement block with let + tail expression.
+    int(int) g = (int x):
+        int twice = x + x
+        twice + 1
+    print(g(5))

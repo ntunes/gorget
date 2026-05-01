@@ -17090,6 +17090,11 @@ fn closure_compose() {
 }
 
 #[test]
+fn closure_block_tail_expr() {
+    run_gg("closure_block_tail_expr.gg", "7\n11");
+}
+
+#[test]
 fn closure_partial_application() {
     run_gg(
         "closure_partial_application.gg",
