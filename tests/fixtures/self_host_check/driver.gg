@@ -52,7 +52,12 @@ void main():
     Module m = parse_source(source)
 
     # Multi-file import resolution + auto-load std.iter
-    load_all(&m, path, lib_dir)
+    # Entry source length feeds the loader's per-module span-offset
+    # bookkeeping — without it, imported-module spans collide with the
+    # entry's and the resolver's resolution_map last-write-wins on the
+    # collisions, silently mis-routing identifier uses to defs in the
+    # wrong file.
+    load_all(&m, path, lib_dir, source.byte_len())
 
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()

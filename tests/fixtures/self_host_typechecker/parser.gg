@@ -3958,7 +3958,14 @@ equip Parser:
 # ── Public API ───────────────────────────────────────────────
 
 Module parse_source(String source):
-    Vector[SpannedToken] all_tokens = lex_tokenize(source)
+    return parse_source_with_offset(source, 0)
+
+# Parse `source` shifting every emitted span by `base_offset`. Used by
+# the multi-file loader so spans of imported modules don't collide with
+# the entry module's. See `lex_tokenize_with_offset` for the underlying
+# mechanism.
+Module parse_source_with_offset(String source, int base_offset):
+    Vector[SpannedToken] all_tokens = lex_tokenize_with_offset(source, base_offset)
     # Strip comment tokens from the stream — the Rust parser does this at init.
     # Without stripping, comments between structural tokens (COLON NEWLINE INDENT)
     # cause expect_tok failures that corrupt block parsing in equip/trait/etc.

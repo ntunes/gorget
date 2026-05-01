@@ -4,7 +4,7 @@
 # functions (e.g. std.conv.parse_int → std__conv___parse_int) and builds a
 # call-redirect map so the lowerer can rewrite bare call names.
 
-from parser import parse_source
+from parser import parse_source, parse_source_with_offset
 from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
 from derive import expand_derives
 from std.fs import read_file, file_exists
@@ -71,7 +71,7 @@ void cr_put_module(Module &m, String key, String val):
 
 # ── Import loading ───────────────────────────────────────
 
-Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns):
+Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len):
     String base_dir = parent_dir(entry_path)
     # Linear-scan dedup — the self-host compiled Dict[String, bool]
     # does not reliably persist `put` / `contains` across iterations
@@ -80,6 +80,16 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
     # actually works.
     Vector[String] loaded = []
     Dict[String, String] call_redirects = {}
+
+    # Cumulative span offset for imported modules: every module's spans
+    # get shifted by this base so that span values stay globally unique
+    # across the merged program. Without this, file-local byte offsets
+    # collide and the resolver's `Dict[int, int] resolution_map` last-
+    # write-wins on the collision — silently routing identifier uses to
+    # defs in the wrong file. Mirrors `ModuleLoader.next_offset` in
+    # `src/loader.rs`. The 1-byte separator keeps end-of-module spans
+    # from butting against the next module's start.
+    int next_offset = entry_source_len + 1
 
     # Collect import paths from the module
     Vector[String] import_paths = []
@@ -109,7 +119,9 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
             file_path = resolve_module_path(lib_dir, mod_path)
         if file_exists(file_path):
             String source = read_file(file_path)
-            Module imported = parse_source(source)
+            int module_offset = next_offset
+            next_offset = next_offset + source.byte_len() + 1
+            Module imported = parse_source_with_offset(source, module_offset)
             expand_derives(&imported)
 
             # Add imported items to main module, with mangling

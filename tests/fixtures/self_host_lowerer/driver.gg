@@ -34,7 +34,9 @@ void main():
     String source = read_file(path)
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
-    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns)
+    # Pass the entry source length so the loader can shift imported-
+    # module spans past it and avoid resolution_map collisions.
+    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len())
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()

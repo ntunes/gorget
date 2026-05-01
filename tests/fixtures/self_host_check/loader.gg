@@ -18,7 +18,7 @@
 # names or call `.iter()` get `std.iter` injected as an implicit import,
 # unless they already import it explicitly or shadow `VectorIter`.
 
-from parser import parse_source
+from parser import parse_source, parse_source_with_offset
 from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
 from ast import SpannedExpr, Expr, Stmt, SpannedType, Type, EnumVariant, Param
 from ast import EMethodCall, EIdentifier, EFString, EBinaryOp, EUnaryOp, ECall, EClosure
@@ -386,9 +386,16 @@ String parent_dir(String path):
     return "."
 
 # ── Linear-scan dedup ────────────────────────────────────────
-# Avoids Dict[String, bool].contains, which has staging issues when
-# the loader runs under a self-host-compiled driver (see
-# self_host_lowerer/loader.gg's notes on this).
+# PROOF-OF-FIX: this loader runs under the Rust-compiled
+# `self_host_check/driver` binary — not under a stage-1 self-host
+# binary — so the `Dict[String, bool]` state-loss seen in
+# `self_host_lowerer/loader.gg` doesn't apply here. The real-world
+# manifestation that introduced this workaround was span-collision
+# in `resolution_map: Dict[int, int]` (now fixed by per-module
+# `parse_source_with_offset`). Switching `loaded` to `Dict[String,
+# bool]` is the actual proof-of-fix for cli_basic / encoding_basic
+# downstream — the dedup table that produced the import order
+# whose spans collided.
 
 bool string_in(Vector[String] v, String s):
     int i = 0
@@ -405,10 +412,26 @@ bool string_in(Vector[String] v, String s):
 # in place. Imported items are appended to the entry's; the
 # resolver's Pass 1 top-level collection makes order-independent.
 
-void load_all(Module &entry, String entry_path, String lib_dir):
+void load_all(Module &entry, String entry_path, String lib_dir, int entry_source_len):
     String base_dir = parent_dir(entry_path)
-    Vector[String] loaded = []
+    # PROOF-OF-FIX: reverted from `Vector[String] loaded = []` to a
+    # Dict[String, bool]. The Vector was a workaround for the alleged
+    # "Dict[String, _] state-loss"; the actual root cause was span-
+    # collision in resolution_map (now fixed by next_offset plumbing).
+    # `string_in` is preserved for the queue/import_paths Vectors,
+    # which still need linear scans because they're ordered.
+    Dict[String, bool] loaded = {}
     Vector[String] queue = []
+
+    # `next_offset` is the cumulative byte position at which the next
+    # imported module will be parsed — each module's spans get shifted
+    # by its base offset so that span values stay globally unique
+    # across the merged program. The entry was parsed at offset 0 and
+    # claims `[0 .. entry_source_len)`; we leave a 1-byte separator
+    # between modules so end-of-module spans never butt against the
+    # next module's start. Mirrors `ModuleLoader.next_offset` in
+    # `src/loader.rs`.
+    int next_offset = entry_source_len + 1
 
     # Collect direct imports from entry module
     int i = 0
@@ -416,26 +439,26 @@ void load_all(Module &entry, String entry_path, String lib_dir):
         Item item = entry.items.get(i).unwrap()
         match item:
             case IImport(imp):
-                if not string_in(loaded, imp.module_path):
+                if not loaded.contains(imp.module_path):
                     queue.push(imp.module_path.clone())
-                    loaded.push(imp.module_path.clone())
+                    loaded.put(imp.module_path.clone(), true)
             else:
                 pass
         i += 1
 
     # Auto-load std.iter when the entry needs it (but doesn't import it)
     if should_auto_load_std_iter(entry):
-        if not string_in(loaded, "std.iter"):
+        if not loaded.contains("std.iter"):
             queue.push("std.iter")
-            loaded.push("std.iter")
+            loaded.put("std.iter", true)
 
     # Auto-load std.hash when @derive(Hashable) appears anywhere in the
     # entry — derived `equip T with Hashable: void hash(self, FxHasher &h)`
     # references std.hash's FxHasher / write_int / write_string / finish.
     if module_uses_hashable_derive(entry):
-        if not string_in(loaded, "std.hash"):
+        if not loaded.contains("std.hash"):
             queue.push("std.hash")
-            loaded.push("std.hash")
+            loaded.put("std.hash", true)
 
     # BFS over the queue: resolve, parse, collect items + sub-imports
     int qi = 0
@@ -449,7 +472,9 @@ void load_all(Module &entry, String entry_path, String lib_dir):
 
         if file_exists(file_path):
             String src = read_file(file_path)
-            Module imported = parse_source(src)
+            int module_offset = next_offset
+            next_offset = next_offset + src.byte_len() + 1
+            Module imported = parse_source_with_offset(src, module_offset)
 
             # Discover sub-imports + append items to entry (skip imports —
             # they're consumed at load time, not items in the merged AST)
@@ -458,9 +483,9 @@ void load_all(Module &entry, String entry_path, String lib_dir):
                 Item imp_item = imported.items.get(ji).unwrap()
                 match imp_item:
                     case IImport(sub_imp):
-                        if not string_in(loaded, sub_imp.module_path):
+                        if not loaded.contains(sub_imp.module_path):
                             queue.push(sub_imp.module_path.clone())
-                            loaded.push(sub_imp.module_path.clone())
+                            loaded.put(sub_imp.module_path.clone(), true)
                     else:
                         entry.items.push(imp_item)
                 ji += 1

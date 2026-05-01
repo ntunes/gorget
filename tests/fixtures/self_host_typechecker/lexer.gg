@@ -99,6 +99,13 @@ struct Lexer:
     bool lex_finished
     bool lex_need_newline
     String lex_error
+    # Cumulative byte offset added to every emitted span. The loader sets
+    # this per imported module so spans are globally unique across the
+    # merged program — without it, file-local byte offsets collide and
+    # the resolver's `Dict[int, int] resolution_map` last-write-wins,
+    # causing identifier uses in different files to silently resolve to
+    # the wrong def. Mirrors Rust's `Parser::new_with_offset`.
+    int lex_base_offset
 
 # ── Keyword lookup ────────────────────────────────────────────
 
@@ -313,7 +320,7 @@ equip Lexer:
         self.lex_pos = self.lex_pos + 1
 
     void lex_emit(&self, Token !tok, int start, int end):
-        self.lex_tokens.push(SpannedToken(!tok, start, end))
+        self.lex_tokens.push(SpannedToken(!tok, start + self.lex_base_offset, end + self.lex_base_offset))
 
     # ── Indentation helpers ───────────────────────────────────
 
@@ -1100,8 +1107,16 @@ int lex_parse_int_radix(String s, int radix):
 # ── Public API ────────────────────────────────────────────────
 
 Vector[SpannedToken] lex_tokenize(String source):
+    return lex_tokenize_with_offset(source, 0)
+
+# Lex `source` shifting every emitted span's start/end by `base_offset`.
+# Used by the multi-file loader to keep span keys globally unique across
+# imported modules — file-local offsets collide otherwise (the resolver's
+# resolution_map is `Dict[int, int]` keyed on `expr.span.start` and last-
+# write-wins on collision).
+Vector[SpannedToken] lex_tokenize_with_offset(String source, int base_offset):
     Vector[int] indent = Vector[int]()
     indent.push(0)
-    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "")
+    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "", base_offset)
     l.lex_all()
     return l.lex_tokens
