@@ -1,6 +1,6 @@
 # Unified Resource Model — Design
 
-> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4). Revised 2026-05-01 to add Phase D (§6) — the IR-side counterpart to Phase A — after a `lower_var_decl` walkthrough showed Phase C is intractable without it.
+> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4). Revised 2026-05-01 to add Phase D (§6) — the IR-side counterpart to Phase A — after a `lower_var_decl` walkthrough showed Phase C is intractable without it. Revised 2026-05-01 to add §8 (sequencing alongside self-host + contract evolution discipline).
 > **Authors:** opus-4.7 session.
 > **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`.
 > **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4); the seven sidecar maps in `LoweringContext` enumerated in §6.1.
@@ -662,34 +662,133 @@ This is what makes "Rust-grade memory safety, no lifetime annotations" a propert
 
 Phase A unblocks B, C, and D — all need authoritative metadata. Phase B is faster to land and gives immediate runtime safety. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the real fix and supersedes B over time.
 
-Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable.
+Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable. §8 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
 
 ---
 
-## 8. Risks and trade-offs
+## 8. Sequencing and contract discipline
 
-### 8.1 ABI breaks
+A four-phase plan is only useful if the phases can land without blocking unrelated work, and if the contracts each phase exposes don't drift once implementation begins. Self-host (`tests/fixtures/self_host_lowerer/`) is the most relevant other-track — it mirrors the Rust implementation and is currently at 845/861 typechecker drift. This section describes how to sequence the four phases alongside self-host work, and the discipline that keeps shared contracts (metadata schemas, IR shapes, runtime layouts) stable while migrations are in flight.
+
+### 8.1 Per-phase contract surfaces
+
+Each phase has a *contract surface* — the typed metadata, schema files, or layout decisions that downstream consumers (in Rust and self-host alike) read. Pinning these before implementation begins is what prevents divergence.
+
+| Phase | Contract surface | Crosses Rust ↔ self-host? |
+|---|---|---|
+| A | `ResourceMetadata` struct shape (§3.2) **and** the declarative source file (§8.2) both compilers read. | **Yes** — shared schema. |
+| D | `LocalOwnership` enum (§6.2), `BorrowOrigin` enum (§6.3), `ReadMode` enum (§6.4). | No — internal IR shape per compiler. |
+| B | Field offsets for every resource type (§4.3). The full runtime ABI. | **Yes** — both compilers emit code that agrees byte-for-byte. |
+| C | The `validate_read()` rule (§5.4 / §6.4). Internal pass. | No — consumers don't see it. |
+
+Phases A and B touch contracts that bridge Rust and self-host. Phases C and D are internal to whichever compiler implements them — self-host adopts them at its own pace.
+
+### 8.2 The declarative metadata source (Phase A's tooling deliverable)
+
+The naive Phase A delivers `ResourceMetadata` as a Rust table at one canonical site (§3.4). The cross-compiler version delivers it as a declarative data file plus a parser on each side:
+
+```toml
+# resources.toml — single source of truth, read by both compilers.
+
+schema_version = 1
+
+[resource.GorgetString]
+size              = 32
+align             = 8
+drop_fn           = "gorget_string_free"
+clone_fn          = "gorget_string_clone"
+clone_inplace_fn  = "gorget_string_clone_inplace"
+materialize_fn    = "gorget_string_materialize"
+has_view_header   = true
+copy_semantics    = "Resource"
+on_get            = "Borrow"
+elem_abi          = "ByValue"
+
+[resource.GorgetArray]
+size              = 64
+…
+```
+
+Cost: ~1 week on top of Phase A's 2-week estimate (parser + the schema design). Pays back across Phase B (one file edit moves `cap` to offset 0 for both compilers), future resource additions (one row, both compilers see it), and self-host parity in general (no parallel Rust/self-host metadata tables to drift). It is Rule 3 of the layering discipline (`layering-discipline.md`) applied to the Rust ↔ self-host axis: one source of truth per piece of metadata.
+
+Without the declarative source, Phase A's "consolidate 16 lookup tables into one accessor" succeeds in Rust but creates a new fragmentation — 16 tables in Rust, 16 tables in self-host, drift compounds. The tooling cost is the price of preventing that.
+
+The `schema_version` field is load-bearing; see §8.4.
+
+### 8.3 Sequencing alongside self-host
+
+| Stage | Duration | Self-host track | Rust track | Notes |
+|---|---|---|---|---|
+| 1 | ~3 weeks | continues unblocked | Phase A + declarative-source tooling | Self-host PRs that touch the lookup-table sites are deferred until 1.5 |
+| 1.5 | ~2 days | adopts shared `resources.toml` | (idle on this track) | Small follow-up PR; mechanical |
+| 2 | ~2 weeks | continues unblocked | Phase D | Internal IR; self-host adopts later as a separate task |
+| 3 | ~2 weeks | **frozen on layout-touching changes** | Phase B (lockstep with self-host's runtime emit) | The only forced sync window |
+| 4 | ~1 week | continues unblocked | Phase C (validator only) | No self-host impact |
+
+Total elapsed: ~7 weeks. Stage 3 is the only forced sync window: B's field reorders + flags-header prepends require both compilers to agree byte-for-byte. Outside Stage 3, self-host's typechecker work, fixture additions, and bug fixes proceed without coordination.
+
+Phase D shrinks Phase C from 3 weeks to ~1 (§6.7) — the validator collapses to a single rule once `LocalOwnership` is the source of truth. That's where the time savings come from. The naive ordering (A → B → C, no D) costs more in absolute weeks *and* leaves more sidecar fragmentation behind.
+
+### 8.4 Contract evolution discipline
+
+Contracts will need to be revised. The first consumer migration in Phase A will shake out fields the schema didn't anticipate; the first `cow_before_mutation` rewrite in Phase D will reveal `BorrowOrigin` variants that weren't in the initial enum. **Treat this as expected, and discipline the revision process so it doesn't cause divergence.**
+
+Four rules:
+
+1. **Spike before freeze.** Before declaring a contract "ready for migration," implement *one* consumer migration end-to-end as a throwaway spike. The spike's job is to find the schema gaps — fields that turn out to be needed, enum variants that turn out to be missing, layout decisions that turn out to be unsound. Update the contract based on what the spike revealed, then freeze. A 3-day spike routinely saves a week of "we found another field we need" rework.
+
+2. **Freeze before broad migration.** Once a contract is frozen, no edits to its surface while migrations are in flight. If migrations are running on multiple tracks (Rust + self-host, or multiple consumer migrations in Rust at once), an unannounced contract change desynchronises them — each migration was written against a different version of the schema. Edits to a frozen contract require recalling the in-flight migrations first.
+
+3. **Recall on drift.** If a real issue surfaces that requires a contract change — a field is wrong-shaped, a variant is missing, a layout decision was unsound — *stop* in-flight migrations, update the contract, then resume. Do not try to migrate "around" a known-broken contract; the divergence cost compounds. Recalling is cheap (each migration is bounded scope); divergence is expensive (every migration needs reconciliation).
+
+4. **Versioned schema as runtime backstop.** The declarative `resources.toml` carries a `schema_version` field. Both compilers refuse to load a schema whose version they don't recognize. When the schema changes, the version bumps; both compilers see the bump and either upgrade together or fail loudly with a build error. This is the mechanical safety net for rule 2 — even if the freeze discipline slips, the version mismatch surfaces as a build failure rather than as silent divergence.
+
+The same shape applies to internal-only contracts (Phase D's enums): version them at the type-definition level (a `#[allow(...)]`-style marker that bumps when the enum changes; consumers that haven't been updated trip a compile error). Mechanical safety net beats discipline alone.
+
+### 8.5 Why these rules and not others
+
+**Why spike-first?** Contracts that look complete on paper routinely have gaps that only surface in implementation. Phase A's schema almost certainly omits something that the first real migration will reveal — better to find it via a focused 3-day spike than via a 2-week migration that's halfway done before the gap is noticed. The spike is throwaway by design: its output is *information about the contract*, not production code.
+
+**Why freeze-then-implement?** Contract drift mid-flight is the project's most expensive failure mode. A contract edited after migrations are running means every running migration is a candidate for rework — and the more migrations are running, the more rework piles up. Freezing flips the cost: a contract change costs *one* recall + restart, not N partial-redos. The freeze isn't bureaucracy; it's how you keep the cost of revision linear.
+
+**Why recall on drift, not "fix forward"?** Trying to amend mid-migration ("I'll just adjust the spec note for everyone in flight") fails under pressure: in-flight work has already absorbed the old contract's shape into local decisions. The cleanest reset is recall + restart against the new contract. Painful, but bounded — and the spike rule (rule 1) is what keeps recall events rare.
+
+**Why versioned schema?** Discipline rules ("don't edit the frozen contract") fail under pressure. The version field is the mechanical safety net: a schema edit that didn't bump the version is caught at load time; a schema edit that did bump the version forces every consumer to acknowledge the upgrade. Same shape as Phase B's `__gorget_is_view` runtime check — discipline is the design, runtime check is the defence in depth.
+
+**Why does this apply to self-host specifically?** Self-host's existing 845/861 drift is the cautionary tale. It didn't drift all at once; it drifted across many small unsynchronised changes against a moving target. The contract discipline above is what stops that pattern from repeating in the new shared metadata source — and from compounding through Phases B/D/C as well.
+
+### 8.6 Where the discipline lives
+
+- **The contract documents** themselves (`resources.toml` schema description, the `LocalOwnership` enum doc, the Phase B layout decisions) — versioned, frozen, edited only between phases.
+- **Phase landing checklists** in `TODO.md` — each phase has a "Spike done? ✓ / Schema frozen? ✓ / Migrations green on both tracks? ✓" gate.
+- **`AGENTS.md` cross-reference** — when adding a new resource type, builtin, or runtime fn, the rule "edit the declarative source first, both compilers second" gets cited; same shape as the existing "no name matching" cite.
+
+---
+
+## 9. Risks and trade-offs
+
+### 9.1 ABI breaks
 
 - Phase A: none — purely a refactor.
 - Phase B grows `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). Real ABI break — every site that assumes `sizeof(GorgetClosure) == 16` needs to update. Bounded though: ~10-20 sites in the runtime + LIR codegen, all mechanical. The earlier-draft pointer-tagging alternative was rejected as too clever (see §4.2).
 - Phase C: none — the IR pass is internal.
 - Phase D: none — internal IR shape only. `Local` grows by one enum field (~16 bytes); `Slot` grows by one `Option<BorrowOrigin>` (~16 bytes). No runtime ABI impact.
 
-### 8.2 Performance
+### 9.2 Performance
 
 - Phase A: zero cost — just better organised code.
 - Phase B: one bitwise check per drop. Negligible. View-vs-owner tracking also avoids unnecessary deep clones in some hot paths.
 - Phase C: depends on how many shallow copies become Clones vs Moves. Liveness analysis already in place; should be a wash or net improvement (fewer clones because Move is preferred at last use).
 - Phase D: net **win** at compile time. Eliminates the 12-predicate query in `lower_var_decl` and the alias-chain walks in `cow_before_mutation`. Adds ~16 bytes per local in the IR (memory, not runtime). Net runtime: zero.
 
-### 8.3 User-facing language changes
+### 9.3 User-facing language changes
 
 - Phase A: none.
 - Phase B: none — runtime detail.
 - Phase C: stricter compile-time checking. Users may see new errors on previously-accepted code that was silently wrong. The errors are diagnosable (point at the shallow-copy site, suggest `!` or `.clone()`). README already promises this style of safety.
 - Phase D: none. Better diagnostics indirectly — error messages can name the borrow origin ("borrowed from `outer` at line 42, invalidated by mutation at line 47") because the origin is now structurally available.
 
-### 8.4 Test surface
+### 9.4 Test surface
 
 Each phase has a clear validation point:
 - A: existing test suite (~2000 tests) must stay green at every stage.
@@ -699,7 +798,7 @@ Each phase has a clear validation point:
 
 The validation pass in C is itself a test mechanism — once it's a hard error, every CI run verifies the invariant.
 
-### 8.5 Migration cost
+### 9.5 Migration cost
 
 - A: 2 weeks. Refactor with strong tests as safety net. Mostly mechanical.
 - B: 1.5 weeks. Runtime + LIR. Requires careful audit of each resource's drop function.
@@ -710,7 +809,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 ---
 
-## 9. Open questions
+## 10. Open questions
 
 1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-04-28: yes.** The full first 8 bytes of every resource are the discriminator (`0` ⇒ view, non-zero ⇒ owner). Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. See §4.2-4.3 for the converged design. The cost (Box/Closure/Task gain 8 bytes each) is paid for: a single `__gorget_is_view` function works on any resource pointer, no metadata-dispatch needed in the hot drop path, no bit-stealing on `env` size prefixes or pointer alignment bits.
 
@@ -728,7 +827,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 ---
 
-## 10. What this doesn't fix
+## 11. What this doesn't fix
 
 This is a memory-safety architecture proposal. It does not address:
 
@@ -742,7 +841,7 @@ These continue to be addressed individually.
 
 ---
 
-## 11. Summary
+## 12. Summary
 
 We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Four** structural changes close the recurring class:
 
