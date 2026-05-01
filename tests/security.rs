@@ -31,7 +31,18 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-const BUILD_TIMEOUT: Duration = Duration::from_secs(180);
+/// Sanitize builds are slower than the integration suite's, so the default
+/// is higher (180 vs 120). Override with GG_BUILD_TIMEOUT_SECS for shared /
+/// loaded hosts. The env var supplies the same number to both suites — set
+/// it generously when running both.
+fn build_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("GG_BUILD_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180),
+    )
+}
 
 fn test_binary_timeout() -> Duration {
     Duration::from_secs(
@@ -131,7 +142,7 @@ fn sanitize_build_and_run(fixture_name: &str) -> (SanitizeOutcome, PathBuf) {
     let build = run_with_deadline(
         gg_command("build").arg("--sanitize").arg(&fp),
         fixture_name,
-        BUILD_TIMEOUT,
+        build_timeout(),
     );
     let build_ok = build.status.success();
     let build_stderr = String::from_utf8_lossy(&build.stderr).into_owned();
@@ -234,7 +245,7 @@ fn security_traps(name: &str, stderr_pattern: &str) {
 /// stderr pattern.
 fn security_rejected(name: &str, stderr_pattern: &str) {
     let fp = fixture_path(name);
-    let output = run_with_deadline(gg_command("check").arg(&fp), name, BUILD_TIMEOUT);
+    let output = run_with_deadline(gg_command("check").arg(&fp), name, build_timeout());
     assert!(
         !output.status.success(),
         "security_rejected({name}): expected `gg check` to fail, but it succeeded.\nstdout: {}",

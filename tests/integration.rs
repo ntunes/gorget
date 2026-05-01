@@ -14,7 +14,17 @@ use gorget::span::Spanned;
 /// machine). Disk-contended CI environments can inflate wall time
 /// significantly, so we keep a comfortable margin. If a build actually
 /// hangs indefinitely the outer cargo test deadline still catches it.
-const BUILD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Override with GG_BUILD_TIMEOUT_SECS env var for shared / loaded hosts
+/// (e.g. multi-agent dev boxes where DEBUG `gg build` against
+/// `self_host_lowerer/driver.gg` can drift past the default).
+fn build_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("GG_BUILD_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(120),
+    )
+}
 /// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
 /// for slower environments (e.g. CI).
 fn test_binary_timeout() -> Duration {
@@ -123,10 +133,10 @@ fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std
     std::process::Output { status, stdout, stderr }
 }
 
-/// Run a build command with BUILD_TIMEOUT. Wraps any Command that should not
-/// block indefinitely (e.g. `gg build`).
+/// Run a build command with the configured build timeout. Wraps any Command
+/// that should not block indefinitely (e.g. `gg build`).
 fn build_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
-    run_with_deadline(cmd, fixture, BUILD_TIMEOUT)
+    run_with_deadline(cmd, fixture, build_timeout())
 }
 
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.

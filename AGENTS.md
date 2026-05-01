@@ -40,6 +40,11 @@ GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 
 Both backends should be at parity (1047/1047 as of 2026-04-30); a regression on one but not the other usually means the change touched a backend-specific path rather than shared LIR.
 
+**Build / binary timeouts** (override on shared / loaded hosts):
+
+- `GG_BUILD_TIMEOUT_SECS` — outer `gg build` deadline. Default 120 (integration suite) / 180 (security suite). On a multi-agent box where DEBUG `cargo run -- build --backend=llvm self_host_lowerer/driver.gg` can drift past 5 minutes, set this generously: `GG_BUILD_TIMEOUT_SECS=600`.
+- `GG_TEST_TIMEOUT_SECS` — per-test-binary deadline. Default 30. Bump for slow stress fixtures (`stress_*`, p2p, gorget-arena builds).
+
 ## Documentation
 
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience, not Gorget experience)
