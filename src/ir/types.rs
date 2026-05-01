@@ -157,6 +157,15 @@ pub struct TypeMetadata {
     /// Clone function name for deep-cloning this type (e.g., "gorget_array_clone").
     /// Set from BuiltinTypeProtocol during type registration.
     pub clone_fn: Option<String>,
+    /// In-place clone function for collection element slots (`void(*)(void*)`).
+    /// e.g., "gorget_array_clone_inplace", "gorget_string_clone_inplace".
+    /// Replaces the parallel `elem_clone_fn_for_*` lookup tables.
+    pub clone_inplace_fn: Option<String>,
+    /// CoW materialize function (`void(*)(void*)`) — view → owned in place.
+    /// e.g., "gorget_string_materialize_inplace". `None` if the type has no
+    /// view/owner distinction. Replaces the `elem_materialize_fn_for_c_type`
+    /// lookup table.
+    pub materialize_fn: Option<String>,
     /// Collection kind for metadata-based dispatch (replaces name-prefix matching).
     pub collection_kind: Option<CollectionKind>,
     /// Enum category for Option/Result detection (replaces starts_with("Option__") matching).
@@ -171,6 +180,8 @@ impl Default for TypeMetadata {
             drop_strategy: DropStrategy::None,
             copy_semantics: CopySemantics::Trivial,
             clone_fn: None,
+            clone_inplace_fn: None,
+            materialize_fn: None,
             collection_kind: None,
             enum_category: None,
         }

@@ -28,15 +28,20 @@ pub struct TypeMapper {
 
 impl TypeMapper {
     pub fn new(registry: &mut TypeRegistry) -> Self {
-        // Register GorgetString with Move semantics + trivial drop (gorget_string_free)
+        // Register GorgetString with Move semantics + trivial drop (gorget_string_free).
+        // Phase A: populate clone_fn / clone_inplace_fn / materialize_fn so consumers
+        // read from metadata instead of name-matching against "GorgetString".
         registry.add_type_def(TypeDef {
             name: "GorgetString".to_string(),
             kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
             metadata: TypeMetadata {
-                size: None,
-                align: None,
+                size: Some(32),
+                align: Some(8),
                 drop_strategy: DropStrategy::Trivial("gorget_string_free".to_string()),
                 copy_semantics: CopySemantics::Resource,
+                clone_fn: Some("gorget_string_clone_to_owned".to_string()),
+                clone_inplace_fn: Some("gorget_string_clone_inplace".to_string()),
+                materialize_fn: Some("gorget_string_materialize_inplace".to_string()),
                 ..Default::default()
             },
         });
@@ -191,6 +196,8 @@ impl TypeMapper {
                         // Set protocol-derived metadata on the TypeDef
                         if let Some(td) = registry.get_type_def_mut(&mangled) {
                             td.metadata.clone_fn = protocol.clone_fn.map(String::from);
+                            td.metadata.clone_inplace_fn = protocol.clone_inplace_fn.map(String::from);
+                            td.metadata.materialize_fn = protocol.materialize_fn.map(String::from);
                             td.metadata.collection_kind = protocol.collection_kind;
                         }
 

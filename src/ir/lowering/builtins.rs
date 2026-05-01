@@ -89,6 +89,12 @@ pub struct BuiltinTypeProtocol {
     pub drop_fn: Option<&'static str>,
     /// Clone function name (e.g., "gorget_array_clone"). None = not cloneable.
     pub clone_fn: Option<&'static str>,
+    /// In-place clone for collection element slots (`void(*)(void*)`).
+    /// e.g., "gorget_array_clone_inplace". None = no inplace clone.
+    pub clone_inplace_fn: Option<&'static str>,
+    /// CoW materialize function (`void(*)(void*)`) — view → owned in place.
+    /// e.g., "gorget_string_materialize_inplace". None = no view/owner distinction.
+    pub materialize_fn: Option<&'static str>,
     /// Collection kind for metadata-based dispatch. None = not a collection.
     pub collection_kind: Option<CollectionKind>,
     /// All methods on this type.
@@ -200,6 +206,8 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_array_free"),
     clone_fn: Some("gorget_array_clone"),
+    clone_inplace_fn: Some("gorget_array_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::Array),
     methods: &[
         // Mutating
@@ -281,6 +289,8 @@ pub static DEQUE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_array_free"),
     clone_fn: Some("gorget_array_clone"),
+    clone_inplace_fn: Some("gorget_array_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::Array),
     methods: VECTOR.methods, // Same interface as Vector
 };
@@ -291,6 +301,8 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_map_free"),
     clone_fn: Some("gorget_map_clone"),
+    clone_inplace_fn: Some("gorget_map_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::OrderedMap),
     methods: &[
         BuiltinMethodDecl { name: "put", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: key_val_params, return_type: ret_void },
@@ -346,6 +358,8 @@ pub static HASHMAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_map_free"),
     clone_fn: Some("gorget_map_clone"),
+    clone_inplace_fn: Some("gorget_map_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::Map),
     methods: DICT.methods, // Same interface as Dict
 };
@@ -356,6 +370,8 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_set_free"),
     clone_fn: Some("gorget_set_clone"),
+    clone_inplace_fn: Some("gorget_set_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::OrderedSet),
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
@@ -401,6 +417,8 @@ pub static HASHSET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_set_free"),
     clone_fn: Some("gorget_set_clone"),
+    clone_inplace_fn: Some("gorget_set_clone_inplace"),
+    materialize_fn: None,
     collection_kind: Some(CollectionKind::Set),
     methods: SET.methods, // Same interface as Set
 };
@@ -411,6 +429,8 @@ pub static CHANNEL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None, // Typed drop wrapper emitted by c_lir
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "send", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
@@ -430,6 +450,8 @@ pub static SHARED: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
@@ -454,6 +476,8 @@ pub static WEAK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_self },
@@ -471,6 +495,8 @@ pub static MUTEX: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "lock", runtime_callee: Some("gorget_mutex_lock"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: |a, ctx| {
@@ -487,6 +513,8 @@ pub static GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: None, // Per-type drop wrapper
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_elem },
@@ -500,6 +528,8 @@ pub static RWLOCK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "read", runtime_callee: Some("gorget_rwlock_read"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: |a, ctx| {
@@ -519,6 +549,8 @@ pub static READ_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_read_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_elem },
@@ -531,6 +563,8 @@ pub static WRITE_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_write_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, params: no_params, return_type: ret_elem },
@@ -544,6 +578,8 @@ pub static THREAD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "join", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_void },
@@ -557,6 +593,8 @@ pub static HEAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Resource,
     drop_fn: Some("gorget_heap_free"),
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_heap_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, params: elem_param, return_type: ret_void },
@@ -573,6 +611,8 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         // Mutating (StringBuilder-style)
@@ -612,6 +652,8 @@ pub static OPTION: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         // Combinator methods: return the same Option type (self)
@@ -641,6 +683,8 @@ pub static RESULT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         // Combinator methods: return the same Result type (self)
@@ -665,6 +709,8 @@ pub static ATOMIC_INT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_int },
@@ -681,6 +727,8 @@ pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_bool },
@@ -696,6 +744,8 @@ pub static BARRIER: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "wait", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_void },
@@ -708,6 +758,8 @@ pub static WAIT_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: int_param, return_type: ret_void },
@@ -722,6 +774,8 @@ pub static SEMAPHORE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "acquire", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_void },
@@ -736,6 +790,8 @@ pub static ONCE_FLAG: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "do_once", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: no_params, return_type: ret_bool },
@@ -749,6 +805,8 @@ pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     copy_semantics: CopySemantics::Trivial,
     drop_fn: None,
     clone_fn: None,
+    clone_inplace_fn: None,
+    materialize_fn: None,
     collection_kind: None,
     methods: &[
         BuiltinMethodDecl { name: "spawn", runtime_callee: Some("gorget_task_group_submit"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, params: elem_param, return_type: ret_void },
