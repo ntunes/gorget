@@ -1,19 +1,20 @@
 # Unified Resource Model — Design
 
-> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4).
+> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4). Revised 2026-05-01 to add Phase D (§6) — the IR-side counterpart to Phase A — after a `lower_var_decl` walkthrough showed Phase C is intractable without it.
 > **Authors:** opus-4.7 session.
 > **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`.
-> **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4).
+> **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4); the seven sidecar maps in `LoweringContext` enumerated in §6.1.
 
-This document proposes a three-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time.
+This document proposes a four-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time.
 
 The changes are:
 
-- **Phase A — Unified resource metadata.** Replace the current ~10 parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. All consumers read from one accessor. Adding a new resource type touches one declaration site instead of ten.
+- **Phase A — Unified resource metadata.** Replace the current ~10 parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. All consumers read from one accessor. Adding a new resource type touches one declaration site instead of ten. *Type-axis consolidation.*
+- **Phase D — Local-state consolidation and borrow provenance.** The IR-side mirror of Phase A. Replace the seven parallel sidecar maps in `LoweringContext` (`local_ownership`, `string_borrow_sources`, `cow_alias_sources`, `cow_ptr_params`, `move_override_params`, `mut_capture_locals`, `tuple_element_locals`) with a single typed `LocalOwnership` field on every `Local`, including a first-class `BorrowOrigin` that persists from GIR through LIR. *Local-axis consolidation.* Without this, Phase C is intractable.
 - **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses (`cap == 0` ⇒ view, the drop fn is a no-op) to every resource type, with one rule: **first 8 bytes == 0 ⇒ view**. Collections move existing `cap` to offset 0; non-collections (Box, Closure, Task) prepend a uniform `flags` header. Shallow copies become safe at runtime: only the owner ever frees, every other holder is a view that no-ops on drop. One `__gorget_is_view(void*)` function works on any resource pointer with no metadata lookup. Defends in depth against bugs that escape Phase C.
 - **Phase C — Strict move/clone validation.** Make every read of a resource-typed value either `MoveZero` (source dies), an explicit `Clone` (independent deep copy), or a `Borrow` (typed `Ref[T]`/`MutPtr<T>` that has its own no-drop discipline). Reject any IR that produces a shallow alias of an owned resource. This makes the Phase B safety net redundant in steady state, but keeps it as defence in depth during migration.
 
-The phases compose: Phase A is a refactor that unblocks the others; Phase B is a runtime safety net that ships fast and catches bugs while Phase C is being built; Phase C is the compile-time guarantee that the bug class can't recur.
+The phases compose: A and D are refactors that unblock the others (A on the type axis, D on the local axis); B is a runtime safety net that ships fast and catches bugs while C is being built; C is the compile-time guarantee that the bug class can't recur.
 
 ---
 
@@ -454,63 +455,262 @@ This is why Phase C is the actual safety guarantee, not just defence in depth.
 
 ---
 
-## 6. The composition
+## 6. Phase D — Local-state consolidation and borrow provenance
 
-| Bug class | Phase A | Phase B | Phase C |
-|---|---|---|---|
-| Forgotten lookup table for new resource type | **Fixed** | — | — |
-| Two parts of pipeline disagree on size/ABI | **Fixed** | — | — |
-| Shallow copy → both drop, double-free | — | **Fixed (runtime no-op)** | **Fixed (compile error)** |
-| Shallow copy → aliased mutable state | — | — | **Fixed** |
-| Use-after-free from outliving source | — | Partial (drop is no-op so use sees stale data) | **Fixed (borrow checker rejects)** |
-| Type-erased function-pointer ABI mismatch | — | — | Partial (separate UBSan-shim issue) |
+> **Status:** Added 2026-05-01 after a `lower_var_decl` walkthrough. Phase A consolidates the *type* axis; Phase D is the missing consolidation on the *local* axis. Without it, Phase C's validator either re-derives state from instruction sequences (slow, fragile) or queries half a dozen sidecar maps that today disagree at the seams.
 
-Phase A unblocks B and C — both need authoritative metadata. Phase B is faster to land and gives immediate runtime safety. Phase C is the real fix and supersedes B over time.
+### 6.1 The fragmentation on the IR side
 
-Recommended landing order: A → B → C. Each phase builds on the previous and is independently shippable.
+Phase A targets the type axis: 16 parallel name-based lookup tables collapsed into one `ResourceMetadata` accessor. The mirror image — *per-local* ownership state during lowering — is just as fragmented. To answer "what is `_42`?" today the lowering context queries:
+
+| Source | Question it answers |
+|---|---|
+| `Local.ownership: OwnershipState` (3 variants on the post-lowering `Local`) | Owned / Ref / MaybeBorrowed |
+| `LoweringContext.local_ownership: FxHashMap<LocalId, LocalOwnershipState>` (7 variants) | Owned / Alias / CollectionRef / BareParam / Ref / CowBorrow / ViewOf |
+| `func_state.string_borrow_sources: FxHashSet<LocalId>` | "Has this string been borrowed-from?" |
+| `func_state.cow_alias_sources` / `cow_ptr_params` | CoW alias bookkeeping |
+| `func_state.move_override_params` | "Is this generic param being moved?" |
+| `func_state.mut_capture_locals` | "Was this local declared `&` or `!`?" |
+| `func_state.tuple_element_locals` | "What element locals back this tuple temp?" |
+| `func_state.field_load_origins` | "Which struct field did this temp come from?" |
+| `func_state.fresh_strings` | "Is this string a fresh allocation, safe to skip clone?" |
+| `drops.is_registered` / `is_moved` | "Will scope-exit drop this? Is it dead?" |
+
+The decision tree in `lower_var_decl` (`src/ir/lowering/stmts/mod.rs:521–620`) is the smoking gun: ~100 lines query a dozen of these predicates in a specific order to choose one of four `AssignMode` values. That's the same shape as Phase A's "16 lookup sites for one type" pattern, just on the local axis.
+
+The downstream collapse to `OwnershipState` (3 variants on `Local`) loses information. Once lowering finishes, no pass can ask *"did this Ptr borrow from collection X or struct field Y?"* — that distinction lived on `LocalOwnershipState` and was thrown away by the time the LIR runs.
+
+This violates the project rule "no name matching, no parallel lists that have to stay in sync" (CLAUDE.md): the sidecars *are* parallel lists, and they have drifted before — every "use-after-move that escaped the borrow checker" bug in the last six months is a case where one sidecar said one thing and the other said another.
+
+### 6.2 Single typed `LocalOwnership` field
+
+Replace the parallel sidecars with a single typed field on `Local`:
+
+```rust
+pub struct Local {
+    pub type_id: TypeId,
+    pub name_hint: Option<String>,
+    pub ownership: LocalOwnership,
+}
+
+pub enum LocalOwnership {
+    /// Owns its data. Registered for drop at scope exit.
+    Owned,
+    /// Borrowed — does NOT drop. Carries provenance (§6.3).
+    Borrowed { origin: BorrowOrigin, mutability: Mutability },
+    /// Runtime view (Phase B): cap=0 sentinel, source-zero discriminator.
+    /// Drop is a no-op, source mutation triggers materialisation.
+    View { source: BorrowOrigin },
+    /// Started borrowed, may have been materialised on some paths.
+    /// Conditional drop guard via `__gorget_is_view`. Today's
+    /// `MaybeBorrowed` state — kept until Phase C makes it unreachable.
+    MaybeOwned,
+}
+
+pub enum Mutability { Shared, Unique }
+```
+
+This collapses the existing 7-variant `LocalOwnershipState`, the 3-variant `OwnershipState`, **and** the six sidecar maps listed above into one field per local. Equivalent encodings:
+
+| Today | After |
+|---|---|
+| `local_ownership[l] = BareParam` + `ownership = Ref` | `Borrowed { origin: Param(p), mutability: Shared }` |
+| `local_ownership[l] = CollectionRef { collection }` | `Borrowed { origin: CollectionElement(c), mutability: Shared }` |
+| `local_ownership[l] = ViewOf { source }` + `string_borrow_sources.insert(source)` | `View { source: Local(s) }` |
+| `mut_capture_locals.contains(l)` (param `&` or `!`) | `Borrowed { origin: Param(p), mutability: Unique }` |
+| `cow_ptr_params[l] = source` | absorbed into `Borrowed { origin, … }` |
+
+The `string_borrow_sources` set disappears: "has X been borrowed-from?" becomes a typed walk over `func.locals` matching `Borrowed { origin: Local(s), .. } | View { source: Local(s) }` — and is constant-time if we keep an inverted `borrowed_by` index next to it.
+
+### 6.3 First-class `BorrowOrigin`
+
+Today `Instruction::Borrow { dst, place }` carries the source `place` *at emission time*, but the information evaporates downstream. A pass that wants to ask "what does `_42` point into?" reads `local_ownership[_42]`, walks `Alias { source }` chains, and matches on enum variants. CoW materialisation (`cow_before_mutation`) re-derives this on every mutation.
+
+Promote it to a typed field inside `LocalOwnership::Borrowed`:
+
+```rust
+pub enum BorrowOrigin {
+    /// Param N of the enclosing function. Const if Shared, mutable if Unique.
+    Param(LocalId),
+    /// Element borrowed from a collection. Mutation of the collection
+    /// triggers materialisation (today's `LocalOwnershipState::CollectionRef`).
+    CollectionElement(LocalId),
+    /// Field of a struct local. Mutation of the struct (or assignment
+    /// to the field) triggers materialisation.
+    Field { base: LocalId, field: u32 },
+    /// Alias of another local — propagate origin transitively to root.
+    Alias(LocalId),
+    /// Fresh runtime view (e.g., `s.trim()`, `s[1..3]`) borrowing
+    /// from `source`'s buffer. Today's `LocalOwnershipState::ViewOf`.
+    RuntimeView(LocalId),
+}
+```
+
+`cow_before_mutation` collapses to one typed match on `local.ownership` — no hashmap walks, no name-based fallbacks. The borrow checker (Pass-5a) and the validator (Phase C) both read the same field.
+
+Crucially, this **persists through the LIR**: today `Slot { ty, name }` doesn't carry ownership; future LIR slots get an `origin: Option<BorrowOrigin>` so backends can emit safer code. (The C backend's deref-vs-clone decision becomes a typed match instead of the current name heuristics.)
+
+### 6.4 Uniform read-mode discipline
+
+Phase C as drafted (§5) handles `Assign { mode: Copy }` of resource types. There are *six* other reads in the IR, each with its own mode encoding:
+
+| Instruction | Mode encoding today |
+|---|---|
+| `Assign` | `AssignMode { Copy, Move, Clone, Borrow }` |
+| `FieldLoad` | `FieldLoadMode { Copy, MoveZeroSource }` |
+| `IndexLoad` | `borrow: bool` |
+| `LoadRef` | implicit (always reads through Ptr) |
+| `Call` per-arg | `ArgOwnership { Copy, Move, Borrow }` |
+| `Operand::Copy(Place)` (anywhere) | implicit copy |
+
+Replace with **one shared `ReadMode`** that every read-of-a-place carries:
+
+```rust
+pub enum ReadMode {
+    /// Trivial bitwise read. Validator: source type MUST be `Trivial`.
+    Copy,
+    /// Move ownership — validator: source MUST be Owned and last-use.
+    Move,
+    /// Deep clone — validator: source must have a clone fn (Phase A metadata).
+    Clone,
+    /// Borrow — destination becomes Borrowed { origin derived from source }.
+    /// Validator: respects unique-vs-shared borrow rules.
+    Borrow(Mutability),
+}
+```
+
+Existing instructions keep their shape — `AssignMode`, `FieldLoadMode`, `IndexLoad.borrow`, `ArgOwnership` all become typed views of this one enum. `LoadRef`/`StoreRef` become explicit `Borrow`-mode reads.
+
+The Phase C validator (§5.4) becomes one rule applied uniformly:
+
+```rust
+fn validate_read(local: &Local, mode: ReadMode, registry: &TypeRegistry) -> Result<()> {
+    match (registry.copy_semantics(local.type_id), mode) {
+        (CopySemantics::Trivial,    ReadMode::Copy)        => Ok(()),
+        (CopySemantics::Resource,   ReadMode::Copy)        => Err(ShallowCopyOfResource),
+        (CopySemantics::Resource,   ReadMode::Move)        => check_last_use(local),
+        (CopySemantics::Resource,   ReadMode::Clone)       => check_clone_fn_exists(local),
+        (CopySemantics::Resource,   ReadMode::Borrow(mu))  => check_borrow_rules(local, mu),
+        (CopySemantics::RefCounted, _)                     => Ok(()), // Shared[T]/Rc[T]
+        // ...
+    }
+}
+```
+
+One rule, applied at every read site, replacing six per-instruction validation paths.
+
+### 6.5 Rationale — why this shape, not others
+
+**Why a typed field on `Local` instead of a parallel hashmap?** Three reasons.
+
+1. *Locality of reasoning.* When a pass wants "what is `_42`?", it reads `func.locals[42]` — type, name, ownership all in one place. Today the answer is split across the IR (`type_id`), the lowering context (`local_ownership` + six sidecars), and the drop accountant (`drops`). The bug pattern in this codebase is reliably one of those going stale relative to the others.
+2. *Persistence through pipeline stages.* `LocalOwnershipState` lives only in `LoweringContext`; it's gone by the time LIR runs. Putting it on `Local` carries it to LIR and beyond — backends, validators, future borrow-checker passes all read the same source of truth.
+3. *Symmetry with Phase A.* Phase A puts type metadata on `TypeDef`. This puts local metadata on `Local`. Same rule on both axes: declarative state at the source, typed accessors everywhere else. The CLAUDE.md "no name matching" prohibition applies symmetrically — sidecar maps keyed by `LocalId` are the local-axis equivalent of the name-based runtime-symbol lookup tables Phase A is killing.
+
+**Why `BorrowOrigin` as an enum, not a `Place` (LocalId + projection path)?** A `Place`-based representation is the obvious alternative. Rejected because it conflates *where the borrow points* (a Place) with *which mutations trigger materialisation* (a coarser concept — the whole collection, the whole struct). A `Vector[Vector[int]]` element borrowed via `outer.get(i).get(j)` should be invalidated when `outer` is mutated *or* when the inner vector is, but treating that as one Place loses the structure. The enum makes the materialisation predicate explicit; each variant *is* the trigger.
+
+**Why one `ReadMode` instead of keeping the four instruction-specific enums?** Each existing enum carries the *same* four-option choice in slightly different vocabulary, validated by slightly different code. Sharing the type means sharing the validator — and ensures the rules can't drift between AssignMode-Copy and FieldLoadMode-Copy. We've already had that drift: `AssignMode::Copy` of a resource is rejected by convention (today, by the lowering's politeness, not by validation); `FieldLoadMode::Copy` of a resource field still happens because field-projection lowering doesn't go through the AssignMode path. Same rule, two implementations, two opportunities to drift.
+
+**Why not just keep the lowering-context map and accept the cost?** The lowering context is rebuilt per function. The information it carries is recomputed every monomorphisation, every generic instantiation. Persisting onto `Local` removes that recomputation. More importantly: the mental model improvement isn't free if you have to look at two places to answer "what is `_42`?" — keeping the sidecar means keeping the cognitive cost.
+
+**Why now, not later?** Phase C's validator pass needs an authoritative source of "is this local owned, borrowed, or a view, and from where?" Without Phase D, that pass either re-derives the answer (slow, error-prone) or pulls from `local_ownership` (incomplete after lowering finishes, and tangled with the six sidecars). Landing Phase D first is what makes Phase C's validator small enough to actually write — without it, Phase C is a 3-week IR-tour, with it, Phase C is a 200-line walker over a typed field.
+
+**Why is this Gorget-shaped, not Rust-shaped?** Rust solves the same problem with lifetime parameters: provenance is in the type. Gorget deliberately chose to keep lifetimes out of the user-visible language. That decision *requires* the compiler to track provenance somewhere — and the only honest place is on the local. CoW provenance via `BorrowOrigin` is the IR mechanism that buys "no lifetime annotations" without giving up the safety guarantees. It's the actual invention.
+
+### 6.6 Migration plan for Phase D
+
+Stage D1: Define `LocalOwnership` and `BorrowOrigin` enums. Add the field to `Local` alongside the existing `ownership: OwnershipState` (don't remove yet — allow both during transition).
+
+Stage D2: At every site that today writes to `local_ownership`, also write the corresponding `LocalOwnership` variant onto the local. Both stay in sync; consumers can pick which to read.
+
+Stage D3: Migrate consumers one at a time. Easiest first (`is_owned_local`, `is_bare_param`, `is_cow_borrow`) — each becomes a typed match on `local.ownership`. Hardest last: `cow_before_mutation` and the `lower_var_decl` decision tree.
+
+Stage D4: Delete `local_ownership: FxHashMap`, the six sidecar maps (`string_borrow_sources`, `cow_alias_sources`, `cow_ptr_params`, `move_override_params`, `mut_capture_locals`, `tuple_element_locals`), and the old `OwnershipState` enum.
+
+Stage D5: Introduce `ReadMode` as the shared enum. Migrate `AssignMode`, `FieldLoadMode`, `IndexLoad.borrow`, `ArgOwnership` to be typed views of it. Update the validator (§5.4) to use the unified `validate_read()` rule.
+
+Stage D6: Persist `LocalOwnership` through GIR → LIR (`Slot.origin: Option<BorrowOrigin>`). This unblocks future borrow-aware codegen optimisations.
+
+Estimated effort: 2 weeks. Risk: medium. Each consumer migration is independent and revertable. Stage D4 is the dangerous one — if any consumer was reading the sidecar without going through the new accessor, deletion breaks it. Mitigation: keep the sidecars as `cfg(debug_assertions)` cross-checks for one release.
+
+### 6.7 What Phase D enables
+
+- **Phase C's validator becomes ~50 lines** instead of a per-instruction tour.
+- **The `lower_var_decl` decision tree** (`stmts/mod.rs:521–620`) collapses to a few typed matches on `source.ownership`. The 12-predicate query becomes one read.
+- **CoW materialisation (`cow_before_mutation`) becomes a typed match** on `BorrowOrigin`. New origins (e.g., `Field`, `RuntimeView`) get materialisation rules added by extending the enum, not by adding a sidecar.
+- **Self-host parity is easier.** A single typed local-state struct is simpler to mirror than the seven sidecars it replaces. (Self-host's typechecker drift, currently 845/861, has the same root cause as the sidecar drift here: scattered state of record.)
+- **Future borrow-checker enhancements** (cross-block, cross-function, alias-aware) read one canonical source instead of reconstructing state from instruction sequences.
+- **The IR validator already exists** (`src/ir/validate.rs` — 1200+ lines, with `UseAfterMove` detection across blocks) — Phase D plugs into it; no new pass infrastructure needed.
+
+This is what makes "Rust-grade memory safety, no lifetime annotations" a property of the IR, not a property of an exhausting decision tree spread across a dozen files.
 
 ---
 
-## 7. Risks and trade-offs
+## 7. The composition
 
-### 7.1 ABI breaks
+| Bug class | Phase A | Phase B | Phase C | Phase D |
+|---|---|---|---|---|
+| Forgotten lookup table for new resource type | **Fixed** | — | — | — |
+| Two parts of pipeline disagree on size/ABI | **Fixed** | — | — | — |
+| Shallow copy → both drop, double-free | — | **Fixed (runtime no-op)** | **Fixed (compile error)** | Enables Phase C |
+| Shallow copy → aliased mutable state | — | — | **Fixed** | Enables Phase C |
+| Use-after-free from outliving source | — | Partial (drop is no-op so use sees stale data) | **Fixed (borrow checker rejects)** | Enables Phase C |
+| Type-erased function-pointer ABI mismatch | — | — | Partial (separate UBSan-shim issue) | — |
+| Sidecar maps drift (`local_ownership` vs `string_borrow_sources` vs `cow_ptr_params`) | — | — | — | **Fixed** |
+| Provenance lost between GIR and LIR | — | — | — | **Fixed** |
+| `lower_var_decl` 12-predicate decision tree | — | — | — | **Fixed (collapses to typed match)** |
+
+Phase A unblocks B, C, and D — all need authoritative metadata. Phase B is faster to land and gives immediate runtime safety. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the real fix and supersedes B over time.
+
+Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable.
+
+---
+
+## 8. Risks and trade-offs
+
+### 8.1 ABI breaks
 
 - Phase A: none — purely a refactor.
 - Phase B grows `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). Real ABI break — every site that assumes `sizeof(GorgetClosure) == 16` needs to update. Bounded though: ~10-20 sites in the runtime + LIR codegen, all mechanical. The earlier-draft pointer-tagging alternative was rejected as too clever (see §4.2).
 - Phase C: none — the IR pass is internal.
+- Phase D: none — internal IR shape only. `Local` grows by one enum field (~16 bytes); `Slot` grows by one `Option<BorrowOrigin>` (~16 bytes). No runtime ABI impact.
 
-### 7.2 Performance
+### 8.2 Performance
 
 - Phase A: zero cost — just better organised code.
 - Phase B: one bitwise check per drop. Negligible. View-vs-owner tracking also avoids unnecessary deep clones in some hot paths.
 - Phase C: depends on how many shallow copies become Clones vs Moves. Liveness analysis already in place; should be a wash or net improvement (fewer clones because Move is preferred at last use).
+- Phase D: net **win** at compile time. Eliminates the 12-predicate query in `lower_var_decl` and the alias-chain walks in `cow_before_mutation`. Adds ~16 bytes per local in the IR (memory, not runtime). Net runtime: zero.
 
-### 7.3 User-facing language changes
+### 8.3 User-facing language changes
 
 - Phase A: none.
 - Phase B: none — runtime detail.
 - Phase C: stricter compile-time checking. Users may see new errors on previously-accepted code that was silently wrong. The errors are diagnosable (point at the shallow-copy site, suggest `!` or `.clone()`). README already promises this style of safety.
+- Phase D: none. Better diagnostics indirectly — error messages can name the borrow origin ("borrowed from `outer` at line 42, invalidated by mutation at line 47") because the origin is now structurally available.
 
-### 7.4 Test surface
+### 8.4 Test surface
 
 Each phase has a clear validation point:
 - A: existing test suite (~2000 tests) must stay green at every stage.
 - B: each migrated resource gets a focused fixture exercising its view-vs-owner discipline.
 - C: each warning fixed in C1 → C2 prevents regression by adding the case to a `validate_resource_moves` test.
+- D: stage D2's "both write the new field and the old map" gives a free cross-check — assert at end of lowering that the typed field and the legacy sidecars agree. Failure means a write-site was missed; fix before promoting.
 
 The validation pass in C is itself a test mechanism — once it's a hard error, every CI run verifies the invariant.
 
-### 7.5 Migration cost
+### 8.5 Migration cost
 
 - A: 2 weeks. Refactor with strong tests as safety net. Mostly mechanical.
 - B: 1.5 weeks. Runtime + LIR. Requires careful audit of each resource's drop function.
-- C: 3 weeks. IR-lowering changes spread across many sites. Highest risk of "fixing one violation creates another".
+- C: 3 weeks → reduced to ~1 week if D lands first. The validator collapses to a single rule once `LocalOwnership` is the source of truth.
+- D: 2 weeks. IR refactor, sidecar deletion is the dangerous part. Strong existing test coverage (~2000 tests) is the safety net.
 
-Total: ~7 weeks of focused work (revised from 6.5 — Phase B's field-reorder ripples into the self-host lowerer's hardcoded offsets, see project memory's 2026-04-12 layout note). Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
+Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for itself by shrinking C). Compare against the cost of *not* doing this: roughly two SECURITY-tagged TODOs per session, each ~1-2 hours to investigate and fix, plus the risk that some go unnoticed in user code. Pays back within ~3 months at current bug-discovery rate.
 
 ---
 
-## 8. Open questions
+## 9. Open questions
 
 1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-04-28: yes.** The full first 8 bytes of every resource are the discriminator (`0` ⇒ view, non-zero ⇒ owner). Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. See §4.2-4.3 for the converged design. The cost (Box/Closure/Task gain 8 bytes each) is paid for: a single `__gorget_is_view` function works on any resource pointer, no metadata-dispatch needed in the hot drop path, no bit-stealing on `env` size prefixes or pointer alignment bits.
 
@@ -518,15 +718,17 @@ Total: ~7 weeks of focused work (revised from 6.5 — Phase B's field-reorder ri
 
 3. **`Shared[T]` and `Weak[T]` interaction.** These deliberately allow shared ownership via refcounting. Phase C must not reject `Shared[T]` shallow copies — they're sound because the runtime refcounts. The metadata's `copy_semantics` should distinguish `Resource` (move-only) from `RefCounted` (shallow-copy ok, refcount the source).
 
-4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata table needs a self-host equivalent. Probably means generating the table from a single source-of-truth file (TOML or JSON) that both Rust and self-host read. Adds tooling cost but eliminates drift.
+4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata table needs a self-host equivalent. Probably means generating the table from a single source-of-truth file (TOML or JSON) that both Rust and self-host read. Adds tooling cost but eliminates drift. Phase D's `LocalOwnership` field has the same shape — should ride the same generation mechanism.
 
 5. **External / FFI types.** `extern "C"` types wrapped via `extern fn` declarations don't have full Gorget TypeDefs. Phase A needs a story for "minimum metadata required to declare an external resource type" — probably just `drop_fn` and `clone_fn`, with `view: AlwaysOwned` as a safe default.
 
 6. **Performance regression test.** Add a microbenchmark suite (fib, primes, JSON parse, regex match, …) that runs before and after each phase. Prevents Phase C from accidentally introducing a 10× slowdown via over-aggressive cloning.
 
+7. **Phase D `BorrowOrigin::Field` granularity.** When a struct field is borrowed and another field of the same struct is mutated, should the borrow be invalidated? Conservative answer (today's behaviour): yes, treat any struct mutation as invalidating all field-borrows. Optimal answer: per-field tracking, only invalidate on same-field mutation. Tractable in the IR but adds complexity to `cow_before_field_mutation`. Defer until a fixture demonstrates the cost.
+
 ---
 
-## 9. What this doesn't fix
+## 10. What this doesn't fix
 
 This is a memory-safety architecture proposal. It does not address:
 
@@ -540,12 +742,17 @@ These continue to be addressed individually.
 
 ---
 
-## 10. Summary
+## 11. Summary
 
-We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. Three structural changes — A (consolidate metadata), B (universal view/owner discrimination), C (strict move/clone validation) — close the recurring class.
+We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Four** structural changes close the recurring class:
 
-Recommended path: A first (foundation), B second (runtime safety net), C third (compile-time guarantee that supersedes B).
+- **Phase A** — consolidate type-axis metadata (one `ResourceMetadata`, sixteen lookup sites collapse to one).
+- **Phase D** — consolidate local-axis state (one `LocalOwnership` with first-class `BorrowOrigin`, seven sidecar maps collapse to one field). The IR-side mirror of Phase A.
+- **Phase B** — universal view/owner discrimination at runtime (one bit per resource, shallow-copy double-free becomes physically impossible).
+- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible).
 
-Total cost: ~7 weeks. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety" promise mechanical instead of aspirational.
+Recommended path: **A → D → B → C**. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. B is the runtime safety net that ships fast. C is the compile-time guarantee that supersedes B over time, and is small once D is in place.
 
-Land Phase A and we're already winning. Land Phase C and the bug class is dead.
+Total cost: ~6.5 weeks. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
+
+Land Phase A and we're already winning. Land Phase D and the IR's ownership story becomes singular and inspectable. Land Phase C and the bug class is dead.
