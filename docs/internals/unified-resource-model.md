@@ -1,20 +1,23 @@
-# Unified Resource Model — Design
+# Unified Resource Model and LIR Correctness Roadmap
 
-> **Status:** Proposed (2026-04-28). Revised same day to converge `cap` with the universal header (§4). Revised 2026-05-01 to add Phase D (§6) — the IR-side counterpart to Phase A — after a `lower_var_decl` walkthrough showed Phase C is intractable without it. Revised 2026-05-01 to add §8 (sequencing alongside self-host + contract evolution discipline).
+> **Status:** Proposed (2026-04-28). Revised 2026-05-01 to add Phase D (the IR-side counterpart to Phase A), §8 (sequencing alongside self-host + contract evolution discipline), and to merge in the LIR correctness roadmap — folding overlapping items into Phases A/B/C/D and adding Tier E for residual LIR-only hygiene work. This document supersedes `lir-correctness-roadmap.md`.
 > **Authors:** opus-4.7 session.
-> **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`.
+> **Builds on:** `ownership-ir.md`, `copy-on-write.md`, `safety-checker.md`, `layering-discipline.md`.
 > **Supersedes once landed:** the parallel name-based lookup tables enumerated in §3.1; the 2026-04-12 "cap at field index 1" layout decision (replaced by "cap at field index 0" — see §4); the seven sidecar maps in `LoweringContext` enumerated in §6.1.
 
-This document proposes a four-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time.
+This document proposes a four-phase architectural change to make a recurring class of bugs — double-frees, use-after-free, and use-after-move on resource-typed values — *structurally impossible* rather than chased one fixture at a time. It also folds in the residual LIR-correctness work (Tier E) that doesn't touch resources directly but is part of the same "make the IR correct by construction" agenda.
 
 The changes are:
 
-- **Phase A — Unified resource metadata.** Replace the current ~10 parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. All consumers read from one accessor. Adding a new resource type touches one declaration site instead of ten. *Type-axis consolidation.*
-- **Phase D — Local-state consolidation and borrow provenance.** The IR-side mirror of Phase A. Replace the seven parallel sidecar maps in `LoweringContext` (`local_ownership`, `string_borrow_sources`, `cow_alias_sources`, `cow_ptr_params`, `move_override_params`, `mut_capture_locals`, `tuple_element_locals`) with a single typed `LocalOwnership` field on every `Local`, including a first-class `BorrowOrigin` that persists from GIR through LIR. *Local-axis consolidation.* Without this, Phase C is intractable.
-- **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses (`cap == 0` ⇒ view, the drop fn is a no-op) to every resource type, with one rule: **first 8 bytes == 0 ⇒ view**. Collections move existing `cap` to offset 0; non-collections (Box, Closure, Task) prepend a uniform `flags` header. Shallow copies become safe at runtime: only the owner ever frees, every other holder is a view that no-ops on drop. One `__gorget_is_view(void*)` function works on any resource pointer with no metadata lookup. Defends in depth against bugs that escape Phase C.
-- **Phase C — Strict move/clone validation.** Make every read of a resource-typed value either `MoveZero` (source dies), an explicit `Clone` (independent deep copy), or a `Borrow` (typed `Ref[T]`/`MutPtr<T>` that has its own no-drop discipline). Reject any IR that produces a shallow alias of an owned resource. This makes the Phase B safety net redundant in steady state, but keeps it as defence in depth during migration.
+- **Phase A — Unified resource metadata.** Replace the parallel name-based lookup tables (`clone_fn_for_ptr`, `infer_drop_strategy`, `elem_drop_fn_for_*`, `needs_drop`, `is_resource_type`, `collection_runtime_type`, `c_sizeof_with_structs`, …) with a single `ResourceMetadata` struct attached to every resource type at registration time. Includes the typed runtime function table (`RuntimeFn` enum + signature data — `RuntimeFn` already shipped, the declaration table extends it). All consumers read from one accessor. Adding a new resource type or runtime fn touches one declaration site. *Type-axis consolidation.*
+- **Phase D — Local-state consolidation and borrow provenance.** The IR-side mirror of Phase A. Replace the seven parallel sidecar maps in `LoweringContext` with a single typed `LocalOwnership` field on every `Local`, including a first-class `BorrowOrigin` that persists from GIR through LIR. Subsumes the LIR roadmap's per-value origin metadata refactor — same pattern at the LIR layer. *Local-axis consolidation.* Without this, Phase C is intractable.
+- **Phase B — Universal view/owner discrimination.** Generalise the CoW pattern that `String` already uses to every resource type, with one rule: **first 8 bytes == 0 ⇒ view**. Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. Shallow copies become safe at runtime: only the owner ever frees, every other holder is a view that no-ops on drop. Co-designed with `LirType::FuncRef` (typed function references) so Phase B's closure layout change and the typed FuncRef land together. Defends in depth against bugs that escape Phase C.
+- **Phase C — Strict move/clone validation.** Make every read of a resource-typed value an explicit `Move` / `Clone` / `Borrow`. Reject any IR that produces a shallow alias of an owned resource. Plugs into the LIR's per-pass validator framework (Tier E §7.3) — Phase C is one validator entry; the framework hosts it and other invariant checks.
+- **Tier E — LIR/SSA hygiene.** Residual correctness work that doesn't touch resources: drop-flag dataflow init, critical-edge splitting + post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint. Independent of the resource-model phases; runs in parallel.
 
-The phases compose: A and D are refactors that unblock the others (A on the type axis, D on the local axis); B is a runtime safety net that ships fast and catches bugs while C is being built; C is the compile-time guarantee that the bug class can't recur.
+The phases compose: A and D are refactors that unblock the others (A on the type axis, D on the local axis); B is a runtime safety net that ships fast and catches bugs while C is being built; C is the compile-time guarantee that the bug class can't recur. Tier E proceeds independently throughout.
+
+**Already shipped** (subsets of Phase A, delivered by the LIR audit): `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2 — typed runtime call boundary), `Inst::CollectionCtor` (LIR A3 — typed collection ctor with `ElemMeta` replacing `original_name` parsing in three downstream passes). What's left of Phase A is the GIR-side type-metadata consolidation and the runtime declaration table extension.
 
 ---
 
@@ -100,6 +103,8 @@ For just *one* resource type (Callable), these are the lookup paths I touched in
 | `src/backend/c_lir/helpers.rs` | `elem_materialize_fn_for_c_type` | "What materialises a view to owned (CoW)?" |
 
 Sixteen lookup sites. Each has a slightly different `if name.starts_with(…)` chain. **Adding a resource means touching all sixteen.** Forgetting one is the mechanical source of half the bugs above.
+
+> **Already partly retired (LIR audit, shipped).** `Inst::CollectionCtor` (the typed collection-constructor instruction) replaced `original_name` string-parsing in three of these passes — `wire_collection_bridges`, `find_hashable_key_types`, `infer_collection_elem_fns` — with structured `ElemMeta::{Primitive, Resource, UserStruct, UserEnum}` reads. Same pattern as Phase A's `ResourceMetadata`, applied at the LIR layer. What's left is the GIR-side and C-emit-side consolidation: roughly 12-13 sites still name-match.
 
 ### 3.2 The proposed schema
 
@@ -223,6 +228,31 @@ Stage A5: Add a `cargo test --lib` check that every TypeId returned as a resourc
 
 Estimated effort: 2 weeks. Risk: low — purely a refactor with the existing test suite as the safety net. Each stage is incremental and revertable.
 
+### 3.6 Companion: the runtime declaration table
+
+Phase A consolidates metadata for resource *types*. The same single-source-of-truth pattern applies to runtime *functions* — and the LIR audit's "RuntimeFn enum + signature table" (B1 in the old roadmap) is the natural extension.
+
+`RuntimeFn` already exists (LIR A2, shipped) — an enum with ~80 variants and `c_name()` / `from_c_name()` / `signature()` accessors. What's left is consolidating the *full signature data* (param types, return types, side-effect markers) into one declarative table:
+
+```rust
+pub static RUNTIME_DECLS: &[RuntimeDecl] = &[
+    RuntimeDecl {
+        callee: RuntimeFn::ArrayNew,
+        c_name: "gorget_array_new",
+        params: &[CRuntimeType::Size],
+        ret: CRuntimeType::GorgetArray,
+        side_effects: SideEffects::Allocates,
+    },
+    /* ~80 entries */
+];
+```
+
+From this table the C backend emits `extern` declarations, the LLVM backend emits `declare`s, the (future) WASM backend emits `(import …)` statements. The C runtime header itself is auto-generated from the table, so the hand-written C runtime and the Rust frontend can never disagree on a signature.
+
+Crucially, `RuntimeDecl.params` and `RuntimeDecl.ret` reference *resource types by their `ResourceMetadata` entry* — so layout changes from Phase B propagate automatically to runtime signatures. One source of truth covers both axes (types and functions).
+
+Estimated effort: 3-4 weeks (the bulk of "what's left of Phase A"). Cost concentrates on the runtime-header generation and the migration of the existing hand-written `runtime_extern_sig` function in `src/lir/lower/calls.rs`. **Co-dependent with Phase B's layout changes** — see §4.8.
+
 ---
 
 ## 4. Phase B — Universal view/owner discrimination
@@ -345,6 +375,27 @@ Stage B6: Wire the IR sites that produce shallow copies of resources (Dict.get u
 
 Estimated effort: 2 weeks (revised from 1.5 — the field-reorder ripples are real, especially for self-host parity). Risk: medium. Each resource type can be migrated independently, but the field-reorder needs the whole runtime + self-host moved in one synchronised change.
 
+### 4.8 Companion: typed function references (`LirType::FuncRef`)
+
+Today `Inst::FuncAddr { dst, func: FuncId }` produces a `Ptr` value. That works for C (any function pointer is `void(*)`) and LLVM (any function pointer is `ptr`). It does NOT work for WASM, which uses table indices, not pointers — and it conflates "raw function pointer" with "boxed closure" semantically.
+
+Long-term shape:
+
+```rust
+// New LirType variant.
+LirType::FuncRef
+// Inst::FuncAddr's dst becomes LirType::FuncRef instead of Ptr.
+Inst::CallByRef { dst, fref: ValueId, args }  // call-via-table-or-pointer
+```
+
+Backends:
+- C/LLVM: lower `FuncRef` to `void*` / `ptr`, `CallByRef` to indirect call.
+- WASM (future): lower `FuncRef` to a table index, `CallByRef` to `call_indirect`.
+
+This properly types `GorgetClosure` as `{ flags: u64, fn_ptr: FuncRef, env: Ptr }` — including Phase B's flags header at offset 0. **Co-design with Phase B is mandatory:** A5's typed shape and B's flags-header layout edit the same struct. Land them in the same window so the closure layout flips once, not twice.
+
+Estimated effort: 3-5 days standalone, folded into Phase B's window so the cost is mostly already counted.
+
 ---
 
 ## 5. Phase C — Strict move/clone validation
@@ -452,6 +503,10 @@ This is an aliased mutable state bug — the caller's "I have my own closure" ex
 Phase C catches it by requiring the caller's `f(handler)` either Move (caller doesn't keep handler) or Clone (callee gets independent copy). Aliased mutable state becomes impossible.
 
 This is why Phase C is the actual safety guarantee, not just defence in depth.
+
+### 5.8 Hosting in the validator framework
+
+`validate_resource_moves` doesn't need its own pass infrastructure — Tier E's per-pass validator framework (§7.3) hosts it. Phase C's contribution is one entry in the validator registry; the framework provides the "run after every pass" plumbing. Phase C lands as: define the rule, register it, done.
 
 ---
 
@@ -644,6 +699,18 @@ Estimated effort: 2 weeks. Risk: medium. Each consumer migration is independent 
 
 This is what makes "Rust-grade memory safety, no lifetime annotations" a property of the IR, not a property of an exhausting decision tree spread across a dozen files.
 
+### 6.8 Companion: LIR-side per-value provenance
+
+The LIR has the same fragmentation today, one layer down. Both backends rebuild parallel arrays — `str_lit_vals`, `null_vals`, `cstr_vals`, `func_addr_targets`, `spawn_source_fn`, `ptr_pointee` — to recover origin information about each `ValueId`. ~37 emit-decision sites per backend.
+
+**Phase D extends naturally to the LIR.** The same `BorrowOrigin` vocabulary (Param / CollectionElement / Field / Alias / RuntimeView) plus a few LIR-specific origins (StrLit, NullPtr, FuncAddr, CstrLit) becomes a typed `Provenance` field on `LirFunction` indexed by `ValueId`. Either as one shared array on the function (replacing the five backend bitmaps) or encoded into the instruction variants that produce values with those origins (`Inst::StrLit`, `Inst::NullPtr`, `Inst::FuncAddr` already exist — making them the *only* way to produce values with those origins is the cleanest shape).
+
+This is the LIR roadmap's "A4 — origin metadata as per-value tags" item. It's not a separate refactor; it's Phase D's continuation across the GIR/LIR boundary, using the same enum vocabulary. Co-design the two together.
+
+WASM-specific: linear-memory loads need precise width (`i32.load8_u` vs `i32.load`). Per-value type info MUST be authoritative — falling back to "infer from context" doesn't work in WASM. Phase D's LIR side is what makes a WASM backend tractable.
+
+Estimated effort: 2 commits, folded into Phase D's overall window. Subsumes A4 entirely.
+
 ---
 
 ## 7. The composition
@@ -662,65 +729,111 @@ This is what makes "Rust-grade memory safety, no lifetime annotations" a propert
 
 Phase A unblocks B, C, and D — all need authoritative metadata. Phase B is faster to land and gives immediate runtime safety. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the real fix and supersedes B over time.
 
-Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable. §8 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
+Recommended landing order: **A → D → B → C**. (D before B because D is internal-only and de-risks C; B's runtime invariants are easier to verify against a clean local-state model. D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a 200-line walker.) Each phase is independently shippable. Tier E (§8) proceeds in parallel throughout. §9 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
 
 ---
 
-## 8. Sequencing and contract discipline
+## 8. Tier E — LIR/SSA hygiene
+
+Residual correctness work from the LIR audit that doesn't touch resources directly. Independent of Phases A/B/C/D — runs in parallel throughout. Listed here so the unified roadmap is complete; sequenced with the resource phases in §9.
+
+### 8.1 Drop-flag init from dataflow
+
+Today's drop-flag instrumentation (commit `d28b8f86`) seeds `bb0 = false` and instruments `SlotStore` to set the flag at first store. Conservative but correct. The dataflow pass already computes per-block init states; the flag's initial value at each block could be seeded from that state directly — no blanket false, no reliance on `SlotStore` to "fix" the flag at first use. Catches function-param slots and other unconditionally-init cases without waiting for the explicit param-`SlotStore`.
+
+Estimate: 1 commit + extended drop test fixtures.
+
+### 8.2 Critical-edge splitting + post-SSA invariant validation
+
+SSA construction (`src/lir/ssa.rs`) uses a simplified Braun et al. algorithm that assumes no critical edges. There's no validator that asserts:
+- The CFG is reducible (no irreducible loops).
+- Every value use is dominated by its definition.
+- Critical edges (block with multiple successors → block with multiple predecessors) don't exist.
+
+WASM has structured control flow only. If the LIR produces an irreducible CFG, the WASM backend can't emit it without a relooper pass — which is its own correctness hazard. Long-term-correct: critical edges split at LIR construction time (or by a dedicated pre-SSA pass). Post-SSA validator asserts reducibility, dominance, and edge-set well-formedness. The dominance check exists in debug builds (`ssa.rs:32-36`) but isn't called from `validate_module`.
+
+Estimate: 1 commit — split + validator extension.
+
+### 8.3 Validator runs after every pass
+
+Today `validate_module` runs once before SSA. After every pass — optimizer, BIR lowering, drop elaboration — invariants can drift silently. Long-term-correct: the test harness invokes `validate_module` after each pass in debug builds. Cheap, catches every shape regression. **Phase C's `validate_resource_moves` plugs into this framework** (§5.8) — same registry, same per-pass invocation.
+
+Estimate: 1 commit.
+
+### 8.4 Optimizer fixpoint
+
+`optimize_function` runs three iterations and stops, regardless of whether it would have converged in four. Replace with snapshot-equality fixpoint check (already used in SSA, drop elab). Trivial.
+
+Estimate: 1 commit.
+
+### 8.5 Cross-block constant propagation, GVN, LICM (deferred)
+
+The LIR optimizer is intra-block CSE + intra-block constant folding today. Cross-block passes — constant propagation, global value numbering, loop-invariant code motion — are textbook but lower priority while LLVM's `clang -O2` does most of this on the C backend's output, and LLVM's own optimizer does it on the LLVM backend's output. The LIR optimizer matters most for WASM (where downstream optimization is weaker). **Defer until WASM ships.**
+
+### 8.6 Already shipped
+
+For completeness: `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2) and `Inst::CollectionCtor` (LIR A3) shipped from the audit and are subsets of Phase A's typed-metadata story (see §3.1, §3.6). No further work needed on those.
+
+---
+
+## 9. Sequencing and contract discipline
 
 A four-phase plan is only useful if the phases can land without blocking unrelated work, and if the contracts each phase exposes don't drift once implementation begins. Self-host (`tests/fixtures/self_host_lowerer/`) is the most relevant other-track — it mirrors the Rust implementation and is currently at 845/861 typechecker drift. This section describes how to sequence the four phases alongside self-host work, and the discipline that keeps shared contracts (metadata schemas, IR shapes, runtime layouts) stable while migrations are in flight.
 
-### 8.1 Per-phase contract surfaces
+### 9.1 Per-phase contract surfaces
 
 Each phase has a *contract surface* — the typed metadata, schema files, or layout decisions that downstream consumers (in Rust and self-host alike) read. Pinning these before implementation begins is what prevents divergence.
 
 | Phase | Contract surface | Crosses Rust ↔ self-host? |
 |---|---|---|
-| A | `ResourceMetadata` struct shape (§3.2) **and** the declarative source file (§8.2) both compilers read. | **Yes** — shared schema. |
+| A | `ResourceMetadata` + `RUNTIME_DECLS` const Rust data (§3.2, §3.6); generated artifacts for C runtime header and self-host. | **Yes** — both compilers see the same generated outputs. |
 | D | `LocalOwnership` enum (§6.2), `BorrowOrigin` enum (§6.3), `ReadMode` enum (§6.4). | No — internal IR shape per compiler. |
 | B | Field offsets for every resource type (§4.3). The full runtime ABI. | **Yes** — both compilers emit code that agrees byte-for-byte. |
 | C | The `validate_read()` rule (§5.4 / §6.4). Internal pass. | No — consumers don't see it. |
 
 Phases A and B touch contracts that bridge Rust and self-host. Phases C and D are internal to whichever compiler implements them — self-host adopts them at its own pace.
 
-### 8.2 The declarative metadata source (Phase A's tooling deliverable)
+### 9.2 The single canonical metadata source
 
-The naive Phase A delivers `ResourceMetadata` as a Rust table at one canonical site (§3.4). The cross-compiler version delivers it as a declarative data file plus a parser on each side:
+The actual requirement is *one canonical place where the metadata lives*. The format is incidental, and earlier drafts of this section over-engineered it as a separate TOML file with a parser. That's not necessary.
 
-```toml
-# resources.toml — single source of truth, read by both compilers.
+The simplest viable shape:
 
-schema_version = 1
+- `ResourceMetadata` and `RUNTIME_DECLS` (§3.6) live as **const Rust data** in one or two files (e.g. `src/ir/resources.rs`, `src/lir/runtime/decls.rs`) with the `pub static RESOURCES: &[ResourceMetadata] = &[…];` shape. The Rust compiler embeds them directly — no parser, no file format, no build artifact.
+- The C runtime header is **generated from the Rust const data** via `build.rs`, so the hand-written runtime and the frontend can never diverge on a signature.
+- Self-host, when it eventually needs the same data, gets a generated Gorget-readable form via the same `build.rs` (a small emitter that writes `lib/std/gen/resources.gg`). Self-host imports it like any other Gorget data — no separate parser to maintain, generation guarantees freshness.
 
-[resource.GorgetString]
-size              = 32
-align             = 8
-drop_fn           = "gorget_string_free"
-clone_fn          = "gorget_string_clone"
-clone_inplace_fn  = "gorget_string_clone_inplace"
-materialize_fn    = "gorget_string_materialize"
-has_view_header   = true
-copy_semantics    = "Resource"
-on_get            = "Borrow"
-elem_abi          = "ByValue"
+This satisfies Rule 3 of the layering discipline (one source of truth per axis) — the Rust file is the single authority; everything else is generated. No TOML, no JSON, no temporary files: just const Rust data plus tiny build-script emitters for the consumers that can't read Rust directly.
 
-[resource.GorgetArray]
-size              = 64
-…
+```rust
+// src/ir/resources.rs — single source of truth.
+pub static RESOURCES: &[ResourceMetadata] = &[
+    ResourceMetadata {
+        runtime_name: "GorgetString",
+        size: 32, align: 8,
+        drop_fn: "gorget_string_free",
+        clone_fn: "gorget_string_clone",
+        has_view_header: true,
+        copy_semantics: CopySemantics::Resource,
+        on_get: GetReturnConvention::Borrow,
+        // …
+    },
+    // ~10 entries
+];
 ```
 
-Cost: ~1 week on top of Phase A's 2-week estimate (parser + the schema design). Pays back across Phase B (one file edit moves `cap` to offset 0 for both compilers), future resource additions (one row, both compilers see it), and self-host parity in general (no parallel Rust/self-host metadata tables to drift). It is Rule 3 of the layering discipline (`layering-discipline.md`) applied to the Rust ↔ self-host axis: one source of truth per piece of metadata.
+Cost: zero extra work for the Rust side (it was always going to live in Rust const data). The build-script emitters are ~50 lines each, written when the consumer (C runtime header, self-host) actually needs them — not speculatively. Pays back across Phase B (one Rust edit moves `cap` to offset 0 for everyone) and future resource additions (one row, all consumers regenerate).
 
-Without the declarative source, Phase A's "consolidate 16 lookup tables into one accessor" succeeds in Rust but creates a new fragmentation — 16 tables in Rust, 16 tables in self-host, drift compounds. The tooling cost is the price of preventing that.
+**Why this shape, not TOML.** A separate TOML file introduces a new format, a new parser per consumer, and a new versioning concern — all to solve a problem (cross-compiler sync) that's solved more cheaply by code generation from the canonical Rust source. The discipline that matters is "ONE source"; the format is a detail. Const Rust data is the format with the lowest tooling cost given that the Rust compiler is the canonical implementation.
 
-The `schema_version` field is load-bearing; see §8.4.
+**Versioning.** Inline a `pub const SCHEMA_VERSION: u32 = 1;` next to the data. Generated artifacts include the version; consumers refuse to load a version they don't know. The mechanical safety net for §9.4's freeze discipline.
 
-### 8.3 Sequencing alongside self-host
+### 9.3 Sequencing alongside self-host
 
 | Stage | Duration | Self-host track | Rust track | Notes |
 |---|---|---|---|---|
 | 1 | ~3 weeks | continues unblocked | Phase A + declarative-source tooling | Self-host PRs that touch the lookup-table sites are deferred until 1.5 |
-| 1.5 | ~2 days | adopts shared `resources.toml` | (idle on this track) | Small follow-up PR; mechanical |
+| 1.5 | ~2 days | adopts the generated `resources.gg` from `build.rs` | (idle on this track) | Small follow-up PR; mechanical |
 | 2 | ~2 weeks | continues unblocked | Phase D | Internal IR; self-host adopts later as a separate task |
 | 3 | ~2 weeks | **frozen on layout-touching changes** | Phase B (lockstep with self-host's runtime emit) | The only forced sync window |
 | 4 | ~1 week | continues unblocked | Phase C (validator only) | No self-host impact |
@@ -729,7 +842,7 @@ Total elapsed: ~7 weeks. Stage 3 is the only forced sync window: B's field reord
 
 Phase D shrinks Phase C from 3 weeks to ~1 (§6.7) — the validator collapses to a single rule once `LocalOwnership` is the source of truth. That's where the time savings come from. The naive ordering (A → B → C, no D) costs more in absolute weeks *and* leaves more sidecar fragmentation behind.
 
-### 8.4 Contract evolution discipline
+### 9.4 Contract evolution discipline
 
 Contracts will need to be revised. The first consumer migration in Phase A will shake out fields the schema didn't anticipate; the first `cow_before_mutation` rewrite in Phase D will reveal `BorrowOrigin` variants that weren't in the initial enum. **Treat this as expected, and discipline the revision process so it doesn't cause divergence.**
 
@@ -741,11 +854,11 @@ Four rules:
 
 3. **Recall on drift.** If a real issue surfaces that requires a contract change — a field is wrong-shaped, a variant is missing, a layout decision was unsound — *stop* in-flight migrations, update the contract, then resume. Do not try to migrate "around" a known-broken contract; the divergence cost compounds. Recalling is cheap (each migration is bounded scope); divergence is expensive (every migration needs reconciliation).
 
-4. **Versioned schema as runtime backstop.** The declarative `resources.toml` carries a `schema_version` field. Both compilers refuse to load a schema whose version they don't recognize. When the schema changes, the version bumps; both compilers see the bump and either upgrade together or fail loudly with a build error. This is the mechanical safety net for rule 2 — even if the freeze discipline slips, the version mismatch surfaces as a build failure rather than as silent divergence.
+4. **Versioned schema as runtime backstop.** The const Rust data carries a `SCHEMA_VERSION` constant; generated artifacts (C runtime header, generated `resources.gg`) embed it; consumers refuse to load a version they don't recognize. When the schema changes, the version bumps and every consumer either upgrades together or fails loudly with a build error. This is the mechanical safety net for rule 2 — even if the freeze discipline slips, the version mismatch surfaces as a build failure rather than as silent divergence.
 
 The same shape applies to internal-only contracts (Phase D's enums): version them at the type-definition level (a `#[allow(...)]`-style marker that bumps when the enum changes; consumers that haven't been updated trip a compile error). Mechanical safety net beats discipline alone.
 
-### 8.5 Why these rules and not others
+### 9.5 Why these rules and not others
 
 **Why spike-first?** Contracts that look complete on paper routinely have gaps that only surface in implementation. Phase A's schema almost certainly omits something that the first real migration will reveal — better to find it via a focused 3-day spike than via a 2-week migration that's halfway done before the gap is noticed. The spike is throwaway by design: its output is *information about the contract*, not production code.
 
@@ -757,38 +870,38 @@ The same shape applies to internal-only contracts (Phase D's enums): version the
 
 **Why does this apply to self-host specifically?** Self-host's existing 845/861 drift is the cautionary tale. It didn't drift all at once; it drifted across many small unsynchronised changes against a moving target. The contract discipline above is what stops that pattern from repeating in the new shared metadata source — and from compounding through Phases B/D/C as well.
 
-### 8.6 Where the discipline lives
+### 9.6 Where the discipline lives
 
-- **The contract documents** themselves (`resources.toml` schema description, the `LocalOwnership` enum doc, the Phase B layout decisions) — versioned, frozen, edited only between phases.
+- **The contract sources** themselves (`src/ir/resources.rs` for `ResourceMetadata`, `src/lir/runtime/decls.rs` for `RUNTIME_DECLS`, the `LocalOwnership` enum definition, the Phase B layout decisions) — versioned, frozen, edited only between phases.
 - **Phase landing checklists** in `TODO.md` — each phase has a "Spike done? ✓ / Schema frozen? ✓ / Migrations green on both tracks? ✓" gate.
-- **`AGENTS.md` cross-reference** — when adding a new resource type, builtin, or runtime fn, the rule "edit the declarative source first, both compilers second" gets cited; same shape as the existing "no name matching" cite.
+- **`AGENTS.md` cross-reference** — when adding a new resource type, builtin, or runtime fn, the rule "edit the canonical Rust source first, regenerate, both compilers see it" gets cited; same shape as the existing "no name matching" cite.
 
 ---
 
-## 9. Risks and trade-offs
+## 10. Risks and trade-offs
 
-### 9.1 ABI breaks
+### 10.1 ABI breaks
 
 - Phase A: none — purely a refactor.
 - Phase B grows `Box[T]`, `GorgetClosure`, `Task[T]` by 8 bytes each (uniform `flags` header at offset 0). Real ABI break — every site that assumes `sizeof(GorgetClosure) == 16` needs to update. Bounded though: ~10-20 sites in the runtime + LIR codegen, all mechanical. The earlier-draft pointer-tagging alternative was rejected as too clever (see §4.2).
 - Phase C: none — the IR pass is internal.
 - Phase D: none — internal IR shape only. `Local` grows by one enum field (~16 bytes); `Slot` grows by one `Option<BorrowOrigin>` (~16 bytes). No runtime ABI impact.
 
-### 9.2 Performance
+### 10.2 Performance
 
 - Phase A: zero cost — just better organised code.
 - Phase B: one bitwise check per drop. Negligible. View-vs-owner tracking also avoids unnecessary deep clones in some hot paths.
 - Phase C: depends on how many shallow copies become Clones vs Moves. Liveness analysis already in place; should be a wash or net improvement (fewer clones because Move is preferred at last use).
 - Phase D: net **win** at compile time. Eliminates the 12-predicate query in `lower_var_decl` and the alias-chain walks in `cow_before_mutation`. Adds ~16 bytes per local in the IR (memory, not runtime). Net runtime: zero.
 
-### 9.3 User-facing language changes
+### 10.3 User-facing language changes
 
 - Phase A: none.
 - Phase B: none — runtime detail.
 - Phase C: stricter compile-time checking. Users may see new errors on previously-accepted code that was silently wrong. The errors are diagnosable (point at the shallow-copy site, suggest `!` or `.clone()`). README already promises this style of safety.
 - Phase D: none. Better diagnostics indirectly — error messages can name the borrow origin ("borrowed from `outer` at line 42, invalidated by mutation at line 47") because the origin is now structurally available.
 
-### 9.4 Test surface
+### 10.4 Test surface
 
 Each phase has a clear validation point:
 - A: existing test suite (~2000 tests) must stay green at every stage.
@@ -798,7 +911,7 @@ Each phase has a clear validation point:
 
 The validation pass in C is itself a test mechanism — once it's a hard error, every CI run verifies the invariant.
 
-### 9.5 Migration cost
+### 10.5 Migration cost
 
 - A: 2 weeks. Refactor with strong tests as safety net. Mostly mechanical.
 - B: 1.5 weeks. Runtime + LIR. Requires careful audit of each resource's drop function.
@@ -809,7 +922,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 ---
 
-## 10. Open questions
+## 11. Open questions
 
 1. ~~**Should Phase B's view bit be uniformly at offset 0?**~~ **Resolved 2026-04-28: yes.** The full first 8 bytes of every resource are the discriminator (`0` ⇒ view, non-zero ⇒ owner). Collections move existing `cap` to offset 0; non-collections prepend a uniform `flags` header. See §4.2-4.3 for the converged design. The cost (Box/Closure/Task gain 8 bytes each) is paid for: a single `__gorget_is_view` function works on any resource pointer, no metadata-dispatch needed in the hot drop path, no bit-stealing on `env` size prefixes or pointer alignment bits.
 
@@ -817,7 +930,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 3. **`Shared[T]` and `Weak[T]` interaction.** These deliberately allow shared ownership via refcounting. Phase C must not reject `Shared[T]` shallow copies — they're sound because the runtime refcounts. The metadata's `copy_semantics` should distinguish `Resource` (move-only) from `RefCounted` (shallow-copy ok, refcount the source).
 
-4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata table needs a self-host equivalent. Probably means generating the table from a single source-of-truth file (TOML or JSON) that both Rust and self-host read. Adds tooling cost but eliminates drift. Phase D's `LocalOwnership` field has the same shape — should ride the same generation mechanism.
+4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata needs a self-host equivalent. Resolved (§9.2): keep the canonical data in const Rust source; generate a Gorget-readable form via `build.rs` when self-host needs it. No separate file format. Phase D's `LocalOwnership` rides the same mechanism if/when it crosses to self-host.
 
 5. **External / FFI types.** `extern "C"` types wrapped via `extern fn` declarations don't have full Gorget TypeDefs. Phase A needs a story for "minimum metadata required to declare an external resource type" — probably just `drop_fn` and `clone_fn`, with `view: AlwaysOwned` as a safe default.
 
@@ -827,7 +940,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 ---
 
-## 11. What this doesn't fix
+## 12. What this doesn't fix
 
 This is a memory-safety architecture proposal. It does not address:
 
@@ -841,17 +954,20 @@ These continue to be addressed individually.
 
 ---
 
-## 12. Summary
+## 13. Summary
 
-We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Four** structural changes close the recurring class:
+We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Four** structural changes close the recurring class, plus a **fifth** track of independent LIR hygiene work:
 
-- **Phase A** — consolidate type-axis metadata (one `ResourceMetadata`, sixteen lookup sites collapse to one).
-- **Phase D** — consolidate local-axis state (one `LocalOwnership` with first-class `BorrowOrigin`, seven sidecar maps collapse to one field). The IR-side mirror of Phase A.
-- **Phase B** — universal view/owner discrimination at runtime (one bit per resource, shallow-copy double-free becomes physically impossible).
-- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible).
+- **Phase A** — consolidate type-axis metadata (one `ResourceMetadata`, sixteen lookup sites collapse to one). Includes the `RUNTIME_DECLS` runtime-function table. Partly shipped via the LIR audit (`Inst::CallRuntime`, `Inst::CollectionCtor`).
+- **Phase D** — consolidate local-axis state (one `LocalOwnership` with first-class `BorrowOrigin`, seven sidecar maps collapse to one field). The IR-side mirror of Phase A. Subsumes the LIR roadmap's per-value origin metadata refactor — same pattern at the LIR layer.
+- **Phase B** — universal view/owner discrimination at runtime (one bit per resource, shallow-copy double-free becomes physically impossible). Co-designed with `LirType::FuncRef` so closure layout flips once.
+- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible). Plugs into Tier E's per-pass validator framework.
+- **Tier E** — LIR/SSA hygiene (drop-flag dataflow init, critical-edge splitting, post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint). Independent of resources; runs in parallel.
 
-Recommended path: **A → D → B → C**. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. B is the runtime safety net that ships fast. C is the compile-time guarantee that supersedes B over time, and is small once D is in place.
+Recommended path: **A → D → B → C**, with Tier E running throughout. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. B is the runtime safety net that ships fast. C is the compile-time guarantee that supersedes B over time, and is small once D is in place. Tier E shrinks the failure surface independently.
 
-Total cost: ~6.5 weeks. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
+Total cost: ~6.5 weeks for Phases A-D plus ~1 week of Tier E hygiene that can land in spare cycles. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
+
+The metadata source is one canonical const Rust file (no separate TOML, no temporary files); generated artifacts feed the C runtime header and self-host. One source of truth, mechanical version backstop, drift-free across compilers.
 
 Land Phase A and we're already winning. Land Phase D and the IR's ownership story becomes singular and inspectable. Land Phase C and the bug class is dead.
