@@ -247,11 +247,13 @@ pub static RUNTIME_DECLS: &[RuntimeDecl] = &[
 ];
 ```
 
-From this table the C backend emits `extern` declarations, the LLVM backend emits `declare`s, the (future) WASM backend emits `(import …)` statements. The C runtime header itself is auto-generated from the table, so the hand-written C runtime and the Rust frontend can never disagree on a signature.
+The Rust struct `RuntimeDecl` shown above is the *deserialization target*, not the canonical source. The canonical source is `resources.toml` (§9.2), which carries both `[resource.X]` and `[runtime_fn.X]` sections; `build.rs` emits the const Rust data, the C runtime header, and the self-host Gorget form from the same TOML.
+
+From the resulting `RUNTIME_DECLS` const, the C backend emits `extern` declarations, the LLVM backend emits `declare`s, the (future) WASM backend emits `(import …)` statements. The hand-written C runtime header is auto-generated from the same source, so the runtime and the frontend can never disagree on a signature.
 
 Crucially, `RuntimeDecl.params` and `RuntimeDecl.ret` reference *resource types by their `ResourceMetadata` entry* — so layout changes from Phase B propagate automatically to runtime signatures. One source of truth covers both axes (types and functions).
 
-Estimated effort: 3-4 weeks (the bulk of "what's left of Phase A"). Cost concentrates on the runtime-header generation and the migration of the existing hand-written `runtime_extern_sig` function in `src/lir/lower/calls.rs`. **Co-dependent with Phase B's layout changes** — see §4.8.
+Estimated effort: 3-4 weeks (the bulk of "what's left of Phase A"). Cost concentrates on the TOML schema design, the `build.rs` emitters, and the migration of the existing hand-written `runtime_extern_sig` function in `src/lir/lower/calls.rs`. **Co-dependent with Phase B's layout changes** — see §4.8.
 
 ---
 
@@ -786,7 +788,7 @@ Each phase has a *contract surface* — the typed metadata, schema files, or lay
 
 | Phase | Contract surface | Crosses Rust ↔ self-host? |
 |---|---|---|
-| A | `ResourceMetadata` + `RUNTIME_DECLS` const Rust data (§3.2, §3.6); generated artifacts for C runtime header and self-host. | **Yes** — both compilers see the same generated outputs. |
+| A | `resources.toml` (canonical) + the `ResourceMetadata` / `RuntimeDecl` struct definitions (§3.2, §3.6) it deserializes into. Generated artifacts for Rust, self-host, and the C runtime header. | **Yes** — both compilers regenerate from the same TOML. |
 | D | `LocalOwnership` enum (§6.2), `BorrowOrigin` enum (§6.3), `ReadMode` enum (§6.4). | No — internal IR shape per compiler. |
 | B | Field offsets for every resource type (§4.3). The full runtime ABI. | **Yes** — both compilers emit code that agrees byte-for-byte. |
 | C | The `validate_read()` rule (§5.4 / §6.4). Internal pass. | No — consumers don't see it. |
@@ -795,45 +797,56 @@ Phases A and B touch contracts that bridge Rust and self-host. Phases C and D ar
 
 ### 9.2 The single canonical metadata source
 
-The actual requirement is *one canonical place where the metadata lives*. The format is incidental, and earlier drafts of this section over-engineered it as a separate TOML file with a parser. That's not necessary.
+The metadata lives in one place and every consumer reads a *generated* artifact derived from it. The canonical source is a neutral data file (TOML); both the Rust compiler and self-host are generated consumers, on equal footing.
 
-The simplest viable shape:
-
-- `ResourceMetadata` and `RUNTIME_DECLS` (§3.6) live as **const Rust data** in one or two files (e.g. `src/ir/resources.rs`, `src/lir/runtime/decls.rs`) with the `pub static RESOURCES: &[ResourceMetadata] = &[…];` shape. The Rust compiler embeds them directly — no parser, no file format, no build artifact.
-- The C runtime header is **generated from the Rust const data** via `build.rs`, so the hand-written runtime and the frontend can never diverge on a signature.
-- Self-host, when it eventually needs the same data, gets a generated Gorget-readable form via the same `build.rs` (a small emitter that writes `lib/std/gen/resources.gg`). Self-host imports it like any other Gorget data — no separate parser to maintain, generation guarantees freshness.
-
-This satisfies Rule 3 of the layering discipline (one source of truth per axis) — the Rust file is the single authority; everything else is generated. No TOML, no JSON, no temporary files: just const Rust data plus tiny build-script emitters for the consumers that can't read Rust directly.
-
-```rust
-// src/ir/resources.rs — single source of truth.
-pub static RESOURCES: &[ResourceMetadata] = &[
-    ResourceMetadata {
-        runtime_name: "GorgetString",
-        size: 32, align: 8,
-        drop_fn: "gorget_string_free",
-        clone_fn: "gorget_string_clone",
-        has_view_header: true,
-        copy_semantics: CopySemantics::Resource,
-        on_get: GetReturnConvention::Borrow,
-        // …
-    },
-    // ~10 entries
-];
+```
+resources.toml  (canonical, hand-edited, version-stamped)
+    │
+    └── build.rs ────┬──→ src/ir/gen/resources.rs       (const Rust data, included via include!)
+                     ├──→ lib/std/gen/resources.gg      (const Gorget data, for self-host)
+                     └──→ src/backend/c/gen/resources.h (extern decls + struct layouts)
 ```
 
-Cost: zero extra work for the Rust side (it was always going to live in Rust const data). The build-script emitters are ~50 lines each, written when the consumer (C runtime header, self-host) actually needs them — not speculatively. Pays back across Phase B (one Rust edit moves `cap` to offset 0 for everyone) and future resource additions (one row, all consumers regenerate).
+```toml
+# resources.toml — single source of truth. Hand-edited.
 
-**Why this shape, not TOML.** A separate TOML file introduces a new format, a new parser per consumer, and a new versioning concern — all to solve a problem (cross-compiler sync) that's solved more cheaply by code generation from the canonical Rust source. The discipline that matters is "ONE source"; the format is a detail. Const Rust data is the format with the lowest tooling cost given that the Rust compiler is the canonical implementation.
+schema_version = 1
 
-**Versioning.** Inline a `pub const SCHEMA_VERSION: u32 = 1;` next to the data. Generated artifacts include the version; consumers refuse to load a version they don't know. The mechanical safety net for §9.4's freeze discipline.
+[resource.GorgetString]
+size              = 32
+align             = 8
+drop_fn           = "gorget_string_free"
+clone_fn          = "gorget_string_clone"
+has_view_header   = true
+copy_semantics    = "Resource"
+on_get            = "Borrow"
+elem_abi          = "ByValue"
+
+[resource.GorgetArray]
+size              = 64
+…
+
+[runtime_fn.gorget_array_new]   # extends Phase A's RUNTIME_DECLS
+params            = ["Size"]
+ret               = "GorgetArray"
+side_effects      = "Allocates"
+…
+```
+
+Cost: ~1 week on top of Phase A's 2-week estimate (build script + the schema design + ~10-12 resource entries + ~80 runtime-fn entries). Pays back across Phase B (one TOML edit moves `cap` to offset 0 for every consumer), future resource additions (one row, all consumers regenerate), and self-host parity (zero hand-mirrored data).
+
+**Why TOML, not const Rust data.** An earlier draft of this section proposed `pub static RESOURCES: &[ResourceMetadata] = &[…]` with the C header and self-host form generated *from the Rust source*. That privileges Rust unnecessarily — if any consumer requires generation (and self-host does), the build-script cost is already paid; generating *every* consumer from a neutral source is symmetric and avoids the implicit hierarchy. TOML is the right neutral source: both Rust (`toml` + `serde`) and self-host (small Gorget parser, or just emit Gorget literals) can read it trivially. The `ResourceMetadata` struct definition still lives in Rust; the TOML just populates it via `serde`.
+
+This satisfies Rule 3 of the layering discipline (`layering-discipline.md`) — one source of truth, applied at the cross-language axis. No consumer is canonical; the TOML is. Drift between Rust and self-host metadata becomes physically impossible: both are regenerated from the same file, version-checked at load time.
+
+**Versioning.** The TOML's `schema_version` field is embedded into every generated artifact. Consumers fail to load a version they don't recognize — the mechanical safety net for §9.4's freeze discipline.
 
 ### 9.3 Sequencing alongside self-host
 
 | Stage | Duration | Self-host track | Rust track | Notes |
 |---|---|---|---|---|
 | 1 | ~3 weeks | continues unblocked | Phase A + declarative-source tooling | Self-host PRs that touch the lookup-table sites are deferred until 1.5 |
-| 1.5 | ~2 days | adopts the generated `resources.gg` from `build.rs` | (idle on this track) | Small follow-up PR; mechanical |
+| 1.5 | ~2 days | adopts the generated `lib/std/gen/resources.gg` | (idle on this track) | Small follow-up PR; mechanical |
 | 2 | ~2 weeks | continues unblocked | Phase D | Internal IR; self-host adopts later as a separate task |
 | 3 | ~2 weeks | **frozen on layout-touching changes** | Phase B (lockstep with self-host's runtime emit) | The only forced sync window |
 | 4 | ~1 week | continues unblocked | Phase C (validator only) | No self-host impact |
@@ -854,7 +867,7 @@ Four rules:
 
 3. **Recall on drift.** If a real issue surfaces that requires a contract change — a field is wrong-shaped, a variant is missing, a layout decision was unsound — *stop* in-flight migrations, update the contract, then resume. Do not try to migrate "around" a known-broken contract; the divergence cost compounds. Recalling is cheap (each migration is bounded scope); divergence is expensive (every migration needs reconciliation).
 
-4. **Versioned schema as runtime backstop.** The const Rust data carries a `SCHEMA_VERSION` constant; generated artifacts (C runtime header, generated `resources.gg`) embed it; consumers refuse to load a version they don't recognize. When the schema changes, the version bumps and every consumer either upgrades together or fails loudly with a build error. This is the mechanical safety net for rule 2 — even if the freeze discipline slips, the version mismatch surfaces as a build failure rather than as silent divergence.
+4. **Versioned schema as runtime backstop.** The canonical `resources.toml` carries a `schema_version` field. Every generated artifact (Rust const data, `resources.gg`, C runtime header) embeds it; consumers refuse to load a version they don't recognize. When the schema changes, the version bumps and every consumer either upgrades together or fails loudly with a build error. This is the mechanical safety net for rule 2 — even if the freeze discipline slips, the version mismatch surfaces as a build failure rather than as silent divergence.
 
 The same shape applies to internal-only contracts (Phase D's enums): version them at the type-definition level (a `#[allow(...)]`-style marker that bumps when the enum changes; consumers that haven't been updated trip a compile error). Mechanical safety net beats discipline alone.
 
@@ -872,9 +885,9 @@ The same shape applies to internal-only contracts (Phase D's enums): version the
 
 ### 9.6 Where the discipline lives
 
-- **The contract sources** themselves (`src/ir/resources.rs` for `ResourceMetadata`, `src/lir/runtime/decls.rs` for `RUNTIME_DECLS`, the `LocalOwnership` enum definition, the Phase B layout decisions) — versioned, frozen, edited only between phases.
+- **The contract sources** themselves (`resources.toml` for `ResourceMetadata` + `RuntimeDecl`, the `LocalOwnership` / `BorrowOrigin` enum definitions in `src/ir/`, the Phase B layout decisions) — versioned, frozen, edited only between phases.
 - **Phase landing checklists** in `TODO.md` — each phase has a "Spike done? ✓ / Schema frozen? ✓ / Migrations green on both tracks? ✓" gate.
-- **`AGENTS.md` cross-reference** — when adding a new resource type, builtin, or runtime fn, the rule "edit the canonical Rust source first, regenerate, both compilers see it" gets cited; same shape as the existing "no name matching" cite.
+- **`AGENTS.md` cross-reference** — when adding a new resource type, builtin, or runtime fn, the rule "edit `resources.toml` first, regenerate, all consumers see it" gets cited; same shape as the existing "no name matching" cite.
 
 ---
 
@@ -930,7 +943,7 @@ Total: ~7 weeks (A→B→C only) or ~6.5 weeks (A→D→B→C — D pays for its
 
 3. **`Shared[T]` and `Weak[T]` interaction.** These deliberately allow shared ownership via refcounting. Phase C must not reject `Shared[T]` shallow copies — they're sound because the runtime refcounts. The metadata's `copy_semantics` should distinguish `Resource` (move-only) from `RefCounted` (shallow-copy ok, refcount the source).
 
-4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata needs a self-host equivalent. Resolved (§9.2): keep the canonical data in const Rust source; generate a Gorget-readable form via `build.rs` when self-host needs it. No separate file format. Phase D's `LocalOwnership` rides the same mechanism if/when it crosses to self-host.
+4. **Self-host implications.** The self-host lowerer in `tests/fixtures/self_host_lowerer/` mirrors the Rust implementation. Phase A's metadata needs a self-host equivalent. Resolved (§9.2): canonical source is `resources.toml`; both Rust and self-host get generated artifacts via `build.rs`. Neither language is privileged; drift is mechanically prevented by the `schema_version` check.
 
 5. **External / FFI types.** `extern "C"` types wrapped via `extern fn` declarations don't have full Gorget TypeDefs. Phase A needs a story for "minimum metadata required to declare an external resource type" — probably just `drop_fn` and `clone_fn`, with `view: AlwaysOwned` as a safe default.
 
@@ -968,6 +981,6 @@ Recommended path: **A → D → B → C**, with Tier E running throughout. A and
 
 Total cost: ~6.5 weeks for Phases A-D plus ~1 week of Tier E hygiene that can land in spare cycles. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
 
-The metadata source is one canonical const Rust file (no separate TOML, no temporary files); generated artifacts feed the C runtime header and self-host. One source of truth, mechanical version backstop, drift-free across compilers.
+The metadata source is one canonical `resources.toml`; every consumer (Rust compiler, self-host, C runtime header) gets a generated artifact, version-stamped. No language is privileged; drift between Rust and self-host is mechanically impossible.
 
 Land Phase A and we're already winning. Land Phase D and the IR's ownership story becomes singular and inspectable. Land Phase C and the bug class is dead.
