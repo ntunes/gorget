@@ -345,6 +345,79 @@ impl OwnershipState {
     }
 }
 
+// ── Phase D: typed local ownership and borrow provenance ─────────────
+// See docs/internals/unified-resource-model.md §6 for the design.
+//
+// These types replace the existing 7-variant `LocalOwnershipState` (in
+// `lowering/context.rs`) plus the 3-variant `OwnershipState` above plus
+// the 9 sidecar maps keyed on LocalId. They're being introduced
+// side-by-side with the legacy types during D1; subsequent commits
+// migrate consumers and delete the legacy shapes.
+
+/// Single typed ownership state for a local. Replaces the 7-variant
+/// `LocalOwnershipState` and 3-variant `OwnershipState` with one shape
+/// that carries borrow provenance (via [`BorrowOrigin`]) instead of
+/// scattering it across sidecar maps.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum LocalOwnership {
+    /// Owns its data. Registered for drop at scope exit.
+    #[default]
+    Owned,
+    /// Borrowed — does NOT drop. Carries provenance (which root the
+    /// borrow points into) and mutability (shared vs unique).
+    Borrowed { origin: BorrowOrigin, mutability: Mutability },
+    /// Runtime view: a value that's structurally a borrow at runtime
+    /// (cap=0 sentinel for strings today; broader notion under Phase B
+    /// were it not deferred). Drop is a no-op until the value is
+    /// materialized (cloned to owned). Source mutation triggers the
+    /// materialize.
+    View { source: BorrowOrigin },
+    /// Started borrowed, may have been materialized on some paths.
+    /// Conditional drop guard via the existing memcmp-zero mechanism.
+    /// Today's `OwnershipState::MaybeBorrowed` — kept until Phase C
+    /// makes it unreachable.
+    MaybeOwned,
+}
+
+impl LocalOwnership {
+    /// Whether this state represents a borrowed Ptr reference (not owned).
+    pub fn is_ref(&self) -> bool {
+        !matches!(self, LocalOwnership::Owned)
+    }
+}
+
+/// Where a borrow points. Carried inside `LocalOwnership::Borrowed`
+/// and `LocalOwnership::View`. Replaces the per-shape source fields
+/// scattered across `LocalOwnershipState` (Alias.source, CollectionRef.collection,
+/// ViewOf.source) and the sidecar maps (cow_borrow_sources, etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BorrowOrigin {
+    /// Param N of the enclosing function. Const if Shared, mutable if Unique.
+    Param(LocalId),
+    /// Element borrowed from a collection. Mutation of the collection
+    /// triggers materialisation (today's `LocalOwnershipState::CollectionRef`).
+    /// `LocalId` here is the collection's own local; field-path forms of
+    /// CollectionId are folded to their root local.
+    CollectionElement(LocalId),
+    /// Field of a struct local. Mutation of the struct (or assignment to
+    /// the field) triggers materialisation.
+    Field { base: LocalId, field: u32 },
+    /// Alias of another local — propagate origin transitively to root via
+    /// the resolution helper (today's `cow_resolve_root`).
+    Alias(LocalId),
+    /// Fresh runtime view (e.g. `s.trim()`, `s[1..3]`) borrowing from
+    /// `source`'s buffer. Today's `LocalOwnershipState::ViewOf`.
+    RuntimeView(LocalId),
+}
+
+/// Mutability of a borrow. Today this distinguishes `&` / `!` mutable
+/// captures (Unique) from default const-Ptr borrows (Shared).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mutability {
+    Shared,
+    Unique,
+}
+
 /// A local variable slot.
 #[derive(Debug, Clone)]
 pub struct Local {
