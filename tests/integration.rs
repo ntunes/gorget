@@ -189,6 +189,42 @@ fn build_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output 
     run_with_deadline(cmd, fixture, build_timeout())
 }
 
+/// Apply `f` to each fixture in parallel, preserving input order in the
+/// returned Vec. Used by the comparison tests (lexer/parser/resolver/
+/// typechecker/check/lowerer/c-emit/fmt) which iterate the entire fixture
+/// corpus running an independent self-host driver subprocess per fixture —
+/// the work is embarrassingly parallel and dominated by fork+exec overhead.
+///
+/// Worker count: `available_parallelism / 2`, clamped to [2, 8]. The halving
+/// leaves headroom for the outer cargo-test thread pool (`--test-threads=N`)
+/// so we don't spawn `N * inner` subprocesses simultaneously and starve the
+/// scheduler.
+fn parallel_map_fixtures<F, R>(fixtures: &[PathBuf], f: F) -> Vec<R>
+where
+    F: Fn(&Path) -> R + Sync,
+    R: Send,
+{
+    if fixtures.is_empty() {
+        return Vec::new();
+    }
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let n_workers = (cpus / 2).clamp(2, 8).min(fixtures.len());
+    let chunk_size = fixtures.len().div_ceil(n_workers);
+    let f = &f;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = fixtures
+            .chunks(chunk_size)
+            .map(|chunk| s.spawn(move || chunk.iter().map(|p| f(p.as_path())).collect::<Vec<R>>()))
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("worker panicked"))
+            .collect()
+    })
+}
+
 /// Build and run a `.gg` fixture, asserting its stdout matches `expected`.
 fn run_gg(fixture: &str, expected: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -7515,6 +7551,35 @@ fn build_gg_dir(dir_name: &str, main_file: &str) -> (PathBuf, PathBuf) {
     (exe_path, c_path)
 }
 
+/// `build_gg_dir` variant that caches the build product across the test
+/// process. Multiple `#[test] fn`s call this for the same self-host driver
+/// (e.g. `self_host_lowerer/driver.gg` is rebuilt by `lowerer_comparison`,
+/// `c_emit_comparison`, `self_host_bootstrap`, and
+/// `self_host_bootstrap_fixed_point` — ~57s each on the C backend) and
+/// previously paid the build cost N times. The OnceLock fans concurrent
+/// callers onto a single build; subsequent callers return the same paths
+/// for free.
+///
+/// **Caller contract**: do NOT delete `driver_exe` or `driver_c` in your
+/// cleanup — other tests still rely on them. They survive until the test
+/// process exits, then `cargo clean` reclaims them.
+fn build_gg_dir_cached(dir_name: &'static str, main_file: &'static str) -> (PathBuf, PathBuf) {
+    use std::sync::OnceLock;
+    type CacheEntry = OnceLock<(PathBuf, PathBuf)>;
+    // One slot per (dir_name, main_file). Add new slots here when a new
+    // shared driver is introduced.
+    static SELF_HOST_LOWERER_DRIVER: CacheEntry = OnceLock::new();
+
+    let cache = match (dir_name, main_file) {
+        ("self_host_lowerer", "driver.gg") => &SELF_HOST_LOWERER_DRIVER,
+        _ => panic!(
+            "build_gg_dir_cached: no cache slot for ({dir_name}, {main_file}). \
+             Either add a OnceLock slot or use build_gg_dir for one-shot builds."
+        ),
+    };
+    cache.get_or_init(|| build_gg_dir(dir_name, main_file)).clone()
+}
+
 /// Canonical Rust-side string literal formatter matching the Gorget describe_string_canonical.
 fn escape_canonical_rust(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -7683,21 +7748,19 @@ fn lexer_comparison() {
         gorget_context: Vec<String>,
     }
 
-    let mut mismatches: Vec<Mismatch> = Vec::new();
-    let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut compared = 0;
+    enum Outcome {
+        Matched,
+        Mismatched(Mismatch),
+        Crashed(String, String),
+        ReadErr(String, String),
+    }
 
-    // 3. For each fixture, compare Rust vs Gorget lexer output
-    for fixture in &fixtures {
+    // 3. For each fixture, compare Rust vs Gorget lexer output — parallel.
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let source = match std::fs::read_to_string(fixture) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "  SKIP {}: read error: {e}",
-                    fixture.file_name().unwrap().to_string_lossy()
-                );
-                continue;
-            }
+            Err(e) => return Outcome::ReadErr(fname, e.to_string()),
         };
 
         // Rust side: lex with Gorget's Rust lexer
@@ -7707,36 +7770,40 @@ fn lexer_comparison() {
             .collect();
 
         // Gorget side: run the driver binary
-        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let out = run_with_timeout(
             Command::new(&driver_exe).arg(fixture),
             &fname,
         );
 
-        if out.status.success() {
-            let gorget_tokens: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .filter(|s| !is_comment_token(s))
-                .map(|s| s.to_string())
-                .collect();
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            return Outcome::Crashed(fname, stderr);
+        }
 
-            // Find first divergence
-            let mut first_diff = None;
-            let max_len = rust_tokens.len().max(gorget_tokens.len());
-            for i in 0..max_len {
-                let r = rust_tokens.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                let g = gorget_tokens
-                    .get(i)
-                    .map(|s| s.as_str())
-                    .unwrap_or("<missing>");
-                if !canonical_token_eq(r, g) {
-                    first_diff = Some(i);
-                    break;
-                }
+        let gorget_tokens: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter(|s| !is_comment_token(s))
+            .map(|s| s.to_string())
+            .collect();
+
+        // Find first divergence
+        let mut first_diff = None;
+        let max_len = rust_tokens.len().max(gorget_tokens.len());
+        for i in 0..max_len {
+            let r = rust_tokens.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+            let g = gorget_tokens
+                .get(i)
+                .map(|s| s.as_str())
+                .unwrap_or("<missing>");
+            if !canonical_token_eq(r, g) {
+                first_diff = Some(i);
+                break;
             }
+        }
 
-            if let Some(diff_idx) = first_diff {
-                // Collect context: 2 tokens before and 3 after the divergence
+        match first_diff {
+            None => Outcome::Matched,
+            Some(diff_idx) => {
                 let start = diff_idx.saturating_sub(2);
                 let end = (diff_idx + 3).min(max_len);
                 let rust_context: Vec<String> = (start..end)
@@ -7763,21 +7830,36 @@ fn lexer_comparison() {
                         )
                     })
                     .collect();
-
-                mismatches.push(Mismatch {
-                    fixture: fname.clone(),
+                Outcome::Mismatched(Mismatch {
+                    fixture: fname,
                     first_diff: diff_idx,
                     rust_len: rust_tokens.len(),
                     gorget_len: gorget_tokens.len(),
                     rust_context,
                     gorget_context,
-                });
+                })
             }
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            crashes.push((fname, stderr));
         }
-        compared += 1;
+    });
+
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => compared += 1,
+            Outcome::Mismatched(m) => {
+                mismatches.push(m);
+                compared += 1;
+            }
+            Outcome::Crashed(fname, stderr) => {
+                crashes.push((fname, stderr));
+                compared += 1;
+            }
+            Outcome::ReadErr(fname, msg) => {
+                eprintln!("  SKIP {fname}: read error: {msg}");
+            }
+        }
     }
 
     // 4. Cleanup
@@ -10664,22 +10746,22 @@ fn parser_comparison() {
         gorget_total: usize,
     }
 
-    let mut matched = 0;
-    let mut mismatches: Vec<Mismatch> = Vec::new();
-    let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut compared = 0;
+    enum Outcome {
+        Matched,
+        Mismatched(Mismatch),
+        Crashed(String, String),
+        ReadErr(String, String),
+    }
 
-    // 3. For each fixture, compare Rust vs Gorget parser output
-    for fixture in &fixtures {
+    // 3. For each fixture, compare Rust vs Gorget parser output — parallel.
+    //    Each iteration is independent (separate subprocess + separate Rust
+    //    parser instance), so we fan out across worker threads and merge the
+    //    per-thread Vec<Outcome> at the end.
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let source = match std::fs::read_to_string(fixture) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "  SKIP {}: read error: {e}",
-                    fixture.file_name().unwrap().to_string_lossy()
-                );
-                continue;
-            }
+            Err(e) => return Outcome::ReadErr(fname, e.to_string()),
         };
 
         // Rust side: parse and format canonically
@@ -10688,55 +10770,76 @@ fn parser_comparison() {
         let rust_output = format_module_canonical(&module);
 
         // Gorget side: run the driver binary
-        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let out = run_with_timeout(
             Command::new(&driver_exe).arg(fixture),
             &fname,
         );
 
-        if out.status.success() {
-            let gorget_output = String::from_utf8_lossy(&out.stdout)
-                .trim_end()
-                .to_string();
-
-            let rust_lines: Vec<&str> = rust_output.lines().collect();
-            let gorget_lines: Vec<&str> = gorget_output.lines().collect();
-
-            // Find first line divergence
-            let mut first_diff = None;
-            let max_lines = rust_lines.len().max(gorget_lines.len());
-            for i in 0..max_lines {
-                let r = rust_lines.get(i).unwrap_or(&"<missing>");
-                let g = gorget_lines.get(i).unwrap_or(&"<missing>");
-                if r != g {
-                    first_diff = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(diff_line) = first_diff {
-                mismatches.push(Mismatch {
-                    fixture: fname.clone(),
-                    first_diff_line: diff_line,
-                    rust_line: rust_lines
-                        .get(diff_line)
-                        .unwrap_or(&"<missing>")
-                        .to_string(),
-                    gorget_line: gorget_lines
-                        .get(diff_line)
-                        .unwrap_or(&"<missing>")
-                        .to_string(),
-                    rust_total: rust_lines.len(),
-                    gorget_total: gorget_lines.len(),
-                });
-            } else {
-                matched += 1;
-            }
-        } else {
+        if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            crashes.push((fname, stderr));
+            return Outcome::Crashed(fname, stderr);
         }
-        compared += 1;
+
+        let gorget_output = String::from_utf8_lossy(&out.stdout)
+            .trim_end()
+            .to_string();
+
+        let rust_lines: Vec<&str> = rust_output.lines().collect();
+        let gorget_lines: Vec<&str> = gorget_output.lines().collect();
+
+        // Find first line divergence
+        let mut first_diff = None;
+        let max_lines = rust_lines.len().max(gorget_lines.len());
+        for i in 0..max_lines {
+            let r = rust_lines.get(i).unwrap_or(&"<missing>");
+            let g = gorget_lines.get(i).unwrap_or(&"<missing>");
+            if r != g {
+                first_diff = Some(i);
+                break;
+            }
+        }
+
+        match first_diff {
+            Some(diff_line) => Outcome::Mismatched(Mismatch {
+                fixture: fname,
+                first_diff_line: diff_line,
+                rust_line: rust_lines
+                    .get(diff_line)
+                    .unwrap_or(&"<missing>")
+                    .to_string(),
+                gorget_line: gorget_lines
+                    .get(diff_line)
+                    .unwrap_or(&"<missing>")
+                    .to_string(),
+                rust_total: rust_lines.len(),
+                gorget_total: gorget_lines.len(),
+            }),
+            None => Outcome::Matched,
+        }
+    });
+
+    let mut matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => {
+                matched += 1;
+                compared += 1;
+            }
+            Outcome::Mismatched(m) => {
+                mismatches.push(m);
+                compared += 1;
+            }
+            Outcome::Crashed(fname, stderr) => {
+                crashes.push((fname, stderr));
+                compared += 1;
+            }
+            Outcome::ReadErr(fname, msg) => {
+                eprintln!("  SKIP {fname}: read error: {msg}");
+            }
+        }
     }
 
     // 4. Cleanup
@@ -10923,22 +11026,19 @@ fn resolver_comparison() {
         gorget_total: usize,
     }
 
-    let mut matched = 0;
-    let mut mismatches: Vec<Mismatch> = Vec::new();
-    let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut compared = 0;
+    enum Outcome {
+        Matched,
+        Mismatched(Mismatch),
+        Crashed(String, String),
+        ReadErr(String, String),
+    }
 
-    // 3. For each fixture, compare Rust vs Gorget resolver output
-    for fixture in &fixtures {
+    // 3. For each fixture, compare Rust vs Gorget resolver output — parallel.
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let source = match std::fs::read_to_string(fixture) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "  SKIP {}: read error: {e}",
-                    fixture.file_name().unwrap().to_string_lossy()
-                );
-                continue;
-            }
+            Err(e) => return Outcome::ReadErr(fname, e.to_string()),
         };
 
         // Rust side: parse, resolve, format canonically
@@ -10960,7 +11060,6 @@ fn resolver_comparison() {
         );
         resolution_map.extend(resolve_ctx.resolution_map);
         let rust_output = format_resolution_canonical(&scopes, &resolution_map);
-        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
         // Gorget side: run the driver binary
         let out = run_with_timeout(
@@ -10968,56 +11067,76 @@ fn resolver_comparison() {
             &fname,
         );
 
-        if out.status.success() {
-            let gorget_output = String::from_utf8_lossy(&out.stdout)
-                .trim_end()
-                .to_string();
-
-            // Normalize: extract DEF + RES lines (skip SCOPE — structural AST diffs)
-            let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
-            let (gorget_defs, gorget_res) = normalize_resolver_output(&gorget_output);
-
-            // Combine DEF + RES for comparison
-            let mut rust_lines = rust_defs;
-            rust_lines.extend(rust_res);
-            let mut gorget_lines = gorget_defs;
-            gorget_lines.extend(gorget_res);
-
-            // Find first line divergence
-            let mut first_diff = None;
-            let max_lines = rust_lines.len().max(gorget_lines.len());
-            for i in 0..max_lines {
-                let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
-                if r != g {
-                    first_diff = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(diff_line) = first_diff {
-                mismatches.push(Mismatch {
-                    fixture: fname.clone(),
-                    first_diff_line: diff_line,
-                    rust_line: rust_lines
-                        .get(diff_line)
-                        .cloned()
-                        .unwrap_or_else(|| "<missing>".to_string()),
-                    gorget_line: gorget_lines
-                        .get(diff_line)
-                        .cloned()
-                        .unwrap_or_else(|| "<missing>".to_string()),
-                    rust_total: rust_lines.len(),
-                    gorget_total: gorget_lines.len(),
-                });
-            } else {
-                matched += 1;
-            }
-        } else {
+        if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            crashes.push((fname.clone(), stderr));
+            return Outcome::Crashed(fname, stderr);
         }
-        compared += 1;
+
+        let gorget_output = String::from_utf8_lossy(&out.stdout)
+            .trim_end()
+            .to_string();
+
+        // Normalize: extract DEF + RES lines (skip SCOPE — structural AST diffs)
+        let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
+        let (gorget_defs, gorget_res) = normalize_resolver_output(&gorget_output);
+
+        let mut rust_lines = rust_defs;
+        rust_lines.extend(rust_res);
+        let mut gorget_lines = gorget_defs;
+        gorget_lines.extend(gorget_res);
+
+        let mut first_diff = None;
+        let max_lines = rust_lines.len().max(gorget_lines.len());
+        for i in 0..max_lines {
+            let r = rust_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+            let g = gorget_lines.get(i).map(|s| s.as_str()).unwrap_or("<missing>");
+            if r != g {
+                first_diff = Some(i);
+                break;
+            }
+        }
+
+        match first_diff {
+            None => Outcome::Matched,
+            Some(diff_line) => Outcome::Mismatched(Mismatch {
+                fixture: fname,
+                first_diff_line: diff_line,
+                rust_line: rust_lines
+                    .get(diff_line)
+                    .cloned()
+                    .unwrap_or_else(|| "<missing>".to_string()),
+                gorget_line: gorget_lines
+                    .get(diff_line)
+                    .cloned()
+                    .unwrap_or_else(|| "<missing>".to_string()),
+                rust_total: rust_lines.len(),
+                gorget_total: gorget_lines.len(),
+            }),
+        }
+    });
+
+    let mut matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => {
+                matched += 1;
+                compared += 1;
+            }
+            Outcome::Mismatched(m) => {
+                mismatches.push(m);
+                compared += 1;
+            }
+            Outcome::Crashed(fname, stderr) => {
+                crashes.push((fname, stderr));
+                compared += 1;
+            }
+            Outcome::ReadErr(fname, msg) => {
+                eprintln!("  SKIP {fname}: read error: {msg}");
+            }
+        }
     }
 
     // 4. Cleanup
@@ -11230,23 +11349,20 @@ fn type_comparison() {
         gorget_total: usize,
     }
 
-    let mut matched = 0;
-    let mut superset_matched = 0; // Gorget has all of Rust's + extras
-    let mut mismatches: Vec<Mismatch> = Vec::new();
-    let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut compared = 0;
+    enum Outcome {
+        Matched,
+        SupersetMatched,
+        Mismatched(Mismatch),
+        Crashed(String, String),
+        ReadErr(String, String),
+    }
 
-    // 3. For each fixture, compare Rust vs Gorget type output
-    for fixture in &fixtures {
+    // 3. For each fixture, compare Rust vs Gorget type output — parallel.
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
         let source = match std::fs::read_to_string(fixture) {
             Ok(s) => s,
-            Err(e) => {
-                eprintln!(
-                    "  SKIP {}: read error: {e}",
-                    fixture.file_name().unwrap().to_string_lossy()
-                );
-                continue;
-            }
+            Err(e) => return Outcome::ReadErr(fname, e.to_string()),
         };
 
         // Rust side: parse, full semantic analysis, format types canonically
@@ -11254,7 +11370,6 @@ fn type_comparison() {
         let mut module = parser.parse_module();
         let result = gorget::semantic::analyze(&mut module, &[]);
         let rust_output = format_types_canonical(&result.scopes, &result.types);
-        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
         // Gorget side: run the driver binary
         let out = run_with_timeout(
@@ -11262,54 +11377,73 @@ fn type_comparison() {
             &fname,
         );
 
-        if out.status.success() {
-            let gorget_output = String::from_utf8_lossy(&out.stdout)
-                .trim_end()
-                .to_string();
-
-            // Normalize: extract "name" = type pairs (strip def_id for order-independent comparison)
-            let rust_lines = normalize_type_output(&rust_output);
-            let gorget_lines = normalize_type_output(&gorget_output);
-
-            // Extract name=type pairs, ignoring def_id ordering
-            let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
-                lines.iter().filter_map(|line| {
-                    // TYPE <id> "name" = type → "name" = type
-                    if let Some(quote_start) = line.find('"') {
-                        Some(line[quote_start..].to_string())
-                    } else {
-                        None
-                    }
-                }).collect()
-            };
-            let rust_set = extract_pairs(&rust_lines);
-            let gorget_set = extract_pairs(&gorget_lines);
-
-            if rust_set == gorget_set {
-                matched += 1;
-            } else if rust_set.is_subset(&gorget_set) {
-                // Gorget has all of Rust's entries plus extras — count as superset match
-                superset_matched += 1;
-            } else {
-                // Find first difference for reporting
-                let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
-                let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
-                let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
-                let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
-                mismatches.push(Mismatch {
-                    fixture: fname.clone(),
-                    first_diff_line: 0,
-                    rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
-                    gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
-                    rust_total: rust_lines.len(),
-                    gorget_total: gorget_lines.len(),
-                });
-            }
-        } else {
+        if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            crashes.push((fname.clone(), stderr));
+            return Outcome::Crashed(fname, stderr);
         }
-        compared += 1;
+
+        let gorget_output = String::from_utf8_lossy(&out.stdout)
+            .trim_end()
+            .to_string();
+
+        let rust_lines = normalize_type_output(&rust_output);
+        let gorget_lines = normalize_type_output(&gorget_output);
+
+        let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
+            lines.iter().filter_map(|line| {
+                line.find('"').map(|q| line[q..].to_string())
+            }).collect()
+        };
+        let rust_set = extract_pairs(&rust_lines);
+        let gorget_set = extract_pairs(&gorget_lines);
+
+        if rust_set == gorget_set {
+            Outcome::Matched
+        } else if rust_set.is_subset(&gorget_set) {
+            Outcome::SupersetMatched
+        } else {
+            let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
+            let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
+            let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+            let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
+            Outcome::Mismatched(Mismatch {
+                fixture: fname,
+                first_diff_line: 0,
+                rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
+                gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
+                rust_total: rust_lines.len(),
+                gorget_total: gorget_lines.len(),
+            })
+        }
+    });
+
+    let mut matched = 0;
+    let mut superset_matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => {
+                matched += 1;
+                compared += 1;
+            }
+            Outcome::SupersetMatched => {
+                superset_matched += 1;
+                compared += 1;
+            }
+            Outcome::Mismatched(m) => {
+                mismatches.push(m);
+                compared += 1;
+            }
+            Outcome::Crashed(fname, stderr) => {
+                crashes.push((fname, stderr));
+                compared += 1;
+            }
+            Outcome::ReadErr(fname, msg) => {
+                eprintln!("  SKIP {fname}: read error: {msg}");
+            }
+        }
     }
 
     // 4. Cleanup
@@ -11421,27 +11555,26 @@ fn check_comparison() {
         result.ok().flatten()
     }
 
-    let mut matched = 0;
-    let mut superset_matched = 0;
-    let mut mismatches: Vec<Mismatch> = Vec::new();
-    let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut rust_skipped = 0;
-    let mut compared = 0;
+    enum Outcome {
+        Matched,
+        SupersetMatched,
+        Mismatched(Mismatch),
+        Crashed(String, String),
+        RustSkipped,
+        ReadErr,
+    }
 
-    for fixture in &fixtures {
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
         let source = match std::fs::read_to_string(fixture) {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(_) => return Outcome::ReadErr,
         };
         let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
         // Rust side: full pipeline (loader + analyze).
         let rust_output = match rust_check_output(fixture, &source) {
             Some(s) => s,
-            None => {
-                rust_skipped += 1;
-                continue;
-            }
+            None => return Outcome::RustSkipped,
         };
 
         // Self-host side: run the check driver
@@ -11452,9 +11585,7 @@ fn check_comparison() {
 
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-            crashes.push((fname.clone(), stderr));
-            compared += 1;
-            continue;
+            return Outcome::Crashed(fname, stderr);
         }
 
         let gorget_output = String::from_utf8_lossy(&out.stdout)
@@ -11466,34 +11597,58 @@ fn check_comparison() {
 
         let extract_pairs = |lines: &[String]| -> std::collections::HashSet<String> {
             lines.iter().filter_map(|line| {
-                if let Some(quote_start) = line.find('"') {
-                    Some(line[quote_start..].to_string())
-                } else {
-                    None
-                }
+                line.find('"').map(|q| line[q..].to_string())
             }).collect()
         };
         let rust_set = extract_pairs(&rust_lines);
         let gorget_set = extract_pairs(&gorget_lines);
 
         if rust_set == gorget_set {
-            matched += 1;
+            Outcome::Matched
         } else if rust_set.is_subset(&gorget_set) {
-            superset_matched += 1;
+            Outcome::SupersetMatched
         } else {
             let rust_only: Vec<_> = rust_set.difference(&gorget_set).cloned().collect();
             let gorget_only: Vec<_> = gorget_set.difference(&rust_set).cloned().collect();
             let rust_line = rust_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
             let gorget_line = gorget_only.first().cloned().unwrap_or_else(|| "<none>".to_string());
-            mismatches.push(Mismatch {
-                fixture: fname.clone(),
+            Outcome::Mismatched(Mismatch {
+                fixture: fname,
                 rust_line: format!("only in Rust ({}): {}", rust_only.len(), rust_line),
                 gorget_line: format!("only in Gorget ({}): {}", gorget_only.len(), gorget_line),
                 rust_total: rust_lines.len(),
                 gorget_total: gorget_lines.len(),
-            });
+            })
         }
-        compared += 1;
+    });
+
+    let mut matched = 0;
+    let mut superset_matched = 0;
+    let mut mismatches: Vec<Mismatch> = Vec::new();
+    let mut crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_skipped = 0;
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => {
+                matched += 1;
+                compared += 1;
+            }
+            Outcome::SupersetMatched => {
+                superset_matched += 1;
+                compared += 1;
+            }
+            Outcome::Mismatched(m) => {
+                mismatches.push(m);
+                compared += 1;
+            }
+            Outcome::Crashed(fname, stderr) => {
+                crashes.push((fname, stderr));
+                compared += 1;
+            }
+            Outcome::RustSkipped => rust_skipped += 1,
+            Outcome::ReadErr => {}
+        }
     }
 
     let _ = std::fs::remove_file(&driver_c);
@@ -11543,8 +11698,9 @@ fn check_comparison() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn lowerer_comparison() {
-    // 1. Build the Gorget lowerer driver
-    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    // 1. Build the Gorget lowerer driver (cached — shared with c_emit_comparison
+    //    and the bootstrap tests, all of which build the same self-host driver).
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
 
@@ -11568,15 +11724,19 @@ fn lowerer_comparison() {
     let mut mismatched_error = 0; // rust=0 (error fixtures the Rust compiler rejects)
     let mut mismatched_real: Vec<(String, usize, usize)> = Vec::new(); // (name, rust, gorget)
     let mut crashes: Vec<(String, String)> = Vec::new();
-    let mut compared = 0;
-
     // 3. Rust-side GIR emitter binary path
     let gg_exe = manifest_dir.join("target/debug/gg");
 
-    for fixture in &fixtures {
+    enum Outcome {
+        Matched,
+        ErrorOnly,                    // rust=0, gorget>0 (rust rejects at semantic)
+        RealMismatch(String, usize, usize),
+        Crashed(String, String),
+    }
+
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
         let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
 
-        // Rust side: get fn count via --emit-gir
         let rust_out = run_with_timeout(
             Command::new(&gg_exe)
                 .arg("build")
@@ -11589,7 +11749,6 @@ fn lowerer_comparison() {
             .filter(|l| l.starts_with("fn "))
             .count();
 
-        // Gorget side: run the lowerer driver
         let gorget_out = run_with_timeout(
             Command::new(&driver_exe)
                 .arg(fixture)
@@ -11597,34 +11756,48 @@ fn lowerer_comparison() {
             &fname,
         );
 
-        if gorget_out.status.success() {
-            let gorget_fn_count = String::from_utf8_lossy(&gorget_out.stdout)
-                .lines()
-                .filter(|l| l.starts_with("fn "))
-                .count();
-
-            compared += 1;
-
-            if rust_fn_count == gorget_fn_count {
-                matched += 1;
-            } else if rust_fn_count == 0 {
-                // Error fixtures: Rust rejects at semantic analysis, self-host lowers anyway
-                mismatched_error += 1;
-            } else {
-                mismatched_real.push((fname, rust_fn_count, gorget_fn_count));
-            }
-        } else {
+        if !gorget_out.status.success() {
             let stderr = String::from_utf8_lossy(&gorget_out.stderr);
             let first_line = stderr.lines().next().unwrap_or("(no stderr)").to_string();
-            crashes.push((fname, first_line));
+            return Outcome::Crashed(fname, first_line);
+        }
+
+        let gorget_fn_count = String::from_utf8_lossy(&gorget_out.stdout)
+            .lines()
+            .filter(|l| l.starts_with("fn "))
+            .count();
+
+        if rust_fn_count == gorget_fn_count {
+            Outcome::Matched
+        } else if rust_fn_count == 0 {
+            Outcome::ErrorOnly
+        } else {
+            Outcome::RealMismatch(fname, rust_fn_count, gorget_fn_count)
+        }
+    });
+
+    let mut compared = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Matched => {
+                matched += 1;
+                compared += 1;
+            }
+            Outcome::ErrorOnly => {
+                mismatched_error += 1;
+                compared += 1;
+            }
+            Outcome::RealMismatch(fname, rust, gorget) => {
+                mismatched_real.push((fname, rust, gorget));
+                compared += 1;
+            }
+            Outcome::Crashed(fname, msg) => crashes.push((fname, msg)),
         }
     }
 
     let total = compared + crashes.len();
 
-    // 4. Cleanup
-    let _ = std::fs::remove_file(&driver_c);
-    let _ = std::fs::remove_file(&driver_exe);
+    // 4. (Cleanup skipped — driver is cached across tests.)
 
     // 5. Report
     eprintln!("\n================================");
@@ -11683,7 +11856,7 @@ fn lowerer_comparison() {
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn c_emit_comparison() {
-    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     let gg_exe = manifest_dir.join("target/debug/gg");
@@ -11727,16 +11900,16 @@ fn c_emit_comparison() {
         n
     }
 
-    let mut matched = 0;
-    let mut rust_only = 0;       // Rust emits, self-host crashes/empty
-    let mut mismatched: Vec<(String, usize, usize)> = Vec::new();
-    let mut self_host_crashes: Vec<(String, String)> = Vec::new();
-    let mut rust_crashes = 0;
-    let mut total = 0;
+    enum Outcome {
+        Matched,
+        RustOnly,
+        Mismatched(String, usize, usize),
+        SelfHostCrash(String, String),
+        RustCrash,
+    }
 
-    for fixture in &fixtures {
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
         let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
-        total += 1;
 
         let rust_out = run_with_timeout(
             Command::new(&gg_exe)
@@ -11746,8 +11919,7 @@ fn c_emit_comparison() {
             &fname,
         );
         if !rust_out.status.success() {
-            rust_crashes += 1;
-            continue;
+            return Outcome::RustCrash;
         }
         let rust_c = String::from_utf8_lossy(&rust_out.stdout);
         let rust_n = user_fn_count(&rust_c);
@@ -11762,23 +11934,37 @@ fn c_emit_comparison() {
         if !gorget_out.status.success() {
             let stderr = String::from_utf8_lossy(&gorget_out.stderr);
             let first_line = stderr.lines().next().unwrap_or("(no stderr)").to_string();
-            self_host_crashes.push((fname.clone(), first_line));
-            continue;
+            return Outcome::SelfHostCrash(fname, first_line);
         }
         let gorget_c = String::from_utf8_lossy(&gorget_out.stdout);
         let gorget_n = user_fn_count(&gorget_c);
 
         if gorget_n == 0 && rust_n > 0 {
-            rust_only += 1;
+            Outcome::RustOnly
         } else if rust_n == gorget_n {
-            matched += 1;
+            Outcome::Matched
         } else {
-            mismatched.push((fname, rust_n, gorget_n));
+            Outcome::Mismatched(fname, rust_n, gorget_n)
+        }
+    });
+
+    let mut matched = 0;
+    let mut rust_only = 0;
+    let mut mismatched: Vec<(String, usize, usize)> = Vec::new();
+    let mut self_host_crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_crashes = 0;
+    let total = outcomes.len();
+    for o in outcomes {
+        match o {
+            Outcome::Matched => matched += 1,
+            Outcome::RustOnly => rust_only += 1,
+            Outcome::Mismatched(f, r, g) => mismatched.push((f, r, g)),
+            Outcome::SelfHostCrash(f, msg) => self_host_crashes.push((f, msg)),
+            Outcome::RustCrash => rust_crashes += 1,
         }
     }
 
-    let _ = std::fs::remove_file(&driver_c);
-    let _ = std::fs::remove_file(&driver_exe);
+    // (Cleanup skipped — driver is cached across tests.)
 
     eprintln!("\n================================");
     eprintln!("C Emission Comparison (user-fn count)");
@@ -11845,10 +12031,10 @@ fn c_emit_comparison() {
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap() {
     if skip_under_llvm() { return; }
-    // 1. Build stage-0 driver via the Rust compiler. build_gg_dir
+    // 1. Build stage-0 driver via the Rust compiler (cached). build_gg_dir
     //    leaves driver.c next to the binary — we reuse it to extract
     //    the runtime preamble in step 3.
-    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     let driver_gg = manifest_dir
@@ -11915,9 +12101,9 @@ fn self_host_bootstrap() {
         .output()
         .expect("failed to spawn cc");
 
-    // 6. Cleanup the stage-0 artifacts regardless of the cc outcome.
-    let _ = std::fs::remove_file(&driver_c);
-    let _ = std::fs::remove_file(&driver_exe);
+    // 6. Stage-0 artifacts are cached across tests (build_gg_dir_cached) — leave them
+    //    in place so subsequent self-host tests don't pay another ~57s rebuild.
+    let _ = (&driver_c, &driver_exe);
 
     if !cc_out.status.success() {
         let stderr = String::from_utf8_lossy(&cc_out.stderr);
@@ -12008,7 +12194,7 @@ fn self_host_bootstrap() {
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap_fixed_point() {
     if skip_under_llvm() { return; }
-    let (driver_exe, driver_c) = build_gg_dir("self_host_lowerer", "driver.gg");
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     let driver_gg = manifest_dir
@@ -12108,9 +12294,8 @@ fn self_host_bootstrap_fixed_point() {
     );
     let stage3_body = String::from_utf8_lossy(&stage3_out.stdout).to_string();
 
-    // Cleanup stage-0 artifacts regardless of the comparison outcome.
-    let _ = std::fs::remove_file(&driver_c);
-    let _ = std::fs::remove_file(&driver_exe);
+    // Stage-0 artifacts are cached across tests — leave them in place.
+    let _ = (&driver_c, &driver_exe);
 
     // Byte-for-byte fixed-point assertion: stage-1's emission of itself
     // (stage2_body) must equal stage-2's emission of itself (stage3_body).
