@@ -1922,11 +1922,12 @@ impl<'a> LoweringContext<'a> {
         );
     }
 
-    /// Find all locals that are views of `source`.
+    /// Find all locals that are views of `source`. Phase D: reads v2.
     pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
-        self.func_state.local_ownership.iter()
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership_v2.iter()
             .filter_map(|(local, state)| {
-                if matches!(state, LocalOwnershipState::ViewOf { source: s } if *s == source) {
+                if matches!(state, LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source) {
                     Some(*local)
                 } else {
                     None
@@ -2011,9 +2012,16 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Resolve a local to its root source (follow alias chain).
+    /// Phase D: walks v2 `Borrowed { Alias(s), .. }` chain. Self-loops
+    /// (source == current — produced by set_ref placeholders) terminate
+    /// resolution at the local itself, matching the legacy semantics
+    /// where set_ref-marked locals weren't real aliases.
     fn cow_resolve_root(&self, local: LocalId) -> LocalId {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
         let mut current = local;
-        while let Some(LocalOwnershipState::Alias { source }) = self.func_state.local_ownership.get(&current) {
+        while let Some(LocalOwnership::Borrowed {
+            origin: BorrowOrigin::Alias(source), ..
+        }) = self.func_state.local_ownership_v2.get(&current) {
             if *source == current { break; }
             current = *source;
         }
@@ -2021,20 +2029,34 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a CoW alias of something else.
+    /// Phase D: a true alias has v2 = Borrowed { Alias(s), .. } with s != self
+    /// (the self-loop form is the set_ref placeholder, not a real alias).
     pub fn cow_is_alias(&self, local: LocalId) -> bool {
-        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::Alias { .. }))
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        matches!(self.func_state.local_ownership_v2.get(&local),
+            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. }) if *s != local
+        )
     }
 
     /// Check if a local has CoW aliases pointing to it (is a source).
+    /// Phase D: scans v2 for Alias entries pointing at `local`, excluding
+    /// self-loop placeholders.
     pub fn cow_has_aliases(&self, local: LocalId) -> bool {
-        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::Alias { source } if *source == local))
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership_v2.iter().any(|(other, s)|
+            matches!(s, LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(src), .. }
+                       if *src == local && *other != local)
+        )
     }
 
     /// Collect all aliases pointing to `source`. Derived query — O(n) scan.
+    /// Phase D: scans v2, excludes self-loop placeholders.
     fn cow_aliases_of(&self, source: LocalId) -> Vec<LocalId> {
-        self.func_state.local_ownership.iter()
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership_v2.iter()
             .filter_map(|(&id, s)| match s {
-                LocalOwnershipState::Alias { source: s } if *s == source => Some(id),
+                LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(src), .. }
+                    if *src == source && id != source => Some(id),
                 _ => None,
             })
             .collect()
