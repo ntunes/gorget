@@ -357,9 +357,10 @@ impl TypeRegistry {
 
     /// Check whether a type needs dropping based on its metadata.
     /// Primitives never need dropping. Named types need dropping if they
-    /// have Resource copy semantics or a non-None drop strategy.
-    /// Collection types (Vector, Dict, Set) are detected by name prefix
-    /// without TypeDefs to avoid transitive struct field upgrade.
+    /// have Resource copy semantics or a non-None drop strategy. The type
+    /// upgrade scan (upgrade_types_from_fields) sets DropStrategy::Recursive
+    /// for structs/enums with resource-typed fields/variant payloads, so
+    /// the drop_strategy check covers transitive cases.
     pub fn needs_drop(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         // Callable values lower to either `GirType::FnPtr` (the bare type-level
@@ -368,20 +369,12 @@ impl TypeRegistry {
         // `clone_fn_for_ptr` materializes a value). Both shapes carry a
         // heap-alloc'd env at runtime (via `__gorget_closure_env_alloc`) that
         // must be freed on scope exit, otherwise `Vector[Callable].get(i).
-        // unwrap().clone()` leaks one env per call. Targeted at `needs_drop`
-        // rather than `is_resource_type` because the borrow checker / call ABI
-        // for closure params is POD-shaped and we don't want to cascade
-        // Resource semantics through every closure-typed binding.
+        // unwrap().clone()` leaks one env per call. Callable types still don't
+        // have TypeDef registration today, so the explicit fallback is needed.
         if matches!(self.get(type_id), Some(GirType::FnPtr { .. })) {
             return true;
         }
         if let Some(GirType::Named(name)) = self.get(type_id) {
-            // Collection types (no TypeDef, by design — avoids transitive struct upgrade)
-            if self.is_collection_type_name(name) {
-                return true;
-            }
-            // GorgetString is droppable — gorget_string_free handles cap=0 views.
-            if name == "GorgetString" { return true; }
             if name == "GorgetClosure"
                 || name.starts_with("Callable__")
                 || name.starts_with("MutCallable__")
@@ -395,30 +388,19 @@ impl TypeRegistry {
                 {
                     return true;
                 }
-                // Enum drop is detected by copy_semantics or drop_strategy above.
-                // The type upgrade scan (upgrade_types_from_fields) sets
-                // DropStrategy::Recursive for enums with resource-type variant
-                // payloads, which is caught by the drop_strategy != None check.
             }
         }
         false
     }
 
     /// Check if a type name is a collection type (Vector, Dict, Set, etc.).
-    /// Uses metadata-based detection via `collection_kind` field on TypeDef.
-    /// Falls back to name-based check for types without TypeDefs.
+    /// Reads `collection_kind` from the type's TypeDef — every collection
+    /// type and runtime singleton has this set at registration via
+    /// BuiltinTypeProtocol.
     pub fn is_collection_type_name(&self, name: &str) -> bool {
-        if let Some(type_def) = self.get_type_def(name) {
-            if type_def.metadata.collection_kind.is_some() {
-                return true;
-            }
-        }
-        // Fallback for types registered without TypeDefs (shouldn't happen with protocol table,
-        // but kept for safety during the migration)
-        name.starts_with("Vector__") || name.starts_with("Dict__")
-            || name.starts_with("HashMap__") || name.starts_with("Set__")
-            || name.starts_with("HashSet__") || name.starts_with("Deque__")
-            || name == "GorgetArray" || name == "GorgetMap" || name == "GorgetSet"
+        self.get_type_def(name)
+            .map(|td| td.metadata.collection_kind.is_some())
+            .unwrap_or(false)
     }
 
     /// Check whether a Copy-semantics type needs dropping when passed as a parameter.
@@ -504,44 +486,21 @@ impl TypeRegistry {
     pub fn is_collection_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
-            // Metadata-based check: collection_kind set during type registration
-            if let Some(type_def) = self.get_type_def(name) {
-                if type_def.metadata.collection_kind.is_some() {
-                    return true;
-                }
-            }
-            // Fallback for migration safety
-            name.starts_with("Vector__") || name.starts_with("Dict__")
-                || name.starts_with("HashMap__") || name.starts_with("Set__")
-                || name.starts_with("HashSet__") || name.starts_with("Deque__")
-                || name == "GorgetArray" || name == "GorgetMap" || name == "GorgetSet"
+            self.is_collection_type_name(name)
         } else {
             false
         }
     }
 
     /// Check if a named type is a resource type (owns heap allocations).
-    /// Checks TypeDef metadata (collection_kind, copy_semantics) and struct fields transitively.
+    /// Reads `copy_semantics` and `collection_kind` from TypeDef metadata,
+    /// with transitive struct-field check for user types containing
+    /// resource-typed fields.
     fn is_resource_name(&self, name: &str) -> bool {
-        // Metadata-based check: collection types have collection_kind set
         if let Some(type_def) = self.get_type_def(name) {
             if type_def.metadata.collection_kind.is_some() {
                 return true;
             }
-        }
-        // All string types are Resource — uniform CoW treatment with collections.
-        // String Borrow params go into ref_locals (read-through without clone).
-        if name == "GorgetString" {
-            return true;
-        }
-        // Fallback for types without TypeDefs (migration safety)
-        if name.starts_with("Vector__") || name.starts_with("Dict__")
-            || name.starts_with("HashMap__") || name.starts_with("Set__")
-            || name.starts_with("HashSet__") || name == "GorgetArray"
-        {
-            return true;
-        }
-        if let Some(type_def) = self.get_type_def(name) {
             if type_def.metadata.copy_semantics == CopySemantics::Resource {
                 return true;
             }
