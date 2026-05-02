@@ -871,3 +871,59 @@ pub fn is_mutating_builtin_method(method_name: &str) -> bool {
         p.methods.iter().any(|m| m.name == method_name && m.is_mutating)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Phase A invariant: every BuiltinTypeProtocol with `collection_kind: Some(_)`
+    /// must populate the full metadata required by the consolidated
+    /// type-predicate / drop / clone consumers — drop_fn, clone_fn,
+    /// clone_inplace_fn, copy_semantics. After Phase A, those fields are the
+    /// authoritative source; if a future protocol entry leaves any of them
+    /// None, downstream sites that read metadata will silently take the
+    /// wrong path (e.g., a missing clone_fn → no deep clone → shallow alias
+    /// → double free). This test locks the invariant at unit-test time.
+    #[test]
+    fn collection_protocols_have_full_metadata() {
+        for protocol in ALL_PROTOCOLS {
+            if protocol.collection_kind.is_none() {
+                continue;
+            }
+            assert!(
+                protocol.copy_semantics == crate::ir::types::CopySemantics::Resource,
+                "collection protocol {} must have copy_semantics = Resource",
+                protocol.base_name,
+            );
+            assert!(
+                protocol.drop_fn.is_some(),
+                "collection protocol {} missing drop_fn", protocol.base_name,
+            );
+            assert!(
+                protocol.clone_fn.is_some(),
+                "collection protocol {} missing clone_fn", protocol.base_name,
+            );
+            assert!(
+                protocol.clone_inplace_fn.is_some(),
+                "collection protocol {} missing clone_inplace_fn — \
+                 Phase A consumers (elem_clone_fn_for_type) read this field",
+                protocol.base_name,
+            );
+        }
+    }
+
+    /// Phase A invariant: builtin protocols never share a base_name with each
+    /// other. `lookup_protocol` returns the first match by base_name, so a
+    /// duplicate would silently shadow downstream metadata reads.
+    #[test]
+    fn protocol_base_names_are_unique() {
+        let mut seen: Vec<&str> = Vec::new();
+        for protocol in ALL_PROTOCOLS {
+            assert!(
+                !seen.contains(&protocol.base_name),
+                "duplicate protocol base_name: {}", protocol.base_name,
+            );
+            seen.push(protocol.base_name);
+        }
+    }
+}

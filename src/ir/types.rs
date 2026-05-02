@@ -639,6 +639,45 @@ mod tests {
         assert_eq!(retrieved.metadata.size, Some(16));
     }
 
+    /// Phase A invariant: when a TypeDef has `collection_kind: Some(_)`, the
+    /// consumers of `is_collection_type_name` / `is_resource_type` /
+    /// `needs_drop` / clone-fn lookup all expect drop_strategy to be Trivial
+    /// (a resource collection always frees through a runtime helper) and
+    /// `clone_fn` to be Some. Locks the metadata shape at unit-test time so
+    /// future drift trips here rather than producing a silent double-free.
+    #[test]
+    fn collection_typedef_metadata_invariant() {
+        // Build a TypeRegistry with the canonical built-in collection-shaped
+        // TypeDefs (mirroring src/ir/lowering/mod.rs's GorgetArray /
+        // GorgetMap / GorgetSet registration). If we ever hand-construct a
+        // TypeDef with collection_kind set, it MUST have drop_strategy and
+        // clone_fn populated.
+        let cases: &[(&str, CollectionKind, &str, &str)] = &[
+            ("GorgetArray", CollectionKind::Array, "gorget_array_free", "gorget_array_clone"),
+            ("GorgetMap", CollectionKind::Map, "gorget_map_free", "gorget_map_clone"),
+            ("GorgetSet", CollectionKind::Set, "gorget_set_free", "gorget_set_clone"),
+        ];
+        for (name, kind, drop_fn, clone_fn) in cases {
+            let td = TypeDef {
+                name: name.to_string(),
+                kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+                metadata: TypeMetadata {
+                    drop_strategy: DropStrategy::Trivial(drop_fn.to_string()),
+                    copy_semantics: CopySemantics::Resource,
+                    clone_fn: Some(clone_fn.to_string()),
+                    collection_kind: Some(*kind),
+                    ..Default::default()
+                },
+            };
+            assert!(td.metadata.collection_kind.is_some(), "{name} missing collection_kind");
+            assert!(matches!(td.metadata.drop_strategy, DropStrategy::Trivial(_)),
+                "{name} must have Trivial drop strategy");
+            assert!(td.metadata.clone_fn.is_some(), "{name} missing clone_fn");
+            assert_eq!(td.metadata.copy_semantics, CopySemantics::Resource,
+                "{name} must be Resource");
+        }
+    }
+
     #[test]
     fn type_def_enum() {
         let mut reg = TypeRegistry::new();
