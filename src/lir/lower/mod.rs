@@ -615,17 +615,21 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Infer the drop strategy for a type, falling back to name-based detection
-    /// for collection types that don't have TypeDefs in the registry.
+    /// Infer the drop strategy for a type from its TypeDef metadata, with a
+    /// Box-specific override.
+    ///
+    /// All collection types and runtime singletons carry `drop_strategy` set
+    /// at registration via BuiltinTypeProtocol. Box[T] needs special routing:
+    /// its registered TypeDef has `DropStrategy::Trivial("free")` (historical
+    /// convention for the bare `free()` runtime call), but recursive-drop
+    /// emitters need to call the per-type `Box__T__drop` wrapper so inner T's
+    /// resources get freed and the tracked `__gorget_box_free_T` accounts for
+    /// the dealloc. We detect the Box shape FIRST and route to the wrapper —
+    /// except for trait-object boxes (Box__Trait where `{Trait}_TraitObj` is
+    /// registered), which use a 16-byte `{data, vtable}` layout and are
+    /// handled inline by drops.rs.
     fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
         use crate::ir::types::DropStrategy;
-        // Box[T] is special: the registered TypeDef has DropStrategy::Trivial("free")
-        // (a historical convention), but the recursive-drop emitters need to call the
-        // per-type Box__T__drop wrapper so inner T's resources get freed and the
-        // tracked __gorget_box_free_T accounts for the dealloc. Detect the Box
-        // shape FIRST and route to the wrapper, except for trait-object boxes
-        // (Box__Trait where {Trait}_TraitObj is registered) which use a 16-byte
-        // {data, vtable} layout and are handled inline by drops.rs.
         if let Some(inner) = type_name.strip_prefix("Box__") {
             let trait_obj = format!("{inner}_TraitObj");
             let is_trait_box = self.gir.type_registry.get_type_def(&trait_obj).is_some();
@@ -637,19 +641,8 @@ impl<'a> LoweringContext<'a> {
             // code. (TODO: full trait-box-as-field/variant support.)
             return DropStrategy::Trivial("free".to_string());
         }
-        // First try the type registry
         if let Some(td) = self.gir.type_registry.get_type_def(type_name) {
             return td.metadata.drop_strategy.clone();
-        }
-        // Collection types registered without TypeDef — infer from name
-        if type_name.starts_with("Vector__") || type_name.starts_with("Deque__") {
-            return DropStrategy::Trivial("gorget_array_free".to_string());
-        }
-        if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
-            return DropStrategy::Trivial("gorget_map_free".to_string());
-        }
-        if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") {
-            return DropStrategy::Trivial("gorget_set_free".to_string());
         }
         DropStrategy::None
     }

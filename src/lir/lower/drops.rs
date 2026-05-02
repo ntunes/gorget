@@ -534,23 +534,19 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
-    /// Infer drop strategy for a type, using name-based fallback for collection types.
+    /// Infer drop strategy for a type from its TypeDef metadata.
+    ///
+    /// All collection types (Vector__/Deque__/Dict__/HashMap__/Set__/HashSet__)
+    /// and runtime-named singletons (GorgetString/GorgetArray/GorgetMap/GorgetSet)
+    /// carry `drop_strategy` set at registration via BuiltinTypeProtocol — see
+    /// the four registration paths in `src/ir/lowering/types.rs` and
+    /// `src/ir/lowering/mod.rs`. Callable*/GorgetClosure types don't get
+    /// TypeDef registration today; they're handled by the explicit fallback
+    /// below until that gap closes.
     pub(super) fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
         use crate::ir::types::DropStrategy;
         if let Some(td) = self.gir_types.get_type_def(type_name) {
             return td.metadata.drop_strategy.clone();
-        }
-        if type_name.starts_with("Vector__") || type_name.starts_with("Deque__") {
-            return DropStrategy::Trivial("gorget_array_free".to_string());
-        }
-        if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
-            return DropStrategy::Trivial("gorget_map_free".to_string());
-        }
-        if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") {
-            return DropStrategy::Trivial("gorget_set_free".to_string());
-        }
-        if type_name.starts_with("Box__") {
-            return DropStrategy::Trivial("free".to_string());
         }
         // Callable values that flowed through `wrap_closure_args_at_void_elem`
         // own a heap-alloc'd env (size-prefix header + env data); on scope
