@@ -28,26 +28,13 @@ from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
-# ── Type-info key helper ────────────────────────────────────
-# `gmod.type_infos.keys()` returns DUPLICATE keys at stage-1 runtime
-# (Dict[String, _] state-loss bug). Use the parallel `type_info_keys`
-# Vector populated alongside the Dict in lower.gg. Falls back to the
-# Dict if the parallel vector hasn't been populated.
+# Iterate registered type-info keys.
 Vector[String] type_info_keys_safe(GirModule &gmod):
-    Vector[String] out = []
-    if gmod.type_info_keys.len() > 0:
-        int i = 0
-        while i < gmod.type_info_keys.len():
-            out.push(gmod.type_info_keys.get(i).unwrap().clone())
-            i += 1
-        return out
     return gmod.type_infos.keys()
 
 # ── Struct Registry ─────────────────────────────────────────
-# Parallel-Vector backing for the same Dict[String, _] state-loss reason
-# as gmod.named_keys / type_info_keys. The Dict version misses lookups
-# at stage-1 runtime → duplicate `m.structs` entries → "redefinition"
-# C errors in stage-2.
+# Insertion-ordered name → struct-id map. Kept as parallel Vectors
+# because callers iterate in insertion order at emission time.
 
 struct StructRegistry:
     Vector[String] keys
@@ -518,9 +505,6 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         pc_i += 1
 
     # Pass 2: Fill in struct/enum fields from GIR type info.
-    # Use parallel ti_vals — Dict.contains() at stage-1 runtime returns
-    # false for valid keys, causing Pass 2 to skip filling the struct →
-    # placeholder stays as `char __pad` → "incomplete type" cc errors.
     int tki = 0
     while tki < ti_keys.len():
         String tname = ti_keys.get(tki).unwrap()
@@ -528,17 +512,10 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
         if sid < 0:
             tki += 1
             continue
-        int tii = type_info_index(&gmod, tname)
-        bool have_via_parallel = tii >= 0
-        bool have_via_dict = gmod.type_infos.contains(tname)
-        if not have_via_parallel and not have_via_dict:
+        if not gmod.type_infos.contains(tname):
             tki += 1
             continue
-        GirTypeInfo tinfo = GirTypeInfo("", [], [], false)
-        if have_via_dict:
-            tinfo = gmod.type_infos.get(tname).unwrap()
-        else:
-            tinfo = gmod.type_info_vals.get(tii).unwrap()
+        GirTypeInfo tinfo = gmod.type_infos.get(tname).unwrap()
         LirStructDef sdef = m.structs.get(sid).unwrap()
         # Only fill if placeholder (empty fields)
         if sdef.fields.len() > 0:

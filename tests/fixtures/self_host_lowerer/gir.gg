@@ -161,13 +161,7 @@ struct GirModule:
     Vector[GirExtern] externs
     Vector[GirType] type_table
     Dict[String, int] fn_sigs
-    # named_types was Dict[String, int]; same Dict[String, _] state-loss bug
-    # as the others — `gmod.named_types.put("Lexer", 100)` then
-    # `gmod.named_types.get("Lexer")` returns a tid pointing to GtNamed("")
-    # at stage-1 runtime (12k+ such corruptions on driver.gg). Parallel
-    # Vectors are the unified workaround. See feedback_selfhost_workarounds.md.
-    Vector[String] named_keys
-    Vector[int] named_vals
+    Dict[String, int] named_types  # name → type id; deduped GtNamed registration
     Dict[String, bool] resource_types
     Dict[String, int] type_subs
     Dict[String, String] meta_aliases
@@ -175,55 +169,23 @@ struct GirModule:
     Dict[String, bool] imported_fns
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
     Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
-    # Module-level int constants and None-typed sentinel decls. Restored
-    # to Dict-backed storage once the underlying Dict[String, _] codegen
-    # bug was fixed (see DONE.md 2026-05-01). Helpers below preserve the
-    # same accessor API so call sites are unchanged.
+    # Module-level int constants and None-typed sentinel decls.
     Dict[String, int] const_decls
     Dict[String, bool] none_decls
-    # Parallel cache over type_infos: names of registered enum types, and
-    # for each enum a Vector of its variant names. Same Dict[String, _]
-    # workaround — needed so match_enum_type / match_variant_index can
-    # succeed when type_infos.contains() silently misses.
+    # Enum registry — used by `find_enum_by_variant` for the inverted
+    # variant→enum lookup and by `enum_variant_index` for ordinal
+    # resolution. Kept as parallel Vectors (not a Dict) because the
+    # primary access pattern is iteration across all enums to locate a
+    # variant, not keyed lookup. Mirrors Rust's `ctx.resolve_enum_variant`.
     Vector[String] enum_names
     Vector[Vector[String]] enum_variants
-    # Parallel storage for type_infos — same Dict[String, _] state-loss
-    # workaround. Populated alongside type_infos.put at construction time;
-    # readers prefer the parallel vectors (linear scan; tens of types so
-    # cost is negligible). Without this, struct field lookups in stage-1
-    # silently miss and EFieldAccess emits "I64(0) placeholder" → all
-    # downstream method dispatch on the wrongly-typed receiver fails.
-    Vector[String] type_info_keys
-    Vector[GirTypeInfo] type_info_vals
-    # Parallel storage for call_redirects — same workaround. Without this,
-    # `extern foo() = "bar"` symbol redirects silently miss at stage-1
-    # runtime and the call emits with empty fname (`); ` orphan).
-    Vector[String] call_redirect_keys
-    Vector[String] call_redirect_vals
-    # Parallel storage for fn_sigs — same workaround. Without this,
-    # method-call return-type lookups silently miss → ret_tid = I64_TYPE,
-    # which cascades into "base type 'int64_t'" errors when the result
-    # is used in a field access.
-    Vector[String] fn_sig_keys
-    Vector[int] fn_sig_vals
-    # Parallel storage for type_subs — same workaround. Without this,
-    # generic type-param substitutions (R → File for `reader_drain[R]`)
-    # silently miss → method call dispatches to `R__read` which is
-    # undefined at link time.
-    Vector[String] type_sub_keys
-    Vector[int] type_sub_vals
-    # Float constants — separate from `const_keys`/`const_vals` (which
-    # store int64). Module-level `float EPSILON = 0.000001` etc. lands
-    # here so `EIdentifier(EPSILON)` can inline an `OpConstF64(value)`
-    # rather than emitting a `[bug] EIdentifier: unknown identifier
-    # 'EPSILON'` placeholder. Mirrors Rust gg's unified
-    # `module_constants: FxHashMap<String, Constant>` which stores
-    # both `Constant::I64` and `Constant::F64` in one table.
-    # Placed at the END of the struct to keep existing field offsets
-    # stable — prepending shifts every later field's offset and
-    # cascades into bootstrap-fixed-point failures.
-    Vector[String] float_const_keys
-    Vector[float] float_const_vals
+    # Float constants. Module-level `float EPSILON = 0.000001` etc.
+    # lands here so `EIdentifier(EPSILON)` can inline an
+    # `OpConstF64(value)` rather than emitting a `[bug] EIdentifier:
+    # unknown identifier 'EPSILON'` placeholder. Mirrors Rust gg's
+    # unified `module_constants: FxHashMap<String, Constant>` which
+    # stores both `Constant::I64` and `Constant::F64` in one table.
+    Dict[String, float] float_const_decls
     # Module-level statics with a runtime-call initializer —
     # `public static File stdout = _stdout_handle()` etc. in lib/std/io.gg.
     # Mirrors Rust gg's `LoweringContext::global_names` + `module.globals:
@@ -231,7 +193,6 @@ struct GirModule:
     # zero-arg function call mapped to a C-runtime symbol; `EIdentifier`
     # references resolve through `__global_ref__<name>` in lir_lower
     # against a parallel name→gid map populated by `lir_mod_add_global`.
-    # Placed at the END of the struct to keep existing field offsets stable.
     Vector[String] static_keys
     # C expression to use for the global's initializer (e.g.,
     # "gorget_stdout_handle()"). Currently always a zero-arg call;
@@ -256,39 +217,17 @@ int const_lookup(GirModule &gmod, String name):
 void const_put(GirModule &gmod, String name, int val):
     gmod.const_decls.put(name.clone(), val)
 
-# float_const accessors (parallel-Vector form, like const_*).
+# float_const accessors — thin wrappers over the Dict.
 bool float_const_contains(GirModule &gmod, String name):
-    bool found = false
-    int i = 0
-    while i < gmod.float_const_keys.len():
-        String k = gmod.float_const_keys.get(i).unwrap()
-        if k == name:
-            found = true
-        i += 1
-    return found
+    return gmod.float_const_decls.contains(name)
 
 float float_const_lookup(GirModule &gmod, String name):
-    float result = 0.0
-    int i = 0
-    while i < gmod.float_const_keys.len():
-        String k = gmod.float_const_keys.get(i).unwrap()
-        if k == name:
-            result = gmod.float_const_vals.get(i).unwrap()
-        i += 1
-    return result
+    if gmod.float_const_decls.contains(name):
+        return gmod.float_const_decls.get(name).unwrap()
+    return 0.0
 
 void float_const_put(GirModule &gmod, String name, float val):
-    bool found = false
-    int i = 0
-    while i < gmod.float_const_keys.len():
-        String k = gmod.float_const_keys.get(i).unwrap()
-        if k == name:
-            gmod.float_const_vals.set(i, val)
-            found = true
-        i += 1
-    if not found:
-        gmod.float_const_keys.push(name.clone())
-        gmod.float_const_vals.push(val)
+    gmod.float_const_decls.put(name.clone(), val)
 
 # Module-level static (runtime-call init) accessors. Same parallel-Vector
 # shape as const_* / float_const_*. See GirModule.static_keys.
@@ -398,118 +337,47 @@ int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
         i += 1
     return result
 
-# Parallel-Vector accessors for type_infos — Dict[String, _] state-loss
-# workaround. Linear scan; tens of types per module so cost negligible.
+# type_infos / call_redirects / fn_sigs / type_subs accessors —
+# thin wrappers over the underlying Dict so call sites stay stable.
 bool type_info_contains(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.type_info_keys.len():
-        String k = gmod.type_info_keys.get(i).unwrap()
-        if k == name:
-            return true
-        i += 1
-    return false
-
-int type_info_index(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.type_info_keys.len():
-        String k = gmod.type_info_keys.get(i).unwrap()
-        if k == name:
-            return i
-        i += 1
-    return -1
+    return gmod.type_infos.contains(name)
 
 void type_info_register(GirModule &gmod, String name, GirTypeInfo info):
-    int idx = type_info_index(&gmod, name)
-    if idx < 0:
-        gmod.type_info_keys.push(name.clone())
-        gmod.type_info_vals.push(info)
-    else:
-        gmod.type_info_vals.set(idx, info)
+    gmod.type_infos.put(name.clone(), info)
 
-# Parallel-Vector accessors for call_redirects.
 bool call_redirect_contains(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.call_redirect_keys.len():
-        String k = gmod.call_redirect_keys.get(i).unwrap()
-        if k == name:
-            return true
-        i += 1
-    return false
+    return gmod.call_redirects.contains(name)
 
 String call_redirect_lookup(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.call_redirect_keys.len():
-        String k = gmod.call_redirect_keys.get(i).unwrap()
-        if k == name:
-            return gmod.call_redirect_vals.get(i).unwrap().clone()
-        i += 1
+    if gmod.call_redirects.contains(name):
+        return gmod.call_redirects.get(name).unwrap().clone()
     return ""
 
-# Parallel-Vector accessors for fn_sigs.
 bool fn_sig_contains(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.fn_sig_keys.len():
-        String k = gmod.fn_sig_keys.get(i).unwrap()
-        if k == name:
-            return true
-        i += 1
-    return false
+    return gmod.fn_sigs.contains(name)
 
 int fn_sig_lookup(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.fn_sig_keys.len():
-        String k = gmod.fn_sig_keys.get(i).unwrap()
-        if k == name:
-            return gmod.fn_sig_vals.get(i).unwrap()
-        i += 1
+    if gmod.fn_sigs.contains(name):
+        return gmod.fn_sigs.get(name).unwrap()
     return I64_TYPE
 
 void fn_sig_register(GirModule &gmod, String name, int ret_tid):
-    int i = 0
-    while i < gmod.fn_sig_keys.len():
-        String k = gmod.fn_sig_keys.get(i).unwrap()
-        if k == name:
-            gmod.fn_sig_vals.set(i, ret_tid)
-            return
-        i += 1
-    gmod.fn_sig_keys.push(name.clone())
-    gmod.fn_sig_vals.push(ret_tid)
+    gmod.fn_sigs.put(name.clone(), ret_tid)
 
-# Parallel-Vector accessors for type_subs.
 bool type_sub_contains(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.type_sub_keys.len():
-        String k = gmod.type_sub_keys.get(i).unwrap()
-        if k == name:
-            return true
-        i += 1
-    return false
+    return gmod.type_subs.contains(name)
 
 int type_sub_lookup(GirModule &gmod, String name):
-    int i = 0
-    while i < gmod.type_sub_keys.len():
-        String k = gmod.type_sub_keys.get(i).unwrap()
-        if k == name:
-            return gmod.type_sub_vals.get(i).unwrap()
-        i += 1
+    if gmod.type_subs.contains(name):
+        return gmod.type_subs.get(name).unwrap()
     return -1
 
 void type_sub_register(GirModule &gmod, String name, int tid):
-    int i = 0
-    while i < gmod.type_sub_keys.len():
-        String k = gmod.type_sub_keys.get(i).unwrap()
-        if k == name:
-            gmod.type_sub_vals.set(i, tid)
-            return
-        i += 1
-    gmod.type_sub_keys.push(name.clone())
-    gmod.type_sub_vals.push(tid)
+    gmod.type_subs.put(name.clone(), tid)
 
 void type_sub_clear(GirModule &gmod):
-    Vector[String] empty_k = []
-    Vector[int] empty_v = []
-    gmod.type_sub_keys = !empty_k
-    gmod.type_sub_vals = !empty_v
+    Dict[String, int] empty = {}
+    gmod.type_subs = !empty
 
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
@@ -533,19 +401,10 @@ int register_type(GirModule &gmod, GirType gt):
     return id
 
 int lookup_or_register_named(GirModule &gmod, String name):
-    # Linear-scan parallel Vectors instead of Dict — the Dict[String, _]
-    # state-loss bug (#9 in feedback_selfhost_workarounds.md) returns wrong
-    # tids for valid keys at stage-1 runtime, leading to GtNamed("") leakage
-    # and 1700+ "base type ''" cascades in stage-2.
-    int i = 0
-    while i < gmod.named_keys.len():
-        String k = gmod.named_keys.get(i).unwrap()
-        if k == name:
-            return gmod.named_vals.get(i).unwrap()
-        i += 1
+    if gmod.named_types.contains(name):
+        return gmod.named_types.get(name).unwrap()
     int id = register_type(&gmod, GtNamed(name.clone()))
-    gmod.named_keys.push(name)
-    gmod.named_vals.push(id)
+    gmod.named_types.put(name, id)
     return id
 
 int register_ptr(GirModule &gmod, int inner):
