@@ -535,38 +535,34 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
 ///
 /// Other resource types (Task, user structs, etc.) are still moved+zeroed
 /// since they may not support cloning or may be intentionally consumed.
-pub(super) fn clone_fn_for_collection_element(elem_type_name: &str) -> Option<&'static str> {
-    if elem_type_name.starts_with("Vector__")
-        || elem_type_name.starts_with("Deque__")
-        || elem_type_name == "GorgetArray"
-    {
-        Some("gorget_array_clone")
-    } else if elem_type_name.starts_with("Dict__")
-        || elem_type_name.starts_with("HashMap__")
-        || elem_type_name == "GorgetMap"
-    {
-        Some("gorget_map_clone")
-    } else if elem_type_name.starts_with("Set__")
-        || elem_type_name.starts_with("HashSet__")
-        || elem_type_name == "GorgetSet"
-    {
-        Some("gorget_set_clone")
-    } else if elem_type_name == "GorgetString" {
-        Some("gorget_string_clone_to_owned")
-    } else if elem_type_name == "GorgetClosure"
+pub(super) fn clone_fn_for_collection_element(
+    elem_type_name: &str,
+    gir_types: &crate::ir::types::TypeRegistry,
+) -> Option<String> {
+    // Reads `metadata.clone_fn` from the type's TypeDef — every collection
+    // type and runtime singleton carries this set at registration via
+    // BuiltinTypeProtocol (see src/ir/lowering/types.rs and mod.rs).
+    if let Some(td) = gir_types.get_type_def(elem_type_name) {
+        if let Some(ref f) = td.metadata.clone_fn {
+            return Some(f.clone());
+        }
+    }
+
+    // Callable elements: deep-clone on read so the source slot stays
+    // intact. Without this, the IndexLoad path treats the Callable's
+    // `Trivial("gorget_closure_free")` drop strategy as a Move, memsets
+    // the slot to zero after the read, and the next iteration of (e.g.)
+    // a middleware loop reads `fn_ptr=NULL` → SEGV calling the closure.
+    // Callable types still don't have TypeDef registration today.
+    if elem_type_name == "GorgetClosure"
         || elem_type_name.starts_with("Callable__")
         || elem_type_name.starts_with("MutCallable__")
         || elem_type_name.starts_with("ConsumeCallable__")
     {
-        // Callable elements: deep-clone on read so the source slot stays
-        // intact. Without this, the IndexLoad path treats the Callable's
-        // `Trivial("gorget_closure_free")` drop strategy as a Move, memsets
-        // the slot to zero after the read, and the next iteration of (e.g.)
-        // a middleware loop reads `fn_ptr=NULL` → SEGV calling the closure.
-        Some("gorget_closure_clone_to_owned")
-    } else {
-        None
+        return Some("gorget_closure_clone_to_owned".to_string());
     }
+
+    None
 }
 
 /// Map monomorphized GIR function names to their C runtime equivalents.

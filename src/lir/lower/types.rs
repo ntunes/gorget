@@ -80,59 +80,76 @@ pub(super) fn set_elem_type_from_monomorphized(name: &str) -> Option<String> {
 }
 
 /// Determine the elem_drop function name for a collection element type.
+///
+/// Reads `metadata.drop_strategy` from the type's TypeDef — every collection
+/// type and runtime singleton carries this set at registration via
+/// BuiltinTypeProtocol. Box[T] needs an override (the registered metadata
+/// is `Trivial("free")` historical convention; the per-type
+/// `Box__T__drop` wrapper is what actually frees inner resources).
+/// Callable types still don't have TypeDef registration; that arm stays
+/// until they do.
+///
 /// Returns None for trivially-droppable types (int, float, bool, ptr).
-pub(super) fn elem_drop_fn_for_type(elem_type: &str) -> Option<String> {
-    if elem_type.starts_with("GorgetArray") || elem_type.starts_with("Vector__") {
-        Some("gorget_array_free".into())
-    } else if elem_type.starts_with("GorgetMap") || elem_type.starts_with("Dict__") || elem_type.starts_with("HashMap__") {
-        Some("gorget_map_free".into())
-    } else if elem_type.starts_with("GorgetSet") || elem_type.starts_with("Set__") || elem_type.starts_with("HashSet__") {
-        Some("gorget_set_free".into())
-    } else if elem_type == "GorgetString" {
-        Some("gorget_string_free".into())
-    } else if elem_type == "GorgetClosure"
+pub(super) fn elem_drop_fn_for_type(elem_type: &str, gir_types: &TypeRegistry) -> Option<String> {
+    use crate::ir::types::DropStrategy;
+
+    // Box[T] override: route per-element drop through the per-type wrapper
+    // (emitted by `emit_box_drop_wrappers` in c_lir) so boxed allocs get
+    // freed AND inner T resources recursively dropped. Trait boxes
+    // (`{Trait}_TraitObj` registered) use a 16-byte `{data, vtable}`
+    // layout and aren't currently supported as collection elements.
+    if let Some(inner) = elem_type.strip_prefix("Box__") {
+        let trait_obj = format!("{inner}_TraitObj");
+        if gir_types.get_type_def(&trait_obj).is_none() {
+            return Some(format!("Box__{inner}__drop"));
+        }
+        return None;
+    }
+
+    if let Some(td) = gir_types.get_type_def(elem_type) {
+        if let DropStrategy::Trivial(ref f) = td.metadata.drop_strategy {
+            return Some(f.clone());
+        }
+    }
+
+    // Closures stored in collections own a heap-alloc'd env (packed by
+    // `wrap_closure_args_at_void_elem`); container drop must free it.
+    // Callable types lack TypeDef registration today.
+    if elem_type == "GorgetClosure"
         || elem_type.starts_with("Callable__")
         || elem_type.starts_with("MutCallable__")
         || elem_type.starts_with("ConsumeCallable__")
     {
-        // Closures stored in collections own a heap-alloc'd env (packed by
-        // `wrap_closure_args_at_void_elem`); container drop must free it.
-        Some("gorget_closure_free".into())
-    } else if elem_type.starts_with("Box__") {
-        // Vector[Box[T]] / Dict[K, Box[T]] / Set[Box[T]] etc.: route per-element
-        // drop through the per-type Box wrapper so the boxed allocation gets
-        // freed AND any inner T resources are recursively dropped. The wrapper
-        // is emitted by `emit_box_drop_wrappers` in the C backend; trait boxes
-        // (Box[Trait]) don't go through `__gorget_box_alloc_T` and thus don't
-        // get a wrapper — they're not currently supported as collection
-        // elements (would need their 16-byte trait-obj layout handled).
-        Some(format!("{elem_type}__drop"))
-    } else {
-        None
+        return Some("gorget_closure_free".into());
     }
+
+    None
 }
 
 /// Determine the elem_clone function name for a collection element type.
-pub(super) fn elem_clone_fn_for_type(elem_type: &str) -> Option<String> {
-    if elem_type.starts_with("GorgetArray") || elem_type.starts_with("Vector__") {
-        Some("gorget_array_clone_inplace".into())
-    } else if elem_type.starts_with("GorgetMap") || elem_type.starts_with("Dict__") || elem_type.starts_with("HashMap__") {
-        Some("gorget_map_clone_inplace".into())
-    } else if elem_type.starts_with("GorgetSet") || elem_type.starts_with("Set__") || elem_type.starts_with("HashSet__") {
-        Some("gorget_set_clone_inplace".into())
-    } else if elem_type == "GorgetString" {
-        Some("gorget_string_clone_inplace".into())
-    } else if elem_type == "GorgetClosure"
+///
+/// Reads `metadata.clone_inplace_fn` — every collection type and runtime
+/// singleton carries this set at registration via BuiltinTypeProtocol.
+/// Callable types still need the explicit fallback until TypeDef
+/// registration lands for them.
+pub(super) fn elem_clone_fn_for_type(elem_type: &str, gir_types: &TypeRegistry) -> Option<String> {
+    if let Some(td) = gir_types.get_type_def(elem_type) {
+        if let Some(ref f) = td.metadata.clone_inplace_fn {
+            return Some(f.clone());
+        }
+    }
+
+    // `Vector[Callable].clone()` deep-clones each element so the new
+    // vector's closures own independent envs.
+    if elem_type == "GorgetClosure"
         || elem_type.starts_with("Callable__")
         || elem_type.starts_with("MutCallable__")
         || elem_type.starts_with("ConsumeCallable__")
     {
-        // `Vector[Callable].clone()` deep-clones each element so the new
-        // vector's closures own independent envs.
-        Some("gorget_closure_clone_inplace".into())
-    } else {
-        None
+        return Some("gorget_closure_clone_inplace".into());
     }
+
+    None
 }
 
 /// Return the sizeof of an LIR type in bytes (best-effort for 64-bit targets).

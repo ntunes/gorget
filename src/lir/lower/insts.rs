@@ -1005,22 +1005,22 @@ impl<'a> FuncLowering<'a> {
                     // instead of move+zero so the parent collection retains the original.
                     // Other resource types (Task, user structs) are still moved+zeroed
                     // since they may be intentionally consumed (e.g., task.await()).
-                    let clone_fn = clone_fn_for_collection_element(elem_type_name);
+                    let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types);
 
                     if let Some(clone_fn_name) = clone_fn {
                         // Borrow mode: zero-copy view instead of clone for strings
                         let actual_fn = if *borrow && clone_fn_name == "gorget_string_clone_to_owned" {
-                            "gorget_string_borrow"
+                            "gorget_string_borrow".to_string()
                         } else {
                             clone_fn_name
                         };
                         let ret_ty = elem_ty.clone();
-                        self.ensure_extern(actual_fn, &[LirType::Ptr], &ret_ty);
-                        let abis = self.lookup_arg_abis(actual_fn);
+                        self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
+                        let abis = self.lookup_arg_abis(&actual_fn);
                         let result = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
                             dst: Some(result),
-                            name: actual_fn.to_string(),
+                            name: actual_fn,
                             args: vec![ptr_val],
                             original_name: None,
                             arg_abis: abis,
@@ -1847,7 +1847,7 @@ impl<'a> FuncLowering<'a> {
             // When the collection itself is freed (gorget_array_free), elem_drop
             // fires for each element. The ownership system handles individual
             // element drops (via IndexLoad MoveZero), not batch cleanup.
-            if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type) {
+            if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type, self.gir_types) {
                 stores.push((40, drop_fn));
             } else if self.recursive_drop_structs.contains_key(elem_type)
                 || self.recursive_drop_enums.contains_key(elem_type)
@@ -1859,7 +1859,7 @@ impl<'a> FuncLowering<'a> {
             // fields. Without elem_clone, gorget_array_clone does a shallow
             // memcpy of elements, creating shared String pointers that
             // use-after-free when one copy is dropped.
-            if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type) {
+            if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type, self.gir_types) {
                 stores.push((48, clone_fn));
             } else if self.recursive_drop_structs.contains_key(elem_type)
                 || self.recursive_drop_enums.contains_key(elem_type)
@@ -1894,7 +1894,7 @@ impl<'a> FuncLowering<'a> {
                     // GorgetMap offsets: val_drop=104, val_clone=112,
                     // key_drop=120, key_clone=128, val_materialize=136.
                     // val_drop: built-in + user recursive types (see elem_drop comment).
-                    if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type) {
+                    if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type, self.gir_types) {
                         stores.push((104, drop_fn));
                     } else if self.recursive_drop_structs.contains_key(val_type)
                         || self.recursive_drop_enums.contains_key(val_type)
@@ -1903,7 +1903,7 @@ impl<'a> FuncLowering<'a> {
                         stores.push((104, drop_name));
                     }
                     // val_clone: built-in + user recursive types (see elem_clone comment).
-                    if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type) {
+                    if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type, self.gir_types) {
                         stores.push((112, clone_fn));
                     } else if self.recursive_drop_structs.contains_key(val_type)
                         || self.recursive_drop_enums.contains_key(val_type)
