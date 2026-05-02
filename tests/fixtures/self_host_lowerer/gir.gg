@@ -175,15 +175,12 @@ struct GirModule:
     Dict[String, bool] imported_fns
     Dict[String, GirTypeInfo] type_infos  # struct/enum field info for LIR drop analysis
     Dict[String, Vector[bool]] fn_borrow_params  # per-param: true if borrow (&)
-    # const_decls: Dict[String, int] normally, but self-host-compiled
-    # Dict[String, _] loses its hash_fn in some call paths, so lookups of
-    # LT_STRUCT_BASE/I64_TYPE/NO_NAME module-level constants silently
-    # miss. Swapped to parallel Vectors. Same reason as LowerCtx.nl_keys
-    # — see feedback_selfhost_workarounds.md #9.
-    Vector[String] const_keys
-    Vector[int] const_vals
-    # none_decls was Dict[String, bool]; same workaround.
-    Vector[String] none_keys
+    # Module-level int constants and None-typed sentinel decls. Restored
+    # to Dict-backed storage once the underlying Dict[String, _] codegen
+    # bug was fixed (see DONE.md 2026-05-01). Helpers below preserve the
+    # same accessor API so call sites are unchanged.
+    Dict[String, int] const_decls
+    Dict[String, bool] none_decls
     # Parallel cache over type_infos: names of registered enum types, and
     # for each enum a Vector of its variant names. Same Dict[String, _]
     # workaround — needed so match_enum_type / match_variant_index can
@@ -246,40 +243,18 @@ struct GirModule:
 
 # ── Helpers ──────────────────────────────────────────────
 
-# const_decls accessors (see GirModule.const_keys for why these aren't
-# Dict operations).
+# const_decls accessors — kept as a thin layer over the Dict so call
+# sites stay stable if the storage shape changes again.
 bool const_contains(GirModule &gmod, String name):
-    bool found = false
-    int i = 0
-    while i < gmod.const_keys.len():
-        String k = gmod.const_keys.get(i).unwrap()
-        if k == name:
-            found = true
-        i += 1
-    return found
+    return gmod.const_decls.contains(name)
 
 int const_lookup(GirModule &gmod, String name):
-    int result = 0
-    int i = 0
-    while i < gmod.const_keys.len():
-        String k = gmod.const_keys.get(i).unwrap()
-        if k == name:
-            result = gmod.const_vals.get(i).unwrap()
-        i += 1
-    return result
+    if gmod.const_decls.contains(name):
+        return gmod.const_decls.get(name).unwrap()
+    return 0
 
 void const_put(GirModule &gmod, String name, int val):
-    bool found = false
-    int i = 0
-    while i < gmod.const_keys.len():
-        String k = gmod.const_keys.get(i).unwrap()
-        if k == name:
-            gmod.const_vals.set(i, val)
-            found = true
-        i += 1
-    if not found:
-        gmod.const_keys.push(name.clone())
-        gmod.const_vals.push(val)
+    gmod.const_decls.put(name.clone(), val)
 
 # float_const accessors (parallel-Vector form, like const_*).
 bool float_const_contains(GirModule &gmod, String name):
@@ -364,18 +339,11 @@ void static_put(GirModule &gmod, String name, String init_expr, int type_id):
 
 # none_decls accessors.
 bool none_contains(GirModule &gmod, String name):
-    bool found = false
-    int i = 0
-    while i < gmod.none_keys.len():
-        String k = gmod.none_keys.get(i).unwrap()
-        if k == name:
-            found = true
-        i += 1
-    return found
+    return gmod.none_decls.contains(name)
 
 void none_mark(GirModule &gmod, String name):
-    if not none_contains(&gmod, name):
-        gmod.none_keys.push(name.clone())
+    if not gmod.none_decls.contains(name):
+        gmod.none_decls.put(name.clone(), true)
 
 # enum registry accessors. Used when match_enum_type can't trust
 # gmod.type_infos.contains() due to the Dict[String, _] bug.

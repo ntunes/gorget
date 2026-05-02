@@ -24,16 +24,12 @@ struct LowerCtx:
     Vector[Vector[Instruction]] block_insts
     Vector[Terminator] block_terms
     int current_block
-    # named_locals was `Dict[String, int]` but the self-host-compiled
-    # binary silently drops keys looked up by literal strings — e.g.
-    # `put(param_name, plid)` followed by `contains("buf")` returns
-    # false for keys where `put` got a parser-derived String but
-    # `contains` gets a literal one. The same lookup using a clone of
-    # the stashed parser String succeeds. That's a `hash_fn`-gone-
-    # missing symptom. Linear-scan Vectors are O(N²) but robust — N is
-    # usually <20 (params + local bindings) so it's fine.
-    Vector[String] nl_keys
-    Vector[int] nl_vals
+    # Maps local-binding name → GIR local id. Restored from a parallel-
+    # Vector workaround once the underlying `Dict[String, _]` codegen
+    # bug was fixed (the magic-name `__gorget_map_new_sized_` path was
+    # emitting `gorget_map_new` instead of `gorget_map_new_str` for
+    # String-keyed empty-literal Dicts; see DONE.md 2026-05-01).
+    Dict[String, int] named_locals
     int next_closure_id
     # Stack of (continue_target, break_target) bb ids for the enclosing
     # loops. break / continue inside a loop body jump to the innermost
@@ -60,44 +56,18 @@ struct LowerCtx:
 
 Option[String] NO_NAME = None
 
-# named_locals helpers — see LowerCtx.nl_keys for why these are
-# linear-scan Vectors and not a Dict.
+# named_locals helpers — kept as a thin layer over the Dict so we can
+# swap the storage shape without touching call sites.
 bool nl_contains(LowerCtx &ctx, String name):
-    bool found = false
-    int i = 0
-    while i < ctx.nl_keys.len():
-        String k = ctx.nl_keys.get(i).unwrap()
-        if k == name:
-            found = true
-        i += 1
-    return found
+    return ctx.named_locals.contains(name)
 
 int nl_get(LowerCtx &ctx, String name):
-    int result = -1
-    int i = 0
-    while i < ctx.nl_keys.len():
-        String k = ctx.nl_keys.get(i).unwrap()
-        if k == name:
-            result = ctx.nl_vals.get(i).unwrap()
-        i += 1
-    return result
+    if ctx.named_locals.contains(name):
+        return ctx.named_locals.get(name).unwrap()
+    return -1
 
-# Append or overwrite: match Dict.put semantics (last-write-wins).
-# Explicitly structured without early-return — self-host-compiled
-# functions with `&ctx` param and an early return can trip the borrow
-# checker in misleading ways (see feedback_selfhost_workarounds.md).
 void nl_put(LowerCtx &ctx, String name, int val):
-    bool found = false
-    int i = 0
-    while i < ctx.nl_keys.len():
-        String k = ctx.nl_keys.get(i).unwrap()
-        if k == name:
-            ctx.nl_vals.set(i, val)
-            found = true
-        i += 1
-    if not found:
-        ctx.nl_keys.push(name.clone())
-        ctx.nl_vals.push(val)
+    ctx.named_locals.put(name.clone(), val)
 
 # Diagnostic helper for unhandled AST variants. Called from the
 # `else: ...` fall-through arms in lower_stmt / lower_expr. The message
@@ -3119,9 +3089,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[Terminator] block_terms = [GTNone()]
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
-    Vector[String] _nl_keys = []
-    Vector[int] _nl_vals = []
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_nl_keys, !_nl_vals, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
+    Dict[String, int] _named_locals = {}
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -3246,9 +3215,8 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
 
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
-        Vector[String] _nl_keys2 = []
-        Vector[int] _nl_vals2 = []
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_nl_keys2, !_nl_vals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
+        Dict[String, int] _named_locals2 = {}
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -3837,38 +3805,9 @@ struct GenericInstance:
     Vector[SpannedType] type_args
     String mangled_name
 
-# Linear-scan membership check for `seen` Vector. Avoids both
-# `Vector.contains` (may be bytewise on Str structs) and the former
-# `Dict[String, bool]` (silently misses for parser-derived strings on
-# self-host-compiled runs — triggered the transitive-generic fixpoint
-# loop to never terminate because every round re-added the "already
-# seen" instance, keeping transitive_changed=true forever).
-bool seen_has(Vector[String] &v, String s):
-    bool found = false
-    int i = 0
-    while i < v.len():
-        String k = v.get(i).unwrap()
-        if k == s:
-            found = true
-        i += 1
-    return found
-
-# Look up index of `s` in parallel keys Vector, or -1 if absent. Shared
-# helper for fn_template / meta_alias / similar parallel-Vector lookups
-# that replace Dict[String, _] due to the self-host state-loss bug.
-int keys_index_of(Vector[String] &keys, String s):
-    int result = -1
-    int i = 0
-    while i < keys.len():
-        String k = keys.get(i).unwrap()
-        if k == s:
-            result = i
-        i += 1
-    return result
-
 # Expand generic calls inside meta for bodies to the 4 standard types.
 # meta for T in type_variants(...): generates code for int, float, String, bool.
-void expand_meta_for_generics(Vector[Stmt] stmts, Vector[String] &seen, Vector[GenericInstance] &instances):
+void expand_meta_for_generics(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     # Standard column types that type_variants typically expands to.
     # Deliberately excludes 'bool' — variant_payloads() expands to enum payload
     # types (typically int/float/String), not bool.  Adding bool causes spurious
@@ -3884,7 +3823,7 @@ void expand_meta_for_generics(Vector[Stmt] stmts, Vector[String] &seen, Vector[G
         expand_meta_for_stmt(stmt, &seen, &instances, std_types)
         si += 1
 
-void expand_meta_for_stmt(Stmt stmt, Vector[String] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match stmt:
         case SVarDecl(_, _, init, _, _, _):
             expand_meta_for_expr(init, &seen, &instances, std_types)
@@ -3923,7 +3862,7 @@ void expand_meta_for_stmt(Stmt stmt, Vector[String] &seen, Vector[GenericInstanc
         else:
             pass
 
-void expand_meta_for_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
+void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types):
     match sexpr.expr:
         case ECall(callee_box, args, targs):
             if targs.len() > 0 and has_type_variable(targs):
@@ -3951,8 +3890,8 @@ void expand_meta_for_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[Generi
                                     expanded.push(ta)
                                 tai += 1
                             String mangled = compute_mangled_name(expanded, fname)
-                            if not seen_has(&seen, mangled):
-                                seen.push(mangled.clone())
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
                                 instances.push(GenericInstance(fname.clone(), !expanded, mangled))
                             ti += 1
                     else:
@@ -3971,7 +3910,7 @@ void expand_meta_for_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[Generi
             pass
 
 # Discover generic call sites in an expression
-void discover_generic_calls_expr(SpannedExpr sexpr, Vector[String] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
         case ECall(callee_box, args, targs):
             if targs.len() > 0 and not has_type_variable(targs):
@@ -3979,8 +3918,8 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Vector[String] &seen, Vector
                 match callee.expr:
                     case EIdentifier(fname):
                         String mangled = compute_mangled_name(targs, fname)
-                        if not seen_has(&seen, mangled):
-                            seen.push(mangled.clone())
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
                             GenericInstance gi = GenericInstance(fname, targs, mangled)
                             instances.push(!gi)
                     else:
@@ -4022,7 +3961,7 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Vector[String] &seen, Vector
         else:
             pass
 
-void discover_generic_calls_stmt(Stmt stmt, Vector[String] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match stmt:
         case SVarDecl(stype, _, init, _, _, _):
             # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
@@ -4030,8 +3969,8 @@ void discover_generic_calls_stmt(Stmt stmt, Vector[String] &seen, Vector[Generic
                 case TNamed(tname, targs):
                     if targs.len() > 0 and not has_type_variable(targs):
                         String mangled = compute_mangled_name(targs, tname)
-                        if not seen_has(&seen, mangled):
-                            seen.push(mangled.clone())
+                        if not seen.contains(mangled):
+                            seen.put(mangled.clone(), true)
                             GenericInstance gi = GenericInstance(tname, targs, mangled)
                             instances.push(!gi)
                 else:
@@ -4083,7 +4022,7 @@ void discover_generic_calls_stmt(Stmt stmt, Vector[String] &seen, Vector[Generic
         else:
             pass
 
-void discover_generic_calls_stmts(Vector[Stmt] stmts, Vector[String] &seen, Vector[GenericInstance] &instances):
+void discover_generic_calls_stmts(Vector[Stmt] stmts, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int si = 0
     while si < stmts.len():
         Stmt stmt = stmts.get(si).unwrap()
@@ -4562,7 +4501,7 @@ String extract_meta_op_suffix(Vector[SpannedExpr] args):
         ai += 1
     return ""
 
-int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match sexpr.expr:
         case ECall(callee_box, args, targs):
@@ -4577,8 +4516,8 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                     match (*callee_box).expr:
                         case EIdentifier(fname):
                             String mangled = compute_mangled_name(resolved, fname) + meta_suffix
-                            if not seen_has(&seen, mangled):
-                                seen.push(mangled.clone())
+                            if not seen.contains(mangled):
+                                seen.put(mangled.clone(), true)
                                 instances.push(GenericInstance(fname, resolved, mangled))
                                 added += 1
                         else:
@@ -4623,7 +4562,7 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
             pass
     return added
 
-int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match stmt:
         case SVarDecl(_, _, init, _, _, _):
@@ -4663,7 +4602,7 @@ int discover_transitive_stmt(Stmt stmt, Dict[String, SpannedType] &type_sub_map,
             pass
     return added
 
-int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Vector[String] &seen, Vector[GenericInstance] &instances):
+int discover_transitive_stmts(Vector[Stmt] stmts, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     int si = 0
     while si < stmts.len():
@@ -4892,11 +4831,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tfi += 1
-    Vector[String] const_keys = []
-    Vector[int] const_vals = []
+    Dict[String, int] const_decls = {}
+    Dict[String, bool] none_decls = {}
     Vector[String] float_const_keys = []
     Vector[float] float_const_vals = []
-    Vector[String] none_keys = []
     # Mirror call_redirects into parallel Vectors so stage-1's lookups
     # don't silently miss the symbol-redirect mapping.
     # Read the parallel call_redirect storage from the Module — built
@@ -4920,7 +4858,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Vector[String] static_keys_init = []
     Vector[String] static_init_exprs_init = []
     Vector[int] static_type_ids_init = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_keys, !const_vals, !none_keys, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init, !float_const_keys, !float_const_vals, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_keys, !named_vals, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_names, !enum_variants, !ti_keys, !ti_vals, !call_redirect_keys, !call_redirect_vals, !fn_sig_keys_init, !fn_sig_vals_init, !type_sub_keys_init, !type_sub_vals_init, !float_const_keys, !float_const_vals, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
@@ -5020,17 +4958,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 pass
         cdi += 1
 
-    # Collect generic templates and discover instances.
-    # fn_templates was Dict[String, FunctionDef]; swapped to parallel Vectors
-    # to dodge the self-host Dict[String, _] state-loss bug (lookups hung in
-    # the mono-gen emission loop at mi=64 when 73 generic instances were
-    # being processed). See feedback_selfhost_workarounds.md #9.
-    Vector[String] fn_template_keys = []
-    Vector[FunctionDef] fn_template_vals = []
+    # Collect generic templates and discover instances. Restored to
+    # Dict-backed storage once the underlying Dict[String, _] codegen
+    # bug was fixed (see DONE.md 2026-05-01).
+    Dict[String, FunctionDef] fn_templates = {}
     Vector[EquipBlock] equip_templates = []
-    # equip_generic_names was Dict[String, bool]; same bug pattern.
-    Vector[String] equip_generic_name_list = []
-    Vector[String] seen_instances = []
+    Dict[String, bool] equip_generic_names = {}
+    Dict[String, bool] seen_instances = {}
     Vector[GenericInstance] generic_instances = []
 
     int gi = 0
@@ -5039,8 +4973,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         match gitem:
             case IFunction(fdef):
                 if fdef.type_params.len() > 0:
-                    fn_template_keys.push(fdef.name.clone())
-                    fn_template_vals.push(fdef)
+                    fn_templates.put(fdef.name.clone(), fdef)
             case IEquip(eqblk):
                 # Check if equip is generic: either type_params set OR target has type args
                 bool is_generic_equip = eqblk.type_params.len() > 0
@@ -5050,8 +4983,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                             is_generic_equip = true
                         if is_generic_equip:
                             equip_templates.push(eqblk)
-                            if not seen_has(&equip_generic_name_list, tname):
-                                equip_generic_name_list.push(tname.clone())
+                            if not equip_generic_names.contains(tname):
+                                equip_generic_names.put(tname.clone(), true)
                     else:
                         pass
             else:
@@ -5104,15 +5037,12 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         while tfix_i < tfix_end:
             GenericInstance tinst = generic_instances.get(tfix_i).unwrap()
             String tfix_key = tinst.base_name.clone()
-            int tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
-            if tfix_idx < 0 and call_redirect_contains(&gmod, tinst.base_name):
+            if not fn_templates.contains(tfix_key) and call_redirect_contains(&gmod, tinst.base_name):
                 tfix_key = call_redirect_lookup(&gmod, tinst.base_name)
-                tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
-            if tfix_idx < 0 and gmod.call_redirects.contains(tinst.base_name):
+            if not fn_templates.contains(tfix_key) and gmod.call_redirects.contains(tinst.base_name):
                 tfix_key = gmod.call_redirects.get(tinst.base_name).unwrap()
-                tfix_idx = keys_index_of(&fn_template_keys, tfix_key)
-            if tfix_idx >= 0:
-                FunctionDef tfix_tmpl = fn_template_vals.get(tfix_idx).unwrap()
+            if fn_templates.contains(tfix_key):
+                FunctionDef tfix_tmpl = fn_templates.get(tfix_key).unwrap()
                 if tfix_tmpl.type_params.len() > 0:
                     Dict[String, SpannedType] type_sub_map = {}
                     int tpi = 0
@@ -5221,12 +5151,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         GenericInstance inst = generic_instances.get(si).unwrap()
         # Look up template by base name, or by call-redirected (mangled) name
         String tmpl_key = inst.base_name.clone()
-        int tmpl_idx = keys_index_of(&fn_template_keys, tmpl_key)
-        if tmpl_idx < 0 and gmod.call_redirects.contains(inst.base_name):
+        if not fn_templates.contains(tmpl_key) and gmod.call_redirects.contains(inst.base_name):
             tmpl_key = gmod.call_redirects.get(inst.base_name).unwrap()
-            tmpl_idx = keys_index_of(&fn_template_keys, tmpl_key)
-        if tmpl_idx >= 0:
-            FunctionDef tmpl = fn_template_vals.get(tmpl_idx).unwrap()
+        if fn_templates.contains(tmpl_key):
+            FunctionDef tmpl = fn_templates.get(tmpl_key).unwrap()
             # Compute return type with substitutions active
             setup_type_subs(&gmod, tmpl.type_params, inst.type_args)
             int rt = map_ast_type(tmpl.return_type, &gmod)
@@ -5284,9 +5212,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         String test_fn_name = "__test_" + int_to_str(test_idx)
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
-                        Vector[String] _nl_keys3 = []
-                        Vector[int] _nl_vals3 = []
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_nl_keys3, !_nl_vals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
+                        Dict[String, int] _named_locals3 = {}
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
@@ -5556,17 +5483,13 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     while mi < generic_instances.len():
         GenericInstance inst = generic_instances.get(mi).unwrap()
         # Look up template by base name, or by call-redirected (mangled) name.
-        # Prefer parallel call_redirects to dodge Dict[String, _] state-loss.
         String fn_key = inst.base_name.clone()
-        int fn_idx = keys_index_of(&fn_template_keys, fn_key)
-        if fn_idx < 0 and call_redirect_contains(&gmod, inst.base_name):
+        if not fn_templates.contains(fn_key) and call_redirect_contains(&gmod, inst.base_name):
             fn_key = call_redirect_lookup(&gmod, inst.base_name)
-            fn_idx = keys_index_of(&fn_template_keys, fn_key)
-        if fn_idx < 0 and gmod.call_redirects.contains(inst.base_name):
+        if not fn_templates.contains(fn_key) and gmod.call_redirects.contains(inst.base_name):
             fn_key = gmod.call_redirects.get(inst.base_name).unwrap()
-            fn_idx = keys_index_of(&fn_template_keys, fn_key)
-        if fn_idx >= 0:
-            FunctionDef tmpl = fn_template_vals.get(fn_idx).unwrap()
+        if fn_templates.contains(fn_key):
+            FunctionDef tmpl = fn_templates.get(fn_key).unwrap()
             # Monomorphized generics use bare names (no module prefix)
             lower_generic_function(tmpl, inst.mangled_name, tmpl.type_params, inst.type_args, &gmod)
         mi += 1
@@ -5575,7 +5498,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     int ei = 0
     while ei < generic_instances.len():
         GenericInstance einst = generic_instances.get(ei).unwrap()
-        if seen_has(&equip_generic_name_list, einst.base_name):
+        if equip_generic_names.contains(einst.base_name):
             # Find all equip templates matching this type name
             int eti = 0
             while eti < equip_templates.len():
