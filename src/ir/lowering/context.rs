@@ -1856,6 +1856,38 @@ impl<'a> LoweringContext<'a> {
         );
     }
 
+    /// Phase D refined setter: a `&` (MutableBorrow) param on a resource type.
+    /// Origin is the param itself; mutability is Unique. Replaces a generic
+    /// `set_ref` call for this specific class — see audit in
+    /// commit message of the migration that introduces this setter.
+    pub fn set_param_borrow_unique(&mut self, local: LocalId) {
+        // Legacy v1: keep the same Ref tag the previous set_ref produced
+        // (or_insert semantics; doesn't override BareParam etc.).
+        self.func_state.local_ownership.entry(local).or_insert(LocalOwnershipState::Ref);
+        // v2: typed Borrowed { Param, Unique } replaces the Alias(self) placeholder
+        // the foundation commit's generic set_ref would have written.
+        self.func_state.local_ownership_v2.insert(local,
+            crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Param(local),
+                mutability: crate::ir::Mutability::Unique,
+            }
+        );
+    }
+
+    /// Phase D refined setter: a Ptr-typed local that's a borrow of a struct
+    /// field (or enum variant payload field). `base` is the struct/scrutinee
+    /// local; `field` is the field/variant-payload index. Replaces a generic
+    /// `set_ref` for this class.
+    pub fn set_field_borrow(&mut self, local: LocalId, base: LocalId, field: u32) {
+        self.func_state.local_ownership.entry(local).or_insert(LocalOwnershipState::Ref);
+        self.func_state.local_ownership_v2.insert(local,
+            crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Field { base, field },
+                mutability: crate::ir::Mutability::Shared,
+            }
+        );
+    }
+
     /// Mark a local as a CoW borrow (deferred clone). Uses insert to
     /// override any prior state (e.g., Owned from call_extern_tracked).
     pub fn set_cow_borrow(&mut self, local: LocalId) {

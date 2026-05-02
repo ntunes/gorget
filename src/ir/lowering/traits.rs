@@ -1442,7 +1442,7 @@ fn lower_static_trait_method(
         } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.set_ref(LocalId(param_idx));
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }

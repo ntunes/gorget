@@ -868,7 +868,7 @@ pub fn lower_equip_method(
         } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.set_ref(LocalId(param_idx));
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }
@@ -1155,7 +1155,7 @@ pub fn lower_generic_function(
         } else if matches!(ownership, Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.set_ref(local_id);
+            ctx.set_param_borrow_unique(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
             ctx.func_state.mut_capture_locals.insert(local_id, base_type);
         }
@@ -1530,7 +1530,7 @@ fn lower_equip_method_with_subs(
         } else if matches!(p.node.ownership, Ownership::MutableBorrow)
             && ctx.type_registry.is_resource_type(base_type)
         {
-            ctx.set_ref(LocalId(param_idx));
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
         }

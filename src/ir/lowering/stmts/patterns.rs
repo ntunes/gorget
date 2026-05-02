@@ -525,9 +525,10 @@ pub fn emit_pattern_bindings(
                     field_type,
                 );
 
-                // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop)
+                // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop).
+                // Phase D: origin is Field { base: scrut_local, field: i }.
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
-                    ctx.set_ref(dst);
+                    ctx.set_field_borrow(dst, scrut_local, i as u32);
                 }
                 // Value scrutinee + droppable field (string, collection, user
                 // struct with resource fields): register for drop at scope exit.
@@ -671,8 +672,9 @@ pub fn emit_pattern_bindings(
                     field_type,
                 );
 
+                // Phase D: origin is Field { base: scrut_local, field: i }.
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
-                    ctx.set_ref(dst);
+                    ctx.set_field_borrow(dst, scrut_local, i as u32);
                 }
 
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);
