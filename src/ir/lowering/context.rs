@@ -1389,38 +1389,30 @@ impl<'a> LoweringContext<'a> {
 
     /// Return the clone function name for deep-cloning a resource type.
     /// Used for Ptr(T) → T auto-clone and named-variable clone.
-    /// Returns None for trivial types and GorgetString (uses provenance).
+    /// Returns None for trivial types.
     pub fn clone_fn_for_ptr(&self, inner_type: TypeId) -> Option<String> {
         use crate::ir::types::{GirType, DropStrategy};
         if let Some(GirType::Named(name)) = self.type_registry.get(inner_type) {
-            // Metadata-based check: clone_fn set during type registration from protocol table.
+            // Metadata-based: clone_fn populated at registration from
+            // BuiltinTypeProtocol (or hand-set for the runtime-named singletons
+            // GorgetString / GorgetArray / GorgetMap / GorgetSet). Covers
+            // every Vector/Deque/Dict/HashMap/Set/HashSet instantiation +
+            // GorgetString and the runtime-named collection types.
             if let Some(type_def) = self.type_registry.get_type_def(name) {
                 if let Some(ref clone_fn) = type_def.metadata.clone_fn {
                     return Some(clone_fn.clone());
                 }
             }
 
-            // GorgetString → gorget_string_clone_to_owned (always produces owned copy).
-            if name == "GorgetString" {
-                return Some("gorget_string_clone_to_owned".to_string());
-            }
-
-            // Fallback for types without metadata.clone_fn (migration safety):
-            // Collections that might not have TypeDefs with clone_fn yet.
-            if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
-                return Some("gorget_array_clone".to_string());
-            }
-            if name.starts_with("Dict__") || name.starts_with("HashMap__") || name == "GorgetMap" {
-                return Some("gorget_map_clone".to_string());
-            }
-            if name.starts_with("Set__") || name.starts_with("HashSet__") || name == "GorgetSet" {
-                return Some("gorget_set_clone".to_string());
-            }
-            // Callable values stored in collections own a heap-alloc'd env
-            // (via `__gorget_closure_env_alloc`). `.clone()` on a borrow of one
-            // must produce an independently-owned closure with its own env —
-            // shallow memcpy would leave both the slot and the clone aliasing
-            // the same heap region and UAF when the source drops.
+            // Callable/MutCallable/ConsumeCallable/GorgetClosure don't have
+            // TypeDef registration today (Callable values lower to GirType::FnPtr
+            // at locals; the Named form only appears via collection-elem
+            // resolve_inner_type fallback). Closures own a heap-alloc'd env via
+            // __gorget_closure_env_alloc; `.clone()` on a borrow must produce
+            // an independently-owned closure with its own env — shallow memcpy
+            // would leave both the slot and the clone aliasing the same heap
+            // region and UAF when the source drops. Will be retired when
+            // Callable types get TypeDef registration.
             if name.starts_with("Callable__")
                 || name.starts_with("MutCallable__")
                 || name.starts_with("ConsumeCallable__")
