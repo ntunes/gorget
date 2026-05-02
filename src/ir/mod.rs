@@ -416,6 +416,14 @@ pub enum BorrowOrigin {
     /// triggers materialisation. Mirrors the legacy
     /// `CollectionId::FieldPath(String)` shape.
     FieldPath(String),
+    /// Pending CoW borrow: set_cow_borrow was called without a known
+    /// source. A subsequent set_cow_borrow_source upgrades the entry
+    /// to CollectionElement / FieldPath. Distinct from set_ref's
+    /// Alias(self) placeholder so is_cow_borrow can disambiguate.
+    /// Should never persist past D6 once eager source propagation
+    /// lands (set_cow_borrow gains a source-known-at-call-time
+    /// signature).
+    CowBorrowPending,
 }
 
 /// Mutability of a borrow. Today this distinguishes `&` / `!` mutable

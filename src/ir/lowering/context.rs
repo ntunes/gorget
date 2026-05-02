@@ -1223,11 +1223,13 @@ impl<'a> LoweringContext<'a> {
             if post_save {
                 // Mirror the legacy filter: drop branch-local CollectionRef/
                 // CowBorrow at scope exit. v2 equivalents are
-                // Borrowed { CollectionElement | FieldPath } and View.
+                // Borrowed { CollectionElement | FieldPath | CowBorrowPending }
+                // and View.
                 let keep = !matches!(state,
                     crate::ir::LocalOwnership::Borrowed {
                         origin: crate::ir::BorrowOrigin::CollectionElement(_)
-                              | crate::ir::BorrowOrigin::FieldPath(_),
+                              | crate::ir::BorrowOrigin::FieldPath(_)
+                              | crate::ir::BorrowOrigin::CowBorrowPending,
                         ..
                     } | crate::ir::LocalOwnership::View { .. }
                 );
@@ -1918,27 +1920,39 @@ impl<'a> LoweringContext<'a> {
     /// override any prior state (e.g., Owned from call_extern_tracked).
     pub fn set_cow_borrow(&mut self, local: LocalId) {
         self.func_state.local_ownership.insert(local, LocalOwnershipState::CowBorrow);
-        // Phase D: CoW borrow without a known source uses an Alias(self)
-        // placeholder in v2 (same as set_ref). Once set_cow_borrow_source
-        // fires, the entry upgrades to CollectionElement / FieldPath. The
-        // is_cow_borrow predicate stays on the legacy map for the
-        // pending-source case — see is_cow_borrow's comment.
+        // Phase D: CoW borrow without a known source uses CowBorrowPending
+        // in v2 to disambiguate from set_ref's Alias(self) placeholder.
+        // set_cow_borrow_source upgrades to CollectionElement / FieldPath.
         self.func_state.local_ownership_v2.insert(local,
             crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Alias(local),
+                origin: crate::ir::BorrowOrigin::CowBorrowPending,
                 mutability: crate::ir::Mutability::Shared,
             }
         );
     }
 
     /// Check if a local is a CoW borrow (deferred clone).
-    /// Stays on the legacy map: v2's set_cow_borrow placeholder collides
-    /// with set_ref's (both produce Borrowed { Alias(self), Shared }), so
-    /// v2 alone can't tell them apart. The legacy CowBorrow variant
-    /// disambiguates. Migrate when set_cow_borrow gains an eager-source
-    /// signature (D6 or earlier).
+    /// Phase D: matches v2 Borrowed origin variants that all map to legacy
+    /// CowBorrow / CollectionRef:
+    ///   - CowBorrowPending: set_cow_borrow without source
+    ///   - CollectionElement(_): direct collection-local borrow
+    ///   - FieldPath(_): collection borrow through a field path
+    /// The set_collection_ref path also produces CollectionElement /
+    /// FieldPath origins, so this predicate effectively answers "is
+    /// this any flavor of collection-element borrow." Same answer as
+    /// legacy `is_cow_borrow` returned in practice — callers use it to
+    /// gate clone-on-mutation and similar decisions, all of which apply
+    /// to set_collection_ref-tagged locals identically.
     pub fn is_cow_borrow(&self, local: LocalId) -> bool {
-        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::CowBorrow))
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        matches!(self.func_state.local_ownership_v2.get(&local),
+            Some(LocalOwnership::Borrowed {
+                origin: BorrowOrigin::CowBorrowPending
+                      | BorrowOrigin::CollectionElement(_)
+                      | BorrowOrigin::FieldPath(_),
+                ..
+            })
+        )
     }
 
     /// Mark a local as a string view borrowing from `source`'s buffer.
@@ -1966,6 +1980,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Record the source collection for a CowBorrow local.
+    /// Does NOT upgrade the v2 entry past CowBorrowPending — the v2
+    /// origin distinction (CowBorrowPending vs CollectionElement /
+    /// FieldPath) is what lets is_cow_borrow disambiguate legacy
+    /// CowBorrow from CollectionRef. Upgrading would broaden what
+    /// cow_collection_refs_for_id matches, breaking the legacy
+    /// invariant where cow_borrow locals weren't picked up by field
+    /// mutation passes. The cow_borrow_sources sidecar still carries
+    /// the source for cow_borrow_source() lookups.
     pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: CollectionId) {
         self.func_state.cow_borrow_sources.insert(local, collection);
     }
@@ -2031,13 +2053,19 @@ impl<'a> LoweringContext<'a> {
                 LocalOwnership::MaybeOwned => OwnershipState::MaybeBorrowed,
                 LocalOwnership::View { .. } => OwnershipState::MaybeBorrowed,
                 LocalOwnership::Borrowed { origin, .. } => match origin {
-                    // Self-rooted borrows are flat refs (no source to track).
+                    // Self-rooted borrows + pending cow are flat refs (no source
+                    // to track yet). CowBorrowPending matches the previous
+                    // Alias(self) placeholder semantics so codegen behaves the
+                    // same — once set_cow_borrow_source upgrades the entry to
+                    // CollectionElement/FieldPath, it falls into the
+                    // MaybeBorrowed bucket below.
                     BorrowOrigin::Param(p) if *p == local_id => OwnershipState::Ref,
                     BorrowOrigin::Alias(a) if *a == local_id => OwnershipState::Ref,
                     BorrowOrigin::Field { .. } => OwnershipState::Ref,
+                    BorrowOrigin::CowBorrowPending => OwnershipState::Ref,
                     // External-rooted borrows: alias to another local, collection
-                    // element, runtime view — may have been materialized on
-                    // some paths.
+                    // element, runtime view, or field-path collection element —
+                    // may have been materialized on some paths.
                     BorrowOrigin::Param(_)
                     | BorrowOrigin::Alias(_)
                     | BorrowOrigin::CollectionElement(_)
