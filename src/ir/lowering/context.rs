@@ -1794,13 +1794,16 @@ impl<'a> LoweringContext<'a> {
     // ── Unified ownership state helpers ──────────────────────────────
 
     /// Check if a local is tracked as a borrowed Ptr reference.
+    /// Phase D: reads `local_ownership_v2`. Returns true iff the local has
+    /// a v2 entry that isn't `Owned`.
     pub fn is_ref_local(&self, local: LocalId) -> bool {
-        self.func_state.local_ownership.get(&local).map_or(false, |s| s.is_ref())
+        self.func_state.local_ownership_v2.get(&local).map_or(false, |s| s.is_ref())
     }
 
     /// Check if a local is tracked as definitely owning its data.
+    /// Phase D: reads `local_ownership_v2`.
     pub fn is_owned_local(&self, local: LocalId) -> bool {
-        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::Owned))
+        matches!(self.func_state.local_ownership_v2.get(&local), Some(crate::ir::LocalOwnership::Owned))
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
@@ -1946,21 +1949,24 @@ impl<'a> LoweringContext<'a> {
     pub fn set_collection_ref(&mut self, local: LocalId, collection: CollectionId) {
         // Phase D mirror: CollectionId::Local(l) → CollectionElement(l).
         // CollectionId::FieldPath(_) doesn't fit BorrowOrigin's LocalId-only
-        // shape; skip the v2 entry for now (the few field-path borrows it
-        // covers are not on the Phase C critical path). Field-path locals
-        // will gain richer support when Phase D introduces a Place-based
-        // BorrowOrigin variant.
+        // shape, so we record an Alias(self) placeholder in v2 — same as
+        // generic set_ref. The placeholder preserves is_ref_local /
+        // is_owned_local behavior; field-path provenance still lives in
+        // the legacy CollectionRef map for cow_before_field_mutation to
+        // consult. A future BorrowOrigin extension (Place-based variant)
+        // will close this gap.
         let v2 = match &collection {
-            CollectionId::Local(coll_local) => Some(crate::ir::LocalOwnership::Borrowed {
+            CollectionId::Local(coll_local) => crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::CollectionElement(*coll_local),
                 mutability: crate::ir::Mutability::Shared,
-            }),
-            CollectionId::FieldPath(_) => None,
+            },
+            CollectionId::FieldPath(_) => crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Alias(local),
+                mutability: crate::ir::Mutability::Shared,
+            },
         };
         self.func_state.local_ownership.insert(local, LocalOwnershipState::CollectionRef { collection });
-        if let Some(v2_state) = v2 {
-            self.func_state.local_ownership_v2.insert(local, v2_state);
-        }
+        self.func_state.local_ownership_v2.insert(local, v2);
     }
 
     /// Derive the set of ref locals for GIR function output.
