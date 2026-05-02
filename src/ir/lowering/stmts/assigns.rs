@@ -73,7 +73,7 @@ pub(super) fn lower_assign(
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
                 if ctx.cow_is_alias(local_id) {
-                    ctx.func_state.local_ownership.remove(&local_id);
+                    ctx.unset_ownership(local_id);
                 }
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.

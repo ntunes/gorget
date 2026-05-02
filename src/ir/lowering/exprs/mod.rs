@@ -241,7 +241,7 @@ fn lower_expr_inner(
                 // Remove any collection refs keyed on this local (now zeroed/stale)
                 let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
                 for r in stale_refs {
-                    ctx.func_state.local_ownership.remove(&r);
+                    ctx.unset_ownership(r);
                 }
                 FunctionBuilder::copy(tmp)
             } else {

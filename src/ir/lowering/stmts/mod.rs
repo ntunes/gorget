@@ -503,9 +503,7 @@ fn lower_var_decl(
                         // Propagate CollectionRef from the source operand.
                         let propagated = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
-                                if let Some(super::context::LocalOwnershipState::CollectionRef { collection }) =
-                                    ctx.func_state.local_ownership.get(&p.local).cloned()
-                                {
+                                if let Some(collection) = ctx.collection_ref_source(p.local) {
                                     ctx.set_collection_ref(local_id, collection);
                                     ctx.drops.unregister(local_id);
                                     true

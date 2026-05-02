@@ -1098,7 +1098,7 @@ impl<'a> LoweringContext<'a> {
                         let is_non_owned_string = self.is_string_type(local_type)
                             && !self.is_owned_local(local);
                         // Borrow params — always clone
-                        let is_borrow_param = matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam));
+                        let is_borrow_param = self.is_bare_param(local);
                         if is_non_owned_string || is_borrow_param {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 if let Some(s) = span {
@@ -1598,11 +1598,13 @@ impl<'a> LoweringContext<'a> {
         // explicit drop registration (LIR string assign auto-clones, `builder.call`
         // results for fresh allocating externs, etc.). Only explicit ref-state
         // flags represent aliasing relationships that require materialization.
-        let ownership_is_ref = self.func_state.local_ownership.get(&local)
-            .map_or(false, |s| s.is_ref());
-        let is_borrow = ownership_is_ref
+        // Phase D: is_ref_local already covers all non-Owned variants;
+        // is_bare_param and is_cow_borrow are subsets of it. Keep the
+        // explicit bare_param + cow_borrow checks since both are still
+        // semantically meaningful at this site (they fire even for
+        // shapes is_ref_local might miss in legacy edge cases).
+        let is_borrow = self.is_ref_local(local)
             || self.is_bare_param(local)
-            || self.is_ref_local(local)
             || self.is_cow_borrow(local);
         if !is_borrow {
             return operand;
@@ -1812,6 +1814,14 @@ impl<'a> LoweringContext<'a> {
         self.func_state.local_ownership_v2.insert(local, crate::ir::LocalOwnership::Owned);
     }
 
+    /// Drop ownership tracking for a local. Mirrors removes across both
+    /// the legacy and v2 maps to keep them in sync during the Phase D
+    /// migration window.
+    pub fn unset_ownership(&mut self, local: LocalId) {
+        self.func_state.local_ownership.remove(&local);
+        self.func_state.local_ownership_v2.remove(&local);
+    }
+
     /// Check if a local's string data is a fresh allocation not shared with any
     /// other variable. True only for direct function/extern call results that
     /// return the owned string type.
@@ -1952,6 +1962,18 @@ impl<'a> LoweringContext<'a> {
     /// Look up the source collection for a CowBorrow local.
     pub fn cow_borrow_source(&self, local: LocalId) -> Option<&CollectionId> {
         self.func_state.cow_borrow_sources.get(&local)
+    }
+
+    /// Look up the source collection of a local marked as a CollectionRef.
+    /// Reads from the legacy map because v2's BorrowOrigin::CollectionElement
+    /// only carries LocalId — Place-shaped FieldPath sources are stored as
+    /// `BorrowOrigin::Alias(self)` placeholders which don't preserve the
+    /// path. A future Phase D extension will introduce a Place-based variant.
+    pub fn collection_ref_source(&self, local: LocalId) -> Option<CollectionId> {
+        match self.func_state.local_ownership.get(&local) {
+            Some(LocalOwnershipState::CollectionRef { collection }) => Some(collection.clone()),
+            _ => None,
+        }
     }
 
     /// Mark a local as a collection element reference.
@@ -2123,14 +2145,23 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
-        if matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam)) {
-            self.func_state.local_ownership.remove(&local);
+        if self.is_bare_param(local) {
+            self.unset_ownership(local);
             self.cow_materialize_alias(builder, local, local, span);
         }
 
-        // Case 1: local is an alias of something else → clone source into local
-        if let Some(LocalOwnershipState::Alias { source }) = self.func_state.local_ownership.get(&local).cloned() {
-            self.func_state.local_ownership.remove(&local);
+        // Case 1: local is an alias of something else → clone source into local.
+        // Phase D: read alias source from v2 (Borrowed { Alias(s), .. } with
+        // s != local — self-loops are set_ref placeholders, not real aliases).
+        let alias_source: Option<LocalId> = {
+            use crate::ir::{LocalOwnership, BorrowOrigin};
+            match self.func_state.local_ownership_v2.get(&local) {
+                Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. }) if *s != local => Some(*s),
+                _ => None,
+            }
+        };
+        if let Some(source) = alias_source {
+            self.unset_ownership(local);
             self.cow_materialize_alias(builder, local, source, span);
         }
 
@@ -2138,7 +2169,7 @@ impl<'a> LoweringContext<'a> {
         let aliases = self.cow_aliases_of(local);
         if !aliases.is_empty() {
             for alias in aliases {
-                self.func_state.local_ownership.remove(&alias);
+                self.unset_ownership(alias);
                 self.cow_materialize_alias(builder, alias, local, span);
             }
         }
@@ -2158,7 +2189,7 @@ impl<'a> LoweringContext<'a> {
         // before the source is mutated (push/append/clear/reassign).
         let views = self.views_of_source(local);
         for view_local in views {
-            self.func_state.local_ownership.remove(&view_local);
+            self.unset_ownership(view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
     }
@@ -2190,23 +2221,23 @@ impl<'a> LoweringContext<'a> {
     ) {
         let aliases = self.cow_aliases_of(source_local);
         for alias in aliases {
-            self.func_state.local_ownership.remove(&alias);
+            self.unset_ownership(alias);
             self.cow_materialize_alias(builder, alias, source_local, span);
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
-        if matches!(self.func_state.local_ownership.get(&source_local), Some(LocalOwnershipState::BareParam)) {
-            self.func_state.local_ownership.remove(&source_local);
+        if self.is_bare_param(source_local) {
+            self.unset_ownership(source_local);
         }
         // Remove collection refs pointing to this source
         let refs = self.cow_collection_refs_for(source_local);
         for r in refs {
-            self.func_state.local_ownership.remove(&r);
+            self.unset_ownership(r);
         }
         // Materialize string views borrowing from this source
         let views = self.views_of_source(source_local);
         for view_local in views {
-            self.func_state.local_ownership.remove(&view_local);
+            self.unset_ownership(view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
     }
@@ -2224,7 +2255,7 @@ impl<'a> LoweringContext<'a> {
         // First, materialize any transitive views (views of THIS view)
         let sub_views = self.views_of_source(view_local);
         for sub in sub_views {
-            self.func_state.local_ownership.remove(&sub);
+            self.unset_ownership(sub);
             self.cow_materialize_view(builder, sub, span);
         }
 
@@ -2322,7 +2353,7 @@ impl<'a> LoweringContext<'a> {
             self.func_state.named_locals.insert(owned_local);
         }
         // The old ref_local is now dead
-        self.func_state.local_ownership.remove(&ref_local);
+        self.unset_ownership(ref_local);
     }
 
     /// If the given local came from a resource-type field load, emit MoveZero for the

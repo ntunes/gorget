@@ -1374,9 +1374,13 @@ pub(super) fn lower_method_call(
         if needs_mut {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                 if place.projections.is_empty() {
-                    // Check CollectionRef (from index_load) and CowBorrow (from .get().unwrap())
-                    let source = match ctx.func_state.local_ownership.get(&place.local) {
-                        Some(crate::ir::lowering::context::LocalOwnershipState::CollectionRef { collection: CollectionId::Local(src) }) => Some(*src),
+                    // Check CollectionRef (from index_load) and CowBorrow (from .get().unwrap()).
+                    // Phase D: read CollectionRef via the typed accessor; its
+                    // `CollectionId::FieldPath` arm is excluded by the
+                    // Local match below (only direct-collection sources are
+                    // severed at this site).
+                    let source = match ctx.collection_ref_source(place.local) {
+                        Some(CollectionId::Local(src)) => Some(src),
                         _ => ctx.cow_borrow_source(place.local)
                             .and_then(|c| if let CollectionId::Local(src) = c { Some(*src) } else { None }),
                     };
