@@ -1844,8 +1844,16 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a bare Ptr param borrowing from the caller.
+    /// Phase D: v2 representation is Borrowed { Param(self), Shared } —
+    /// the self-referential Param(local) where local == this is the
+    /// signature set_bare_param writes. Mutability::Unique would mean
+    /// set_param_borrow_unique (a `&` param), which is not bare.
     pub fn is_bare_param(&self, local: LocalId) -> bool {
-        matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::BareParam))
+        use crate::ir::{LocalOwnership, BorrowOrigin, Mutability};
+        matches!(self.func_state.local_ownership_v2.get(&local),
+            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Shared })
+                if *p == local
+        )
     }
 
     /// Mark a local as a bare Ptr param borrowing from the caller.
@@ -1971,28 +1979,43 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Derive the set of ref locals for GIR function output.
-    /// Collects all locals with any ref state (Ref, BareParam, Alias, CollectionRef).
-    /// Flush ownership state from the lowering side map onto the builder's Local structs.
-    /// Called after lowering a function body, before `builder.build()`.
+    /// Flush v2 ownership state onto the builder's Local structs as the
+    /// 3-variant `OwnershipState` the rest of the pipeline still consumes.
+    /// Phase D: reads v2. Mapping:
+    ///   Owned → Owned
+    ///   Borrowed { Param(self) | Alias(self) | Field {..} } → Ref
+    ///     (self-rooted borrows: bare params, set_ref placeholders, field
+    ///     loads, pattern extracts — never dropped, no source-mutation
+    ///     materialization needed at this layer)
+    ///   Borrowed { Param(other) | Alias(other) | CollectionElement(_) }
+    ///     → MaybeBorrowed (alias to a tracked source — may need
+    ///     conditional drop after CoW materialization)
+    ///   View {..} → MaybeBorrowed
+    ///   MaybeOwned → MaybeBorrowed
+    /// D6 lifts the rich enum directly onto Local, retiring this collapse.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
-        for (&local_id, state) in &self.func_state.local_ownership {
+        use crate::ir::{LocalOwnership, BorrowOrigin, OwnershipState};
+        for (&local_id, state) in &self.func_state.local_ownership_v2 {
             let idx = local_id.0 as usize;
-            if idx < builder.locals.len() {
-                builder.locals[idx].ownership = match state {
-                    LocalOwnershipState::Owned => crate::ir::OwnershipState::Owned,
-                    // Borrows from caller or field loads — never dropped
-                    LocalOwnershipState::BareParam | LocalOwnershipState::Ref => {
-                        crate::ir::OwnershipState::Ref
-                    }
-                    // CoW borrows that may have been materialized on some paths
-                    LocalOwnershipState::Alias { .. }
-                    | LocalOwnershipState::CollectionRef { .. }
-                    | LocalOwnershipState::CowBorrow
-                    | LocalOwnershipState::ViewOf { .. } => {
-                        crate::ir::OwnershipState::MaybeBorrowed
-                    }
-                };
-            }
+            if idx >= builder.locals.len() { continue; }
+            builder.locals[idx].ownership = match state {
+                LocalOwnership::Owned => OwnershipState::Owned,
+                LocalOwnership::MaybeOwned => OwnershipState::MaybeBorrowed,
+                LocalOwnership::View { .. } => OwnershipState::MaybeBorrowed,
+                LocalOwnership::Borrowed { origin, .. } => match origin {
+                    // Self-rooted borrows are flat refs (no source to track).
+                    BorrowOrigin::Param(p) if *p == local_id => OwnershipState::Ref,
+                    BorrowOrigin::Alias(a) if *a == local_id => OwnershipState::Ref,
+                    BorrowOrigin::Field { .. } => OwnershipState::Ref,
+                    // External-rooted borrows: alias to another local, collection
+                    // element, or runtime view — may have been materialized on
+                    // some paths.
+                    BorrowOrigin::Param(_)
+                    | BorrowOrigin::Alias(_)
+                    | BorrowOrigin::CollectionElement(_)
+                    | BorrowOrigin::RuntimeView(_) => OwnershipState::MaybeBorrowed,
+                },
+            };
         }
     }
 
@@ -2063,9 +2086,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a collection has any element refs pointing into it.
+    /// Phase D: scans v2 for Borrowed { CollectionElement(`collection`), .. }.
     pub fn cow_has_collection_refs(&self, collection: LocalId) -> bool {
-        let target = CollectionId::Local(collection);
-        self.func_state.local_ownership.values().any(|s| matches!(s, LocalOwnershipState::CollectionRef { collection: c } if *c == target))
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership_v2.values().any(|s|
+            matches!(s, LocalOwnership::Borrowed {
+                origin: BorrowOrigin::CollectionElement(c), ..
+            } if *c == collection)
+        )
     }
 
     /// Collect all collection refs pointing to a `CollectionId`. Derived query — O(n) scan.
