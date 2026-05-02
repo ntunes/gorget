@@ -64,17 +64,27 @@ fn skip_under_llvm() -> bool {
     matches!(gg_backend().as_deref(), Some("llvm"))
 }
 
-/// Build and run gg via cargo to ensure we use the non-test-profile binary.
-/// CARGO_BIN_EXE_gg provides the test-profile binary (compiled with --tests),
-/// which may differ from the normal binary due to cfg(test) or profile settings.
+/// Path to the `gg` binary that integration tests invoke. Cargo sets
+/// `CARGO_BIN_EXE_gg` at compile time of this test binary and guarantees the
+/// referenced executable is built and up-to-date before the test process
+/// starts; the bin source has no `cfg(test)` gating, so it is the same
+/// artifact `cargo run` would produce. Using it directly avoids the cargo
+/// lock contention that otherwise forces `--test-threads=1` for LLVM sweeps —
+/// every `cargo run` in a parallel test run re-acquires the build lock and
+/// can race a concurrent rebuild check.
+fn gg_binary() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_gg"))
+}
+
+/// Invoke the pre-built `gg` binary directly.
 ///
 /// When `GG_BACKEND=llvm` is set in the environment, append `--backend=llvm`
 /// to every `gg build` / `gg test` invocation. Other subcommands (`run`,
 /// `check`, `fmt`, …) ignore the flag so we don't pass it where the CLI
 /// rejects it.
 fn gg_command(subcommand: &str) -> Command {
-    let mut cmd = Command::new(env!("CARGO"));
-    cmd.args(["run", "--quiet", "--", subcommand]);
+    let mut cmd = Command::new(gg_binary());
+    cmd.arg(subcommand);
     if matches!(subcommand, "build" | "test" | "run") {
         if let Some(backend) = gg_backend() {
             cmd.arg(format!("--backend={backend}"));
@@ -92,6 +102,7 @@ fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
 /// Run a command with a specific timeout duration. Returns the output or panics
 /// if the process hangs beyond the deadline.
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
+    let start = std::time::Instant::now();
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -143,7 +154,33 @@ fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
 
+    record_timing(fixture, start.elapsed());
+
     std::process::Output { status, stdout, stderr }
+}
+
+/// Append a `<elapsed_ms>\t<fixture>\n` line to `$GG_TIMING_LOG` when set.
+/// Each fixture issues multiple `run_with_deadline` calls (build + one or
+/// more exec); aggregate by fixture in post-processing. The line is built
+/// in memory and emitted in a single `write()` syscall — POSIX guarantees
+/// atomicity for O_APPEND writes <= PIPE_BUF (4096 bytes on Linux), and a
+/// single record is well under that. `writeln!` would issue multiple
+/// syscalls and let parallel threads interleave bytes mid-line.
+fn record_timing(fixture: &str, elapsed: Duration) {
+    use std::io::Write;
+    let Ok(path) = std::env::var("GG_TIMING_LOG") else { return };
+    if path.is_empty() {
+        return;
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    let line = format!("{}\t{}\n", elapsed.as_millis(), fixture);
+    let _ = f.write_all(line.as_bytes());
 }
 
 /// Run a build command with the configured build timeout. Wraps any Command
