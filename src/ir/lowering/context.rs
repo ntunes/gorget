@@ -2529,6 +2529,65 @@ impl<'a> LoweringContext<'a> {
             make_option_type_def(n, inner_type)
         });
     }
+
+    /// Phase A — auto-register a collection-family TypeDef + Named TypeId
+    /// using the BuiltinTypeProtocol metadata. Idempotent: returns the
+    /// existing TypeId if already registered. Used by the late-registration
+    /// sites (dict literal lowering, items()/zip()/etc. method return-type
+    /// inference) that synthesize `Vector__T` / `Dict__K_V` / `Set__T` /
+    /// `HashMap__K_V` / `HashSet__T` names without going through
+    /// register_collection_alias or map_ast_type_mut. Without metadata,
+    /// downstream consumers (`collection_runtime_type`,
+    /// `is_collection_type_name`, `is_resource_type`, ...) that read
+    /// `metadata.collection_kind` would see no entry and fall through
+    /// to a Ptr.
+    ///
+    /// Pass the canonical mangled name (e.g. "Vector__Tuple__int64_t__int64_t");
+    /// the protocol base ("Vector") is detected from the leading prefix.
+    pub fn ensure_collection_type(&mut self, name: &str) -> TypeId {
+        if let Some(tid) = self.type_mapper.lookup_named(name) {
+            return tid;
+        }
+        let base = if name.starts_with("Vector__") { "Vector" }
+            else if name.starts_with("Deque__") { "Deque" }
+            else if name.starts_with("Dict__") { "Dict" }
+            else if name.starts_with("HashMap__") { "HashMap" }
+            else if name.starts_with("Set__") { "Set" }
+            else if name.starts_with("HashSet__") { "HashSet" }
+            else {
+                // Not a known collection family — register as a bare Named
+                // and let downstream callers handle it.
+                let tid = self.type_registry.insert(GirType::Named(name.to_string()));
+                self.type_mapper.register_named(name.to_string(), tid);
+                return tid;
+            };
+        if let Some(protocol) = super::builtins::lookup_protocol(base) {
+            if !self.type_registry.has_type_def(name) {
+                let drop_strat = match protocol.drop_fn {
+                    Some(f) => crate::ir::types::DropStrategy::Trivial(f.to_string()),
+                    None => crate::ir::types::DropStrategy::None,
+                };
+                self.type_registry.add_type_def(crate::ir::types::TypeDef {
+                    name: name.to_string(),
+                    kind: crate::ir::types::TypeDefKind::Struct(crate::ir::types::StructDef { fields: vec![] }),
+                    metadata: crate::ir::types::TypeMetadata {
+                        size: None,
+                        align: None,
+                        copy_semantics: protocol.copy_semantics,
+                        drop_strategy: drop_strat,
+                        clone_fn: protocol.clone_fn.map(String::from),
+                        clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
+                        materialize_fn: protocol.materialize_fn.map(String::from),
+                        collection_kind: protocol.collection_kind,
+                        enum_category: None,
+                    },
+                });
+            }
+        }
+        let tid = self.type_registry.insert(GirType::Named(name.to_string()));
+        self.type_mapper.register_named(name.to_string(), tid);
+        tid
+    }
 }
 
 /// Known blocking call names at AST level — these are yield points where the

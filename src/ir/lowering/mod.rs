@@ -1521,13 +1521,9 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     let str_str = vec![owned_string_type, owned_string_type];
 
     // Methods returning typed Vector
-    // Ensure Vector__GorgetString is registered early so split() etc. return the correct type.
-    let vec_str_type = ctx.type_mapper.named_types.get("Vector__GorgetString").copied()
-        .unwrap_or_else(|| {
-            let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named("Vector__GorgetString".to_string()));
-            ctx.type_mapper.register_named("Vector__GorgetString".to_string(), tid);
-            tid
-        });
+    // Ensure Vector__GorgetString is registered early so split() etc. return
+    // the correct type. Phase A: protocol-derived metadata.
+    let vec_str_type = ctx.ensure_collection_type("Vector__GorgetString");
     let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
         .unwrap_or(array_type);
     let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()

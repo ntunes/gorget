@@ -697,7 +697,7 @@ impl<'a> LoweringContext<'a> {
 
             // Map collection instantiations to their runtime struct.
             // e.g., Vector__Str → GorgetArray, Dict__Str__int64_t → GorgetMap
-            if let Some(runtime_name) = collection_runtime_type(&def.name) {
+            if let Some(runtime_name) = collection_runtime_type(&def.name, &self.gir.type_registry) {
                 if let Some(runtime_sid) = self.struct_reg.lookup(runtime_name) {
                     self.struct_reg.register(&def.name, runtime_sid);
                     continue;
@@ -900,7 +900,7 @@ impl<'a> LoweringContext<'a> {
                 continue;
             }
             // Skip collections and opaques — handled by existing logic.
-            if collection_runtime_type(name).is_some() {
+            if collection_runtime_type(name, &self.gir.type_registry).is_some() {
                 continue;
             }
             if is_opaque_pointer_type(name) {
@@ -964,7 +964,7 @@ impl<'a> LoweringContext<'a> {
             }
 
             // No TypeDef exists — synthesize from the name pattern.
-            if let Some(fields) = synthesize_struct_fields(name, &self.struct_reg) {
+            if let Some(fields) = synthesize_struct_fields(name, &self.struct_reg, &self.gir.type_registry) {
                 let sid = self.module.add_struct(StructDef {
                     name: name.clone(),
                     fields,
@@ -1008,14 +1008,15 @@ impl<'a> LoweringContext<'a> {
 pub(super) fn synthesize_struct_fields(
     name: &str,
     struct_reg: &StructRegistry,
+    gir_types: &crate::ir::types::TypeRegistry,
 ) -> Option<Vec<(String, LirType)>> {
     if let Some(rest) = name.strip_prefix("Result__") {
         // Result__X__Y — split into Ok type (X) and Error type (Y).
         // Handle compound inner types (e.g., Result__Vector__int64_t__Str)
         // by finding the split point.
         let (ok_name, err_name) = split_result_components(rest)?;
-        let ok_ty = component_to_lir_type(ok_name, struct_reg);
-        let err_ty = component_to_lir_type(err_name, struct_reg);
+        let ok_ty = component_to_lir_type(ok_name, struct_reg, gir_types);
+        let err_ty = component_to_lir_type(err_name, struct_reg, gir_types);
         return Some(vec![
             ("tag".into(), LirType::I32),
             ("Ok_0".into(), ok_ty),
@@ -1023,7 +1024,7 @@ pub(super) fn synthesize_struct_fields(
         ]);
     }
     if let Some(inner) = name.strip_prefix("Option__") {
-        let some_ty = component_to_lir_type(inner, struct_reg);
+        let some_ty = component_to_lir_type(inner, struct_reg, gir_types);
         return Some(vec![
             ("tag".into(), LirType::I32),
             ("Some_0".into(), some_ty),
@@ -1049,7 +1050,11 @@ pub(super) fn split_result_components(rest: &str) -> Option<(&str, &str)> {
 }
 
 /// Map a monomorphized type name component to an LirType.
-pub(super) fn component_to_lir_type(name: &str, struct_reg: &StructRegistry) -> LirType {
+pub(super) fn component_to_lir_type(
+    name: &str,
+    struct_reg: &StructRegistry,
+    gir_types: &crate::ir::types::TypeRegistry,
+) -> LirType {
     match name {
         "bool" => LirType::Bool,
         "int8_t" => LirType::I8,
@@ -1069,7 +1074,7 @@ pub(super) fn component_to_lir_type(name: &str, struct_reg: &StructRegistry) -> 
                 return LirType::Struct(sid);
             }
             // Collection types.
-            if let Some(runtime_name) = collection_runtime_type(name) {
+            if let Some(runtime_name) = collection_runtime_type(name, gir_types) {
                 if let Some(sid) = struct_reg.lookup(runtime_name) {
                     return LirType::Struct(sid);
                 }
@@ -1080,30 +1085,31 @@ pub(super) fn component_to_lir_type(name: &str, struct_reg: &StructRegistry) -> 
     }
 }
 
-/// Map generic collection type names to their runtime struct name.
-/// Returns None for non-collection types.
-pub(super) fn collection_runtime_type(name: &str) -> Option<&'static str> {
-    if name.starts_with("Vector__") {
-        return Some("GorgetArray");
+/// Map a generic collection type to its runtime struct name. Reads
+/// `metadata.collection_kind` set during Phase A type registration,
+/// falling back to a Callable* name fallback (Callable types still
+/// don't have TypeDef registration today). Returns None for non-
+/// collection types and for Result/Option (real enum types — no alias).
+pub(super) fn collection_runtime_type(
+    name: &str,
+    gir_types: &crate::ir::types::TypeRegistry,
+) -> Option<&'static str> {
+    use crate::ir::types::CollectionKind;
+    if let Some(td) = gir_types.get_type_def(name) {
+        return td.metadata.collection_kind.map(|kind| match kind {
+            CollectionKind::Array => "GorgetArray",
+            CollectionKind::Map | CollectionKind::OrderedMap => "GorgetMap",
+            CollectionKind::Set | CollectionKind::OrderedSet => "GorgetSet",
+        });
     }
-    if name.starts_with("Dict__") || name.starts_with("GorgetDict__") {
-        return Some("GorgetMap");
-    }
-    if name.starts_with("HashMap__") || name.starts_with("GorgetMap__") {
-        return Some("GorgetMap");
-    }
-    if name.starts_with("Set__") || name.starts_with("GorgetSet__") {
-        return Some("GorgetSet");
-    }
+    // Callable types lack TypeDef registration today; explicit fallback
+    // until that gap closes (Phase A residual #1 in TODO.md).
     if name.starts_with("Callable__")
         || name.starts_with("MutCallable__")
         || name.starts_with("ConsumeCallable__")
+        || name == "GorgetClosure"
     {
         return Some("GorgetClosure");
-    }
-    if name.starts_with("Result__") || name.starts_with("Option__") {
-        // Result/Option are real structs with fields — don't alias.
-        return None;
     }
     None
 }
@@ -1345,7 +1351,7 @@ pub fn map_gir_type_with_structs(
                             return LirType::PtrTo(sid);
                         }
                         // Collection instantiations map to runtime structs.
-                        if let Some(runtime_name) = collection_runtime_type(name) {
+                        if let Some(runtime_name) = collection_runtime_type(name, registry) {
                             if let Some(sid) = sr.lookup(runtime_name) {
                                 return LirType::PtrTo(sid);
                             }
@@ -1371,7 +1377,7 @@ pub fn map_gir_type_with_structs(
                     }
                     // Collection instantiations map to runtime structs.
                     // e.g., Dict__int64_t__int64_t → GorgetMap
-                    if let Some(runtime_name) = collection_runtime_type(name) {
+                    if let Some(runtime_name) = collection_runtime_type(name, registry) {
                         if let Some(sid) = sr.lookup(runtime_name) {
                             return LirType::Struct(sid);
                         }
@@ -1702,7 +1708,10 @@ mod tests {
 
     #[test]
     fn map_ptr_collection_to_ptr_to() {
-        use crate::ir::types::{GirType, TypeRegistry};
+        use crate::ir::types::{
+            GirType, TypeRegistry, TypeDef, TypeDefKind, StructDef, TypeMetadata,
+            CopySemantics, DropStrategy, CollectionKind,
+        };
         use crate::lir::{StructId};
         use crate::lir::types::StructRegistry;
 
@@ -1713,7 +1722,21 @@ mod tests {
         let array_sid = StructId(200);
         struct_reg.register("GorgetArray", array_sid);
 
-        // Register a collection type name.
+        // Phase A registration discipline: every collection type carries
+        // a TypeDef with collection_kind set. Name-prefix fallbacks are
+        // gone, so the test fixture has to mirror what register_-
+        // collection_alias / map_ast_type_mut / etc. would write.
+        registry.add_type_def(TypeDef {
+            name: "Vector__int64_t".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                copy_semantics: CopySemantics::Resource,
+                drop_strategy: DropStrategy::Trivial("gorget_array_free".into()),
+                clone_fn: Some("gorget_array_clone".into()),
+                collection_kind: Some(CollectionKind::Array),
+                ..Default::default()
+            },
+        });
         let vec_id = registry.insert(GirType::Named("Vector__int64_t".to_string()));
         let ptr_vec = registry.insert(GirType::Ptr(vec_id));
 

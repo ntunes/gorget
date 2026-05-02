@@ -1140,12 +1140,10 @@ pub(super) fn lower_method_call(
                 let val_type = ctx.type_mapper.lookup_named(val_name).unwrap_or(I64_TYPE);
                 let tuple_type_id = register_tuple_type(ctx, &[key_type, val_type]);
                 let tuple_name = ctx.type_name_for_id(tuple_type_id).unwrap_or("int64_t").to_string();
-                // Register Vector[tuple] type name
+                // Register Vector[tuple] type name with full Phase A metadata
+                // so downstream consumers can read collection_kind etc.
                 let vec_name = format!("Vector__{tuple_name}");
-                if ctx.lookup_type_by_name(&vec_name).is_none() {
-                    let vec_type = ctx.type_registry.insert(crate::ir::types::GirType::Named(vec_name.clone()));
-                    ctx.type_mapper.register_named(vec_name.clone(), vec_type);
-                }
+                ctx.ensure_collection_type(&vec_name);
                 // Also register Option[tuple] for .get() calls
                 let option_name = format!("Option__{tuple_name}");
                 if ctx.lookup_type_by_name(&option_name).is_none() {
@@ -1661,12 +1659,9 @@ pub(super) fn lower_method_call(
             let other_type = resolve_inner_type(ctx, &other_elem_name);
             let tuple_type_id = register_tuple_type(ctx, &[self_type, other_type]);
             let tuple_name = ctx.type_name_for_id(tuple_type_id).unwrap_or("int64_t").to_string();
-            // Register Vector[Tuple] type
+            // Register Vector[Tuple] type with full Phase A metadata.
             let vec_name = format!("Vector__{tuple_name}");
-            if ctx.lookup_type_by_name(&vec_name).is_none() {
-                let vec_type = ctx.type_registry.insert(crate::ir::types::GirType::Named(vec_name.clone()));
-                ctx.type_mapper.register_named(vec_name, vec_type);
-            }
+            ctx.ensure_collection_type(&vec_name);
         }
 
         // Borrowing methods (get/first/last) always return `Option__Ref__T` with a

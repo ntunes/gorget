@@ -2275,8 +2275,8 @@ impl<'a> FuncLowering<'a> {
         let key_sep = type_part.find("__")?;
         let key_c = &type_part[..key_sep];
         let val_c = &type_part[key_sep + 2..];
-        let key_ty = super::component_to_lir_type(key_c, self.struct_reg);
-        let val_ty = super::component_to_lir_type(val_c, self.struct_reg);
+        let key_ty = super::component_to_lir_type(key_c, self.struct_reg, self.gir_types);
+        let val_ty = super::component_to_lir_type(val_c, self.struct_reg, self.gir_types);
 
         // Closure signature lookup (same shape as Vector HOFs).
         let closure_idx = lir_args.len() - 1;
@@ -2471,7 +2471,7 @@ impl<'a> FuncLowering<'a> {
             return None;
         }
         let elem_c = &rest[..sep_pos];
-        let elem_ty = super::component_to_lir_type(elem_c, self.struct_reg);
+        let elem_ty = super::component_to_lir_type(elem_c, self.struct_reg, self.gir_types);
 
         let closure_idx = lir_args.len() - 1;
         let closure_call_sig = args.get(closure_idx).and_then(|op| {
@@ -2877,7 +2877,7 @@ impl<'a> FuncLowering<'a> {
         }
 
         let elem_c_name = &rest[..sep];
-        let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg);
+        let element_ty = super::component_to_lir_type(elem_c_name, self.struct_reg, self.gir_types);
 
         // Resolve the closure's signature from the pre-computed
         // table. The snapshot gives us both the return type (needed

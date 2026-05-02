@@ -101,14 +101,10 @@ pub(super) fn lower_dict_literal(
     let val_c = type_id_to_mangle_name(ctx, val_type);
     let mangled = format!("Dict__{key_c}__{val_c}");
 
-    // Register dict type if not present
-    let dict_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-        tid
-    } else {
-        let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-        ctx.type_mapper.register_named(mangled.clone(), tid);
-        tid
-    };
+    // Phase A: ensure_collection_type populates protocol-derived metadata
+    // (collection_kind / drop_strategy / clone_fn) for downstream consumers
+    // like collection_runtime_type, elem_drop_fn_for_type, is_resource_type.
+    let dict_type = ctx.ensure_collection_type(&mangled);
 
     let new_fn = format!("{mangled}__new");
     let put_fn = format!("{mangled}__put");
@@ -347,15 +343,10 @@ pub(super) fn lower_dict_comprehension(
             "_dict_comp_var".to_string()
         };
 
-        // We need to infer dict type — use I64 placeholders
+        // We need to infer dict type — use I64 placeholders.
+        // Phase A: ensure_collection_type populates protocol metadata.
         let mangled = "Dict__int64_t__int64_t".to_string();
-        let dict_type = if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
-            tid
-        } else {
-            let tid = ctx.type_registry.insert(GirType::Named(mangled.clone()));
-            ctx.type_mapper.register_named(mangled.clone(), tid);
-            tid
-        };
+        let dict_type = ctx.ensure_collection_type(&mangled);
 
         let new_fn = format!("{mangled}__new");
         let put_fn = format!("{mangled}__put");

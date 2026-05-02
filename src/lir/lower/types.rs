@@ -609,7 +609,7 @@ pub(super) fn gir_type_to_c(type_id: gir_types::TypeId, registry: &TypeRegistry)
             GirType::MutPtr(inner) => format!("{}*", gir_type_to_c(*inner, registry)),
             GirType::Named(name) => {
                 // Map collection instantiations to runtime struct names.
-                if let Some(rt) = collection_runtime_type(name) {
+                if let Some(rt) = collection_runtime_type(name, registry) {
                     rt.into()
                 } else if is_opaque_pointer_type(name) {
                     // Opaque types are lowered to Ptr (void*) in LIR.
