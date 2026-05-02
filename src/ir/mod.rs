@@ -408,6 +408,14 @@ pub enum BorrowOrigin {
     /// Fresh runtime view (e.g. `s.trim()`, `s[1..3]`) borrowing from
     /// `source`'s buffer. Today's `LocalOwnershipState::ViewOf`.
     RuntimeView(LocalId),
+    /// Field-path borrow: a collection element borrowed from a path
+    /// like `self.data` or `cfg.items`. Path is the dotted-string form
+    /// (e.g. "self.data"). Carries a String because the path may
+    /// traverse multiple struct layers — a single LocalId can't
+    /// represent the chain. Mutation of any prefix of the path
+    /// triggers materialisation. Mirrors the legacy
+    /// `CollectionId::FieldPath(String)` shape.
+    FieldPath(String),
 }
 
 /// Mutability of a borrow. Today this distinguishes `&` / `!` mutable

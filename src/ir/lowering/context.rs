@@ -1221,9 +1221,14 @@ impl<'a> LoweringContext<'a> {
             let type_flipped = saved_types.get(lid)
                 .map_or(false, |orig| *orig != builder.local_type(*lid));
             if post_save {
+                // Mirror the legacy filter: drop branch-local CollectionRef/
+                // CowBorrow at scope exit. v2 equivalents are
+                // Borrowed { CollectionElement | FieldPath } and View.
                 let keep = !matches!(state,
                     crate::ir::LocalOwnership::Borrowed {
-                        origin: crate::ir::BorrowOrigin::CollectionElement(_), ..
+                        origin: crate::ir::BorrowOrigin::CollectionElement(_)
+                              | crate::ir::BorrowOrigin::FieldPath(_),
+                        ..
                     } | crate::ir::LocalOwnership::View { .. }
                 );
                 if keep {
@@ -1913,10 +1918,11 @@ impl<'a> LoweringContext<'a> {
     /// override any prior state (e.g., Owned from call_extern_tracked).
     pub fn set_cow_borrow(&mut self, local: LocalId) {
         self.func_state.local_ownership.insert(local, LocalOwnershipState::CowBorrow);
-        // Phase D: CowBorrow without a known source maps to Borrowed with
-        // an Alias-to-self origin. Where the call site has the source
-        // collection (set_collection_ref), the richer CollectionElement
-        // variant is used instead.
+        // Phase D: CoW borrow without a known source uses an Alias(self)
+        // placeholder in v2 (same as set_ref). Once set_cow_borrow_source
+        // fires, the entry upgrades to CollectionElement / FieldPath. The
+        // is_cow_borrow predicate stays on the legacy map for the
+        // pending-source case — see is_cow_borrow's comment.
         self.func_state.local_ownership_v2.insert(local,
             crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::Alias(local),
@@ -1926,6 +1932,11 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a CoW borrow (deferred clone).
+    /// Stays on the legacy map: v2's set_cow_borrow placeholder collides
+    /// with set_ref's (both produce Borrowed { Alias(self), Shared }), so
+    /// v2 alone can't tell them apart. The legacy CowBorrow variant
+    /// disambiguates. Migrate when set_cow_borrow gains an eager-source
+    /// signature (D6 or earlier).
     pub fn is_cow_borrow(&self, local: LocalId) -> bool {
         matches!(self.func_state.local_ownership.get(&local), Some(LocalOwnershipState::CowBorrow))
     }
@@ -1965,34 +1976,29 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Look up the source collection of a local marked as a CollectionRef.
-    /// Reads from the legacy map because v2's BorrowOrigin::CollectionElement
-    /// only carries LocalId — Place-shaped FieldPath sources are stored as
-    /// `BorrowOrigin::Alias(self)` placeholders which don't preserve the
-    /// path. A future Phase D extension will introduce a Place-based variant.
+    /// Phase D: reads v2 (Borrowed { CollectionElement | FieldPath }).
     pub fn collection_ref_source(&self, local: LocalId) -> Option<CollectionId> {
-        match self.func_state.local_ownership.get(&local) {
-            Some(LocalOwnershipState::CollectionRef { collection }) => Some(collection.clone()),
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        match self.func_state.local_ownership_v2.get(&local) {
+            Some(LocalOwnership::Borrowed {
+                origin: BorrowOrigin::CollectionElement(c), ..
+            }) => Some(CollectionId::Local(*c)),
+            Some(LocalOwnership::Borrowed {
+                origin: BorrowOrigin::FieldPath(p), ..
+            }) => Some(CollectionId::FieldPath(p.clone())),
             _ => None,
         }
     }
 
     /// Mark a local as a collection element reference.
     pub fn set_collection_ref(&mut self, local: LocalId, collection: CollectionId) {
-        // Phase D mirror: CollectionId::Local(l) → CollectionElement(l).
-        // CollectionId::FieldPath(_) doesn't fit BorrowOrigin's LocalId-only
-        // shape, so we record an Alias(self) placeholder in v2 — same as
-        // generic set_ref. The placeholder preserves is_ref_local /
-        // is_owned_local behavior; field-path provenance still lives in
-        // the legacy CollectionRef map for cow_before_field_mutation to
-        // consult. A future BorrowOrigin extension (Place-based variant)
-        // will close this gap.
         let v2 = match &collection {
             CollectionId::Local(coll_local) => crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::CollectionElement(*coll_local),
                 mutability: crate::ir::Mutability::Shared,
             },
-            CollectionId::FieldPath(_) => crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Alias(local),
+            CollectionId::FieldPath(path) => crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::FieldPath(path.clone()),
                 mutability: crate::ir::Mutability::Shared,
             },
         };
@@ -2030,12 +2036,13 @@ impl<'a> LoweringContext<'a> {
                     BorrowOrigin::Alias(a) if *a == local_id => OwnershipState::Ref,
                     BorrowOrigin::Field { .. } => OwnershipState::Ref,
                     // External-rooted borrows: alias to another local, collection
-                    // element, or runtime view — may have been materialized on
+                    // element, runtime view — may have been materialized on
                     // some paths.
                     BorrowOrigin::Param(_)
                     | BorrowOrigin::Alias(_)
                     | BorrowOrigin::CollectionElement(_)
-                    | BorrowOrigin::RuntimeView(_) => OwnershipState::MaybeBorrowed,
+                    | BorrowOrigin::RuntimeView(_)
+                    | BorrowOrigin::FieldPath(_) => OwnershipState::MaybeBorrowed,
                 },
             };
         }
@@ -2119,11 +2126,22 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Collect all collection refs pointing to a `CollectionId`. Derived query — O(n) scan.
+    /// Phase D: scans v2 for Borrowed { CollectionElement | FieldPath }
+    /// matching the target.
     fn cow_collection_refs_for_id(&self, target: &CollectionId) -> Vec<LocalId> {
-        self.func_state.local_ownership.iter()
-            .filter_map(|(&id, s)| match s {
-                LocalOwnershipState::CollectionRef { collection: c } if c == target => Some(id),
-                _ => None,
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership_v2.iter()
+            .filter_map(|(&id, s)| {
+                let matches = match (s, target) {
+                    (LocalOwnership::Borrowed {
+                        origin: BorrowOrigin::CollectionElement(c), ..
+                    }, CollectionId::Local(t)) => *c == *t,
+                    (LocalOwnership::Borrowed {
+                        origin: BorrowOrigin::FieldPath(p), ..
+                    }, CollectionId::FieldPath(t)) => p == t,
+                    _ => false,
+                };
+                if matches { Some(id) } else { None }
             })
             .collect()
     }
