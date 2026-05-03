@@ -1036,17 +1036,40 @@ pub(super) fn lower_compound_assign(
             || type_name == "GorgetMap";
 
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
-            // Save index into a local so it can be reused for both read and write
+            // Save index into a local so it can be reused for both read and write.
+            // Phase C: for resource-typed indices (e.g. Dict[String, V] keys),
+            // Move from the source (key local) — the idx_local is consumed by
+            // both the read and the eventual put/set, but cap=0 propagation
+            // makes the shallow shape correct for literal sources today.
             let idx_type = infer_operand_type_full(ctx, &idx_raw, builder);
             let idx_local = builder.add_local(idx_type, None);
-            builder.assign(Place::local(idx_local), idx_raw);
+            let idx_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = idx_raw {
+                let src_ty = builder.local_type(p.local);
+                if p.projections.is_empty()
+                    && (ctx.type_registry.is_resource_type(src_ty)
+                        || ctx.type_registry.needs_drop(src_ty))
+                {
+                    crate::ir::instructions::AssignMode::Borrow
+                } else {
+                    crate::ir::instructions::AssignMode::Copy
+                }
+            } else {
+                crate::ir::instructions::AssignMode::Copy
+            };
+            builder.assign_mode(idx_mode, Place::local(idx_local), idx_raw);
 
             // For field-accessed collections (e.g. self.scores[i]), copy to a temp local
             // so the C backend can determine the collection type from the local's TypeId.
             // index_load doesn't handle Places with Field projections correctly.
+            // Phase C: temp is a non-owning view of the field — Borrow.
             let read_place = if resolved_field_type.is_some() {
                 let temp = builder.add_local(obj_type, None);
-                builder.assign(Place::local(temp), Operand::Copy(place.clone()));
+                let temp_mode = if ctx.type_registry.is_resource_type(obj_type) {
+                    crate::ir::instructions::AssignMode::Borrow
+                } else {
+                    crate::ir::instructions::AssignMode::Copy
+                };
+                builder.assign_mode(temp_mode, Place::local(temp), Operand::Copy(place.clone()));
                 Place::local(temp)
             } else {
                 place.clone()
