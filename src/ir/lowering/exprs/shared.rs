@@ -293,6 +293,18 @@ pub fn emit_with_shared_refresh(
             }
             SharedLocalKind::RwLock => emit_rwlock_read_get(ctx, builder, hidden_local, inner_type),
         };
-        builder.assign(Place::local(binding_local), fresh);
+        // Phase C: `fresh` is the freshly extracted value from the
+        // shared facade (Move from the lock guard). For resource types,
+        // Move transfers ownership to the binding_local; primitives stay
+        // Copy. Mirrors the resource_assign_mode pattern from
+        // lower_shared_var_decl.
+        let refresh_mode = if ctx.type_registry.is_resource_type(inner_type)
+            || ctx.type_registry.needs_drop(inner_type)
+        {
+            crate::ir::instructions::AssignMode::Move
+        } else {
+            crate::ir::instructions::AssignMode::Copy
+        };
+        builder.assign_mode(refresh_mode, Place::local(binding_local), fresh);
     }
 }
