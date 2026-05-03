@@ -1087,12 +1087,20 @@ fn lower_return(
                 // data when MoveZero zeros the source without freeing.
                 // Locals from field/pattern extracts may be shallow copies — Clone
                 // is needed to produce an independent return value.
+                //
+                // Phase C: the condition is widened to "any bare-place return of
+                // a needs_drop local" because the post-assign block at line 1135
+                // unconditionally emits move_zero on the source for these cases.
+                // GIR mode follows runtime intent — Copy + move_zero at the source
+                // IS Move semantics, and the validator (correctly) flagged the
+                // original Copy mode as a shallow alias. Named non-owned locals
+                // (rare on this path — see lower_var_decl ownership propagation)
+                // would benefit from Clone instead, but that's a C3 audit
+                // refinement and the current move_zero behavior is unchanged.
                 let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     p.projections.is_empty()
                         && ctx.type_registry.needs_drop(
                             builder.local_type(p.local))
-                        && (ctx.is_owned_local(p.local)
-                            || !ctx.is_named_local(p.local))
                 } else { false };
                 if use_move {
                     builder.assign_mode(
