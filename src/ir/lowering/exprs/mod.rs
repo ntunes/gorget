@@ -2084,11 +2084,11 @@ fn lower_match_expr(
     arms: &[ast::MatchArm],
     else_arm: Option<&Spanned<Expr>>,
 ) -> Operand {
-    // Lower scrutinee to a temp local
+    // Lower scrutinee to a temp local. Phase C: stage with the right
+    // AssignMode by source shape — see stage_match_scrutinee.
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
-    let scrut_local = builder.add_local(scrut_type, None);
-    builder.assign(Place::local(scrut_local), scrut_op);
+    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
 
     // Allocate result local (placeholder type — will be overwritten)
     let result_local = builder.add_local(I64_TYPE, None);
@@ -2530,10 +2530,15 @@ fn lower_match_stmt_as_expr(
     arms: &[ast::MatchItem],
     else_arm: Option<&ast::Block>,
 ) -> Operand {
+    // Phase C: stage with the right AssignMode by source shape. This is
+    // the path that nested `match X:` inside an arm body takes (the inner
+    // match becomes the last stmt of the arm-body block, which is lowered
+    // as Expr::Block, which routes the trailing match here). Without
+    // this, the @DataFrame__col_* cluster's inner `match b:` produced
+    // `_scrut = copy _b` shallow aliases.
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
-    let scrut_local = builder.add_local(scrut_type, None);
-    builder.assign(Place::local(scrut_local), scrut_op);
+    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
 
     let result_local = builder.add_local(I64_TYPE, None);
     let merge_bb = builder.new_block();

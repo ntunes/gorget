@@ -11,6 +11,61 @@ use super::super::drops::DropScopeKind;
 use super::super::exprs::{lower_expr, infer_operand_type_full, resolve_none_tag};
 use super::lower_block;
 
+/// Stage a match scrutinee into a fresh temp with the right `AssignMode` and
+/// transfer ownership/borrow tracking to the temp.
+///
+/// Phase C: `_scrut = copy _src` for a resource-typed scrut is a shallow
+/// alias of `_src`'s heap data. The validator (correctly) flags it. This
+/// helper picks the mode by source shape and runs the matching ownership
+/// transfer so the GIR carries a well-formed Move/Borrow at the boundary.
+///
+/// Three sites use it: `lower_match_stmt` (statement form),
+/// `lower_match_stmt_as_expr` (last-stmt-in-block form — what nested
+/// `match b:` inside an arm body lowers as), and `lower_match_expr`
+/// (Expr::Match). All three must do the same thing — they were drifting,
+/// which is what produced the @DataFrame__col_* cluster (the inner match
+/// went through the second site, which lacked C2.9's fix).
+pub fn stage_match_scrutinee(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    scrut_op: &Operand,
+    scrut_type: TypeId,
+) -> LocalId {
+    use crate::ir::instructions::AssignMode;
+    let scrut_local = builder.add_local(scrut_type, None);
+    let mode = if !ctx.type_registry.is_resource_type(scrut_type) {
+        AssignMode::Copy
+    } else if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
+        if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+            AssignMode::Move
+        } else if ctx.is_ref_local(p.local) {
+            AssignMode::Borrow
+        } else {
+            AssignMode::Copy
+        }
+    } else {
+        AssignMode::Copy
+    };
+    builder.assign_mode(mode, Place::local(scrut_local), scrut_op.clone());
+
+    if let Operand::Copy(place) | Operand::Move(place) = scrut_op {
+        if place.projections.is_empty() && ctx.is_owned_local(place.local) {
+            ctx.set_owned(scrut_local);
+            let src_type = builder.local_type(place.local);
+            if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
+                ctx.drops.unregister(place.local);
+                ctx.move_zero_and_mark(builder, place.local);
+                ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
+            }
+        }
+        // Ref propagation: see comment in lower_match_stmt below.
+        if !place.projections.is_empty() && ctx.is_ref_local(place.local) {
+            ctx.set_ref(scrut_local);
+        }
+    }
+    scrut_local
+}
+
 /// Lower a match statement to GIR using Branch chains.
 pub(super) fn lower_match_stmt(
     ctx: &mut LoweringContext,
@@ -63,71 +118,9 @@ pub(super) fn lower_match_stmt(
         } else { None }
     } else { None };
 
-    // Phase C: pick the assign mode for the scrutinee temp based on the
-    // source operand's ownership shape.
-    //   - Resource source that's owned (call result, fresh extraction):
-    //     Move — the post-assign block (lines 76-86) already MoveZeros
-    //     and transfers drop registration; Move makes the GIR carry
-    //     that intent at the boundary.
-    //   - Resource source that's a ref/borrow: Borrow — scrut_local is
-    //     a non-owning view that drives pattern extraction into the
-    //     Ptr-binding path (see set_ref(scrut_local) below).
-    //   - Otherwise (primitives, constants, owned-and-still-alive):
-    //     Copy stays correct (bit-copy is fine for non-resources;
-    //     owned-alive is rare here because dropelaborator catches it).
-    let scrut_local = builder.add_local(scrut_type, None);
-    let scrut_assign_mode = {
-        use crate::ir::instructions::AssignMode;
-        if !ctx.type_registry.is_resource_type(scrut_type) {
-            AssignMode::Copy
-        } else if let Operand::Copy(ref p) | Operand::Move(ref p) = scrut_op {
-            if p.projections.is_empty() && ctx.is_owned_local(p.local) {
-                AssignMode::Move
-            } else if ctx.is_ref_local(p.local) {
-                AssignMode::Borrow
-            } else {
-                AssignMode::Copy
-            }
-        } else {
-            AssignMode::Copy
-        }
-    };
-    builder.assign_mode(scrut_assign_mode, Place::local(scrut_local), scrut_op.clone());
-
-    // Propagate ownership from the source operand to the scrutinee temp.
-    // This lets pattern extraction know whether the scrutinee data is owned
-    // (safe to drop) vs borrowed (from .get().unwrap() etc.).
-    // For owned Resource-type temps (method call results), transfer ownership:
-    // MoveZero the source and register scrut_local for drop. Without this,
-    // the scope-exit drop on the source frees data that pattern-extracted
-    // bindings still reference (double-free).
-    if let Operand::Copy(ref place) | Operand::Move(ref place) = scrut_op {
-        if place.projections.is_empty() && ctx.is_owned_local(place.local) {
-            ctx.set_owned(scrut_local);
-            // Transfer drop registration from source temp to scrutinee local.
-            let src_type = builder.local_type(place.local);
-            if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
-                ctx.drops.unregister(place.local);
-                ctx.move_zero_and_mark(builder, place.local);
-                ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
-            }
-        }
-        // Borrow-derived scrutinee: when scrut_op reads a place that
-        // chains through a ref-typed local (e.g. `match item.item_type`
-        // where `item` came from `.get(i).unwrap()` and is a `Ref<T>`),
-        // the scrut_local's variant payload still aliases the borrowed
-        // memory. Marking scrut_local as ref opts pattern extraction
-        // into the Ptr-binding path (see Pattern::Constructor and
-        // Pattern::DotShorthand below) so resource fields bind as
-        // `Ptr<T>` borrows instead of being moved-and-zeroed through
-        // the borrow. Without this, a `case .Variant(field):` body
-        // that runs across multiple frames clears the source on the
-        // first frame and reads empty data thereafter — surfaced
-        // 2026-04-28 as gorget-arena's invisible menu labels.
-        if !place.projections.is_empty() && ctx.is_ref_local(place.local) {
-            ctx.set_ref(scrut_local);
-        }
-    }
+    // Phase C: stage the scrutinee with the right AssignMode and ownership
+    // transfer. See `stage_match_scrutinee` for the full rationale.
+    let scrut_local = stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
 
     let merge_bb = builder.new_block();
 

@@ -4,7 +4,7 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log (2026-05-03 — 17 commits, 11447 → 405, ~96.5% reduction):**
+  **Progress log (2026-05-03 — 18 commits, 11447 → 303, ~97.4% reduction):**
     - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
     - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
     - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
@@ -22,21 +22,20 @@
     - **C2.15** (`2ae29841`): `Expr::Is` boolean form scrutinee staging picks Move/Borrow/Copy by source. Hits `is_bindings.gg` (13 → 0) and all `if X is Variant(field):` patterns missed by C2.9. (-202)
     - **C2.16** (`1a415a31`): `cow_materialize_alias` and `cow_materialize_collection_ref` emit Move mode for the cloned-to-owned-local transfer. The cloned temp is fresh + dead. Hits `@JsonParser__fail` (31 → 0) and any path through cow_before_mutation on bare params. (-25)
     - **C2.17** (`d33b26f0`): `lower_catch_expr`'s 4 internal assigns (val staging / Ok-extract / Err-bind / recovery) pick Move mode for resources via new `mode_for` closure. Hits `error_conditional_throw.gg` (8 → 0) and any `expr catch (e):` with resource-typed Result. (-51)
+    - **C2.18**: nested-match scrutinee staging — `lower_match_stmt_as_expr` (last-stmt-in-block path that nested `match X:` inside an arm body lowers as) and `lower_match_expr` (`Expr::Match`) both used default `Copy` mode. Factored C2.9's logic into `stage_match_scrutinee` and applied at all three call sites (one source of truth). Hits `@DataFrame__col_{add,sub,mul}` (102 → 0). (-102)
 
-  **Remaining (405 violations after C2.17):**
-    - 102 Column — DataFrame col_* arithmetic (bb2::i3, bb28::i3 patterns — call-arg materialization through Box-deref?)
+  **Remaining (303 violations after C2.18):**
     - 101 GorgetString — diffuse, spread across @main + helpers
     - 70 Vector__GorgetString
     - 46 Vector__int64_t
     - Smaller tail: 12 Expr, 8 Tuple, 7 Set__int64_t, 5 GorgetArray
-    Top fns: @main 161 (broad — ≤10/fixture), @DataFrame__col_* 102, @xtd__http___request 27, @xtd__http___parse_url 18, @eval 12 (option_box_enum Box-deref), @std__fmt___pad_* 18.
+    Top fns: @main 161 (broad — ≤10/fixture), @xtd__http___request 27, @xtd__http___parse_url 18, @eval 12 (option_box_enum Box-deref), @std__fmt___pad_* 18.
 
   **Audit lens (per user direction 2026-05-03):** every remaining shallow copy is either (a) a latent bug we fix in lowering, or (b) a missing IR / syntax / protocol primitive needed to express the necessity legally. There is no third "accept the violation" bucket — that would defeat the Phase C guarantee.
 
   **Stages remaining:**
     - C3 (audit): each remaining cluster needs per-site classification. Likely shapes:
       - Box-deref auto-materialization: `_x = copy box.*` in call-arg path (eval pattern). Either propagate Box-deref skip to validator OR emit Borrow mode at the lowering site.
-      - DataFrame col_add/sub/mul shared bb2::i3 / bb28::i3 — needs deeper trace; possibly call-arg materialization through clone.
       - Tuple / set / smaller residue.
     - C4 (promote validator from warning to error) — locked once C3 closes the residue.
 
