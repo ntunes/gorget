@@ -301,7 +301,9 @@ impl<'a> BorrowChecker<'a> {
                     let is_mutating_collection_method =
                         crate::ir::lowering::builtins::is_mutating_builtin_method(method_name);
                     if is_mutating_collection_method {
-                        if let Some(recv_def_id) = self.find_root_def_id(receiver) {
+                        if let Some((recv_def_id, recv_field_path)) =
+                            self.find_root_def_id_with_path(receiver)
+                        {
                             let recv_name = self.scopes.get_def(recv_def_id).name.clone();
                             // Check explicit T & borrows AND borrow-field structs
                             for (&var_id, origin) in self.var_origins.iter() {
@@ -345,25 +347,40 @@ impl<'a> BorrowChecker<'a> {
                             // borrow from the collection via the CoW system.
                             // Emitted as a warning (not error) because the CoW system
                             // handles correctness by materializing before mutation.
-                            for (&var_id, &source_collection) in self.index_borrow_sources.iter() {
-                                if source_collection == recv_def_id {
-                                    let is_alive = !matches!(
-                                        self.var_states.get(&var_id),
-                                        Some(VarState::Moved { .. })
+                            //
+                            // Field-level disjointness: only invalidate borrows whose
+                            // source path is a prefix of (or equal to) the mutated
+                            // path. `gpu.shader_cache.get(i)` records source path
+                            // `gpu.shader_cache`; `gpu.deform_face_indices.push(...)`
+                            // mutates `gpu.deform_face_indices` — disjoint, no clone.
+                            for (&var_id, source) in self.index_borrow_sources.iter() {
+                                if source.root != recv_def_id { continue; }
+                                // The mutation invalidates a borrow iff the mutated
+                                // path is a prefix of the borrow's source path
+                                // (mutating `gpu` invalidates `gpu.shader_cache`
+                                // borrows; mutating `gpu.shader_cache` does too;
+                                // mutating `gpu.deform_face_indices` does NOT).
+                                let is_prefix = recv_field_path.len() <= source.field_path.len()
+                                    && recv_field_path.iter()
+                                        .zip(source.field_path.iter())
+                                        .all(|(a, b)| a == b);
+                                if !is_prefix { continue; }
+                                let is_alive = !matches!(
+                                    self.var_states.get(&var_id),
+                                    Some(VarState::Moved { .. })
+                                );
+                                if is_alive {
+                                    let var_name = self.scopes.get_def(var_id).name.clone();
+                                    self.stale_warnings.push(
+                                        crate::semantic::errors::SemanticWarning {
+                                            kind: crate::semantic::errors::SemanticWarningKind::CowBorrowMutation {
+                                                source: recv_name.clone(),
+                                                borrow: var_name,
+                                            },
+                                            span: expr.span,
+                                        }
                                     );
-                                    if is_alive {
-                                        let var_name = self.scopes.get_def(var_id).name.clone();
-                                        self.stale_warnings.push(
-                                            crate::semantic::errors::SemanticWarning {
-                                                kind: crate::semantic::errors::SemanticWarningKind::CowBorrowMutation {
-                                                    source: recv_name.clone(),
-                                                    borrow: var_name,
-                                                },
-                                                span: expr.span,
-                                            }
-                                        );
-                                        break;
-                                    }
+                                    break;
                                 }
                             }
                             // Check for-loop iterator invalidation: mutating a collection

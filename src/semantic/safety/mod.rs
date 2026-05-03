@@ -188,10 +188,25 @@ pub(super) struct BranchState {
     pub(super) diverges: bool,
     /// Fallible (Option/Result) variable guard states.
     pub(super) fallible_states: FxHashMap<DefId, FallibleState>,
-    /// Implicit CoW borrows: variable DefId → source collection DefId.
+    /// Implicit CoW borrows: variable DefId → (source-root DefId, field path).
     /// Populated when a variable is bound from `.get().unwrap()` or `vec[i]`
     /// on a collection with resource-type elements.
-    pub(super) index_borrow_sources: FxHashMap<DefId, DefId>,
+    /// Field path lets the mutation-time invalidation check prune disjoint
+    /// sibling-field mutations: `gpu.shader_cache.get(i)` borrows from the
+    /// path `gpu.shader_cache`, so `gpu.deform_face_indices.push(...)` doesn't
+    /// invalidate it.
+    pub(super) index_borrow_sources: FxHashMap<DefId, IndexBorrowSource>,
+}
+
+/// Where an implicit CoW borrow points: the root binding plus the field
+/// path projected from it. An empty path means the borrow is from the
+/// root binding itself (e.g. `let x = vec.get(0)`); a non-empty path
+/// means the borrow is from a sub-collection (e.g. `let x =
+/// gpu.shader_cache.get(0)` records `gpu` + `["shader_cache"]`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct IndexBorrowSource {
+    pub(super) root: DefId,
+    pub(super) field_path: Vec<String>,
 }
 
 // ─── Blocking Call Detection ───────────────────────────────
@@ -279,7 +294,7 @@ pub(super) struct BorrowChecker<'a> {
     /// is bound from `.get().unwrap()` or `vec[i]` on a collection with
     /// resource-type elements. Used to detect MutationWhileBorrowed for
     /// implicit CoW borrows (not just explicit `T &` references).
-    pub(super) index_borrow_sources: FxHashMap<DefId, DefId>,
+    pub(super) index_borrow_sources: FxHashMap<DefId, IndexBorrowSource>,
 
     // ── Borrow dependency export (for drop ordering) ──
     /// Per-local borrow sources: borrower DefId → Vec<source DefId>.

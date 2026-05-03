@@ -379,6 +379,43 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Like `find_root_def_id` but also returns the field path traversed
+    /// from the root to the expression. Used by the CoW-borrow checker
+    /// to track field-level disjointness: borrows from `gpu.shader_cache`
+    /// shouldn't be invalidated by mutations to disjoint sibling
+    /// `gpu.deform_face_indices`. The returned `Vec<String>` contains
+    /// field names in outer-to-inner order (`["shader_cache"]` for
+    /// `gpu.shader_cache`); empty for a direct binding reference.
+    /// Index/OptionalChain segments don't append to the path — they
+    /// dereference, not project (an index borrow is from the collection
+    /// itself, not from a sub-path of it).
+    pub(super) fn find_root_def_id_with_path(
+        &self, expr: &Spanned<Expr>,
+    ) -> Option<(DefId, Vec<String>)> {
+        match &expr.node {
+            Expr::Identifier(_) => self.resolution_map.get(&expr.span.start)
+                .copied()
+                .map(|d| (d, Vec::new())),
+            Expr::SelfExpr => self.resolution_map.get(&expr.span.start)
+                .copied()
+                .map(|d| (d, Vec::new())),
+            Expr::FieldAccess { object, field } => {
+                let (root, mut path) = self.find_root_def_id_with_path(object)?;
+                path.push(field.node.clone());
+                Some((root, path))
+            }
+            Expr::TupleFieldAccess { object, index } => {
+                let (root, mut path) = self.find_root_def_id_with_path(object)?;
+                path.push(format!(".{index}"));
+                Some((root, path))
+            }
+            Expr::Index { object, .. }
+            | Expr::OptionalChain { object, .. } =>
+                self.find_root_def_id_with_path(object),
+            _ => None,
+        }
+    }
+
     /// Check if an expression is an index/get access on a collection.
     /// Returns the collection's root DefId if the expression is:
     /// - `vec[i]` (Index expression)
@@ -400,6 +437,31 @@ impl<'a> BorrowChecker<'a> {
                 if matches!(method.node.as_str(), "get" | "first" | "last") =>
             {
                 self.find_root_def_id(receiver)
+            }
+            _ => None,
+        }
+    }
+
+    /// Like `find_collection_source` but also returns the field path
+    /// from the root binding to the collection. Used by the CoW-borrow
+    /// checker to record where a borrow points, so that disjoint
+    /// sibling-field mutations don't invalidate it.
+    /// `gpu.shader_cache.get(i)` returns `Some((gpu_def_id, ["shader_cache"]))`;
+    /// `vec.get(i)` returns `Some((vec_def_id, []))`.
+    pub(super) fn find_collection_source_with_path(
+        &self, expr: &Spanned<Expr>,
+    ) -> Option<(DefId, Vec<String>)> {
+        match &expr.node {
+            Expr::Index { object, .. } => self.find_root_def_id_with_path(object),
+            Expr::MethodCall { receiver, method, .. }
+                if matches!(method.node.as_str(), "unwrap" | "expect") =>
+            {
+                self.find_collection_source_with_path(receiver)
+            }
+            Expr::MethodCall { receiver, method, .. }
+                if matches!(method.node.as_str(), "get" | "first" | "last") =>
+            {
+                self.find_root_def_id_with_path(receiver)
             }
             _ => None,
         }

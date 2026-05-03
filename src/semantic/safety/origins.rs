@@ -652,7 +652,7 @@ impl<'a> BorrowChecker<'a> {
             }
             // Merge index_borrow_sources: union (conservative — borrow in any branch = borrow)
             for (var_id, collection_id) in &state.index_borrow_sources {
-                merged_index_borrows.entry(*var_id).or_insert(*collection_id);
+                merged_index_borrows.entry(*var_id).or_insert_with(|| collection_id.clone());
             }
         }
 

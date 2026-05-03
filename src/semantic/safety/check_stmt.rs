@@ -80,13 +80,16 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(def_id) = self.scopes.lookup_def_by_span(name, pattern.span)
                         .or_else(|| self.find_def_by_name(name))
                     {
-                        if let Some(collection_def_id) = self.find_collection_source(value) {
+                        if let Some((root, field_path)) =
+                            self.find_collection_source_with_path(value)
+                        {
                             // Only track for non-Copy element types — Copy types
                             // are independent values, not borrows.
                             let elem_is_resource = self.scopes.get_def(def_id).type_id
                                 .map_or(false, |tid| !is_copy_type(tid, self.types, self.scopes));
                             if elem_is_resource {
-                                self.index_borrow_sources.insert(def_id, collection_def_id);
+                                self.index_borrow_sources.insert(def_id,
+                                    super::IndexBorrowSource { root, field_path });
                             }
                         }
                     }
