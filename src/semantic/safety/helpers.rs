@@ -417,30 +417,6 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// Check if an expression is an index/get access on a collection.
-    /// Returns the collection's root DefId if the expression is:
-    /// - `vec[i]` (Index expression)
-    /// - `vec.get(i)` (method call on collection)
-    /// - `vec.get(i).unwrap()` (method chain through unwrap/expect)
-    /// - `vec.first()`, `vec.last()` (element access methods)
-    pub(super) fn find_collection_source(&self, expr: &Spanned<Expr>) -> Option<DefId> {
-        match &expr.node {
-            // vec[i]
-            Expr::Index { object, .. } => self.find_root_def_id(object),
-            // vec.get(i).unwrap() — unwrap/expect on a .get() result
-            Expr::MethodCall { receiver, method, .. }
-                if matches!(method.node.as_str(), "unwrap" | "expect") =>
-            {
-                self.find_collection_source(receiver)
-            }
-            // vec.get(i), vec.first(), vec.last()
-            Expr::MethodCall { receiver, method, .. }
-                if matches!(method.node.as_str(), "get" | "first" | "last") =>
-            {
-                self.find_root_def_id(receiver)
-            }
-            _ => None,
-        }
-    }
 
     /// Like `find_collection_source` but also returns the field path
     /// from the root binding to the collection. Used by the CoW-borrow
