@@ -365,7 +365,7 @@ fn alloc_local(func: &mut Function, type_id: TypeId, hint: Option<&str>) -> Loca
     func.locals.push(Local {
         type_id,
         name_hint: hint.map(|s| s.to_string()),
-        ownership: crate::ir::OwnershipState::default(),
+        ownership: crate::ir::LocalOwnership::default(),
     });
     id
 }
@@ -714,12 +714,12 @@ mod tests {
             params: vec![mut_ptr_i64, I64_TYPE],
             return_type: I64_TYPE,
             locals: vec![
-                Local { type_id: I64_TYPE, name_hint: Some("_0".into()), ownership: crate::ir::OwnershipState::default() },         // return place
-                Local { type_id: mut_ptr_i64, name_hint: Some("counter".into()), ownership: crate::ir::OwnershipState::default() },  // _1: &int
-                Local { type_id: I64_TYPE, name_hint: Some("amount".into()), ownership: crate::ir::OwnershipState::default() },      // _2: int
-                Local { type_id: task_type, name_hint: Some("_task".into()), ownership: crate::ir::OwnershipState::default() },      // _3: Task
-                Local { type_id: I64_TYPE, name_hint: Some("_await_res".into()), ownership: crate::ir::OwnershipState::default() },  // _4: await result
-                Local { type_id: I64_TYPE, name_hint: Some("_result".into()), ownership: crate::ir::OwnershipState::default() },     // _5: final result
+                Local { type_id: I64_TYPE, name_hint: Some("_0".into()), ownership: crate::ir::LocalOwnership::default() },         // return place
+                Local { type_id: mut_ptr_i64, name_hint: Some("counter".into()), ownership: crate::ir::LocalOwnership::default() },  // _1: &int
+                Local { type_id: I64_TYPE, name_hint: Some("amount".into()), ownership: crate::ir::LocalOwnership::default() },      // _2: int
+                Local { type_id: task_type, name_hint: Some("_task".into()), ownership: crate::ir::LocalOwnership::default() },      // _3: Task
+                Local { type_id: I64_TYPE, name_hint: Some("_await_res".into()), ownership: crate::ir::LocalOwnership::default() },  // _4: await result
+                Local { type_id: I64_TYPE, name_hint: Some("_result".into()), ownership: crate::ir::LocalOwnership::default() },     // _5: final result
             ],
             blocks: vec![
                 BasicBlock {
@@ -960,7 +960,7 @@ mod tests {
         // Add a second param
         let mut_ptr_i64 = reg.insert(GirType::MutPtr(I64_TYPE));
         source.params.push(I64_TYPE);
-        source.locals.push(Local { type_id: mut_ptr_i64, name_hint: Some("counter2".into()), ownership: crate::ir::OwnershipState::default() });
+        source.locals.push(Local { type_id: mut_ptr_i64, name_hint: Some("counter2".into()), ownership: crate::ir::LocalOwnership::default() });
 
         let mutex_type = reg.insert(GirType::Named("Mutex__int64_t".into()));
         let guard_type = reg.insert(GirType::Named("Guard__int64_t".into()));

@@ -1,6 +1,6 @@
 use super::instructions::*;
 use super::types::*;
-use super::{BasicBlock, Function, Local, OwnershipState};
+use super::{BasicBlock, Function, Local, LocalOwnership};
 use crate::span::Span;
 
 /// Ergonomic builder for constructing GIR functions.
@@ -35,7 +35,7 @@ impl FunctionBuilder {
         locals.push(Local {
             type_id: return_type,
             name_hint: None,
-            ownership: OwnershipState::default(),
+            ownership: LocalOwnership::default(),
         });
 
         // _1.._N = parameters
@@ -45,7 +45,7 @@ impl FunctionBuilder {
             locals.push(Local {
                 type_id: *ty,
                 name_hint: hint.map(|s| s.to_string()),
-                ownership: OwnershipState::default(),
+                ownership: LocalOwnership::default(),
             });
         }
 
@@ -72,7 +72,7 @@ impl FunctionBuilder {
         self.locals.push(Local {
             type_id,
             name_hint: name_hint.map(|s| s.to_string()),
-            ownership: OwnershipState::default(),
+            ownership: LocalOwnership::default(),
         });
         id
     }

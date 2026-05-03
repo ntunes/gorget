@@ -1956,51 +1956,16 @@ impl<'a> LoweringContext<'a> {
         self.func_state.local_ownership.insert(local, v2);
     }
 
-    /// Derive the set of ref locals for GIR function output.
-    /// Flush v2 ownership state onto the builder's Local structs as the
-    /// 3-variant `OwnershipState` the rest of the pipeline still consumes.
-    /// Phase D: reads v2. Mapping:
-    ///   Owned → Owned
-    ///   Borrowed { Param(self) | Alias(self) | Field {..} } → Ref
-    ///     (self-rooted borrows: bare params, set_ref placeholders, field
-    ///     loads, pattern extracts — never dropped, no source-mutation
-    ///     materialization needed at this layer)
-    ///   Borrowed { Param(other) | Alias(other) | CollectionElement(_) }
-    ///     → MaybeBorrowed (alias to a tracked source — may need
-    ///     conditional drop after CoW materialization)
-    ///   View {..} → MaybeBorrowed
-    ///   MaybeOwned → MaybeBorrowed
-    /// D6 lifts the rich enum directly onto Local, retiring this collapse.
+    /// Persist per-local ownership onto the GIR `Local` structs at the
+    /// GIR/LIR boundary. D6: `Local.ownership` carries the rich
+    /// `LocalOwnership` directly — no collapse to a 3-variant shape.
+    /// LIR consumers read the typed enum (origin, mutability, view source)
+    /// for drop, SlotLoad routing, and CoW materialisation decisions.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
-        use crate::ir::{LocalOwnership, BorrowOrigin, OwnershipState};
         for (&local_id, state) in &self.func_state.local_ownership {
             let idx = local_id.0 as usize;
             if idx >= builder.locals.len() { continue; }
-            builder.locals[idx].ownership = match state {
-                LocalOwnership::Owned => OwnershipState::Owned,
-                LocalOwnership::MaybeOwned => OwnershipState::MaybeBorrowed,
-                LocalOwnership::View { .. } => OwnershipState::MaybeBorrowed,
-                LocalOwnership::Borrowed { origin, .. } => match origin {
-                    // Self-rooted borrows + pending cow are flat refs (no source
-                    // to track yet). CowBorrowPending matches the previous
-                    // Alias(self) placeholder semantics so codegen behaves the
-                    // same — once set_cow_borrow_source upgrades the entry to
-                    // CollectionElement/FieldPath, it falls into the
-                    // MaybeBorrowed bucket below.
-                    BorrowOrigin::Param(p) if *p == local_id => OwnershipState::Ref,
-                    BorrowOrigin::Alias(a) if *a == local_id => OwnershipState::Ref,
-                    BorrowOrigin::Field { .. } => OwnershipState::Ref,
-                    BorrowOrigin::CowBorrowPending => OwnershipState::Ref,
-                    // External-rooted borrows: alias to another local, collection
-                    // element, runtime view, or field-path collection element —
-                    // may have been materialized on some paths.
-                    BorrowOrigin::Param(_)
-                    | BorrowOrigin::Alias(_)
-                    | BorrowOrigin::CollectionElement(_)
-                    | BorrowOrigin::RuntimeView(_)
-                    | BorrowOrigin::FieldPath(_) => OwnershipState::MaybeBorrowed,
-                },
-            };
+            builder.locals[idx].ownership = state.clone();
         }
     }
 

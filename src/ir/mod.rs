@@ -319,45 +319,17 @@ pub struct InnerSharedSpawn {
     pub callee_param_ownerships: Vec<crate::parser::ast::Ownership>,
 }
 
-/// Ownership state for a GIR local — persists through the pipeline.
-/// Populated during lowering from `FunctionState::local_ownership`,
-/// consumed by the LIR lowering (SlotLoad vs SlotAddr) and future
-/// ownership-aware optimization passes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum OwnershipState {
-    /// Owns its data. Registered for drop at scope exit.
-    #[default]
-    Owned,
-    /// Borrowed pointer reference (Ptr/MutPtr). LIR uses SlotLoad.
-    /// Not registered for drop — the owner is elsewhere.
-    Ref,
-    /// Started as a borrow (Alias, CollectionRef, CowBorrow) that may have
-    /// been materialized (cloned to owned) on some code paths via CoW.
-    /// Needs conditional drop guard (the current memcmp-zero mechanism).
-    /// Future: replace memcmp with an ownership flag.
-    MaybeBorrowed,
-}
-
-impl OwnershipState {
-    /// Whether this state represents a borrowed Ptr reference for LIR purposes.
-    pub fn is_ref(self) -> bool {
-        matches!(self, Self::Ref | Self::MaybeBorrowed)
-    }
-}
-
 // ── Phase D: typed local ownership and borrow provenance ─────────────
 // See docs/internals/unified-resource-model.md §6 for the design.
 //
-// These types replace the existing 7-variant `LocalOwnershipState` (in
-// `lowering/context.rs`) plus the 3-variant `OwnershipState` above plus
-// the 9 sidecar maps keyed on LocalId. They're being introduced
-// side-by-side with the legacy types during D1; subsequent commits
-// migrate consumers and delete the legacy shapes.
+// `LocalOwnership` + `BorrowOrigin` + `Mutability` replaced the 7-variant
+// `LocalOwnershipState` (deleted in D3-full) and the 3-variant
+// `OwnershipState` (deleted in D6). They are now the single typed shape
+// carried on `Local.ownership` through the GIR/LIR boundary.
 
-/// Single typed ownership state for a local. Replaces the 7-variant
-/// `LocalOwnershipState` and 3-variant `OwnershipState` with one shape
-/// that carries borrow provenance (via [`BorrowOrigin`]) instead of
-/// scattering it across sidecar maps.
+/// Single typed ownership state for a local. Carries borrow provenance
+/// (via [`BorrowOrigin`]) and mutability inline rather than scattering
+/// them across sidecar maps. Source of truth at the GIR/LIR boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LocalOwnership {
     /// Owns its data. Registered for drop at scope exit.
@@ -381,8 +353,51 @@ pub enum LocalOwnership {
 
 impl LocalOwnership {
     /// Whether this state represents a borrowed Ptr reference (not owned).
+    /// Used by LIR-level SlotLoad routing: anything not Owned is a Ptr at
+    /// runtime. Returns true for Borrowed, View, and MaybeOwned.
     pub fn is_ref(&self) -> bool {
         !matches!(self, LocalOwnership::Owned)
+    }
+
+    /// Whether this is a "pure" borrow with no chance of being materialized.
+    /// Such locals must NOT be dropped — the owner is elsewhere on the stack.
+    /// Equivalent to legacy `OwnershipState::Ref`. The flush-time predicate:
+    /// self-rooted Borrowed (param-self / alias-self / Field /
+    /// CowBorrowPending) — these have no external source that could trigger
+    /// CoW materialisation, so they stay borrowed for their entire lifetime.
+    pub fn is_pure_borrow(&self) -> bool {
+        match self {
+            LocalOwnership::Borrowed { origin, .. } => match origin {
+                BorrowOrigin::Field { .. } | BorrowOrigin::CowBorrowPending => true,
+                BorrowOrigin::Param(_) | BorrowOrigin::Alias(_) => {
+                    // Self-rooted (placeholder) → pure borrow. External-rooted
+                    // (`Param(other_local)`, `Alias(other_local)`) is the
+                    // MaybeBorrowed case and may have been materialized.
+                    // The flush-time check uses the local's own LocalId for
+                    // the comparison, so this method needs that context —
+                    // see is_pure_borrow_for() for the precise predicate.
+                    false
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Whether this is a "pure" borrow given the local's own id, used to
+    /// detect self-rooted Param / Alias placeholders. Locals whose origin
+    /// resolves to themselves are sentinels meaning "borrowed but no
+    /// external source tracked here" — never materialized, never dropped.
+    pub fn is_pure_borrow_for(&self, self_id: LocalId) -> bool {
+        match self {
+            LocalOwnership::Borrowed { origin, .. } => match origin {
+                BorrowOrigin::Field { .. } | BorrowOrigin::CowBorrowPending => true,
+                BorrowOrigin::Param(p) => *p == self_id,
+                BorrowOrigin::Alias(a) => *a == self_id,
+                _ => false,
+            },
+            _ => false,
+        }
     }
 }
 
@@ -439,7 +454,11 @@ pub enum Mutability {
 pub struct Local {
     pub type_id: TypeId,
     pub name_hint: Option<String>,
-    pub ownership: OwnershipState,
+    /// Ownership / borrow state. Source of truth at the GIR/LIR boundary
+    /// (D6: lifted from `func_state.local_ownership` directly onto Local).
+    /// LIR consumers read the rich enum to decide drop, SlotLoad routing,
+    /// and CoW materialisation.
+    pub ownership: LocalOwnership,
 }
 
 /// A basic block.
@@ -560,7 +579,7 @@ mod tests {
             locals: vec![Local {
                 type_id: I32_TYPE,
                 name_hint: None,
-                ownership: OwnershipState::default(),
+                ownership: LocalOwnership::default(),
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,

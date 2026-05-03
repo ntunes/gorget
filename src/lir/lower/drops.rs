@@ -58,10 +58,14 @@ impl<'a> FuncLowering<'a> {
 
         let local_idx = place.local.0 as usize;
 
-        // Skip drops for Ref locals — they're borrows, the owner drops them.
+        // Skip drops for pure-borrow locals — they're borrows with no
+        // chance of materialization (self-rooted Param/Alias placeholders,
+        // Field-projected borrows, CowBorrowPending). The owner drops the
+        // data; this slot has no claim. Other Borrowed/View/MaybeOwned
+        // states fall through to the conditional-drop path below.
         if place.projections.is_empty() {
             if let Some(local) = self.gir_func.locals.get(local_idx) {
-                if local.ownership == ir::OwnershipState::Ref {
+                if local.ownership.is_pure_borrow_for(place.local) {
                     self.lir_func.block_mut(bb).insts.push(Inst::Nop);
                     return;
                 }
