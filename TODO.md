@@ -4,7 +4,7 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log (2026-05-03 — 28 commits, 11447 → 19, ~99.83% reduction):**
+  **Progress log (2026-05-03 — 31 commits, 11447 → 17, ~99.85% reduction):**
     - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
     - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
     - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
@@ -42,16 +42,24 @@
        - REVERTED: `lower_for_string` Move attempt — caused double-free in 2 fixtures (string_enum_variants, leak_known_patterns). Original Copy + drop_register kept; for-string flag stays as a known Phase C limitation.
        Combined delta: 46 → 19 (-27 violations).
 
-  **Remaining (19 violations after C2.28):**
-    - 17 GorgetString — bulk is the for-string cluster (lower_for_string at for_loops.rs:165) which can't be fixed without runtime-level work; see notes below.
-    - 1 Vector__int64_t (shared_iterator_invalidation residue, in-loop body context)
-    - 1 Row (FromRow_for_Row__from_row trait body — assign_to_return_slot helper not firing for unclear reason; needs debug print to diagnose).
-    Top fns: @main 9 (diffuse 1-3 per fixture), @tokenize 3, @is_balanced/@caesar_encrypt/@max_depth/@rate_password/@parse_positive/@test_string singleton (each 1).
+    - **C2.29** (`5d307b59`): trait-impl FunctionBody::Expression at traits.rs:953,1472 mirrored `assign_to_return_slot` helper inline. Hits @FromRow_for_Row__from_row (1 → 0).
+    - **C2.30** (`e7ab2232`): compound indexed assign idx_local + field-collection temp pick Borrow for resource sources. Hits compound_index_assign (1 → 0).
+    - **For-string deferred** (`21c127a1`): tried option (b) — Borrow + no drop_register at lower_for_string:165 leaning on cap=0 sentinel. Regressed leak_known_patterns P5 (for-char loop leaked ~30B). Root cause: iter_op has THREE distinct shapes (literal cap=0 view, owned cap>0 clone from CoW, shared cap>0 borrow) that are bit-identical at runtime — neither cap=0 sentinel alone nor a uniform "is-view" runtime bit can distinguish them. The fix needs IR-level origin tracking (Phase D's BorrowOrigin queryable from this site) — option (c). Reverted with detailed in-place comment listing options (a)/(b)/(c) and the regression finding.
 
-  **The for-string cluster** (lower_for_string at for_loops.rs:165) is the dominant residue. The site emits `iter_local = copy iter_op` + drop_registers iter_local as if it owns. Runtime behavior is correct *only* because string literals (cap=0 sentinel) no-op on free, masking the latent shallow-alias-with-double-drop. The proper fix needs *either*:
-    (a) emit a real `gorget_string_clone_to_owned(iter_op)` call to materialize an independent buffer the iter_local can own, OR
-    (b) emit Borrow mode + don't drop_register iter_local, with the caller responsible for keeping the source alive past the loop.
-  Approach (a) is safer (matches the existing comment's intent) but allocates per loop entry; (b) is faster but changes the runtime contract. Either is a C3 follow-up requiring more careful analysis — my Move attempt regressed 2 fixtures with `free(): double free detected in tcache 2`.
+  **Remaining (17 violations — 99.85% reduction from baseline 11447):**
+    - 16 GorgetString — entirely the for-string cluster (lower_for_string at for_loops.rs:165). Touches @tokenize, @is_balanced, @caesar_encrypt, @max_depth, @rate_password, @parse_positive, @test_string + @main across 8 fixtures.
+    - 1 Vector__int64_t — shared_iterator_invalidation in-loop body residue, related to with-clause + spawn interaction.
+
+  **The for-string cluster** is the gating C3 residue. Three iter_op shapes that can't be distinguished at runtime alone:
+    Shape | cap | Owner | iter_local must
+    ------|-----|-------|----------------
+    1. literal view | 0 | static | drop no-ops anyway
+    2. owned clone (CoW) | >0 | nobody else | DROP (P5 leaks otherwise)
+    3. shared borrow | >0 | upstream | NOT DROP (would double-free)
+
+  Today: Copy + drop_register works for shapes 1+2; shape 3 is latent but unhit (the CoW upstream always materializes a clone before for-string entry). Option (a) — always-clone — costs an allocation per loop entry but is safe. Option (c) — source-aware via Phase D `BorrowOrigin` — is the principled fix; ~1-2 days work. The Phase C validator will keep flagging until either (a) or (c) lands.
+
+  **Phase B context:** the for-string finding is also evidence that Phase B (universal runtime view discriminator) wouldn't suffice on its own. Even with a per-resource-type "is-view" bit, the compiler still needs IR-level origin info to set the bit correctly for shape 2 vs shape 3. Phase D + Phase C precision is the right path; Phase B remains correctly deferred.
 
   **Validated externally (2026-05-03):** gorget-arena (51-file user project at `.worktrees/gorget-arena/src/main.gg`) hits **zero** Phase C violations after C2.25. Real-world signal that the major patterns are covered.
 
