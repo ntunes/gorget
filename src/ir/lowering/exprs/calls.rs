@@ -867,9 +867,7 @@ pub(super) fn lower_call(
                 }
                 let callable_name = format!("__callable_{}", local_id.0);
                 // Look up tracked callable return type, fall back to I64_TYPE
-                let ret_type = ctx.func_state.callable_return_types.get(&local_id)
-                    .copied()
-                    .unwrap_or(I64_TYPE);
+                let ret_type = ctx.callable_return_type(local_id).unwrap_or(I64_TYPE);
                 if ret_type == UNIT_TYPE {
                     builder.call_void(callable_name, call_args);
                     return Operand::Constant(Constant::Unit);

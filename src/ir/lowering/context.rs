@@ -1760,6 +1760,31 @@ impl<'a> LoweringContext<'a> {
         self.func_state.string_borrow_sources.contains(&local)
     }
 
+    /// Mark a local as the source of a string Borrow assignment (`String b = a`).
+    /// The target shares the source's heap data, so subsequent uses of the
+    /// source — particularly `return source` — must clone.
+    pub fn mark_string_borrow_source(&mut self, local: LocalId) {
+        self.func_state.string_borrow_sources.insert(local);
+    }
+
+    /// Reset all callable-return-type tracking. Called at function-boundary
+    /// entry; per-function transient state.
+    pub fn callable_return_types_clear(&mut self) {
+        self.func_state.callable_return_types.clear();
+    }
+
+    /// Record the return type of a callable-typed local. Reads back via
+    /// `callable_return_type` at call sites for `cb(...)` return-type
+    /// inference when `cb` binds a closure / function reference.
+    pub fn set_callable_return_type(&mut self, local: LocalId, ret_type: TypeId) {
+        self.func_state.callable_return_types.insert(local, ret_type);
+    }
+
+    /// Look up the recorded return type for a callable-typed local.
+    pub fn callable_return_type(&self, local: LocalId) -> Option<TypeId> {
+        self.func_state.callable_return_types.get(&local).copied()
+    }
+
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked
     /// with a more specific origin (set_bare_param / set_param_borrow_unique /
     /// set_field_borrow / set_collection_ref / set_view_of / cow_register_alias).

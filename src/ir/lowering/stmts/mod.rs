@@ -278,7 +278,7 @@ fn lower_var_decl(
             // inference when `F cb = self.f` binds a closure field and F is a
             // method-level-generic param that resolves to a Function type.
             if let Some(ret_type) = callable_local_return_type(ctx, &type_.node) {
-                ctx.func_state.callable_return_types.insert(local_id, ret_type);
+                ctx.set_callable_return_type(local_id, ret_type);
             }
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);
@@ -537,7 +537,7 @@ fn lower_var_decl(
                         // Track that the source has been borrowed-from.
                         // If we later `return source`, the clone is needed because
                         // the target shares the source's heap data.
-                        ctx.func_state.string_borrow_sources.insert(place.local);
+                        ctx.mark_string_borrow_source(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
                     // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):

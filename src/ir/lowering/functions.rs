@@ -565,7 +565,7 @@ pub fn lower_function(
     ctx.func_state.current_fn_name = name.to_string();
 
     // Register parameters as locals
-    ctx.func_state.callable_return_types.clear();
+    ctx.callable_return_types_clear();
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32); // _1, _2, ...
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
@@ -587,7 +587,7 @@ pub fn lower_function(
         }
         // Track callable parameter return types
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.func_state.callable_return_types.insert(local_id, ret_type);
+            ctx.set_callable_return_type(local_id, ret_type);
         }
     }
 
@@ -840,7 +840,7 @@ pub fn lower_equip_method(
     // Clear and register locals
     ctx.clear_locals();
     ctx.func_state.current_fn_name = mangled_name.clone();
-    ctx.func_state.callable_return_types.clear();
+    ctx.callable_return_types_clear();
     ctx.func_state.consuming_self = self_is_consuming;
 
     // Register self as local _1 (only if method has self)
@@ -874,7 +874,7 @@ pub fn lower_equip_method(
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
+            ctx.set_callable_return_type(LocalId(param_idx), ret_type);
         }
         param_idx += 1;
     }
@@ -1130,7 +1130,7 @@ pub fn lower_generic_function(
     // (meta op params carry no runtime value and are skipped).
     ctx.clear_locals();
     ctx.func_state.current_fn_name = mangled_name.to_string();
-    ctx.func_state.callable_return_types.clear();
+    ctx.callable_return_types_clear();
     // Store move_override_params in context so return-statement lowering can zero sources.
     // Must be set AFTER clear_locals() which resets it.
     ctx.func_state.move_override_params = move_override_params.clone();
@@ -1161,7 +1161,7 @@ pub fn lower_generic_function(
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
-            ctx.func_state.callable_return_types.insert(local_id, ret_type);
+            ctx.set_callable_return_type(local_id, ret_type);
         }
     }
 
@@ -1511,7 +1511,7 @@ fn lower_equip_method_with_subs(
     let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
 
     ctx.clear_locals();
-    ctx.func_state.callable_return_types.clear();
+    ctx.callable_return_types_clear();
     let mut param_idx = if has_self {
         ctx.register_local("self", LocalId(1), self_ptr_type);
         2u32
@@ -1536,7 +1536,7 @@ fn lower_equip_method_with_subs(
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {
-            ctx.func_state.callable_return_types.insert(LocalId(param_idx), ret_type);
+            ctx.set_callable_return_type(LocalId(param_idx), ret_type);
         }
         param_idx += 1;
     }
