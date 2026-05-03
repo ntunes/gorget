@@ -2305,10 +2305,36 @@ fn lower_rethrow_expr(
     error_binding: Option<&(Spanned<crate::parser::ast::Type>, Spanned<String>)>,
     transform: &Spanned<Expr>,
 ) -> Operand {
+    use crate::ir::instructions::AssignMode;
+
+    // Phase C: pick Move mode for resource sources at boundary assigns —
+    // mirrors the C2.17 mode_for closure in lower_catch_expr.
+    let mode_for = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
+        if !ctx.type_registry.is_resource_type(ty)
+            && !ctx.type_registry.needs_drop(ty)
+        {
+            return AssignMode::Copy;
+        }
+        match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                let src_ty = builder.local_type(p.local);
+                if ctx.type_registry.needs_drop(src_ty)
+                    || ctx.type_registry.is_resource_type(src_ty)
+                {
+                    AssignMode::Move
+                } else {
+                    AssignMode::Copy
+                }
+            }
+            _ => AssignMode::Copy,
+        }
+    };
+
     let val = lower_expr(ctx, builder, inner);
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
-    builder.assign(Place::local(val_local), val);
+    let val_mode = mode_for(ctx, builder, &val, val_type);
+    builder.assign_mode(val_mode, Place::local(val_local), val);
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
@@ -2352,7 +2378,9 @@ fn lower_rethrow_expr(
         builder.move_zero(Place::local(val_local));
         ctx.drops.mark_moved(val_local);
         let err_local = builder.add_local(err_field_type, Some(&error_name.node));
-        builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
+        let err_op = FunctionBuilder::copy(err_val);
+        let err_mode = mode_for(ctx, builder, &err_op, err_field_type);
+        builder.assign_mode(err_mode, Place::local(err_local), err_op);
         ctx.register_local(&error_name.node, err_local, err_field_type);
     }
 
@@ -2366,9 +2394,13 @@ fn lower_rethrow_expr(
     if let Some(result_type) = ctx.func_state.current_throws_result_type {
         let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
         let err_dst = builder.enum_init(type_name, "Error", result_type, vec![new_err]);
-        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        let dst_op = FunctionBuilder::copy(err_dst);
+        let dst_mode = mode_for(ctx, builder, &dst_op, result_type);
+        builder.assign_mode(dst_mode, Place::local(LocalId(0)), dst_op);
     } else {
-        builder.assign(Place::local(LocalId(0)), new_err);
+        let ret_ty = builder.locals[0].type_id;
+        let new_err_mode = mode_for(ctx, builder, &new_err, ret_ty);
+        builder.assign_mode(new_err_mode, Place::local(LocalId(0)), new_err);
     }
     // Mark consumed operand as moved to prevent double-free during early-exit drops
     if let Some(local) = new_err_local {
