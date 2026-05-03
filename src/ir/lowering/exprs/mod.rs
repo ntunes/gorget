@@ -225,7 +225,11 @@ fn lower_expr_inner(
                 }
             }
             let val = lower_expr(ctx, builder, inner);
-            // Copy value to a temp BEFORE zeroing the source, so we don't read zeroed data
+            // Copy value to a temp BEFORE zeroing the source, so we don't read
+            // zeroed data. Phase C: emit Move mode for resource types — the
+            // source is about to be zeroed via move_zero_and_mark, so the
+            // semantic IS a transfer of ownership. Copy mode would mark the
+            // GIR as a shallow alias that the validator (correctly) rejects.
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 let place_clone = place.clone();
                 let local_type = if (place_clone.local.0 as usize) < builder.locals.len() {
@@ -234,7 +238,12 @@ fn lower_expr_inner(
                     I64_TYPE
                 };
                 let tmp = builder.add_local(local_type, None);
-                builder.assign(Place::local(tmp), val);
+                let mode = if ctx.type_registry.is_resource_type(local_type) {
+                    crate::ir::instructions::AssignMode::Move
+                } else {
+                    crate::ir::instructions::AssignMode::Copy
+                };
+                builder.assign_mode(mode, Place::local(tmp), val);
                 ctx.move_zero_and_mark(builder, place_clone.local);
                 // Clean up CoW tracking — moved local's data is zeroed, so
                 // any collection refs keyed on it are stale.
