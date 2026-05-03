@@ -1291,8 +1291,20 @@ pub(super) fn lower_interp_segment(
                     t
                 }
             } else {
+                // String / primitive deref: emit the typed AssignMode for the
+                // type. Strings need Clone (the SlotStore handler emits a deep
+                // copy via gorget_string_copy_cow); primitives stay Copy
+                // (bit-copy is correct). Phase C: explicit modes replace the
+                // C-backend's "deep clone for Ptr→String loads" magic, so the
+                // GIR layer carries the typed contract.
+                use crate::ir::instructions::AssignMode;
+                let mode = if ctx.type_mapper.is_string_type(value_type) {
+                    AssignMode::Clone
+                } else {
+                    AssignMode::Copy
+                };
                 let t = builder.add_local(value_type, None);
-                builder.assign(Place::local(t), Operand::Copy(deref_place));
+                builder.assign_mode(mode, Place::local(t), Operand::Copy(deref_place));
                 ctx.drops.register_local(t, value_type, &ctx.type_registry);
                 t
             };
