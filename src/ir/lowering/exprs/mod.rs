@@ -2381,10 +2381,39 @@ fn lower_catch_expr(
     error_binding: &Spanned<String>,
     recovery: &Spanned<Expr>,
 ) -> Operand {
+    use crate::ir::instructions::AssignMode;
+
+    // Phase C: pick Move mode whenever a resource is being staged (val,
+    // extracted ok/err payload, recovery result). The sources here are
+    // either fresh enum-field-load values (already moved out) or
+    // expression results that own their data — Move is the typed
+    // contract. Copy mode left shallow aliases the validator flagged.
+    let mode_for = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
+        if !ctx.type_registry.is_resource_type(ty)
+            && !ctx.type_registry.needs_drop(ty)
+        {
+            return AssignMode::Copy;
+        }
+        match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                let src_ty = builder.local_type(p.local);
+                if ctx.type_registry.needs_drop(src_ty)
+                    || ctx.type_registry.is_resource_type(src_ty)
+                {
+                    AssignMode::Move
+                } else {
+                    AssignMode::Copy
+                }
+            }
+            _ => AssignMode::Copy,
+        }
+    };
+
     let val = lower_expr(ctx, builder, inner);
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
-    builder.assign(Place::local(val_local), val);
+    let val_mode = mode_for(ctx, builder, &val, val_type);
+    builder.assign_mode(val_mode, Place::local(val_local), val);
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
@@ -2415,7 +2444,9 @@ fn lower_catch_expr(
         0,
         ok_field_type,
     );
-    builder.assign(Place::local(result_local), FunctionBuilder::copy(ok_val));
+    let ok_op = FunctionBuilder::copy(ok_val);
+    let ok_mode = mode_for(ctx, builder, &ok_op, ok_field_type);
+    builder.assign_mode(ok_mode, Place::local(result_local), ok_op);
     builder.jump(merge_bb);
 
     // Error path: bind error, evaluate recovery, store into result
@@ -2427,11 +2458,14 @@ fn lower_catch_expr(
         err_field_type,
     );
     let err_local = builder.add_local(err_field_type, Some(&error_binding.node));
-    builder.assign(Place::local(err_local), FunctionBuilder::copy(err_val));
+    let err_op = FunctionBuilder::copy(err_val);
+    let err_mode = mode_for(ctx, builder, &err_op, err_field_type);
+    builder.assign_mode(err_mode, Place::local(err_local), err_op);
     ctx.register_local(&error_binding.node, err_local, err_field_type);
 
     let recovery_val = lower_expr(ctx, builder, recovery);
-    builder.assign(Place::local(result_local), recovery_val);
+    let recovery_mode = mode_for(ctx, builder, &recovery_val, ok_field_type);
+    builder.assign_mode(recovery_mode, Place::local(result_local), recovery_val);
     builder.jump(merge_bb);
 
     builder.switch_to(merge_bb);
