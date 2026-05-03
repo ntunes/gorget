@@ -547,7 +547,26 @@ fn lower_expr_inner(
             let val = lower_expr(ctx, builder, inner);
             let scrut_type = infer_operand_type_full(ctx, &val, builder);
             let scrut_local = builder.add_local(scrut_type, None);
-            builder.assign(Place::local(scrut_local), val);
+            // Phase C: `is` tests the scrutinee — never consumes it. Mirror
+            // the mode-picking logic from `lower_match_stmt` (stmts/patterns.rs).
+            // Resource sources stage as Borrow so the scrutinee_local is a
+            // non-owning view; non-resource sources stay Copy (bit-copy is
+            // correct for primitives / value structs).
+            let mode = {
+                use crate::ir::instructions::AssignMode;
+                if !ctx.type_registry.is_resource_type(scrut_type) {
+                    AssignMode::Copy
+                } else if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
+                    if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+                        AssignMode::Move
+                    } else {
+                        AssignMode::Borrow
+                    }
+                } else {
+                    AssignMode::Copy
+                }
+            };
+            builder.assign_mode(mode, Place::local(scrut_local), val);
 
             let cond = super::stmts::lower_pattern_condition(
                 ctx, builder, pattern, scrut_local, scrut_type,
