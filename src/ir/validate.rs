@@ -950,6 +950,11 @@ fn check_resource_moves(
         for (i, inst) in bb.instructions.iter().enumerate() {
             let Instruction::Assign { mode, dst, value } = inst else { continue };
             if *mode != AssignMode::Copy { continue; }
+            // Only flag whole-local destinations. Projected stores
+            // (`_x.field = ...`) are FieldStore semantics — the dst's
+            // field type, not the whole struct, is what gets the copy.
+            // The struct-typed base is incidental, not an alias source.
+            if !dst.projections.is_empty() { continue; }
             // Only resource-typed destinations.
             let local_idx = dst.local.0 as usize;
             if local_idx >= func.locals.len() { continue; }
