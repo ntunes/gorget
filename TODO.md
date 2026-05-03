@@ -4,8 +4,25 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log:**
-    - **C2.1** (commit `81c01959`, 2026-05-03): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
+  **Progress log (2026-05-03 — 9 commits, 11447 → 2219, ~81% reduction):**
+    - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
+    - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
+    - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
+    - **C2.4** (`37f7001f`): validator skips projected destinations (`_x.field = ...` is FieldStore, not struct alias). -1081 false positives.
+    - **C2.5** (`f06713bf`, part 1): validator skips bare-place auto-deref (`dst:T = copy src` where `src: Ptr<T>`). -492.
+    - **C2.6** (`f06713bf`, part 2): `lower_for_iterable`'s collection_local store emits `Borrow` mode for resource iters. -2260.
+    - **C2.7** (`41b3d168`): `Expr::Move` lowering's tmp emits `AssignMode::Move` for resources (the source is zeroed by the immediately-following `move_zero_and_mark`, so Move IS the typed contract). Closes `@JsonParser__fail` (-746).
+    - **C2.8** (`e0523bf0`): validator extends auto-deref skip to explicit Deref-projection shape (`dst:T = copy src.*` where `src: Ptr<T>`). Closes `@Writer_for_File__write` cluster (-685 across 137 fixtures).
+    - **C2.9** (`6755ef42`): `lower_match_stmt`'s scrutinee staging picks Move/Borrow/Copy by source shape. Hits `@DataFrame__col_*`, `@JsonParser__fail`, `@MultiGroupBy__agg` (-396).
+
+  **Remaining (2219 violations after C2.9):**
+    - 364 GorgetString — spread across many small main / helper sites
+    - 336 Vector__int64_t — collection-local patterns
+    - 188 Vector__GorgetString / 185 Dict__GorgetString__GorgetString
+    - 144 HttpServerResponse / 111 Tensor__double / 102 Column / 96 HttpServer
+    Top fns: @main 253 (broad), @xtd__httpserver___parse_* 144, @DataFrame__col_* 102, @JsonParser__fail 31.
+
+  **Stages remaining:** C3 audit residue, C4 promote validator to error.
 
   **Top violations by destination type** (sweep aggregation):
     2597 GorgetString
