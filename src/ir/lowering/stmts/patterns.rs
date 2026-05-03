@@ -63,8 +63,36 @@ pub(super) fn lower_match_stmt(
         } else { None }
     } else { None };
 
+    // Phase C: pick the assign mode for the scrutinee temp based on the
+    // source operand's ownership shape.
+    //   - Resource source that's owned (call result, fresh extraction):
+    //     Move — the post-assign block (lines 76-86) already MoveZeros
+    //     and transfers drop registration; Move makes the GIR carry
+    //     that intent at the boundary.
+    //   - Resource source that's a ref/borrow: Borrow — scrut_local is
+    //     a non-owning view that drives pattern extraction into the
+    //     Ptr-binding path (see set_ref(scrut_local) below).
+    //   - Otherwise (primitives, constants, owned-and-still-alive):
+    //     Copy stays correct (bit-copy is fine for non-resources;
+    //     owned-alive is rare here because dropelaborator catches it).
     let scrut_local = builder.add_local(scrut_type, None);
-    builder.assign(Place::local(scrut_local), scrut_op.clone());
+    let scrut_assign_mode = {
+        use crate::ir::instructions::AssignMode;
+        if !ctx.type_registry.is_resource_type(scrut_type) {
+            AssignMode::Copy
+        } else if let Operand::Copy(ref p) | Operand::Move(ref p) = scrut_op {
+            if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+                AssignMode::Move
+            } else if ctx.is_ref_local(p.local) {
+                AssignMode::Borrow
+            } else {
+                AssignMode::Copy
+            }
+        } else {
+            AssignMode::Copy
+        }
+    };
+    builder.assign_mode(scrut_assign_mode, Place::local(scrut_local), scrut_op.clone());
 
     // Propagate ownership from the source operand to the scrutinee temp.
     // This lets pattern extraction know whether the scrutinee data is owned
