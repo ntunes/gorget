@@ -971,24 +971,34 @@ fn check_resource_moves(
             if src_place.local == dst.local && src_place.projections.is_empty() {
                 continue;
             }
-            // Auto-deref: source is a Ptr/MutPtr typed local with no
-            // projections, and pointee matches dst type. This is a
-            // codegen-handled `*src` read into a value slot
-            // (LoadRef-equivalent), not a same-type shallow alias.
-            // Phase C2 progress is consolidating these to explicit
-            // LoadRef / Borrow modes upstream; flagging them here is
-            // duplicate noise that doesn't represent runtime risk.
-            if src_place.projections.is_empty() {
+            // Auto-deref: two recognised shapes that codegen handles
+            // correctly today (LoadRef-equivalent reads through a
+            // pointer into a value slot). They're flagged duplicates,
+            // not runtime risks; upstream lowering will be migrated to
+            // explicit LoadRef / Borrow modes.
+            //
+            //   1. `dst:T = copy src:Ptr<T>`  — bare-place auto-deref
+            //      (printer renders this as `dst = copy src`; the type
+            //      mismatch tells codegen to deref).
+            //   2. `dst:T = copy src.*`       — explicit Deref projection
+            //      where src is `Ptr<T>`. Same semantic, different shape.
+            {
                 let src_idx = src_place.local.0 as usize;
                 if src_idx < func.locals.len() {
                     let src_ty = func.locals[src_idx].type_id;
                     use crate::ir::types::GirType;
+                    use crate::ir::instructions::Projection;
                     let pointee = match registry.get(src_ty) {
                         Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) => Some(*inner),
                         _ => None,
                     };
                     if pointee == Some(dst_ty) {
-                        continue;
+                        let is_bare = src_place.projections.is_empty();
+                        let is_single_deref = src_place.projections.len() == 1
+                            && matches!(src_place.projections[0], Projection::Deref);
+                        if is_bare || is_single_deref {
+                            continue;
+                        }
                     }
                 }
             }
