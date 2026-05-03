@@ -33,15 +33,25 @@ pub fn stage_match_scrutinee(
 ) -> LocalId {
     use crate::ir::instructions::AssignMode;
     let scrut_local = builder.add_local(scrut_type, None);
+    // Phase C: prefer Borrow for resource-typed scrutinees by default —
+    // a match doesn't consume its scrutinee, so the staged temp is a
+    // non-owning view. This makes the GIR mode unconditionally non-Copy
+    // for resources, regardless of whether the source's ownership state
+    // is currently tracked as Owned (loop-reassigned named locals etc.).
+    // The earlier per-source-shape picker depended on is_owned_local
+    // which is brittle across loop iterations + reassignments. Borrow
+    // is correct under the match-doesn't-consume invariant.
+    //
+    // Owned + dead-after sources still benefit from Move (transfers
+    // ownership), but only when we can prove the source is owned at
+    // this site — which the predicate below handles.
     let mode = if !ctx.type_registry.is_resource_type(scrut_type) {
         AssignMode::Copy
     } else if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
         if p.projections.is_empty() && ctx.is_owned_local(p.local) {
             AssignMode::Move
-        } else if ctx.is_ref_local(p.local) {
-            AssignMode::Borrow
         } else {
-            AssignMode::Copy
+            AssignMode::Borrow
         }
     } else {
         AssignMode::Copy
