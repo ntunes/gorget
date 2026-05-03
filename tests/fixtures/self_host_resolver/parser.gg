@@ -1019,6 +1019,11 @@ struct Parser:
     int pos
     Vector[String] errors
     int call_arg_depth
+    # Per-Parser counter for f-string interpolation segment span keys.
+    # Starts at 1<<40 (≈1 TiB), bumps by 1<<20 per segment. Matches
+    # Rust's `Parser.next_interp_offset` so RES entries for f-string
+    # interp identifiers land on the same span keys.
+    int next_interp_offset
 
 # ── Parser methods ───────────────────────────────────────────
 
@@ -1948,7 +1953,34 @@ equip Parser:
         # String literal
         if ptag == TOK_STRING:
             SpannedToken t = self.advance()
-            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
+            if token_has_interpolation(t.lex_token):
+                # F-string: pre-parse each `{...}` segment so the
+                # resolver / typechecker can walk identifiers and
+                # method calls inside them. Mirrors Rust's
+                # `parse_format_string_interp_exprs`.
+                String ftemplate = ""
+                Vector[SpannedExpr] fexprs = Vector[SpannedExpr]()
+                match t.lex_token:
+                    case TkString(slit):
+                        int fsi = 0
+                        while fsi < slit.lex_segments.len():
+                            StringSegment fseg = slit.lex_segments.get(fsi).unwrap()
+                            match fseg:
+                                case SegLiteral(s):
+                                    ftemplate = ftemplate + s
+                                case SegInterpolation(expr_text):
+                                    ftemplate = ftemplate + "{}"
+                                    int interp_base = self.next_interp_offset
+                                    self.next_interp_offset = interp_base + 1048576
+                                    Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776)
+                                    SpannedExpr parsed_expr = sub.parse_expr()
+                                    fexprs.push(parsed_expr)
+                            fsi = fsi + 1
+                    else:
+                        pass
+                return SpannedExpr(EFString(ftemplate, !fexprs), Span(t.lex_start, t.lex_end))
+            return SpannedExpr(EStringLiteral(token_string_val(t.lex_token), false), Span(t.lex_start, t.lex_end))
 
         # Bool literal
         if ptag == TOK_BOOL:
@@ -3627,6 +3659,7 @@ Module parse_source(String source):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[String](), 0)
+    # 1099511627776 = 1<<40 — base offset for f-string interp sub-parses.
+    Parser p = Parser(tokens, 0, Vector[String](), 0, 1099511627776)
     Module m = p.parse_module()
     return m

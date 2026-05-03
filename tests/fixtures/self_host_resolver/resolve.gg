@@ -658,6 +658,15 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EStringLiteral(_, _):
             pass
 
+        case EFString(_, exprs):
+            # Walk pre-parsed interpolation segments so identifiers,
+            # method calls, and closures inside `{...}` get resolved.
+            int fi = 0
+            while fi < exprs.len():
+                SpannedExpr fe = exprs.get(fi).unwrap()
+                resolve_expr(fe, &scopes, &ctx)
+                fi = fi + 1
+
         case EIdentifier(name):
             int def_id = scopes.lookup(name)
             if def_id >= 0:

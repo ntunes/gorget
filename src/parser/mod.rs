@@ -46,6 +46,14 @@ pub struct Parser {
     /// True when parsing inside an `extern "C":` block or `extern "C"` inline declaration.
     /// Controls whether `cstr` is accepted as a type.
     in_extern_c: bool,
+    /// Next synthetic base offset for f-string interpolation segment
+    /// sub-parsing. Starts at 1<<40 (well above any plausible source-file
+    /// size, ~1 TiB) and bumps by 1<<20 per segment. Per-Parser instead
+    /// of process-global so span values are deterministic per parse —
+    /// otherwise concurrent fixture parses on the same atomic produce
+    /// different span values across test runs. See
+    /// `parse_format_string_interp_exprs` in `expr.rs`.
+    pub(crate) next_interp_offset: usize,
 }
 
 impl Parser {
@@ -83,6 +91,7 @@ impl Parser {
             call_arg_depth: 0,
             in_extern_c: false,
             comments,
+            next_interp_offset: 1usize << 40,
         }
     }
 

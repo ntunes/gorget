@@ -290,27 +290,29 @@ enum InfixOp {
 ///
 /// Span keys must be unique across the module: typecheck uses
 /// `method.span.start` to index `inferred_method_targs` and Pass 4.5 sync.
-/// Each segment gets a fresh synthetic base offset from a process-global
-/// atomic counter so no two parsed segments produce the same span keys.
-/// Diagnostics inside f-string segments will point at synthetic offsets
-/// rather than real source positions — acceptable trade for correctness;
-/// the lexer would need to record per-segment source offsets to fix that.
+/// Each segment gets a fresh synthetic base offset from the parser's
+/// per-instance counter (`Parser::next_interp_offset`) so no two parsed
+/// segments in the same parse produce the same span keys, AND span values
+/// are deterministic per parse (a process-global atomic would produce
+/// non-deterministic values across parallel test runs that share the
+/// counter, breaking exact-match comparisons in resolver_comparison etc.).
+/// Diagnostics inside f-string segments point at synthetic offsets rather
+/// than real source positions — acceptable trade for correctness; the
+/// lexer would need to record per-segment source offsets to fix that.
 fn parse_format_string_interp_exprs(
+    parser: &mut Parser,
     lit: &crate::lexer::token::StringLiteral,
     span: Span,
 ) -> Vec<Spanned<Expr>> {
     use crate::lexer::token::{StringKind, StringSegment};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    // Start above any plausible source-file size. 1 << 40 ≈ 1 TiB; sources
-    // are at most a few MiB, so this never collides with real spans.
-    static SEGMENT_OFFSET: AtomicUsize = AtomicUsize::new(1usize << 40);
     if lit.kind != StringKind::Format {
         return Vec::new();
     }
     let mut out = Vec::new();
     for seg in &lit.segments {
         if let StringSegment::Interpolation(text, _) = seg {
-            let base = SEGMENT_OFFSET.fetch_add(1usize << 20, Ordering::Relaxed);
+            let base = parser.next_interp_offset;
+            parser.next_interp_offset = base + (1usize << 20);
             let parsed = match Parser::new_with_offset(text, base).parse_expr() {
                 Ok(e) => e,
                 Err(_) => Spanned::new(
@@ -403,7 +405,7 @@ impl Parser {
                 // and lower a fresh AST that bypassed every semantic pass — the
                 // root cause of `f"{v.iter().any(p)}"` link-failing against an
                 // un-mangled symbol.
-                let interp_exprs = parse_format_string_interp_exprs(&s, start);
+                let interp_exprs = parse_format_string_interp_exprs(self, &s, start);
                 Ok(Spanned::new(Expr::StringLiteral(s, interp_exprs), start))
             }
             Token::Keyword(Keyword::True) => {

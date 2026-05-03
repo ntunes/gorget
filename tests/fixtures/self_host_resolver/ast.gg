@@ -90,6 +90,11 @@ enum Expr:
     ESpawnBlocking(Box[SpannedExpr])
     ERethrow(Box[SpannedExpr], Option[String], Option[Box[SpannedType]], Box[SpannedExpr])
     ECatch(Box[SpannedExpr], String, Box[SpannedExpr])
+    # Format-string with pre-parsed interpolation segment expressions.
+    # Mirror of Rust's `Expr::StringLiteral(_, Vec<Spanned<Expr>>)` —
+    # the resolver walks `interp_exprs` so identifiers / closures
+    # inside `{...}` get resolved alongside the rest of the AST.
+    EFString(String, Vector[SpannedExpr])
 
 # ── Statements ───────────────────────────────────────────────
 

@@ -99,6 +99,10 @@ struct Lexer:
     bool lex_finished
     bool lex_need_newline
     String lex_error
+    # Cumulative byte offset added to every emitted span. Used for
+    # f-string interpolation sub-parses so spans inside `{...}`
+    # segments don't collide with main-source spans.
+    int lex_base_offset
 
 # ── Keyword lookup ────────────────────────────────────────────
 
@@ -313,7 +317,7 @@ equip Lexer:
         self.lex_pos = self.lex_pos + 1
 
     void lex_emit(&self, Token !tok, int start, int end):
-        self.lex_tokens.push(SpannedToken(!tok, start, end))
+        self.lex_tokens.push(SpannedToken(!tok, start + self.lex_base_offset, end + self.lex_base_offset))
 
     # ── Indentation helpers ───────────────────────────────────
 
@@ -1058,8 +1062,14 @@ int lex_parse_int_radix(String s, int radix):
 # ── Public API ────────────────────────────────────────────────
 
 Vector[SpannedToken] lex_tokenize(String source):
+    return lex_tokenize_with_offset(source, 0)
+
+# Lex `source` shifting every emitted span by `base_offset`. Used by
+# f-string interpolation sub-parsing so segment spans don't collide
+# with main-source spans.
+Vector[SpannedToken] lex_tokenize_with_offset(String source, int base_offset):
     Vector[int] indent = Vector[int]()
     indent.push(0)
-    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "")
+    Lexer l = Lexer(source, 0, indent, 0, Vector[SpannedToken](), false, false, "", base_offset)
     l.lex_all()
     return l.lex_tokens
