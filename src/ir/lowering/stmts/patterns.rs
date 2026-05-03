@@ -592,7 +592,15 @@ pub fn emit_pattern_bindings(
                                 vec![FunctionBuilder::copy(ptr)],
                                 field_type,
                             );
-                            builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                            // Phase C: cloned is a fresh owned local; this assign
+                            // transfers ownership into dst (the binding). Move
+                            // mode matches the runtime intent — the cloned temp
+                            // is dead after this single use.
+                            builder.assign_mode(
+                                crate::ir::instructions::AssignMode::Move,
+                                Place::local(dst),
+                                FunctionBuilder::copy(cloned),
+                            );
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                             ctx.set_owned(dst);
                         }
