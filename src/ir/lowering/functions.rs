@@ -11,6 +11,31 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// Assign an expression-body operand into the return slot _0, picking the
+/// AssignMode that matches Phase C semantics: Move for resource-typed
+/// bare-place sources (transfer ownership; the source is dead at function
+/// exit anyway), Copy otherwise. Mirrors the use_move logic in
+/// `lower_return` (stmts/mod.rs line ~1090).
+fn assign_to_return_slot(
+    ctx: &LoweringContext,
+    builder: &mut FunctionBuilder,
+    operand: Operand,
+) {
+    use crate::ir::instructions::AssignMode;
+    let mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+        if p.projections.is_empty()
+            && ctx.type_registry.needs_drop(builder.local_type(p.local))
+        {
+            AssignMode::Move
+        } else {
+            AssignMode::Copy
+        }
+    } else {
+        AssignMode::Copy
+    };
+    builder.assign_mode(mode, Place::local(LocalId(0)), operand);
+}
+
 /// Public wrapper around `all_return_nominals_registered` for
 /// cross-module callers (non-generic trait default emission in
 /// `traits.rs` reuses the same demand-gate heuristic).
@@ -677,7 +702,7 @@ pub fn lower_function(
                         return_type,
                         vec![FunctionBuilder::const_unit()],
                     );
-                    builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(ok_val));
+                    assign_to_return_slot(ctx, &mut builder, FunctionBuilder::copy(ok_val));
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
                 } else if return_type == UNIT_TYPE {
                     builder.ret(FunctionBuilder::const_unit());
@@ -708,7 +733,7 @@ pub fn lower_function(
                 }
                 _ => None,
             };
-            builder.assign(Place::local(LocalId(0)), operand);
+            assign_to_return_slot(ctx, &mut builder, operand);
             ctx.drops.emit_early_exit_drops(
                 &mut builder, &ctx.type_registry,
                 DropScopeKind::Function, returned_local,
@@ -973,7 +998,7 @@ pub fn lower_equip_method(
                 }
                 _ => None,
             };
-            builder.assign(Place::local(LocalId(0)), operand);
+            assign_to_return_slot(ctx, &mut builder, operand);
             ctx.drops.emit_early_exit_drops(
                 &mut builder, &ctx.type_registry,
                 DropScopeKind::Function, returned_local,
@@ -1233,7 +1258,7 @@ pub fn lower_generic_function(
                 }
                 _ => None,
             };
-            builder.assign(Place::local(LocalId(0)), operand);
+            assign_to_return_slot(ctx, &mut builder, operand);
             // For move-overridden params: zero the source through the pointer
             // to prevent the caller from double-freeing.
             if !move_override_params.is_empty() {
@@ -1607,7 +1632,7 @@ fn lower_equip_method_with_subs(
                 }
                 _ => None,
             };
-            builder.assign(Place::local(LocalId(0)), operand);
+            assign_to_return_slot(ctx, &mut builder, operand);
             ctx.drops.emit_early_exit_drops(
                 &mut builder, &ctx.type_registry,
                 DropScopeKind::Function, returned_local,
