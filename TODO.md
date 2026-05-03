@@ -4,7 +4,7 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log (2026-05-03 — 9 commits, 11447 → 2219, ~81% reduction):**
+  **Progress log (2026-05-03 — 14 commits, 11447 → 658, ~94% reduction):**
     - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
     - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
     - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
@@ -14,15 +14,23 @@
     - **C2.7** (`41b3d168`): `Expr::Move` lowering's tmp emits `AssignMode::Move` for resources (the source is zeroed by the immediately-following `move_zero_and_mark`, so Move IS the typed contract). Closes `@JsonParser__fail` (-746).
     - **C2.8** (`e0523bf0`): validator extends auto-deref skip to explicit Deref-projection shape (`dst:T = copy src.*` where `src: Ptr<T>`). Closes `@Writer_for_File__write` cluster (-685 across 137 fixtures).
     - **C2.9** (`6755ef42`): `lower_match_stmt`'s scrutinee staging picks Move/Borrow/Copy by source shape. Hits `@DataFrame__col_*`, `@JsonParser__fail`, `@MultiGroupBy__agg` (-396).
+    - **C2.10** (`0efb415b`): `lower_return`'s `use_move` predicate widened to "any bare-place needs_drop source" — the existing post-assign `move_zero` block runs anyway, so GIR mode catches up to runtime intent. Hits `@xtd__httpserver___parse_*` cluster (-427).
+    - **C2.11** (`18570770`): validator skips type-mismatched bare-place assigns (`Vector = copy i64`) — those are generic-monomorphization bugs, not Phase-C-class shallow-alias bugs (-164).
+    - **C2.12** (`e97af1cb`): expression-body return staging picks Move via new `assign_to_return_slot` helper (5 sites consolidated). Hits `@HttpServerResponse__{ok,html,json,…}` cluster (-279).
+    - **C2.13** (`fc521d09`): use_move predicate ORs in `is_resource_type` for types where `needs_drop` is false but `is_resource_type` is true (trait-derived `VectorIter` etc.). Hits `@Vector__T__iter` (-494).
+    - **C2.14** (`e3dffb41`): pattern-extract clone reassign emits Move mode (the cloned temp is fresh + dead at the single use). Hits `@WindowsIter / @ChunksIter` min/max (-197).
 
-  **Remaining (2219 violations after C2.9):**
-    - 364 GorgetString — spread across many small main / helper sites
-    - 336 Vector__int64_t — collection-local patterns
-    - 188 Vector__GorgetString / 185 Dict__GorgetString__GorgetString
-    - 144 HttpServerResponse / 111 Tensor__double / 102 Column / 96 HttpServer
-    Top fns: @main 253 (broad), @xtd__httpserver___parse_* 144, @DataFrame__col_* 102, @JsonParser__fail 31.
+  **Remaining (658 violations after C2.14):**
+    - 247 GorgetString — spread across many small main / helper sites (no concentrated cluster left)
+    - 102 Column — DataFrame col_* arithmetic
+    - 71 Vector__GorgetString
+    - 59 Vector__int64_t
+    - Smaller: 34 DataFrame, 13 Outcome, 12 Expr, 10 Json
+    Top fns: @main 240 (broad), @DataFrame__col_* 102, @JsonParser__fail 31, @xtd__http___request 27, @DataFrame__nsmallest 17, @DataFrame__nlargest 17, @df_from_csv 17.
 
-  **Stages remaining:** C3 audit residue, C4 promote validator to error.
+  **Stages remaining:**
+    - C3 audit: ~5-10 small clusters left, each requiring per-site analysis. Diminishing-returns territory.
+    - C4 promote validator to error.
 
   **Top violations by destination type** (sweep aggregation):
     2597 GorgetString
