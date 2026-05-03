@@ -255,10 +255,18 @@ fn lower_for_array(
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
-    // Store the iterable in a local
+    // Store the iterable in a local. Phase C: emit Borrow mode for
+    // resource-typed iters — iter_local is a non-owning view (no drop
+    // registration), the original local still owns the data. Same shape
+    // as the C2.6 fix in lower_for_iterable.
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
     let iter_local = builder.add_local(iter_type, None);
-    builder.assign(Place::local(iter_local), iter_op);
+    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
+        crate::ir::instructions::AssignMode::Borrow
+    } else {
+        crate::ir::instructions::AssignMode::Copy
+    };
+    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
 
     // idx = 0
     let idx = builder.add_local(I64_TYPE, None);
@@ -454,10 +462,18 @@ fn lower_for_dict(
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
-    // Store the iterable in a local
+    // Store the iterable in a local. Phase C: emit Borrow mode for
+    // resource-typed iters — iter_local is a non-owning view (no drop
+    // registration), the original local still owns the data. Same shape
+    // as the C2.6 fix in lower_for_iterable.
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
     let iter_local = builder.add_local(iter_type, None);
-    builder.assign(Place::local(iter_local), iter_op);
+    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
+        crate::ir::instructions::AssignMode::Borrow
+    } else {
+        crate::ir::instructions::AssignMode::Copy
+    };
+    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
 
     // Create a pointer to the dict for iterator accessor calls.
     let dict_ptr_type = ctx.register_ptr_type(iter_type);
