@@ -12326,6 +12326,389 @@ fn self_host_bootstrap_fixed_point() {
     let _ = std::fs::remove_file(&stage2_bin);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// Self-host End-to-End — every fixture, compiled+run via stage-1
+// ═══════════════════════════════════════════════════════════════
+//
+// For each fixture in `tests/fixtures/*.gg`:
+//   1. Build & run via Rust gg → capture stdout (the "gold" output).
+//   2. Run stage-0 driver with `--lir-c` → emit stage-1 C body.
+//   3. Concatenate the cached Rust runtime preamble + body, cc to a
+//      stage-1 binary specific to this fixture.
+//   4. Run the stage-1 binary → capture stdout.
+//   5. Compare against the gold.
+//
+// Categorises each fixture as Match / OutputMismatch / CCFailed /
+// RuntimeCrashed / DriverCrashed / RustNotBuildable / RustRuntimeFailed.
+// Diagnostic only — always passes; the eprintln summary is the signal
+// for tracking convergence between Rust gg and the self-host stage-1.
+//
+// Differences from the existing comparison tests:
+// - `c_emit_comparison` counts user-fn lines in the emitted C; this test
+//   actually compiles & runs that C and verifies behavioural equivalence.
+// - `self_host_bootstrap[_fixed_point]` exercise only `driver.gg`; this
+//   test sweeps all 1000+ fixtures.
+//
+// Parallelism follows `parallel_map_fixtures` — runs across worker
+// threads with chunked fixture lists. Per-fixture tmp file paths are
+// disambiguated by the fixture stem so concurrent workers don't
+// collide.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_e2e() {
+    if skip_under_llvm() { return; }
+
+    // 1. Build stage-0 driver (cached) and extract the Rust runtime
+    //    preamble once. Both reused across every fixture.
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let gg_exe = manifest_dir.join("target/debug/gg");
+
+    // Shared runtime preamble extracted from driver.c. driver.gg imports
+    // most of std (collections, io, fs, conv, path, iter, hash, async),
+    // so its preamble has broader runtime coverage than any individual
+    // fixture's. Cut at the same boundary the bootstrap test uses —
+    // stage-1's body re-emits user-type typedefs / static literals /
+    // function definitions, so we drop everything from there onwards.
+    let driver_rust_c = std::fs::read_to_string(&driver_c)
+        .expect("failed to read driver.c");
+    let preamble_end = driver_rust_c
+        .find("// ── Static string literals")
+        .or_else(|| driver_rust_c.find("\ntypedef struct __gg_"))
+        .or_else(|| driver_rust_c.find("// ── Function Definitions ──"))
+        .expect("driver.c has no recognisable user-section boundary");
+    let runtime_preamble: String = driver_rust_c[..preamble_end].to_string();
+
+    // 2. Discover fixtures.
+    let fixtures_dir = manifest_dir.join("tests/fixtures");
+    let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
+        .expect("failed to read fixtures dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .collect();
+    fixtures.sort();
+
+    // Per-fixture tmp paths — anchored under a unique sub-directory of
+    // env::temp_dir() so we can clean up everything at the end and
+    // concurrent test processes don't trample each other's files.
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_self_host_e2e_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    enum Outcome {
+        Match,
+        OutputMismatch { fixture: String, rust_len: usize, self_len: usize, first_diff: String },
+        CcFailed { fixture: String, stderr_first: String },
+        RuntimeCrashed { fixture: String, exit_code: Option<i32>, stderr_first: String },
+        DriverCrashed { fixture: String, stderr_first: String },
+        RustNotBuildable, // Rust gg can't compile — not self-host's failure
+        RustRuntimeFailed, // Rust binary itself returned non-zero — error fixture etc.
+    }
+
+    let runtime_preamble_ref: &str = &runtime_preamble;
+    let driver_exe_ref: &Path = &driver_exe;
+    let gg_exe_ref: &Path = &gg_exe;
+    let lib_dir_ref: &Path = &lib_dir;
+    let tmp_root_ref: &Path = &tmp_root;
+
+    let outcomes: Vec<Outcome> = parallel_map_fixtures(&fixtures, |fixture| {
+        // run_with_timeout panics when a child hangs past its deadline; we
+        // want the panic to disable that specific fixture, not abort the
+        // whole sweep. catch_unwind around the per-fixture pipeline. The
+        // closure is panic-only on timeout, so any caught panic is a
+        // hang somewhere — we classify by which step we were on.
+        let pipeline_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_one_fixture(
+                fixture,
+                runtime_preamble_ref,
+                driver_exe_ref,
+                gg_exe_ref,
+                lib_dir_ref,
+                tmp_root_ref,
+            )
+        }));
+        match pipeline_result {
+            Ok(o) => o,
+            Err(_) => {
+                let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+                Outcome::RuntimeCrashed {
+                    fixture: fname,
+                    exit_code: None,
+                    stderr_first: "(timeout — pipeline step panicked)".to_string(),
+                }
+            }
+        }
+    });
+
+    fn run_one_fixture(
+        fixture: &Path,
+        runtime_preamble_ref: &str,
+        driver_exe_ref: &Path,
+        gg_exe_ref: &Path,
+        lib_dir_ref: &Path,
+        tmp_root_ref: &Path,
+    ) -> Outcome {
+        let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
+        let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
+
+        // Per-fixture tmp paths under the test's tmp_root — stem makes
+        // them unique across parallel workers.
+        let rust_bin = tmp_root_ref.join(format!("{stem}_rust"));
+        let rust_c_path = tmp_root_ref.join(format!("{stem}_rust.c"));
+        let stage1_c_path = tmp_root_ref.join(format!("{stem}_stage1.c"));
+        let stage1_bin = tmp_root_ref.join(format!("{stem}_stage1"));
+
+        // ─────────────────────────────────────────────────────────────
+        // Rust side: build via Rust gg, run, capture stdout.
+        // ─────────────────────────────────────────────────────────────
+        let rust_build = run_with_timeout(
+            Command::new(gg_exe_ref)
+                .arg("build")
+                .arg("-o").arg(&rust_bin)
+                .arg(fixture),
+            &fname,
+        );
+        if !rust_build.status.success() {
+            // Fixture isn't compilable by Rust gg — out of scope. Common for
+            // `*_error.gg` (intentionally rejected), missing-import tests, etc.
+            let _ = std::fs::remove_file(&rust_bin);
+            let _ = std::fs::remove_file(&rust_c_path);
+            return Outcome::RustNotBuildable;
+        }
+
+        let rust_run = run_with_timeout(&mut Command::new(&rust_bin), &fname);
+        let _ = std::fs::remove_file(&rust_bin);
+        if !rust_run.status.success() {
+            // Fixture builds but the binary exits non-zero — typically
+            // assertion-failure or panic fixtures. We don't compare these.
+            let _ = std::fs::remove_file(&rust_c_path);
+            return Outcome::RustRuntimeFailed;
+        }
+        let rust_stdout = String::from_utf8_lossy(&rust_run.stdout).trim_end().to_string();
+
+        // Detect external-library needs from the Rust-generated .c so cc
+        // gets the right -l flags. We use the shared driver.gg preamble
+        // (much broader runtime coverage) — the per-fixture .c is read
+        // only for these import-detection signals.
+        let rust_c = std::fs::read_to_string(&rust_c_path).unwrap_or_default();
+        let _ = std::fs::remove_file(&rust_c_path);
+        let needs_tls = rust_c.contains("std_net_tls") || rust_c.contains("xtd_http");
+        let needs_crypto = rust_c.contains("xtd_crypto") || rust_c.contains("xtd_p2p");
+        let needs_regex = rust_c.contains("xtd_regex");
+        let needs_compress = rust_c.contains("xtd_compress");
+        let needs_sdl = rust_c.contains("xtd_sdl") || rust_c.contains("xtd_gfx") || rust_c.contains("xtd_gl");
+
+        // ─────────────────────────────────────────────────────────────
+        // Self-host side: stage-0 driver → body C → preamble+body → cc → run.
+        // ─────────────────────────────────────────────────────────────
+        let body_out = run_with_timeout(
+            Command::new(driver_exe_ref)
+                .arg(fixture)
+                .arg(lib_dir_ref)
+                .arg("--lir-c"),
+            &fname,
+        );
+        if !body_out.status.success() {
+            let stderr = String::from_utf8_lossy(&body_out.stderr);
+            let first = stderr.lines().next().unwrap_or("(no stderr)").to_string();
+            return Outcome::DriverCrashed { fixture: fname, stderr_first: first };
+        }
+        let body_c = String::from_utf8_lossy(&body_out.stdout).to_string();
+
+        if let Err(e) = std::fs::write(
+            &stage1_c_path,
+            format!("{runtime_preamble_ref}\n{body_c}"),
+        ) {
+            return Outcome::CcFailed {
+                fixture: fname,
+                stderr_first: format!("write stage1.c failed: {e}"),
+            };
+        }
+
+        let mut cc_cmd = Command::new("cc");
+        cc_cmd.arg("-O0").arg("-w")
+            .arg("-o").arg(&stage1_bin)
+            .arg(&stage1_c_path)
+            .arg("-lm")
+            .arg("-lpthread");
+        if needs_tls { cc_cmd.arg("-lssl").arg("-lcrypto"); }
+        if needs_crypto && !needs_tls { cc_cmd.arg("-lcrypto"); }
+        if needs_regex { cc_cmd.arg("-lpcre2-8"); }
+        if needs_compress { cc_cmd.arg("-lz"); }
+        // SDL fixtures pull in many libs (SDL2, GL); skip — these tend
+        // to need a windowed environment too. We classify them as
+        // CcFailed which is honest.
+        if needs_sdl {
+            return Outcome::CcFailed {
+                fixture: fname,
+                stderr_first: "(skipped — SDL/gfx/gl needs windowed env)".to_string(),
+            };
+        }
+        let cc_out = cc_cmd.output();
+
+        // stage1.c is small in the success case, larger on cc failures we
+        // want to inspect; remove unconditionally — we keep first stderr
+        // line for diagnostics.
+        let cc_out = match cc_out {
+            Ok(o) => o,
+            Err(e) => {
+                let _ = std::fs::remove_file(&stage1_c_path);
+                return Outcome::CcFailed {
+                    fixture: fname,
+                    stderr_first: format!("spawn cc: {e}"),
+                };
+            }
+        };
+        if !cc_out.status.success() {
+            let stderr = String::from_utf8_lossy(&cc_out.stderr);
+            let first = stderr
+                .lines()
+                .find(|l| l.contains("error") || l.contains("undefined"))
+                .or_else(|| stderr.lines().next())
+                .unwrap_or("(no stderr)")
+                .chars().take(200).collect::<String>();
+            let _ = std::fs::remove_file(&stage1_c_path);
+            return Outcome::CcFailed { fixture: fname, stderr_first: first };
+        }
+        let _ = std::fs::remove_file(&stage1_c_path);
+
+        let self_run = run_with_timeout(&mut Command::new(&stage1_bin), &fname);
+        let _ = std::fs::remove_file(&stage1_bin);
+
+        if !self_run.status.success() {
+            let stderr = String::from_utf8_lossy(&self_run.stderr);
+            let first = stderr.lines().next().unwrap_or("(no stderr)").to_string();
+            return Outcome::RuntimeCrashed {
+                fixture: fname,
+                exit_code: self_run.status.code(),
+                stderr_first: first,
+            };
+        }
+        let self_stdout = String::from_utf8_lossy(&self_run.stdout).trim_end().to_string();
+
+        if rust_stdout == self_stdout {
+            Outcome::Match
+        } else {
+            // First differing line is the most useful diagnostic.
+            let first_diff = rust_stdout
+                .lines()
+                .zip(self_stdout.lines())
+                .enumerate()
+                .find(|(_, (r, s))| r != s)
+                .map(|(i, (r, s))| format!("L{i}: rust={r:?} self={s:?}"))
+                .unwrap_or_else(|| {
+                    if rust_stdout.lines().count() != self_stdout.lines().count() {
+                        format!(
+                            "line-count mismatch: rust={} self={}",
+                            rust_stdout.lines().count(),
+                            self_stdout.lines().count(),
+                        )
+                    } else {
+                        "(diff in trailing bytes)".to_string()
+                    }
+                });
+            Outcome::OutputMismatch {
+                fixture: fname,
+                rust_len: rust_stdout.len(),
+                self_len: self_stdout.len(),
+                first_diff,
+            }
+        }
+    }
+
+    // Tally + report.
+    let total = outcomes.len();
+    let mut matched = 0;
+    let mut output_mismatches: Vec<(String, usize, usize, String)> = Vec::new();
+    let mut cc_failures: Vec<(String, String)> = Vec::new();
+    let mut runtime_crashes: Vec<(String, Option<i32>, String)> = Vec::new();
+    let mut driver_crashes: Vec<(String, String)> = Vec::new();
+    let mut rust_not_buildable = 0;
+    let mut rust_runtime_failed = 0;
+    for o in outcomes {
+        match o {
+            Outcome::Match => matched += 1,
+            Outcome::OutputMismatch { fixture, rust_len, self_len, first_diff } => {
+                output_mismatches.push((fixture, rust_len, self_len, first_diff));
+            }
+            Outcome::CcFailed { fixture, stderr_first } => {
+                cc_failures.push((fixture, stderr_first));
+            }
+            Outcome::RuntimeCrashed { fixture, exit_code, stderr_first } => {
+                runtime_crashes.push((fixture, exit_code, stderr_first));
+            }
+            Outcome::DriverCrashed { fixture, stderr_first } => {
+                driver_crashes.push((fixture, stderr_first));
+            }
+            Outcome::RustNotBuildable => rust_not_buildable += 1,
+            Outcome::RustRuntimeFailed => rust_runtime_failed += 1,
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    // The "comparable set" excludes fixtures Rust gg itself can't build
+    // or where the gold binary itself returns non-zero.
+    let comparable = total - rust_not_buildable - rust_runtime_failed;
+    let pass_pct = if comparable > 0 {
+        (matched as f64 / comparable as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    eprintln!("\n================================");
+    eprintln!("Self-host End-to-End Results");
+    eprintln!("================================");
+    eprintln!(
+        "Fixtures: {total}, comparable: {comparable} (excl. rust_not_buildable={rust_not_buildable}, rust_runtime_failed={rust_runtime_failed})"
+    );
+    eprintln!(
+        "  Match:           {matched}/{comparable} ({pass_pct:.1}%)",
+    );
+    eprintln!("  OutputMismatch:  {}", output_mismatches.len());
+    eprintln!("  CcFailed:        {}", cc_failures.len());
+    eprintln!("  RuntimeCrashed:  {}", runtime_crashes.len());
+    eprintln!("  DriverCrashed:   {}", driver_crashes.len());
+
+    fn report<T>(label: &str, items: &[T], limit: usize, fmt: impl Fn(&T) -> String) {
+        if items.is_empty() {
+            return;
+        }
+        eprintln!("\n--- {label} ({}) ---", items.len());
+        for it in items.iter().take(limit) {
+            eprintln!("  {}", fmt(it));
+        }
+        if items.len() > limit {
+            eprintln!("  ... and {} more", items.len() - limit);
+        }
+    }
+
+    report("DRIVER CRASHES", &driver_crashes, 50, |(f, e)| {
+        format!("{f}: {e}")
+    });
+    report("CC FAILURES", &cc_failures, 100, |(f, e)| {
+        format!("{f}: {e}")
+    });
+    report("RUNTIME CRASHES", &runtime_crashes, 50, |(f, code, e)| {
+        format!("{f}: exit={code:?} stderr={e}")
+    });
+    report("OUTPUT MISMATCHES", &output_mismatches, 100, |(f, r, s, d)| {
+        format!("{f}: rust_len={r} self_len={s} | {d}")
+    });
+    eprintln!("\n================================\n");
+
+    // Diagnostic test — always passes. The summary above guides
+    // where to push self-host parity next.
+}
+
 // Numeric trait integration tests
 
 #[test]
