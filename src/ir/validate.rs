@@ -878,6 +878,106 @@ fn check_terminator_calls(
     }
 }
 
+// ── Phase C: resource-move validation ────────────────────────────────
+// See docs/internals/unified-resource-model.md §5.
+//
+// The CoW contract: every read of a resource-typed value resolves to
+// Move / Clone / Borrow. AssignMode::Copy of a resource source is a
+// shallow alias of an owned resource — a latent double-free or
+// aliased-mutable-state bug.
+//
+// Stage C1 (this commit): emitted as a warning. Gated behind the
+// `GG_VALIDATE_RESOURCE_MOVES` env var so default builds (and CI) are
+// unaffected; manual sweeps print the violation set so we can fix
+// patterns by frequency. Stages C2-C4 fix the upstream lowering and
+// then promote to a fail-fast error in `validate`.
+
+/// A resource-move validation finding. Phase C, Stage C1: warning only.
+#[derive(Debug, Clone)]
+pub struct ResourceMoveWarning {
+    pub function: String,
+    pub block: BlockId,
+    pub inst_index: usize,
+    pub kind: ResourceMoveWarningKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ResourceMoveWarningKind {
+    /// `Assign { mode: Copy, value: Copy(place)|Move(place) }` where dst
+    /// is resource-typed: a bit-copy of a resource value, aliasing the
+    /// source's heap data without registering ownership transfer or a
+    /// clone. The CoW spec mandates Move / Clone / Borrow at this site.
+    ShallowCopyOfResource {
+        local: LocalId,
+        type_name: String,
+    },
+}
+
+impl std::fmt::Display for ResourceMoveWarningKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ShallowCopyOfResource { local, type_name } => {
+                write!(f, "shallow copy of resource _{} : {}", local.0, type_name)
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ResourceMoveWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}::bb{}::i{} — {}",
+            self.function, self.block.0, self.inst_index, self.kind)
+    }
+}
+
+/// Walk every Assign in the module and flag resource-typed shallow
+/// copies. Stage C1: callers print these as warnings; the IR is not
+/// rejected.
+pub fn validate_resource_moves(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        check_resource_moves(func, &module.type_registry, &mut warnings);
+    }
+    warnings
+}
+
+fn check_resource_moves(
+    func: &Function,
+    registry: &TypeRegistry,
+    warnings: &mut Vec<ResourceMoveWarning>,
+) {
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            let Instruction::Assign { mode, dst, value } = inst else { continue };
+            if *mode != AssignMode::Copy { continue; }
+            // Only resource-typed destinations.
+            let local_idx = dst.local.0 as usize;
+            if local_idx >= func.locals.len() { continue; }
+            let dst_ty = func.locals[local_idx].type_id;
+            if !registry.is_resource_type(dst_ty) { continue; }
+            // Only place-sourced operands. `Assign { mode: Copy, value:
+            // Constant(_) }` is fine — that's a literal, not a shallow
+            // alias of an owned resource.
+            if !matches!(value, Operand::Copy(_) | Operand::Move(_)) { continue; }
+            // Self-assignments aren't shallow copies in the bug sense.
+            if let Operand::Copy(p) | Operand::Move(p) = value {
+                if p.local == dst.local && p.projections.is_empty() { continue; }
+            }
+            let type_name = registry.type_name(dst_ty)
+                .unwrap_or_else(|| format!("ty{}", dst_ty.0));
+            warnings.push(ResourceMoveWarning {
+                function: func.name.clone(),
+                block: BlockId(b as u32),
+                inst_index: i,
+                kind: ResourceMoveWarningKind::ShallowCopyOfResource {
+                    local: dst.local,
+                    type_name,
+                },
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

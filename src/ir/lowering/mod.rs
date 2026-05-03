@@ -1476,6 +1476,20 @@ pub fn lower_module(
         }
     }
 
+    // Phase C, Stage C1: resource-move warning pass. Gated behind
+    // GG_VALIDATE_RESOURCE_MOVES so default builds and CI are unaffected.
+    // Subsequent stages C2-C4 fix patterns by frequency and then promote
+    // to a fail-fast invariant in `validate`.
+    if std::env::var_os("GG_VALIDATE_RESOURCE_MOVES").is_some() {
+        let warnings = crate::ir::validate::validate_resource_moves(&module);
+        if !warnings.is_empty() {
+            eprintln!("[resource-moves] {} violation(s):", warnings.len());
+            for w in &warnings {
+                eprintln!("  {}", w);
+            }
+        }
+    }
+
     // Propagate directive flags to module
     module.runtime.overflow_wrap = ctx.overflow_wrap;
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;
