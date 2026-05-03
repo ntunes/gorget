@@ -2,6 +2,51 @@
 
 ## High
 
+- **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
+
+  **Top violations by destination type** (sweep aggregation):
+    2597 GorgetString
+    1079 ReliableStream  (xtd.p2p — ~754 from p2p_*; one user-defined struct)
+     635 VectorIter__int64_t + ~3000 other Iter__* types (auto-generated stdlib trait impls)
+     497 Vector__int64_t
+     493 Column           (xtd.dataframe)
+     258 Vector__uint8_t
+     211 Vector__GorgetString
+     192 HttpServerResponse
+     186 Dict__GorgetString__GorgetString
+
+  **Top violation hotspots by function name:**
+    675 @main (broad — many fixtures)
+    412×2 @ParseError__display + __debug   ← derive-generated for stdlib ParseError
+    137×2 @IoError__display + __debug      ← derive-generated for stdlib IoError
+    754   @xtd__p2p___p2p_*                ← p2p library hand-written
+    525   @WindowsIter__…__sum/min/max/...  ← derive-generated iter trait impls
+    170   @xtd__dataframe___df_from_*
+
+  **Pattern analysis.** The high-volume cases are NOT in the derive code generator — that emits correct Gorget source like `case ParseError.InvalidNumber(a0): return f"InvalidNumber({a0})"`. The bug is in pattern-extraction lowering when the binding feeds a value-consuming call (e.g. `gorget_string_format`). The current GIR shape is:
+
+      _7 = enum_field_load _2, InvalidNumber, 0   ; *GorgetString  (correctly bound as Ptr)
+      _8 = copy _7.*                              ; GorgetString  ← SHALLOW Copy mode here
+      _9 = call_extern @gorget_string_format(..., copy _8)
+      drop _8                                      ; frees data while _2 still holds the alias
+
+  The dereference `_7.*` materializes for the call argument with `AssignMode::Copy`, producing a bit-identical alias. The fix is to emit `AssignMode::Clone` at this dereference materialization (equivalently: route through `auto_clone_if_ptr` instead of bypassing it). Today `auto_clone_if_ptr` returns the Ptr unchanged for string types (see `context.rs:1688` — "Cloning only at ownership boundaries"), but a value-consuming runtime call IS an ownership boundary; the bypass is the bug.
+
+  **Estimated leverage:** fixing just this one materialization pattern likely closes 6000-8000 of the 11,447 violations (every `case Variant(a): use(a)` over a resource-typed field where `a` is consumed by a call). The remaining 3000-5000 split across:
+    (a) Iter trait impl derives — same root cause via stdlib derive (Sum/Product/Min/Max/Join/Collect take their state by value)
+    (b) Vector/Dict element pulls feeding consuming calls
+    (c) Field projection of resource-typed struct fields without Borrow-mode binding
+    (d) Function-return paths that bit-copy
+
+  **Stage C2 plan** (single fix per commit, sweep-validated decreasing count):
+    1. Pattern-extract dereference at call boundary → `Clone` mode (biggest single fix).
+    2. Iter trait impl materializations.
+    3. Field-load of resource-typed fields → bind as Ptr(T) borrow.
+    4. Audit residue (Stage C3).
+    5. Promote validator from warning to error (Stage C4).
+
+  Sweep raw log preserved at `/tmp/c1-sweep.log` during the next session — regenerate via `GG_VALIDATE_RESOURCE_MOVES=1 ./target/release/gg build <fixture>` per fixture. [added: 2026-05-03]
+
 - **Phase D4 deferred — reference-grade refactor of `lower_var_decl` decision tree** (deferred 2026-05-01 in favour of minimal-D4 → D6 → C sequencing). The current 5-branch chain in `src/ir/lowering/stmts/mod.rs` reads four sidecar-style predicates (`named_local`, `cow_unsafe_at`, `drops.is_registered`, `needs_drop`) that are mostly liveness proxies. Reference shape: promote `func_state.liveness` to first-class axis via `source_live_past(local, span)` query, collapse to ~6-arm typed match on `(target.is_resource, source_live, source.ownership())`. ~1-2 days when picked up. **Why deferred:** Phase C's validator (post-D6) will provide a stronger fixture regression net for the refactor — bugs surfaced after C lands are likely real CoW correctness issues, not refactor-induced regressions, which is a strictly better debugging position. **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently — the whole point of the refactor is to make that "what axis am I reading" question explicit. [added: 2026-05-01]
 
 - **Phase A residuals — 3 follow-ups left after the 13-commit consolidation (2026-05-02).** The 9-site migration off name-prefix matching landed; three pieces remain, each with different cost/value:
