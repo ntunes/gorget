@@ -4,7 +4,7 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log (2026-05-03 — 18 commits, 11447 → 303, ~97.4% reduction):**
+  **Progress log (2026-05-03 — 25 commits, 11447 → 46, ~99.6% reduction):**
     - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
     - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
     - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
@@ -22,14 +22,23 @@
     - **C2.15** (`2ae29841`): `Expr::Is` boolean form scrutinee staging picks Move/Borrow/Copy by source. Hits `is_bindings.gg` (13 → 0) and all `if X is Variant(field):` patterns missed by C2.9. (-202)
     - **C2.16** (`1a415a31`): `cow_materialize_alias` and `cow_materialize_collection_ref` emit Move mode for the cloned-to-owned-local transfer. The cloned temp is fresh + dead. Hits `@JsonParser__fail` (31 → 0) and any path through cow_before_mutation on bare params. (-25)
     - **C2.17** (`d33b26f0`): `lower_catch_expr`'s 4 internal assigns (val staging / Ok-extract / Err-bind / recovery) pick Move mode for resources via new `mode_for` closure. Hits `error_conditional_throw.gg` (8 → 0) and any `expr catch (e):` with resource-typed Result. (-51)
-    - **C2.18**: nested-match scrutinee staging — `lower_match_stmt_as_expr` (last-stmt-in-block path that nested `match X:` inside an arm body lowers as) and `lower_match_expr` (`Expr::Match`) both used default `Copy` mode. Factored C2.9's logic into `stage_match_scrutinee` and applied at all three call sites (one source of truth). Hits `@DataFrame__col_{add,sub,mul}` (102 → 0). (-102)
+    - **C2.18** (`d57664e4`, parallel agent): nested-match scrutinee staging — `lower_match_stmt_as_expr` and `lower_match_expr` both used default `Copy`. Factored C2.9 logic into `stage_match_scrutinee` helper applied at all three call sites. Hits `@DataFrame__col_{add,sub,mul}` (102 → 0). (-102)
+    - **C2.18** (`a1e85e7e`, mine, distinct fix): Box deref `*box` lowering at `Expr::Deref` had two default-Copy assigns (shallow + clone-reassign). Now Borrow + Move. Hits `@eval` in option_box_enum (12 → 0). (-12)
+    - **C2.19** (`93724694`): Ptr-CoW upgrade-on-mutate at `stmts/assigns.rs:86-101` — fresh clone written back via Copy now uses Move. Hits `@std__fmt___pad_*` (-6). (Worktree agent ac8a6b independently converged on same site.)
+    - **C2.21** (`f9803e2a`): for-loop iter staging Borrow mode in `lower_for_array` and `lower_for_iterable` (C2.6 missed array path). (-132)
+    - **C2.22** (`001b60b7`): for-loop iter staging Borrow in `lower_for_dict` + `lower_for_set` (C2.21 didn't catch them). (-15)
+    - **C2.23** (`b9da47f7`): tuple destructure pattern picks Move/Copy by source for resource tuples. Hits @main Tuple cluster across http_urls. (-12)
+    - **C2.24** (`89cdb7b5`): array literal element staging picks Move for owned/temp resources (nested vector literals). Hits `vector_of_vectors.gg` (-3) plus broader applicability.
+    - **C2.25** (`bcb4837e`): `stage_match_scrutinee` defaults to Borrow for resource scrutinees (the match-doesn't-consume invariant is unconditional). Hits `@xtd__toml___stringify_section` (4 → 0) and tightens loop-reassigned named locals.
 
-  **Remaining (303 violations after C2.18):**
-    - 101 GorgetString — diffuse, spread across @main + helpers
-    - 70 Vector__GorgetString
-    - 46 Vector__int64_t
-    - Smaller tail: 12 Expr, 8 Tuple, 7 Set__int64_t, 5 GorgetArray
-    Top fns: @main 161 (broad — ≤10/fixture), @xtd__http___request 27, @xtd__http___parse_url 18, @eval 12 (option_box_enum Box-deref), @std__fmt___pad_* 18.
+  **Remaining (46 violations after C2.25):**
+    - 33 GorgetString — diffuse, ≤5/fixture
+    - 6 Vector__int64_t
+    - 4 Resource — singletons in test fixtures
+    - 1-2 each: Shared__*, Row, Yaml, etc.
+    Top fns: @main 24 (broadest — typically 1-5 per fixture), @tokenize 3, @__test_4 2, then ~20 singleton functions.
+
+  **Validated externally (2026-05-03):** gorget-arena (51-file user project at `.worktrees/gorget-arena/src/main.gg`) hits **zero** Phase C violations after C2.25. Real-world signal that the major patterns are covered.
 
   **Audit lens (per user direction 2026-05-03):** every remaining shallow copy is either (a) a latent bug we fix in lowering, or (b) a missing IR / syntax / protocol primitive needed to express the necessity legally. There is no third "accept the violation" bucket — that would defeat the Phase C guarantee.
 
