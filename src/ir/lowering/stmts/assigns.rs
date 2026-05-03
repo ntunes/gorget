@@ -92,7 +92,13 @@ pub(super) fn lower_assign(
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 ctx.warn_implicit_clone(value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
                                 let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
-                                builder.assign(Place::local(local_id), FunctionBuilder::copy(cloned));
+                                // Phase C: cloned is a fresh owned local, dead at this single
+                                // use — Move transfers ownership into local_id.
+                                builder.assign_mode(
+                                    crate::ir::instructions::AssignMode::Move,
+                                    Place::local(local_id),
+                                    FunctionBuilder::copy(cloned),
+                                );
                                 builder.locals[local_id.0 as usize].type_id = inner;
                                 ctx.register_local(name, local_id, inner);
                                 ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
