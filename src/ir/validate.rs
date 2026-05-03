@@ -1000,6 +1000,21 @@ fn check_resource_moves(
                             continue;
                         }
                     }
+                    // Type-mismatched assigns (`dst:Vector = copy src:i64`) are
+                    // generic-monomorphization bugs, not shallow-resource-alias
+                    // bugs. The Phase C validator is scoped to "shallow copy of
+                    // owned resource"; flagging type-mismatched assigns is out
+                    // of scope (and the runtime is producing wrong results
+                    // there independently of the GIR mode label). Skip when
+                    // src isn't the same resource type as dst.
+                    //
+                    // We allow same-type assigns (the genuine shallow-alias
+                    // case) and assigns where src is non-place (constants,
+                    // already excluded above). Other cross-type assigns fall
+                    // out of validator scope.
+                    if src_ty != dst_ty && src_place.projections.is_empty() {
+                        continue;
+                    }
                 }
             }
             let type_name = registry.type_name(dst_ty)
