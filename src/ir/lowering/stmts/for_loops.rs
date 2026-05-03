@@ -48,9 +48,12 @@ pub(super) fn lower_for(
     let iter_op = lower_expr(ctx, builder, iterable);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
 
-    // If the iterable is a Ptr (borrowed resource param), deref to get the value
-    // for iteration. The iter_local is not drop-registered (read-only view), so
-    // the shallow copy is safe — the caller still owns the heap data.
+    // If the iterable is a Ptr (borrowed resource param), deref to get the
+    // iter value for iteration. The iter_local is a non-owning view into
+    // the caller's data — no drop registration, no clone. Phase C: emit
+    // AssignMode::Borrow so the typed contract matches the runtime intent
+    // (memcpy + caller-owns) instead of leaving a Copy-of-resource that
+    // the validator correctly flags as a shallow alias.
     let (iter_op, iter_type) = if let Some(inner) = ctx.pointee_type(iter_type) {
         if let Operand::Copy(ref p) | Operand::Move(ref p) = iter_op {
             let deref_place = Place {
@@ -58,7 +61,11 @@ pub(super) fn lower_for(
                 projections: vec![Projection::Deref],
             };
             let tmp = builder.add_local(inner, None);
-            builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Borrow,
+                Place::local(tmp),
+                Operand::Copy(deref_place),
+            );
             (Operand::Copy(Place::local(tmp)), inner)
         } else {
             (iter_op, iter_type)
