@@ -206,6 +206,8 @@ pub(super) fn lower_list_comprehension(
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
             array_type,
         );
+        ctx.set_owned(acc_local);
+        ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
 
         // Create loop variable
         let var_name = match &variable.node {
@@ -269,7 +271,13 @@ pub(super) fn lower_list_comprehension(
         let iter_op = lower_expr(ctx, builder, iterable);
         let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
         let iter_local = builder.add_local(iter_type, None);
-        builder.assign(Place::local(iter_local), iter_op);
+        // Phase C: iter_local is non-owning view of the source — Borrow.
+        let iter_mode = if ctx.type_registry.is_resource_type(iter_type) {
+            crate::ir::instructions::AssignMode::Borrow
+        } else {
+            crate::ir::instructions::AssignMode::Copy
+        };
+        builder.assign_mode(iter_mode, Place::local(iter_local), iter_op);
 
         // Get element type from collection
         let elem_type = infer_collection_element_type(ctx, iter_type);
@@ -280,6 +288,8 @@ pub(super) fn lower_list_comprehension(
             vec![Operand::Constant(Constant::SizeOf(elem_type))],
             array_type,
         );
+        ctx.set_owned(acc_local);
+        ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
 
         // idx = 0
         let idx = builder.add_local(I64_TYPE, None);
@@ -448,6 +458,8 @@ pub(super) fn lower_set_comprehension(
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
             set_type,
         );
+        ctx.set_owned(acc_local);
+        ctx.drops.register_local(acc_local, set_type, &ctx.type_registry);
 
         let var_name = &variable.node;
         let loop_var = builder.add_local(I64_TYPE, Some(var_name));

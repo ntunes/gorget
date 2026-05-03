@@ -156,6 +156,12 @@ fn lower_for_string(
     // gorget_string_clone (emitted by the CoW system) allocates an independent
     // buffer. Register iter_local for drop so the clone is freed at loop exit.
     // The source variable is dropped separately by its own scope.
+    //
+    // Phase C: kept as Copy intentionally — the validator flag here is
+    // a known limitation. Move mode would zero the source, but the
+    // source is sometimes a borrow that the caller still relies on.
+    // Without a precise liveness pass + ownership origin tag, neither
+    // Move nor Borrow is safe at this site. C3 follow-up.
     let iter_local = builder.add_local(owned_string_type, None);
     builder.assign(Place::local(iter_local), iter_op);
     ctx.drops.register_local(iter_local, owned_string_type, &ctx.type_registry);

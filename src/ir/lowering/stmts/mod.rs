@@ -709,6 +709,22 @@ fn lower_shared_var_decl(
     use super::exprs::{ensure_mutex_type_def, ensure_shared_type_def};
     use crate::semantic::SharedStrategy;
 
+    // Phase C: pick AssignMode for resource-typed assigns within
+    // lower_shared_var_decl. Sources here are either fresh call results
+    // (wrapped/shared_val/init_val) or user-provided expression results
+    // (val_operand). For resource types, Move transfers ownership;
+    // primitives stay Copy (bit-copy is correct).
+    let resource_assign_mode = |ctx: &LoweringContext, ty: TypeId| {
+        use crate::ir::instructions::AssignMode;
+        if ctx.type_registry.is_resource_type(ty)
+            || ctx.type_registry.needs_drop(ty)
+        {
+            AssignMode::Move
+        } else {
+            AssignMode::Copy
+        }
+    };
+
     let name = match &pattern.node {
         Pattern::Binding(n) => n,
         _ => {
@@ -768,7 +784,7 @@ fn lower_shared_var_decl(
 
             let hidden_local = builder.add_local(wrapper_type, None);
             ctx.drops.register_local(hidden_local, wrapper_type, &ctx.type_registry);
-            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(wrapped));
+            builder.assign_mode(crate::ir::instructions::AssignMode::Move, Place::local(hidden_local), FunctionBuilder::copy(wrapped));
 
             let facade_local = builder.add_local(inner_type, Some(name));
             ctx.register_local(name, facade_local, inner_type);
@@ -778,7 +794,7 @@ fn lower_shared_var_decl(
 
             // Initialize facade with atomic load
             let init_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
-            builder.assign(Place::local(facade_local), init_val);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
         }
 
         SharedStrategy::ArcOnly => {
@@ -795,12 +811,12 @@ fn lower_shared_var_decl(
 
             let new_fn = format!("{mangled}__new");
             let tmp = builder.add_local(inner_type, None);
-            builder.assign(Place::local(tmp), val_operand);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
             let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], shared_type);
 
             let hidden_local = builder.add_local(shared_type, None);
             ctx.drops.register_local(hidden_local, shared_type, &ctx.type_registry);
-            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(wrapped));
+            builder.assign_mode(crate::ir::instructions::AssignMode::Move, Place::local(hidden_local), FunctionBuilder::copy(wrapped));
 
             let facade_local = builder.add_local(inner_type, Some(name));
             ctx.register_local(name, facade_local, inner_type);
@@ -809,7 +825,7 @@ fn lower_shared_var_decl(
             ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local, inner_type, wrapper_type: shared_type, kind: SharedLocalKind::SharedArc, ast_shared: *shared });
 
             let init_val = super::exprs::emit_shared_get(ctx, builder, hidden_local, inner_type);
-            builder.assign(Place::local(facade_local), init_val);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
         }
 
         SharedStrategy::ArcRwLock => {
@@ -838,12 +854,12 @@ fn lower_shared_var_decl(
 
             let new_fn = format!("{mangled}__new");
             let tmp = builder.add_local(inner_type, None);
-            builder.assign(Place::local(tmp), val_operand);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
             let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], rwlock_type);
 
             let rwlock_local = builder.add_local(rwlock_type, None);
             ctx.drops.register_local(rwlock_local, rwlock_type, &ctx.type_registry);
-            builder.assign(Place::local(rwlock_local), FunctionBuilder::copy(wrapped));
+            builder.assign_mode(crate::ir::instructions::AssignMode::Move, Place::local(rwlock_local), FunctionBuilder::copy(wrapped));
 
             let facade_local = builder.add_local(inner_type, Some(name));
             ctx.register_local(name, facade_local, inner_type);
@@ -852,7 +868,7 @@ fn lower_shared_var_decl(
             ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local: rwlock_local, inner_type, wrapper_type: rwlock_type, kind: SharedLocalKind::RwLock, ast_shared: *shared });
 
             let init_val = super::exprs::emit_rwlock_read_get(ctx, builder, rwlock_local, inner_type);
-            builder.assign(Place::local(facade_local), init_val);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
         }
 
         SharedStrategy::ArcMutex => {
@@ -887,7 +903,7 @@ fn lower_shared_var_decl(
             // Create Mutex, then wrap in Shared
             let mutex_new_fn = format!("{mutex_mangled}__new");
             let tmp = builder.add_local(inner_type, None);
-            builder.assign(Place::local(tmp), val_operand);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
             let mutex_val = builder.call(&mutex_new_fn, vec![FunctionBuilder::copy(tmp)], mutex_type);
 
             let shared_new_fn = format!("{shared_mutex_mangled}__new");
@@ -895,7 +911,7 @@ fn lower_shared_var_decl(
 
             let hidden_local = builder.add_local(shared_mutex_type, None);
             ctx.drops.register_local(hidden_local, shared_mutex_type, &ctx.type_registry);
-            builder.assign(Place::local(hidden_local), FunctionBuilder::copy(shared_val));
+            builder.assign_mode(crate::ir::instructions::AssignMode::Move, Place::local(hidden_local), FunctionBuilder::copy(shared_val));
 
             let facade_local = builder.add_local(inner_type, Some(name));
             ctx.register_local(name, facade_local, inner_type);
@@ -905,7 +921,7 @@ fn lower_shared_var_decl(
 
             // Init facade: Shared.get() → Mutex, then lock → get → release
             let init_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
-            builder.assign(Place::local(facade_local), init_val);
+            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
         }
     }
 }
@@ -1526,11 +1542,21 @@ fn lower_assert(
                 let lhs_type = infer_operand_type_full(ctx, &lhs_op, builder);
                 let rhs_type = infer_operand_type_full(ctx, &rhs_op, builder);
 
-                // Store in locals so values survive across basic blocks
+                // Store in locals so values survive across basic blocks.
+                // Phase C: pick Move for resource-typed temps so the GIR
+                // mode matches the move-to-temp semantic. Primitives
+                // stay Copy.
+                use crate::ir::instructions::AssignMode;
                 let lhs_local = builder.add_local(lhs_type, None);
-                builder.assign(Place::local(lhs_local), lhs_op);
+                let lhs_mode = if ctx.type_registry.is_resource_type(lhs_type)
+                    || ctx.type_registry.needs_drop(lhs_type)
+                { AssignMode::Move } else { AssignMode::Copy };
+                builder.assign_mode(lhs_mode, Place::local(lhs_local), lhs_op);
                 let rhs_local = builder.add_local(rhs_type, None);
-                builder.assign(Place::local(rhs_local), rhs_op);
+                let rhs_mode = if ctx.type_registry.is_resource_type(rhs_type)
+                    || ctx.type_registry.needs_drop(rhs_type)
+                { AssignMode::Move } else { AssignMode::Copy };
+                builder.assign_mode(rhs_mode, Place::local(rhs_local), rhs_op);
 
                 // Emit type-appropriate comparison
                 let cond_local = emit_assert_comparison(
@@ -1976,7 +2002,17 @@ fn lower_with(
         let local_id = builder.add_local(type_id, Some(&binding.name.node));
         ctx.register_local(&binding.name.node, local_id, type_id);
         ctx.drops.register_local(local_id, type_id, &ctx.type_registry);
-        builder.assign(Place::local(local_id), val);
+        // Phase C: pick Move for resource types (with-binding takes ownership
+        // of the result; e.g. `with Resource(...) as r:` constructs a fresh
+        // owned local). Primitives stay Copy.
+        let with_mode = if ctx.type_registry.is_resource_type(type_id)
+            || ctx.type_registry.needs_drop(type_id)
+        {
+            crate::ir::instructions::AssignMode::Move
+        } else {
+            crate::ir::instructions::AssignMode::Copy
+        };
+        builder.assign_mode(with_mode, Place::local(local_id), val);
 
         // If this binding mirrors a shared variable, register for auto-refresh after await
         if let Some(facade_local) = shared_facade {

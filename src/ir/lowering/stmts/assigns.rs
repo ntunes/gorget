@@ -833,7 +833,13 @@ pub(super) fn lower_compound_assign(
                 } else {
                     Place::local(local_id)
                 };
-                builder.assign(dst, FunctionBuilder::copy(tmp));
+                // Phase C: tmp is fresh from gorget_str_cat, dead after this
+                // single assign — Move transfers ownership.
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    dst,
+                    FunctionBuilder::copy(tmp),
+                );
                 // Mark the temp as moved so the drop elaborator doesn't free it
                 // (the destination variable now owns the GorgetString)
                 ctx.move_zero_and_mark(builder, tmp);
@@ -904,7 +910,16 @@ pub(super) fn lower_compound_assign(
             } else {
                 Place::local(local_id)
             };
-            builder.assign(dst, FunctionBuilder::copy(tmp));
+            // Phase C: tmp is fresh op-result (binop or overload call), dead
+            // after this assign. Move for resource types, Copy for primitives.
+            let cmp_mode = if ctx.type_registry.is_resource_type(value_type)
+                || ctx.type_registry.needs_drop(value_type)
+            {
+                crate::ir::instructions::AssignMode::Move
+            } else {
+                crate::ir::instructions::AssignMode::Copy
+            };
+            builder.assign_mode(cmp_mode, dst, FunctionBuilder::copy(tmp));
         } else if ctx.global_names.contains(name.as_str()) {
             // Module-level static variable — read via GlobalRef, compute, write via GlobalAssign
             let cur_val = Operand::Constant(Constant::GlobalRef(name.clone()));

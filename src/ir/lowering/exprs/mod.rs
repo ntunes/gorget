@@ -533,7 +533,15 @@ fn lower_expr_inner(
                     }
                 }
                 let dst = builder.add_local(deref_type, None);
-                builder.assign(Place::local(dst), Operand::Copy(deref_place));
+                // Phase C: dst is a non-owning view of the deref'd box/ptr
+                // content (no drop registration). Borrow for resource types;
+                // Copy for primitives (bit-copy is correct).
+                let mode = if ctx.type_registry.is_resource_type(deref_type) {
+                    crate::ir::instructions::AssignMode::Borrow
+                } else {
+                    crate::ir::instructions::AssignMode::Copy
+                };
+                builder.assign_mode(mode, Place::local(dst), Operand::Copy(deref_place));
                 return FunctionBuilder::copy(dst);
             }
             val
