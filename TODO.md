@@ -65,6 +65,42 @@
 
   **Audit lens (per user direction 2026-05-03):** every remaining shallow copy is either (a) a latent bug we fix in lowering, or (b) a missing IR / syntax / protocol primitive needed to express the necessity legally. There is no third "accept the violation" bucket — that would defeat the Phase C guarantee.
 
+  **Phase C C4 blocker (discovered 2026-05-03 evening): the §6.8 LIR conflation.**
+
+  The for-string cluster (~16 violations, lower_for_string at for_loops.rs:165) has three iter_op shapes (literal cap=0 view / owned cap>0 clone / shared cap>0 borrow) that the IR can't currently distinguish. Option (c) — query iter_op's source ownership state via Phase D's BorrowOrigin + dispatch Move/Borrow accordingly — is the principled fix. It needs `set_ref` to mean "no-drop borrow" without ALSO triggering LIR SlotLoad routing.
+
+  But LIR's `is_ref()` predicate at 6 sites bundles two semantics:
+  - **Slot kind** (Ptr-sized vs value-sized for layout) — should check TypeId.
+  - **Drop discipline** (no-drop borrow vs owned) — should check ownership.
+
+  Splitting `is_ref()` cleanly *without* touching the GIR doesn't work: the GIR has dozens of `set_ref(value_typed_local)` call sites that exploit the conflation to opt into LIR SlotLoad routing on value-typed locals. This works because of a **layout-coincidence dependency** — collection structs (GorgetString, GorgetArray) have the data pointer as their first field, so loading the first 8 bytes of the slot via SlotLoad happens to give the right pointer.
+
+  **Concrete attempt and result (2026-05-03):**
+  - Replaced LIR's 6 `is_ref()` calls with `is_ptr_typed_local` (TypeId-based).
+  - Wide regression: ~50 fixtures failed across diverse patterns (dataframe, xml, yaml, closures, control flow). The `set_ref` callers were depending on the SlotLoad routing.
+  - Reverted.
+
+  **What full §6.8 needs (multi-day project):**
+  1. Audit all `set_ref` callers in src/ir/lowering. Categorise each:
+     - "Drop discipline only" — pure no-drop signal. Keep set_ref semantics.
+     - "Slot routing" — opt into LIR SlotLoad. Replace with explicit Ptr-typed local OR new typed flag.
+  2. Add a separate `slot_kind: PtrSlot | ValueSlot` axis on GIR Local (or LIR Slot per the original §6.8 vision).
+  3. LIR's 6 sites read slot_kind for routing, ownership for drop.
+  4. Validate via integration tests at each step.
+
+  **Decision (2026-05-03):** Phase C C4 (promote validator from warning to error) is GATED on §6.8. The validator stays warning-only until §6.8 lands. The persistent flag on the for-string cluster (~16 violations) IS the durable signal that work remains. Option (a) — always-clone — was considered and rejected because it would silence the validator and bury the architectural debt under a comment that future readers would miss.
+
+  **Approaches considered and rejected:**
+  - (a) Always-clone for-string. Closes the cluster but silences the validator at the affected sites. Hides architectural debt. Rejected.
+  - (b) Borrow + no drop_register. Regressed leak_known_patterns (shape 2 leaks). Mechanically wrong without per-shape dispatch.
+  - Localized §6.8 subset (split is_ref alone). Wide regression because GIR set_ref callers exploit the conflation. Doesn't work in isolation.
+
+  **Forward path:**
+  - Document the layout-coincidence dependency at affected GIR call sites (search: `set_ref` near `add_local` of value-typed slots).
+  - Land full §6.8 (the multi-day project above).
+  - Then option (c) closes the for-string cluster.
+  - Then C4 ships.
+
   **Stages remaining:**
     - C3 (audit): each remaining cluster needs per-site classification. Likely shapes:
       - Box-deref auto-materialization: `_x = copy box.*` in call-arg path (eval pattern). Either propagate Box-deref skip to validator OR emit Borrow mode at the lowering site.
