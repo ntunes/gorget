@@ -27,9 +27,36 @@ pub(super) fn lower_array_literal(
             vec![Operand::Constant(Constant::SizeOf(etype))],
             array_type,
         );
+        // Phase C: pick mode by source — owned call results / unnamed
+        // temps (e.g., nested vector literals) get Move; primitives stay
+        // Copy. Mirrors the broadened predicate in lower_return /
+        // assign_to_return_slot (C2.10 / C2.13): bare-place + needs_drop
+        // is owned-equivalent at this site since the source temp is dead
+        // immediately after the assign (only the new local + its borrow
+        // are used).
+        let elem_mode = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
+            use crate::ir::instructions::AssignMode;
+            if !ctx.type_registry.is_resource_type(ty) { return AssignMode::Copy; }
+            match op {
+                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                    let src_ty = builder.local_type(p.local);
+                    if ctx.is_owned_local(p.local)
+                        || (!ctx.is_named_local(p.local)
+                            && (ctx.type_registry.needs_drop(src_ty)
+                                || ctx.type_registry.is_resource_type(src_ty)))
+                    {
+                        AssignMode::Move
+                    } else {
+                        AssignMode::Copy
+                    }
+                }
+                _ => AssignMode::Copy,
+            }
+        };
         // Push first element
         let elem_local = builder.add_local(etype, None);
-        builder.assign(Place::local(elem_local), first);
+        let first_mode = elem_mode(ctx, builder, &first, etype);
+        builder.assign_mode(first_mode, Place::local(elem_local), first);
         let ref_local = builder.borrow(Place::local(elem_local), ctx.register_ptr_type(etype));
         let arr_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
         builder.call_extern(
@@ -41,7 +68,8 @@ pub(super) fn lower_array_literal(
         for elem_expr in &elems[1..] {
             let elem_val = lower_expr(ctx, builder, elem_expr);
             let el = builder.add_local(etype, None);
-            builder.assign(Place::local(el), elem_val);
+            let mode = elem_mode(ctx, builder, &elem_val, etype);
+            builder.assign_mode(mode, Place::local(el), elem_val);
             let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(etype));
             let ar_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
             builder.call_extern(
