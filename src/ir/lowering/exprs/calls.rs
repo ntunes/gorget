@@ -1244,6 +1244,27 @@ pub fn lower_print_call(
 /// symbols, but is preserved as a backstop so synthesised f-strings still
 /// work.
 /// `fmt_spec` is an optional format specifier like ".2f", "x", "08d", etc.
+/// Pick an `AssignMode` for the f-string interp temp `tmp = lower(expr)`.
+/// The temp is single-use (consumed by the format call). For resource
+/// types, the right semantic is Move (transfer ownership from the
+/// expression's owned result) when the source is a place, or Clone when
+/// the source can't be moved. For non-resource types, Copy (bit-copy of
+/// a primitive) is correct.
+fn interp_temp_mode(ctx: &LoweringContext, val: &Operand, type_id: crate::ir::types::TypeId)
+    -> crate::ir::instructions::AssignMode
+{
+    use crate::ir::instructions::AssignMode;
+    if !ctx.type_registry.is_resource_type(type_id) {
+        return AssignMode::Copy;
+    }
+    match val {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => AssignMode::Move,
+        // Source has projections (field/index/deref) or is a constant/computation:
+        // can't safely move. Clone gives us an owned independent copy.
+        _ => AssignMode::Clone,
+    }
+}
+
 pub(super) fn lower_interp_segment(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -1325,7 +1346,8 @@ pub(super) fn lower_interp_segment(
         let val = lower_expr(ctx, builder, expr);
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
-        builder.assign(Place::local(tmp), val);
+        let mode = interp_temp_mode(ctx, &val, type_id);
+        builder.assign_mode(mode, Place::local(tmp), val);
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
@@ -1340,7 +1362,8 @@ pub(super) fn lower_interp_segment(
         let val = lower_expr(ctx, builder, &parsed_expr);
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
-        builder.assign(Place::local(tmp), val);
+        let mode = interp_temp_mode(ctx, &val, type_id);
+        builder.assign_mode(mode, Place::local(tmp), val);
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
