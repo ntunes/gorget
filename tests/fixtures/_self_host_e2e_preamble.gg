@@ -11,11 +11,14 @@
 # directory listing and the e2e test skips it from the sweep itself
 # (it isn't a real test program).
 
+from std.collections import Vector, Dict, Set, HashMap, HashSet
 from std.channel import Channel
 from std.async import spawn
 from std.sync import Mutex, RwLock, Guard, AtomicInt, Shared
 from std.time import sleep, time_ms
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+from std.math import sqrt, abs, INFINITY, NAN
+from std.hash import FxHasher, hash_of
 
 async int worker():
     return 0
@@ -49,4 +52,19 @@ async void use_async():
     auto sk_r = socket_connect("127.0.0.1", 1)
 
 void main():
+    Vector[int] v = []
+    v.push(1)
+    Dict[String, int] d = {}
+    d.put("x", 1)
+    Set[int] sv = Set[int]()
+    sv.add(1)
+    HashMap[String, int] hm = HashMap[String, int]()
+    hm.put("y", 2)
+    HashSet[int] hs = HashSet[int]()
+    hs.add(1)
+    float m1 = sqrt(2.0)
+    int m2 = abs(-1)
+    float m3 = INFINITY
+    float m4 = NAN
+    int hh = hash_of(1)
     print("ok")
