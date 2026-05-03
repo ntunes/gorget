@@ -4,7 +4,7 @@
 
 - **Phase C2 — fix highest-frequency resource-move violations** (Stage C1 sweep landed 2026-05-03; full sweep across 1203 fixtures via `GG_VALIDATE_RESOURCE_MOVES=1` produced **11,447 `AssignMode::Copy`-of-resource warnings** before promotion. C2.1 landed same day, bringing count to **10,862** — `@ParseError__display` 412 → 0). The validator catches latent shallow-aliases of owned resources — bugs that don't trigger today only because the call patterns happen to dodge double-free.
 
-  **Progress log (2026-05-03 — 25 commits, 11447 → 46, ~99.6% reduction):**
+  **Progress log (2026-05-03 — 28 commits, 11447 → 19, ~99.83% reduction):**
     - **C2.1** (`81c01959`): f-string string-deref `lower_interp_segment` emits `AssignMode::Clone` instead of default `Copy` when pointee is a string type. -585 violations. Layering correctness: GIR carries the typed mode, no longer relying on the C-backend "deep clone for Ptr→String loads" name-shape magic.
     - **C2.2** (`0986c140`): `lower_for`'s deref-of-Ptr step (`iter_local = *self_ptr`) emits `AssignMode::Borrow` for resource iterables. The local was non-owning by intent; the comment confirmed it. -2250 across the Iter derive cluster.
     - **C2.3** (`9d691ef2`): f-string interp temp `tmp = lower(expr)` picks Move/Clone/Copy by source shape. Closes `@ParseError__debug` + `@IoError__debug` (-733).
@@ -30,13 +30,28 @@
     - **C2.23** (`b9da47f7`): tuple destructure pattern picks Move/Copy by source for resource tuples. Hits @main Tuple cluster across http_urls. (-12)
     - **C2.24** (`89cdb7b5`): array literal element staging picks Move for owned/temp resources (nested vector literals). Hits `vector_of_vectors.gg` (-3) plus broader applicability.
     - **C2.25** (`bcb4837e`): `stage_match_scrutinee` defaults to Borrow for resource scrutinees (the match-doesn't-consume invariant is unconditional). Hits `@xtd__toml___stringify_section` (4 → 0) and tightens loop-reassigned named locals.
+    - **C2.26** (`53dd0f86`): rethrow expression's 4 internal assigns pick Move via `mode_for` closure (mirrors C2.17 catch). Hits @validated_port, @transform, @process, @parse_positive (-13).
+    - **C2.27 + C2.28** (`0def1ca0`): batch from 4 parallel diagnosis agents (Explore type, read-only, no integration tests). Sites:
+       - `lower_shared_var_decl` (stmts/mod.rs): Move + `resource_assign_mode` helper for hidden_local / rwlock_local + tmp + facade_local.
+       - `lower_assert` (stmts/mod.rs): Move for LHS/RHS resource materialization.
+       - comprehension non-range iter (collections.rs): Borrow.
+       - comprehension acc_local: set_owned + drop_register so var-decl picks Move.
+       - `Expr::Deref` non-Box resource path (exprs/mod.rs): Borrow.
+       - `lower_with` (stmts/mod.rs): Move.
+       - `lower_compound_assign` string += and general op-result (assigns.rs): Move.
+       - REVERTED: `lower_for_string` Move attempt — caused double-free in 2 fixtures (string_enum_variants, leak_known_patterns). Original Copy + drop_register kept; for-string flag stays as a known Phase C limitation.
+       Combined delta: 46 → 19 (-27 violations).
 
-  **Remaining (46 violations after C2.25):**
-    - 33 GorgetString — diffuse, ≤5/fixture
-    - 6 Vector__int64_t
-    - 4 Resource — singletons in test fixtures
-    - 1-2 each: Shared__*, Row, Yaml, etc.
-    Top fns: @main 24 (broadest — typically 1-5 per fixture), @tokenize 3, @__test_4 2, then ~20 singleton functions.
+  **Remaining (19 violations after C2.28):**
+    - 17 GorgetString — bulk is the for-string cluster (lower_for_string at for_loops.rs:165) which can't be fixed without runtime-level work; see notes below.
+    - 1 Vector__int64_t (shared_iterator_invalidation residue, in-loop body context)
+    - 1 Row (FromRow_for_Row__from_row trait body — assign_to_return_slot helper not firing for unclear reason; needs debug print to diagnose).
+    Top fns: @main 9 (diffuse 1-3 per fixture), @tokenize 3, @is_balanced/@caesar_encrypt/@max_depth/@rate_password/@parse_positive/@test_string singleton (each 1).
+
+  **The for-string cluster** (lower_for_string at for_loops.rs:165) is the dominant residue. The site emits `iter_local = copy iter_op` + drop_registers iter_local as if it owns. Runtime behavior is correct *only* because string literals (cap=0 sentinel) no-op on free, masking the latent shallow-alias-with-double-drop. The proper fix needs *either*:
+    (a) emit a real `gorget_string_clone_to_owned(iter_op)` call to materialize an independent buffer the iter_local can own, OR
+    (b) emit Borrow mode + don't drop_register iter_local, with the caller responsible for keeping the source alive past the loop.
+  Approach (a) is safer (matches the existing comment's intent) but allocates per loop entry; (b) is faster but changes the runtime contract. Either is a C3 follow-up requiring more careful analysis — my Move attempt regressed 2 fixtures with `free(): double free detected in tcache 2`.
 
   **Validated externally (2026-05-03):** gorget-arena (51-file user project at `.worktrees/gorget-arena/src/main.gg`) hits **zero** Phase C violations after C2.25. Real-world signal that the major patterns are covered.
 
