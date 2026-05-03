@@ -1098,9 +1098,10 @@ fn lower_return(
                 // would benefit from Clone instead, but that's a C3 audit
                 // refinement and the current move_zero behavior is unchanged.
                 let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    let local_ty = builder.local_type(p.local);
                     p.projections.is_empty()
-                        && ctx.type_registry.needs_drop(
-                            builder.local_type(p.local))
+                        && (ctx.type_registry.needs_drop(local_ty)
+                            || ctx.type_registry.is_resource_type(local_ty))
                 } else { false };
                 if use_move {
                     builder.assign_mode(

@@ -23,8 +23,10 @@ fn assign_to_return_slot(
 ) {
     use crate::ir::instructions::AssignMode;
     let mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+        let local_ty = builder.local_type(p.local);
         if p.projections.is_empty()
-            && ctx.type_registry.needs_drop(builder.local_type(p.local))
+            && (ctx.type_registry.needs_drop(local_ty)
+                || ctx.type_registry.is_resource_type(local_ty))
         {
             AssignMode::Move
         } else {
