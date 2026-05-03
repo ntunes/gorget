@@ -950,7 +950,24 @@ fn lower_trait_method_body(
         }
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
-            builder.assign(Place::local(LocalId(0)), operand);
+            // Phase C: trait-impl expression bodies need the same Move-mode
+            // staging as regular FunctionBody::Expression (mirrors
+            // `assign_to_return_slot` in functions.rs).
+            use crate::ir::instructions::AssignMode;
+            let ret_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                let local_ty = builder.local_type(p.local);
+                if p.projections.is_empty()
+                    && (ctx.type_registry.needs_drop(local_ty)
+                        || ctx.type_registry.is_resource_type(local_ty))
+                {
+                    AssignMode::Move
+                } else {
+                    AssignMode::Copy
+                }
+            } else {
+                AssignMode::Copy
+            };
+            builder.assign_mode(ret_mode, Place::local(LocalId(0)), operand);
             ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
@@ -1469,7 +1486,24 @@ fn lower_static_trait_method(
         }
         FunctionBody::Expression(expr) => {
             let operand = lower_expr(ctx, &mut builder, expr);
-            builder.assign(Place::local(LocalId(0)), operand);
+            // Phase C: trait-impl expression bodies need the same Move-mode
+            // staging as regular FunctionBody::Expression (mirrors
+            // `assign_to_return_slot` in functions.rs).
+            use crate::ir::instructions::AssignMode;
+            let ret_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                let local_ty = builder.local_type(p.local);
+                if p.projections.is_empty()
+                    && (ctx.type_registry.needs_drop(local_ty)
+                        || ctx.type_registry.is_resource_type(local_ty))
+                {
+                    AssignMode::Move
+                } else {
+                    AssignMode::Copy
+                }
+            } else {
+                AssignMode::Copy
+            };
+            builder.assign_mode(ret_mode, Place::local(LocalId(0)), operand);
             ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             builder.ret(FunctionBuilder::copy(LocalId(0)));
         }
