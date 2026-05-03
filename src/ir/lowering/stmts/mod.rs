@@ -651,9 +651,25 @@ fn lower_var_decl(
             let operand = lower_expr(ctx, builder, value);
             let tuple_type = infer_operand_type_with_builder(ctx, &operand, builder);
 
-            // Store the tuple in a temp local
+            // Store the tuple in a temp local. Phase C: pick mode by source —
+            // call results (owned + dead) Move; named-local sources Borrow;
+            // primitives Copy.
             let tuple_local = builder.add_local(tuple_type, None);
-            builder.assign(Place::local(tuple_local), operand);
+            let tuple_assign_mode = {
+                use crate::ir::instructions::AssignMode;
+                if !ctx.type_registry.is_resource_type(tuple_type) {
+                    AssignMode::Copy
+                } else if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+                        AssignMode::Move
+                    } else {
+                        AssignMode::Copy
+                    }
+                } else {
+                    AssignMode::Copy
+                }
+            };
+            builder.assign_mode(tuple_assign_mode, Place::local(tuple_local), operand);
 
             // Extract each field and bind it to the corresponding pattern variable
             for (i, part) in parts.iter().enumerate() {
