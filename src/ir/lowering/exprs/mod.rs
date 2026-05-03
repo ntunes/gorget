@@ -506,14 +506,27 @@ fn lower_expr_inner(
                 {
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(deref_type) {
                         let shallow = builder.add_local(deref_type, None);
-                        builder.assign(Place::local(shallow), Operand::Copy(deref_place));
+                        // Phase C: shallow is intentionally non-owning view of
+                        // the Box's content (no drop registration). Borrow
+                        // mode encodes that contract — Copy would label it as
+                        // a shallow alias of an owned resource.
+                        builder.assign_mode(
+                            crate::ir::instructions::AssignMode::Borrow,
+                            Place::local(shallow),
+                            Operand::Copy(deref_place),
+                        );
                         // NOTE: deliberately NO drops.register_local(shallow, ...)
                         let ptr_ty = ctx.register_ptr_type(deref_type);
                         let ptr_local = builder.add_local(ptr_ty, None);
                         builder.emit_borrow(ptr_local, Place::local(shallow));
                         let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], deref_type);
                         let dst = builder.add_local(deref_type, None);
-                        builder.assign(Place::local(dst), FunctionBuilder::copy(cloned));
+                        // Phase C: cloned is fresh + dead — Move into dst.
+                        builder.assign_mode(
+                            crate::ir::instructions::AssignMode::Move,
+                            Place::local(dst),
+                            FunctionBuilder::copy(cloned),
+                        );
                         ctx.drops.register_local(dst, deref_type, &ctx.type_registry);
                         ctx.set_owned(dst);
                         return FunctionBuilder::copy(dst);
