@@ -1,0 +1,52 @@
+# Kitchen-sink fixture used ONLY as a runtime-preamble source for the
+# `self_host_e2e` test. Imports + USES the union of std modules that
+# fixtures might pull in, so the resulting Rust-emitted .c carries
+# every runtime symbol (gorget_channel_*, gorget_mutex_*,
+# gorget_reactor_*, GorgetAtomicInt, gorget_task_group_t,
+# gorget_time_ms, etc.) that ordinary fixtures need but driver.gg's
+# narrower preamble lacks. Each import must be referenced by name or
+# the compiler drops the runtime emission as unused.
+#
+# Filename starts with `_` so it sorts to the top of the fixtures
+# directory listing and the e2e test skips it from the sweep itself
+# (it isn't a real test program).
+
+from std.channel import Channel
+from std.async import spawn
+from std.sync import Mutex, RwLock, Guard, AtomicInt, Shared
+from std.time import sleep, time_ms
+from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect
+
+async int worker():
+    return 0
+
+async void use_async():
+    Channel[int] ch = Channel[int](2)
+    ch.send(1)
+    int v = ch.recv()
+    ch.close()
+
+    Mutex[int] mu = Mutex[int](0)
+    Guard[int] g = mu.lock()
+    int gv = g.get()
+
+    RwLock[int] rw = RwLock[int](0)
+
+    AtomicInt a = AtomicInt(0)
+    a.add(1)
+    int av = a.load()
+
+    Shared[int] sh = Shared[int](42)
+
+    sleep(0.001).await()
+    int t = time_ms()
+
+    TaskGroup group = TaskGroup()
+    group.spawn(spawn worker())
+    group.join()
+
+    auto srv_r = server_socket_bind("127.0.0.1", 0)
+    auto sk_r = socket_connect("127.0.0.1", 1)
+
+void main():
+    print("ok")

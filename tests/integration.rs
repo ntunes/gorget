@@ -12360,33 +12360,126 @@ fn self_host_e2e() {
 
     // 1. Build stage-0 driver (cached) and extract the Rust runtime
     //    preamble once. Both reused across every fixture.
-    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     let gg_exe = manifest_dir.join("target/debug/gg");
 
-    // Shared runtime preamble extracted from driver.c. driver.gg imports
-    // most of std (collections, io, fs, conv, path, iter, hash, async),
-    // so its preamble has broader runtime coverage than any individual
-    // fixture's. Cut at the same boundary the bootstrap test uses —
-    // stage-1's body re-emits user-type typedefs / static literals /
-    // function definitions, so we drop everything from there onwards.
-    let driver_rust_c = std::fs::read_to_string(&driver_c)
-        .expect("failed to read driver.c");
-    let preamble_end = driver_rust_c
+    // Build a "kitchen-sink" preamble fixture once that imports + uses
+    // every std module ordinary fixtures pull in (channel, async, sync,
+    // time, net.socket). The runtime templates in `c_runtime.rs` emit
+    // those families conditionally on imports, so this fixture's .c
+    // carries the union — gorget_channel_*, gorget_mutex_*,
+    // gorget_reactor_*, GorgetAtomicInt, gorget_task_group_t,
+    // GorgetSocket, etc. — that driver.gg's preamble (collections/io/
+    // fs/conv/path only) lacks. We also strip `struct __gg_X { ... };`
+    // blocks from the preamble below so stage-1's re-emission doesn't
+    // collide with the kitchen-sink's user-type definitions.
+    let preamble_src = manifest_dir.join("tests/fixtures/_self_host_e2e_preamble.gg");
+    let preamble_bin = std::env::temp_dir().join(format!(
+        "gg_e2e_preamble_{}",
+        std::process::id(),
+    ));
+    let preamble_c = preamble_bin.with_extension("c");
+    let preamble_build = run_with_timeout(
+        Command::new(&gg_exe)
+            .arg("build")
+            .arg("-o").arg(&preamble_bin)
+            .arg(&preamble_src),
+        "self_host_e2e preamble build",
+    );
+    assert!(
+        preamble_build.status.success(),
+        "preamble fixture failed to build: stderr={}",
+        String::from_utf8_lossy(&preamble_build.stderr),
+    );
+    let preamble_rust_c = std::fs::read_to_string(&preamble_c)
+        .expect("failed to read preamble .c");
+    let _ = std::fs::remove_file(&preamble_bin);
+    let _ = std::fs::remove_file(&preamble_c);
+    // Cut at "Static string literals" — keeps runtime + user-type
+    // typedefs from std library imports (IoError, Task, Guard, etc.).
+    // Stage-1's body re-emits its own user-types, so we then strip
+    // `struct __gg_X { ... };` blocks from the preamble — those are
+    // the redefinition culprits. Forward decls like
+    // `typedef struct __gg_X __gg_X;` stay (C11 permits identical
+    // typedef redeclarations) and the runtime-fn declarations that
+    // reference these types stay, so cc still sees a complete
+    // declaration once stage-1's body provides the matching
+    // `struct __gg_X { ... }` definition.
+    let preamble_end = preamble_rust_c
         .find("// ── Static string literals")
-        .or_else(|| driver_rust_c.find("\ntypedef struct __gg_"))
-        .or_else(|| driver_rust_c.find("// ── Function Definitions ──"))
-        .expect("driver.c has no recognisable user-section boundary");
-    let runtime_preamble: String = driver_rust_c[..preamble_end].to_string();
+        .or_else(|| preamble_rust_c.find("// ── Function Definitions ──"))
+        .expect("preamble .c has no recognisable user-section boundary");
+    let runtime_preamble: String = strip_user_struct_defs(&preamble_rust_c[..preamble_end]);
 
-    // 2. Discover fixtures.
+    fn strip_user_struct_defs(src: &str) -> String {
+        // Strip `struct __gg_X { ... };` body definitions — stage-1's
+        // body re-emits these and cc errors on "redefinition of
+        // 'struct __gg_X'". Forward decls (`typedef struct __gg_X
+        // __gg_X;`) stay; identical typedef redeclarations are OK in
+        // C11.
+        //
+        // We also strip the preamble's typedef aliases for the small
+        // set of runtime-mapped wrapper types where the preamble and
+        // stage-1 disagree on shape: Task__T (preamble emits a 16-byte
+        // struct, stage-1 emits a user-struct typedef) and Guard__T
+        // (preamble emits an alias of `gorget_guard_t`, stage-1 emits
+        // a user-struct typedef). Those names are checked against a
+        // small allow-list — broader pattern-matching strips runtime
+        // aliases like `Vector__int64_t` / `Dict__String__int64_t`
+        // that downstream runtime helpers depend on, taking Match to 0.
+        fn is_runtime_alias_target_to_strip(name: &str) -> bool {
+            // Conservative allow-list — only the types where preamble
+            // and stage-1 disagree on shape. Add more as they appear.
+            name.starts_with("Task__")
+                || name.starts_with("Guard__")
+                || name.starts_with("ReadGuard__")
+                || name.starts_with("WriteGuard__")
+        }
+        let mut out = String::with_capacity(src.len());
+        let mut in_struct = false;
+        for line in src.lines() {
+            if in_struct {
+                if line == "};" {
+                    in_struct = false;
+                }
+                continue;
+            }
+            if line.starts_with("struct __gg_") && line.ends_with(" {") {
+                in_struct = true;
+                continue;
+            }
+            if line.starts_with("typedef ") && line.ends_with(';') {
+                if let Some(name) = line
+                    .trim_end_matches(';')
+                    .rsplit_once(|c: char| c.is_whitespace() || c == '*' || c == ')')
+                    .map(|(_, n)| n)
+                {
+                    if is_runtime_alias_target_to_strip(name) {
+                        continue;
+                    }
+                }
+            }
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+
+    // 2. Discover fixtures. Skip `_self_host_e2e_preamble.gg` — it's
+    // the kitchen-sink fixture used to source the runtime preamble,
+    // not a real test program.
     let fixtures_dir = manifest_dir.join("tests/fixtures");
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
         .expect("failed to read fixtures dir")
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().map_or(false, |ext| ext == "gg"))
+        .filter(|p| {
+            p.is_file()
+                && p.extension().map_or(false, |ext| ext == "gg")
+                && p.file_name().map_or(true, |n| n != "_self_host_e2e_preamble.gg")
+        })
         .collect();
     fixtures.sort();
 
