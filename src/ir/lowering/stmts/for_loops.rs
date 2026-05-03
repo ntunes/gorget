@@ -809,10 +809,18 @@ fn lower_for_iterable(
         .unwrap_or("int64_t");
     let elem_type = ctx.type_mapper.lookup_named(elem_c_type).unwrap_or(I64_TYPE);
 
-    // 5. Store the iterable and (optionally) call iter()
+    // 5. Store the iterable and (optionally) call iter().
+    // The collection_local is a non-owning view into the caller's data
+    // — same shape as the deref-Ptr case at line 54. Phase C: emit
+    // Borrow mode so the typed contract matches (no drop, no clone).
     let iter_type_full = infer_operand_type_full(ctx, &iter_op, builder);
     let collection_local = builder.add_local(iter_type_full, None);
-    builder.assign(Place::local(collection_local), iter_op);
+    let collection_assign_mode = if ctx.type_registry.is_resource_type(iter_type_full) {
+        crate::ir::instructions::AssignMode::Borrow
+    } else {
+        crate::ir::instructions::AssignMode::Copy
+    };
+    builder.assign_mode(collection_assign_mode, Place::local(collection_local), iter_op);
 
     let iterator_local = if let Some(ref iter_fn) = iter_fn_name {
         // Iterable path: Call iter(&collection) → iterator

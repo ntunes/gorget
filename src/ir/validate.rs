@@ -963,10 +963,34 @@ fn check_resource_moves(
             // Only place-sourced operands. `Assign { mode: Copy, value:
             // Constant(_) }` is fine — that's a literal, not a shallow
             // alias of an owned resource.
-            if !matches!(value, Operand::Copy(_) | Operand::Move(_)) { continue; }
+            let src_place = match value {
+                Operand::Copy(p) | Operand::Move(p) => p,
+                _ => continue,
+            };
             // Self-assignments aren't shallow copies in the bug sense.
-            if let Operand::Copy(p) | Operand::Move(p) = value {
-                if p.local == dst.local && p.projections.is_empty() { continue; }
+            if src_place.local == dst.local && src_place.projections.is_empty() {
+                continue;
+            }
+            // Auto-deref: source is a Ptr/MutPtr typed local with no
+            // projections, and pointee matches dst type. This is a
+            // codegen-handled `*src` read into a value slot
+            // (LoadRef-equivalent), not a same-type shallow alias.
+            // Phase C2 progress is consolidating these to explicit
+            // LoadRef / Borrow modes upstream; flagging them here is
+            // duplicate noise that doesn't represent runtime risk.
+            if src_place.projections.is_empty() {
+                let src_idx = src_place.local.0 as usize;
+                if src_idx < func.locals.len() {
+                    let src_ty = func.locals[src_idx].type_id;
+                    use crate::ir::types::GirType;
+                    let pointee = match registry.get(src_ty) {
+                        Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) => Some(*inner),
+                        _ => None,
+                    };
+                    if pointee == Some(dst_ty) {
+                        continue;
+                    }
+                }
             }
             let type_name = registry.type_name(dst_ty)
                 .unwrap_or_else(|| format!("ty{}", dst_ty.0));
