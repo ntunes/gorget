@@ -152,16 +152,35 @@ fn lower_for_string(
 ) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
 
-    // Store the iterable in a local. The assign creates a CoW shallow copy;
-    // gorget_string_clone (emitted by the CoW system) allocates an independent
-    // buffer. Register iter_local for drop so the clone is freed at loop exit.
-    // The source variable is dropped separately by its own scope.
+    // Store the iterable in a local. Three shapes for iter_op exist in
+    // practice and they need different drop disciplines:
+    //   1. literal source (cap=0 view): iter_local inherits cap=0; drop is
+    //      no-op; source caller handles real heap.
+    //   2. owned clone from CoW upstream (cap>0, not drop-registered at
+    //      iter_op): iter_local NEEDS to drop or the clone leaks.
+    //   3. shared borrow (cap>0, source still has its drop): iter_local
+    //      MUST NOT drop or double-free.
     //
-    // Phase C: kept as Copy intentionally — the validator flag here is
-    // a known limitation. Move mode would zero the source, but the
-    // source is sometimes a borrow that the caller still relies on.
-    // Without a precise liveness pass + ownership origin tag, neither
-    // Move nor Borrow is safe at this site. C3 follow-up.
+    // The Phase C validator flags the Copy mode here because the IR
+    // can't statically tell shapes #2 and #3 apart from the operand
+    // alone. Today we Copy + drop_register, which works for #1 + #2
+    // but is a latent double-free for #3 — saved at runtime only because
+    // the borrow shape doesn't actually appear in any fixture (the CoW
+    // upstream always materializes a clone before the for-loop entry,
+    // even for shared sources).
+    //
+    // Approaches considered (see TODO.md C2 progress log):
+    //   (a) emit a real `gorget_string_clone_to_owned` here so iter_op
+    //       always becomes owned-clone. Move + drop_register honest.
+    //       Cost: extra alloc per loop entry.
+    //   (b) Borrow + no drop_register. Leaks shape #2 (verified via
+    //       leak_known_patterns regression).
+    //   (c) Source-aware mode picker — Move for owned, Borrow for
+    //       borrow. Needs precise origin tracking at iter_op.
+    //
+    // Kept as Copy for now. C3 follow-up: pursue (a) once we measure
+    // the alloc cost on representative loops, OR (c) once Phase D's
+    // BorrowOrigin tracking is queryable from this site.
     let iter_local = builder.add_local(owned_string_type, None);
     builder.assign(Place::local(iter_local), iter_op);
     ctx.drops.register_local(iter_local, owned_string_type, &ctx.type_registry);
