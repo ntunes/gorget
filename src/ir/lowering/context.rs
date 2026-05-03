@@ -2235,8 +2235,14 @@ impl<'a> LoweringContext<'a> {
             let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
             let owned_local = builder.add_local(inner_type,
                 name_hint.as_deref());
-            builder.assign(crate::ir::instructions::Place::local(owned_local),
-                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            // Phase C: cloned is a fresh owned local that's dead at this single
+            // use — Move mode transfers ownership into owned_local. Copy mode
+            // would alias the clone, leaking the original.
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                crate::ir::instructions::Place::local(owned_local),
+                crate::ir::builder::FunctionBuilder::copy(cloned),
+            );
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
             self.set_owned(owned_local);
             if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
@@ -2270,8 +2276,12 @@ impl<'a> LoweringContext<'a> {
         if let Some(clone_fn) = self.clone_fn_for_ptr(inner_type) {
             let cloned = builder.call(&clone_fn,
                 vec![crate::ir::builder::FunctionBuilder::copy(ref_local)], inner_type);
-            builder.assign(crate::ir::instructions::Place::local(owned_local),
-                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            // Phase C: cloned is fresh + dead — Move into owned_local.
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                crate::ir::instructions::Place::local(owned_local),
+                crate::ir::builder::FunctionBuilder::copy(cloned),
+            );
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
             self.set_owned(owned_local);
         } else {
