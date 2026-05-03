@@ -365,9 +365,15 @@ fn lower_for_enumerate(
     let iter_op = lower_expr(ctx, builder, receiver);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
 
-    // Store the iterable in a local
+    // Store the iterable in a local. Phase C: Borrow mode for resource
+    // iters — non-owning view; original local owns the data.
     let iter_local = builder.add_local(iter_type, None);
-    builder.assign(Place::local(iter_local), iter_op);
+    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
+        crate::ir::instructions::AssignMode::Borrow
+    } else {
+        crate::ir::instructions::AssignMode::Copy
+    };
+    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
 
     // idx = 0
     let idx = builder.add_local(I64_TYPE, None);
@@ -612,7 +618,14 @@ fn lower_for_set(
 ) {
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
     let iter_local = builder.add_local(iter_type, None);
-    builder.assign(Place::local(iter_local), iter_op);
+    // Phase C: Borrow mode — iter_local is non-owning view; the original
+    // local still owns the Set's heap data.
+    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
+        crate::ir::instructions::AssignMode::Borrow
+    } else {
+        crate::ir::instructions::AssignMode::Copy
+    };
+    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
     // Create pointer for iterator accessor calls
     let set_ptr_type = ctx.register_ptr_type(iter_type);
     let set_ptr = builder.add_local(set_ptr_type, None);
