@@ -658,7 +658,12 @@ impl<'a> FuncLowering<'a> {
         }
 
         let src_type_id = self.gir_func.locals[src_idx].type_id;
-        let dst_type_id = self.gir_func.locals[dst_idx].type_id;
+        // Walk projections so a store into a struct field (e.g. `fm.desc = some_opt`)
+        // compares against the actual field type, not the base struct's type. Without
+        // this, an Option-typed field whose enclosing struct isn't itself an Option
+        // would trigger the payload-extract path and silently drop the discriminant.
+        // Snag #4b (2026-05-01).
+        let dst_type_id = self.effective_place_type(dst);
 
         // Check: source is Option__* or Result__*, destination is NOT.
         let src_name = match self.gir_types.get(src_type_id) {
