@@ -48,14 +48,19 @@ pub(super) fn lower_for(
     let iter_op = lower_expr(ctx, builder, iterable);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
 
-    // If the iterable is a Ptr (borrowed resource param), deref to get the
-    // iter value for iteration. The iter_local is a non-owning view into
-    // the caller's data — no drop registration, no clone. Phase C: emit
-    // AssignMode::Borrow so the typed contract matches the runtime intent
-    // (memcpy + caller-owns) instead of leaving a Copy-of-resource that
-    // the validator correctly flags as a shallow alias.
-    let (iter_op, iter_type) = if let Some(inner) = ctx.pointee_type(iter_type) {
-        if let Operand::Copy(ref p) | Operand::Move(ref p) = iter_op {
+    // §6.8 Stage 5: when iterating a string AND the iterable is Ptr-typed
+    // (e.g. a borrowed resource param), preserve iter_op as the Ptr — so
+    // lower_for_string's source-aware picker can route through
+    // slot_kind=BorrowedPtr without going through a value-typed shallow
+    // alias. For collections, keep the legacy auto-deref path: their
+    // lower_for_* helpers haven't been migrated to consume Ptr-typed
+    // iter_ops yet (separate audit).
+    let pointee = ctx.pointee_type(iter_type);
+    let pointee_is_string = pointee.map_or(false, |p| ctx.type_mapper.is_string_type(p));
+
+    let (iter_op, iter_type) = if pointee.is_some() && !pointee_is_string {
+        // Auto-deref for non-string Ptr iterables (legacy collection paths).
+        if let (Operand::Copy(p) | Operand::Move(p), Some(inner)) = (&iter_op, pointee) {
             let deref_place = Place {
                 local: p.local,
                 projections: vec![Projection::Deref],
@@ -71,7 +76,10 @@ pub(super) fn lower_for(
             (iter_op, iter_type)
         }
     } else {
-        (iter_op, iter_type)
+        // String case OR non-Ptr iterable — keep iter_op as-is. For
+        // strings: lower_for_string detects Ptr-typed source. For
+        // non-Ptr: nothing to deref.
+        (iter_op, pointee.unwrap_or(iter_type))
     };
 
     // Extract the binding name (or use a temp for pattern destructuring)
@@ -152,38 +160,63 @@ fn lower_for_string(
 ) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
 
-    // Store the iterable in a local. Three shapes for iter_op exist in
-    // practice and they need different drop disciplines:
-    //   1. literal source (cap=0 view): iter_local inherits cap=0; drop is
-    //      no-op; source caller handles real heap.
-    //   2. owned clone from CoW upstream (cap>0, not drop-registered at
-    //      iter_op): iter_local NEEDS to drop or the clone leaks.
-    //   3. shared borrow (cap>0, source still has its drop): iter_local
-    //      MUST NOT drop or double-free.
+    // §6.8 Stage 5 — source-aware picker (option (c) from the prior
+    // comment). Three iter_op shapes existed:
+    //   1. literal cap=0 view — iter_local can be a bit-copy; drop is no-op.
+    //   2. owned clone from CoW upstream — iter_local takes ownership; drop frees.
+    //   3. shared borrow — iter_local must NOT drop (source frees).
     //
-    // The Phase C validator flags the Copy mode here because the IR
-    // can't statically tell shapes #2 and #3 apart from the operand
-    // alone. Today we Copy + drop_register, which works for #1 + #2
-    // but is a latent double-free for #3 — saved at runtime only because
-    // the borrow shape doesn't actually appear in any fixture (the CoW
-    // upstream always materializes a clone before the for-loop entry,
-    // even for shared sources).
+    // With the SlotKind axis in place (§6.8 Stages 2-4), shape #3 can
+    // now be expressed honestly: make iter_local a Ptr(String) and tag
+    // its slot as BorrowedPtr. SlotLoad routing gives the pointer; the
+    // .len field projection auto-decodes through the pointer at the LIR
+    // layer; the source's drop is the only one. Shapes #1 and #2 keep
+    // the old Copy + drop_register path — the bit-copy is harmless when
+    // the source isn't drop-tracked.
     //
-    // Approaches considered (see TODO.md C2 progress log):
-    //   (a) emit a real `gorget_string_clone_to_owned` here so iter_op
-    //       always becomes owned-clone. Move + drop_register honest.
-    //       Cost: extra alloc per loop entry.
-    //   (b) Borrow + no drop_register. Leaks shape #2 (verified via
-    //       leak_known_patterns regression).
-    //   (c) Source-aware mode picker — Move for owned, Borrow for
-    //       borrow. Needs precise origin tracking at iter_op.
-    //
-    // Kept as Copy for now. C3 follow-up: pursue (a) once we measure
-    // the alloc cost on representative loops, OR (c) once Phase D's
-    // BorrowOrigin tracking is queryable from this site.
-    let iter_local = builder.add_local(owned_string_type, None);
-    builder.assign(Place::local(iter_local), iter_op);
-    ctx.drops.register_local(iter_local, owned_string_type, &ctx.type_registry);
+    // Detection: iter_op's source is "owning" if it's a bare-place Copy
+    // or Move on a drop-registered local. That's the source of truth
+    // for whether the source will free the heap independently.
+    // Two flavors of "source has an owner besides this loop":
+    //   (a) named local that's drop-registered (e.g. `String s = f"..."`)
+    //   (b) Ptr-typed source (e.g. `String input` param after set_bare_param,
+    //       or any local already tagged BorrowedPtr by an earlier setter)
+    // Both let iter_local borrow without taking ownership. Different inits
+    // (`emit_borrow` to take &source vs `assign` to copy the pointer
+    // value), same end state: iter_local is Ptr(String) with
+    // slot_kind=BorrowedPtr, the source's drop is the only one.
+    let (source_is_owning_named, source_is_ptr_typed) = match &iter_op {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+            let owning = ctx.drops.is_registered(p.local);
+            let ptr_typed = builder.locals.get(p.local.0 as usize).map_or(false, |l| {
+                matches!(ctx.type_registry.get(l.type_id),
+                    Some(GirType::Ptr(_) | GirType::MutPtr(_)))
+            });
+            (owning && !ptr_typed, ptr_typed)
+        }
+        _ => (false, false),
+    };
+    let iter_local = if source_is_owning_named {
+        let ptr_type = ctx.register_ptr_type(owned_string_type);
+        let local = builder.add_local(ptr_type, None);
+        if let Operand::Copy(p) | Operand::Move(p) = &iter_op {
+            builder.emit_borrow(local, p.clone());
+        }
+        ctx.set_ref(local);
+        local
+    } else if source_is_ptr_typed {
+        // Source is already a pointer to String; copy the pointer value.
+        let ptr_type = ctx.register_ptr_type(owned_string_type);
+        let local = builder.add_local(ptr_type, None);
+        builder.assign(Place::local(local), iter_op);
+        ctx.set_ref(local);
+        local
+    } else {
+        let local = builder.add_local(owned_string_type, None);
+        builder.assign(Place::local(local), iter_op);
+        ctx.drops.register_local(local, owned_string_type, &ctx.type_registry);
+        local
+    };
 
     // byte_pos = 0
     let byte_pos = builder.add_local(I64_TYPE, None);
