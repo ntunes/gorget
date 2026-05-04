@@ -271,12 +271,25 @@ pub(super) fn lower_assign(
                                 }
                             } else if ctx.drops.is_registered(place.local) {
                                 assign_mode = AssignMode::Move;
-                            } else if rhs_type == ctx.type_mapper.owned_string_type
-                                && type_id == ctx.type_mapper.owned_string_type
-                            {
-                                assign_mode = AssignMode::Move;
                             }
-                            // Safety net: no Copy for resource types.
+                            // Branch D (rhs==string && type==string) was a
+                            // duplicate of branch A's predicate — unreachable
+                            // today; deleted in the D4 cleanup. The
+                            // string-to-string Move case is handled by branch A
+                            // (with the additional drops.unregister side effect).
+                            // Safety net: no Copy for resource RHS types.
+                            //
+                            // Phase D4 probe (2026-05-04): switching to
+                            // target-keyed `target_resource` regressed 7
+                            // fixtures (dataframe_*, self_host_bootstrap*).
+                            // Unlike `lower_var_decl`'s branch G, this site
+                            // sees cross-type cases where rhs is non-resource
+                            // and target is resource — Move'ing the source
+                            // would zero a non-resource (e.g. primitive)
+                            // local that's still alive elsewhere. The legacy
+                            // RHS-keyed read is the genuinely correct axis
+                            // here. Kept as-is; the mirror with branch G is
+                            // not appropriate at this site.
                             if assign_mode == AssignMode::Copy && ctx.type_registry.is_resource_type(rhs_type) {
                                 assign_mode = AssignMode::Move;
                             }
