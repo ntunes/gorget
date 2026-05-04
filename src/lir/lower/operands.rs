@@ -15,8 +15,11 @@ impl<'a> FuncLowering<'a> {
         // - With Deref projection: use SlotAddr — the Deref loads the pointer
         // - Without Deref: use SlotLoad — directly provides the pointer value
         //   (needed for borrows, method calls, indexing on the Ptr variable)
+        // §6.8 Stage 4: slot_kind is the canonical signal — was
+        // `ownership.is_ref()`. SlotKind::BorrowedPtr means the slot's
+        // bytes ARE the pointer; SlotLoad reads them directly.
         let is_ref_local = self.gir_func.locals.get(place.local.0 as usize)
-            .map_or(false, |l| l.ownership.is_ref());
+            .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
         // Only treat PtrTo(GorgetString) slots as implicit ref locals.
         // Other PtrTo slots carry type information but are not reference locals.
         let is_ptr_to_slot = match &self.lir_func.slots[slot.0 as usize].ty {

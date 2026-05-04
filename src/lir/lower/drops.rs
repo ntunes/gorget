@@ -397,8 +397,9 @@ impl<'a> FuncLowering<'a> {
         // local without an explicit Deref projection produces the
         // pointee's address (via SlotLoad), so the "current type" we
         // walk projections from is the pointee, not the Ptr.
+        // §6.8 Stage 4: was `ownership.is_ref()`.
         let is_ref_local = self.gir_func.locals.get(local_idx)
-            .map_or(false, |l| l.ownership.is_ref());
+            .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
         let has_deref = place.projections.first() == Some(&Projection::Deref);
         if is_ref_local && !has_deref {
             if let Some(GirType::Ptr(inner)) = self.gir_types.get(current_gir_type) {
