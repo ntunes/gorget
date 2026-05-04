@@ -124,7 +124,7 @@ pub(super) fn map_cmp_op(op: GirCmpOp) -> CmpOp {
 }
 
 /// Canonical signature for a known Gorget runtime function.
-pub(super) struct RuntimeSig {
+pub(crate) struct RuntimeSig {
     pub params: Vec<LirType>,
     pub ret: LirType,
     pub param_abis: Vec<AbiKind>,
@@ -133,7 +133,7 @@ pub(super) struct RuntimeSig {
 /// Return canonical signature + ABI tags for known Gorget runtime functions.
 /// This prevents call-site inference from producing wrong parameter types
 /// (e.g. GorgetString instead of Str for gorget_str_* functions).
-pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<RuntimeSig> {
+pub(crate) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<RuntimeSig> {
     use AbiKind::*;
     let str_ty = || sr.lookup("GorgetString").map(LirType::Struct).unwrap_or(LirType::Ptr);
     let arr_ty = || sr.lookup("GorgetArray").map(LirType::Struct).unwrap_or(LirType::Ptr);

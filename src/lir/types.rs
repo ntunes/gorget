@@ -364,20 +364,41 @@ fn infer_call_extern_type(
         | "gorget_array_sorted" | "gorget_array_reversed" | "gorget_array_unique"
         | "gorget_array_filter" | "gorget_array_map" | "gorget_array_zip"
         | "gorget_array_flat_map" | "gorget_array_flatten" | "gorget_array_slice"
-        | "gorget_array_concat" | "gorget_str_split" | "gorget_str_chars" => Some("GorgetArray"),
-        "gorget_map_new" | "gorget_map_clone" => Some("GorgetMap"),
-        "gorget_set_new" | "gorget_set_clone" => Some("GorgetSet"),
+        | "gorget_array_concat" | "gorget_str_split" | "gorget_str_chars"
+        | "gorget_str_bytes" | "gorget_str_codepoints" | "gorget_str_lines"
+        | "gorget_str_splitn"
+        | "gorget_map_items" | "gorget_map_keys" | "gorget_map_values"
+        | "gorget_set_to_array"
+        | "gorget_regex_find_all" | "gorget_regex_split"
+        | "gorget_bytes_concat" | "gorget_bytes_from_hex" | "gorget_bytes_from_str"
+        | "gorget_bytes_slice" => Some("GorgetArray"),
+        "gorget_map_new" | "gorget_map_clone" | "gorget_map_new_like" | "gorget_map_new_str"
+        | "gorget_dict_new" | "gorget_dict_new_str" => Some("GorgetMap"),
+        "gorget_set_new" | "gorget_set_clone" | "gorget_set_new_like" | "gorget_set_new_str"
+        | "gorget_ordered_set_new" | "gorget_ordered_set_new_str" => Some("GorgetSet"),
         "gorget_string_new" | "gorget_string_adopt" | "gorget_string_from_concat"
         | "gorget_str_cat" | "gorget_string_format"
         | "gorget_string_format_alloc"
         | "gorget_string_clone"
+        | "gorget_string_clone_to_owned" | "gorget_string_concat"
+        | "gorget_string_debug" | "gorget_string_from_str"
         | "gorget_int_to_str" | "gorget_float_to_str" | "gorget_char_to_str"
-        | "gorget_str_replace" | "gorget_str_repeat" | "gorget_str_join"
-        | "gorget_str_reverse" | "gorget_str_pad_left" | "gorget_str_pad_right"
+        | "gorget_bool_to_str" | "gorget_char_chr" | "gorget_codepoint_to_utf8"
+        | "gorget_str_replace" | "gorget_str_replacen" | "gorget_str_repeat"
+        | "gorget_str_join" | "gorget_str_reverse"
+        | "gorget_str_pad_left" | "gorget_str_pad_right"
         | "gorget_str_lstrip" | "gorget_str_rstrip" | "gorget_str_strip"
         | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" | "gorget_str_trim"
         | "gorget_str_to_lower" | "gorget_str_to_upper"
-        | "gorget_str_substr" | "gorget_str_index" => Some("GorgetString"),
+        | "gorget_str_substr" | "gorget_str_index"
+        | "gorget_str_byte_slice" | "gorget_str_char_at" | "gorget_str_codepoint_at"
+        | "gorget_str_empty" | "gorget_str_slice"
+        | "gorget_str_from_bool" | "gorget_str_from_cstr" | "gorget_str_from_float"
+        | "gorget_str_from_int" | "gorget_str_from_literal"
+        | "gorget_str_removeprefix" | "gorget_str_removesuffix"
+        | "gorget_process_read_stdout" | "gorget_process_read_stderr"
+        | "gorget_regex_replace"
+        | "gorget_bytes_to_hex" | "gorget_bytes_to_str" | "gorget_read_file" => Some("GorgetString"),
         "gorget_file_open" => Some("GorgetFile"),
         _ => None,
     };
@@ -426,6 +447,20 @@ fn infer_call_extern_type(
         .find(|e| e.name == *name)
         .map(|e| e.return_type.clone())
         .or(Some(LirType::I64))
+}
+
+/// Test-only re-export of [`infer_call_extern_type`]. Used by
+/// `runtime::tests::struct_returns_are_recognized_by_infer` to assert that
+/// every struct-returning RuntimeFn is recognized by the name-based
+/// inference path. Not for production callers.
+#[cfg(test)]
+pub fn infer_call_extern_type_for_test(
+    name: &str,
+    args: &[ValueId],
+    module: &LirModule,
+    val_types: &[Option<LirType>],
+) -> Option<LirType> {
+    infer_call_extern_type(name, args, module, val_types)
 }
 
 /// Extract payload type from an Option/Result struct argument.

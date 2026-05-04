@@ -1018,4 +1018,128 @@ mod tests {
         assert_eq!(r.params, vec![LirType::I64]);
         assert_eq!(r.param_abis, vec![AbiKind::Scalar]);
     }
+
+    /// Cross-table consistency: every `RuntimeFn` in `REGISTRY` whose c_name
+    /// is known to `runtime_extern_sig` (the LirExtern declarations used by
+    /// the GIR→LIR lowerer) must agree on arity, ABI tags, and return type.
+    ///
+    /// This is the regression test for Tier E §8.3's "9 latent runtime arity
+    /// bugs" — `gorget_array_slice` declared with 1 param at runtime.rs:378
+    /// but emitted with 3 args at lower/insts.rs:888, etc. Both tables are
+    /// authoritative for different consumers (validator vs. lowerer); when
+    /// they drift, calls go through one shape and validate against the
+    /// other, surfacing only at integration-test time. This test catches the
+    /// drift at unit-test time.
+    ///
+    /// Functions that are NOT registered in `runtime_extern_sig` (the lowerer
+    /// uses ABI heuristics for them) are skipped — that's a valid pattern;
+    /// only DECLARED entries must match.
+    #[test]
+    fn runtime_sig_matches_extern_sig() {
+        use crate::lir::lower::calls::runtime_extern_sig;
+
+        // Use the canonical builtin struct registry so resolve_lir_sig and
+        // runtime_extern_sig both produce concrete struct types (not the
+        // Ptr fallback).
+        let mut sr = StructRegistry::new();
+        for (i, def) in crate::lir::types::builtin_struct_defs().iter().enumerate() {
+            sr.register(&def.name, crate::lir::StructId(i as u32));
+        }
+
+        let mut mismatches: Vec<String> = Vec::new();
+        for entry in REGISTRY {
+            let runtime_resolved = (entry.sig.params.iter()
+                .map(|(t, _)| t.to_lir_type(&sr))
+                .collect::<Vec<_>>(),
+                entry.sig.params.iter().map(|(_, a)| *a).collect::<Vec<_>>(),
+                entry.sig.ret.to_lir_type(&sr));
+
+            let Some(extern_sig) = runtime_extern_sig(entry.name, &sr) else {
+                // Not declared in the calls.rs table — lowerer uses heuristics.
+                // Acceptable; only declared entries are required to match.
+                continue;
+            };
+
+            let runtime_arity = runtime_resolved.0.len();
+            let extern_arity = extern_sig.params.len();
+            if runtime_arity != extern_arity {
+                mismatches.push(format!(
+                    "{}: runtime.rs has {} param(s), calls.rs has {}",
+                    entry.name, runtime_arity, extern_arity,
+                ));
+                continue;
+            }
+            if extern_sig.param_abis.len() != extern_arity {
+                mismatches.push(format!(
+                    "{}: calls.rs param_abis len ({}) != params len ({})",
+                    entry.name, extern_sig.param_abis.len(), extern_arity,
+                ));
+                continue;
+            }
+            for (i, (rt_abi, ex_abi)) in runtime_resolved.1.iter()
+                .zip(extern_sig.param_abis.iter()).enumerate()
+            {
+                if rt_abi != ex_abi {
+                    mismatches.push(format!(
+                        "{}: arg[{}] ABI runtime.rs={:?} vs calls.rs={:?}",
+                        entry.name, i, rt_abi, ex_abi,
+                    ));
+                }
+            }
+            if runtime_resolved.2 != extern_sig.ret {
+                mismatches.push(format!(
+                    "{}: ret runtime.rs={:?} vs calls.rs={:?}",
+                    entry.name, runtime_resolved.2, extern_sig.ret,
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(),
+            "runtime.rs ↔ calls.rs cross-table mismatches:\n  {}",
+            mismatches.join("\n  "));
+    }
+
+    /// Every `RuntimeFn` that returns a struct type (Array/Map/Set/String/etc.)
+    /// must be recognized by `lir::types::infer_call_extern_type`'s
+    /// struct-returning name list — otherwise the dst type falls through to
+    /// the `LirType::I64` default and downstream backends emit scalar stores
+    /// against aggregate slots (the LLVM symptom that bit `gorget_str_trim`
+    /// after the strip-family routing change).
+    #[test]
+    fn struct_returns_are_recognized_by_infer() {
+        let mut sr = StructRegistry::new();
+        let builtins = crate::lir::types::builtin_struct_defs();
+        for (i, def) in builtins.iter().enumerate() {
+            sr.register(&def.name, crate::lir::StructId(i as u32));
+        }
+        // Build a minimal LirModule whose `structs` list lets
+        // infer_call_extern_type's struct lookups succeed.
+        let mut module = crate::lir::LirModule::default();
+        module.structs = builtins;
+
+        let mut mismatches: Vec<String> = Vec::new();
+        for entry in REGISTRY {
+            let ret = entry.sig.ret.to_lir_type(&sr);
+            // Only struct-returning runtime fns need to be in the rt_struct
+            // list. Scalars and Ptr falls-through paths are fine via the
+            // module.externs lookup or the I64 default.
+            if !ret.is_aggregate() {
+                continue;
+            }
+            // The infer function takes args + val_types; pass empty since
+            // none of the name-based branches read those.
+            let inferred = crate::lir::types::infer_call_extern_type_for_test(
+                entry.name, &[], &module, &[],
+            );
+            match inferred {
+                Some(LirType::Struct(_)) => { /* OK */ }
+                other => mismatches.push(format!(
+                    "{} (returns {:?}): infer_call_extern_type returned {:?}",
+                    entry.name, ret, other,
+                )),
+            }
+        }
+        assert!(mismatches.is_empty(),
+            "RuntimeFn struct-return ↔ infer_call_extern_type mismatches:\n  {}",
+            mismatches.join("\n  "));
+    }
 }
