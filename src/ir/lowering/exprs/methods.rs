@@ -2046,6 +2046,16 @@ pub(super) fn lower_method_call(
             //   branch-local CollectionRef/CowBorrow entries, (c) f-string deref
             //   emits a deep clone for resource-containing struct types instead
             //   of a shallow memcpy, (d) prescan walks every path ancestor.
+            //
+            // The `is_named_local` guard on `recv_local` is GENUINELY required.
+            // Probed 2026-05-04: dropping it (recording Local(unnamed_temp) for
+            // anonymous recv temps) breaks `self.field.get(i).unwrap()` chains
+            // — the unnamed temp aliases the field-load result and downstream
+            // mutation tracking has no way to map back to the actual collection.
+            // Fixtures regressed: heap_advanced (String heap pop returns same
+            // value 3x), vector_task_get, and others. The FieldPath fallback at
+            // the `else if` arm is the correct path for unnamed receivers
+            // because it carries the structural identity of the collection.
             if let Some(ret_name) = ctx.type_name_for_id(ret_type) {
                 if ret_name.starts_with("Option__Ref__") {
                     if let Some(recv_local) = recv_local_for_move_zero {
@@ -2071,6 +2081,13 @@ pub(super) fn lower_method_call(
             let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
             // Trivial getter clone elision: result is Ptr(T) — mark as CowBorrow
             // so the caller sees a zero-cost borrow with collection provenance.
+            // Trivial-getter / Option__Ref__ provenance tracking. The
+            // `is_named_local` guard on `recv_local` is GENUINELY required —
+            // see the parallel block above for rationale and the 2026-05-04
+            // probe outcome. The FieldPath fallback handles unnamed receivers
+            // (e.g. `self.field.get(i)`); recording Local(unnamed_temp) breaks
+            // downstream cow_before_mutation routing because the temp carries
+            // no live notion of the collection's identity.
             if ctx.trivial_getter_methods.contains(sig_name.as_str()) {
                 ctx.set_cow_borrow(dst);
                 if let Some(recv_local) = recv_local_for_move_zero {
