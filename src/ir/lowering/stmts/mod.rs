@@ -539,6 +539,20 @@ fn lower_var_decl(
                     // it so the view can borrow its data safely. Unnamed temps (from
                     // function calls) should NOT be unregistered — they may hold
                     // owned data that needs freeing.
+                    //
+                    // Phase D4 probe (2026-05-04): removing the
+                    // is_named_local guard regressed 10 fixtures across
+                    // the leak_*, stress_alloc_strings/closures, and
+                    // string_builder/string_builder_loop families. An
+                    // unnamed temp from a function call returning
+                    // GorgetString owns its data; this branch
+                    // unregisters its drop and treats it as a borrow
+                    // source — leaks the heap allocation. Genuine
+                    // gating (Outcome 2). Retiring requires moving the
+                    // borrow-source bookkeeping to consult typed
+                    // ownership instead — a function-call temp is
+                    // Owned, only named-and-still-live locals are
+                    // legitimate borrow sources.
                     if rhs_type == ctx.type_mapper.owned_string_type
                         && actual_var_type == ctx.type_mapper.owned_string_type
                         && ctx.is_named_local(place.local)
@@ -590,6 +604,26 @@ fn lower_var_decl(
                     // Named resource variable → CoW alias OR clone (if unsafe for CoW).
                     // Flow-sensitive: only skip aliasing if the name is reassigned
                     // on a forward path from THIS statement (not globally).
+                    //
+                    // Phase D4 probe (2026-05-04): removing the
+                    // is_named_local guard regressed 50+ fixtures
+                    // across arena/async/borrow/box/bytes/closure/
+                    // collection/cow/csv/dataframe/derive/dict/...
+                    // families before the sweep was halted (only
+                    // reached letter "d"). An unnamed temp from a
+                    // function call returning a resource type owns its
+                    // data; this branch creates a Ptr alias into it
+                    // (`builder.emit_borrow` + `cow_register_alias` +
+                    // `set_ref` + Ptr-typing the destination), but the
+                    // temp dies at end-of-stmt — the alias is then a
+                    // dangling pointer. SIGSEGV is the typical
+                    // signature. Genuine gating (Outcome 2). Retiring
+                    // requires teaching CoW alias creation to consume
+                    // (move-from) the source temp instead of borrowing
+                    // it — equivalent to switching the unnamed-temp
+                    // case to Branch F's Move path while still
+                    // recognising the alias relationship for downstream
+                    // CoW materialisation.
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
                         && !ctx.is_cow_unsafe_at(name, stmt_span.start)
@@ -614,6 +648,24 @@ fn lower_var_decl(
                         assign_mode = AssignMode::Borrow;
                     }
                     // Named resource local unsafe for CoW (reassigned/moved) → clone.
+                    //
+                    // Phase D4 probe (2026-05-04): removing the
+                    // is_named_local guard was bundled with Branch C's
+                    // probe; that combined sweep regressed 50+
+                    // fixtures and was halted at letter "d". Most of
+                    // those failures attribute to Branch C (which sees
+                    // the same source first when the destination is
+                    // CoW-safe — Branch D only fires when the
+                    // destination is CoW-unsafe). Branch D's
+                    // independent contribution is a redundant clone
+                    // of an already-Move-eligible unnamed temp:
+                    // structurally a leak, not a use-after-free, since
+                    // the Move-zero in F won't fire (D ran first) and
+                    // the source temp's drop registration is left in
+                    // place. Retiring requires the same shape as C —
+                    // route unnamed-temp sources to Branch F's Move
+                    // path. Keeping the guard until the unified typed
+                    // arm lands.
                     else if ctx.is_named_local(place.local)
                         && ctx.type_registry.is_resource_type(rhs_type)
                     {
