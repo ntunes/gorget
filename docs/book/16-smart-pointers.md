@@ -45,6 +45,29 @@ Box[Callable[int(int)]] g = Box.new((n): n * factor)
 print(f"{g(7)}")          # 21
 ```
 
+`.clone()` on a `Callable` produces an **independent** deep copy — each
+clone owns its own captured environment. Captured mutable state is **not**
+shared between clones. If you want a closure with shared mutable captures
+across multiple owners, wrap it in `Shared[Callable[…]]`:
+
+```gorget
+shared int counter = 0
+Shared[Callable[void()]] tick = Shared.new((): counter = counter + 1)
+
+# Two owners share the same captured state:
+Shared[Callable[void()]] a = tick.clone()    # refcount + 1
+Shared[Callable[void()]] b = tick.clone()    # refcount + 1
+a.get()()
+b.get()()
+print(f"{counter}")        # 2 — both increments hit the same `counter`
+```
+
+The composition rule: **`Shared[Callable[T]]` for shared mutable
+captures, plain `Callable[T]` (or `Box[Callable[T]]`) for independent
+copies.** Pick `Shared` when multiple owners need to observe the same
+captured state across threads or call sites; pick the plain form when
+each caller's invocations should be isolated.
+
 ---
 
 ## Shared — Reference-Counted Ownership
