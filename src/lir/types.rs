@@ -375,6 +375,7 @@ fn infer_call_extern_type(
         | "gorget_str_replace" | "gorget_str_repeat" | "gorget_str_join"
         | "gorget_str_reverse" | "gorget_str_pad_left" | "gorget_str_pad_right"
         | "gorget_str_lstrip" | "gorget_str_rstrip" | "gorget_str_strip"
+        | "gorget_str_lstrip_ws" | "gorget_str_rstrip_ws" | "gorget_str_trim"
         | "gorget_str_to_lower" | "gorget_str_to_upper"
         | "gorget_str_substr" | "gorget_str_index" => Some("GorgetString"),
         "gorget_file_open" => Some("GorgetFile"),

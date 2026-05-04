@@ -3400,8 +3400,11 @@ fn emit_inst(
                     let sz = sizeof_lir_type(&LirType::Struct(*sid), &module.structs, snames);
                     writeln!(out, "  call ptr @memcpy(ptr %v{}, ptr %v{}, i64 {sz})", ptr.0, value.0).unwrap();
                 }
-            } else if matches!(val_ty, Some(LirType::Ptr)) {
-                // Source is an opaque ptr (e.g. void* from gorget_array_safe_pop/safe_get).
+            } else if matches!(val_ty, Some(LirType::Ptr) | Some(LirType::FuncRef)) {
+                // Source is an opaque ptr (e.g. void* from gorget_array_safe_pop/safe_get)
+                // or a typed FuncRef (Tier E §8.6). Mirrors c_lir's path — without admitting
+                // FuncRef here, FuncAddr→GorgetClosure-field stores collapse to an 8-byte
+                // pointer write, leaving `env` uninitialized → SIGSEGV.
                 // If the destination is a FieldPtr to an aggregate field, the ptr is actually
                 // a pointer to that struct's data → emit memcpy instead of store ptr.
                 match dest_field_ty.clone() {
