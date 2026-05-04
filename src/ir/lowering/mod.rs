@@ -2886,17 +2886,28 @@ mod tests {
         let mut lir_module = crate::lir::lower::lower_module(gir);
         // Tier E §8.2: critical-edge split before SSA construction.
         crate::lir::split_edges::split_critical_edges_module(&mut lir_module);
+        // Tier E §8.3: per-pass invariant validation hooks, mirroring the
+        // production pipeline in `src/main.rs`.
+        crate::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
         for func in &mut lir_module.functions {
             crate::lir::ssa::construct_ssa(func);
         }
+        crate::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
         crate::lir::runtime::promote_collection_ctors(&mut lir_module);
+        crate::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         crate::lir::types::wire_collection_bridges(&mut lir_module);
+        crate::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         crate::lir::runtime::promote_runtime_calls(&mut lir_module);
+        crate::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         crate::lir::types::compute_module_value_types(&mut lir_module);
+        crate::lir::validate::assert_module_valid(&lir_module, "compute-value-types-pre-bir");
         let mut bir_module = crate::bir::BirModule::from_lir(lir_module)
             .expect("BIR lowering failed in gir_to_lir_c test helper");
+        crate::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
         crate::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        crate::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
         crate::lir::types::compute_module_value_types(bir_module.as_lir_mut());
+        crate::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-value-types-post-bir");
         let backend = crate::backend::c_lir::CLirBackend;
         crate::backend::Backend::generate(&backend, &bir_module).code
     }

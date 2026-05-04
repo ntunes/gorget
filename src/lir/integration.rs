@@ -29,21 +29,34 @@ mod tests {
         // construction sees a critical-edge-free CFG.
         let mut lir = lower::lower_module(&gir);
         split_edges::split_critical_edges_module(&mut lir);
+        // Tier E §8.3: per-pass invariant validation. The same hooks live in
+        // the production pipeline (`src/main.rs`); replicating them here lets
+        // this helper exercise the full validator under debug-build assertions.
+        validate::assert_module_valid(&lir, "lir-lowering");
 
         // Run SSA construction on each function
         for func in &mut lir.functions {
             ssa::construct_ssa(func);
         }
+        validate::assert_module_valid(&lir, "ssa-construction");
 
         // Run optimizer
         crate::lir::runtime::promote_collection_ctors(&mut lir);
+        validate::assert_module_valid(&lir, "promote-collection-ctors");
         crate::lir::types::wire_collection_bridges(&mut lir);
+        validate::assert_module_valid(&lir, "wire-collection-bridges");
         crate::lir::runtime::promote_runtime_calls(&mut lir);
+        validate::assert_module_valid(&lir, "promote-runtime-calls");
         optimize::optimize_module(&mut lir);
+        validate::assert_module_valid(&lir, "optimize");
         crate::lir::types::compute_module_value_types(&mut lir);
         crate::lir::types::compute_module_pointee_types(&mut lir);
+        validate::assert_module_valid(&lir, "compute-types");
 
-        // Validate (post-optimization)
+        // Validate (post-optimization). `assert_module_valid` already
+        // panicked above on debug builds; this final check still surfaces
+        // errors as a `Result` for release builds where `GG_VALIDATE_PASSES`
+        // is not set, so the test asserts on them either way.
         let errors = validate::validate_module(&lir);
         if !errors.is_empty() {
             let msgs: Vec<String> = errors.iter().map(|e| format!("{e}")).collect();
