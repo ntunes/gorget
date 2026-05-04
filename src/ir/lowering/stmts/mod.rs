@@ -521,6 +521,17 @@ fn lower_var_decl(
             let actual_var_type = builder.local_type(local_id);
             let mut assign_mode = AssignMode::Copy; // default for trivial types
 
+            // Phase D4 typed signals (for incremental decision-tree migration —
+            // see TODO entry "Phase D4 — lower_var_decl decision tree refactor").
+            // Branches below progressively read these instead of the legacy
+            // sidecar predicates (`named_local`, `cow_unsafe_at`,
+            // `drops.is_registered`, `needs_drop`) until every arm is expressed
+            // as `(target_resource, source_live, source_own)` plus the orthogonal
+            // `view_returning_temps` axis.
+            let _target_resource = ctx.type_registry.is_resource_type(actual_var_type);
+            let _source_live = ctx.source_live_past(&operand, stmt_span, builder);
+            let _source_own = ctx.source_ownership(&operand, builder);
+
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 if place.projections.is_empty() && place.local != local_id {
                     let rhs_type = builder.local_type(place.local);
