@@ -628,6 +628,12 @@ pub(super) fn lower_method_call(
                     // Move-if-dead: unwrap_error consumes the Result.
                     // Unregister from drops. MoveZero only for temps (named
                     // locals may be read again — unregister alone suffices).
+                    // Reviewed 2026-05-04 (Phase D4): keep the guard; the
+                    // asymmetry is intentional. For named locals, leaving the
+                    // slot non-zeroed preserves observable contents for later
+                    // reads while drop-tracking takes ownership; for temps
+                    // there are no later reads but MoveZero costs nothing and
+                    // closes any aliased-read window.
                     if is_resource_type_local(dst, builder, &ctx.type_registry) {
                         ctx.drops.unregister(place.local);
                         if !ctx.is_named_local(place.local) {
@@ -1848,6 +1854,12 @@ pub(super) fn lower_method_call(
                     if ctx.is_ref_local(local_id) { return None; }
                     if ctx.is_cow_borrow(local_id) { return None; }
                     // Skip non-named locals (should be rare — falls through via temp path).
+                    // Reviewed 2026-05-04 (Phase D4): structurally defensive. The
+                    // outer branch is Expr::Identifier resolved through
+                    // lookup_local, which under normal invariants only returns
+                    // named locals; the temp-path branch below handles
+                    // expression-shape args. The guard would be redundant
+                    // under stricter typing but is cheap insurance.
                     if !ctx.is_named_local(local_id) { return None; }
                     // Only zero on last use.
                     if !ctx.is_last_use_at(name, arg.node.value.span) { return None; }
