@@ -230,6 +230,14 @@ pub(super) fn lower_assign(
                     use crate::ir::instructions::AssignMode;
                     let mut assign_mode = AssignMode::Copy;
 
+                    // Phase D4 typed signals — same lift as `lower_var_decl`.
+                    // Branches below progressively migrate from sidecar predicates
+                    // (`is_named_local`, `drops.is_registered`, `needs_drop`) to
+                    // `(target_resource, source_live, source_own)`.
+                    let _target_resource = ctx.type_registry.is_resource_type(type_id);
+                    let _source_live = ctx.source_live_past(&operand, value.span, builder);
+                    let _source_own = ctx.source_ownership(&operand, builder);
+
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         if place.projections.is_empty() && place.local != local_id {
                             let rhs_type = builder.local_type(place.local);
