@@ -53,27 +53,41 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
 }
 
 /// Run optimization passes on a single function, iterating until fixpoint.
+/// Convergence is detected via the per-pass "changes made" counters — a
+/// snapshot of `(blocks.len(), inst_count)` alone misses progress made
+/// by passes that rewrite values without adding/removing instructions
+/// (constant folding, algebraic simplification, copy propagation),
+/// which can unblock downstream DCE/CSE on the next iteration.
 fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
-    const MAX_ITERS: usize = 3;
+    // Hard cap as a safety net — fixpoint convergence is the primary
+    // termination signal. Bumped from a tight 3 (which silently stopped
+    // before convergence on some functions) to a generous bound; the
+    // per-pass change counters mean we exit as soon as no pass made
+    // progress. Tier E §8.4 of unified-resource-model.md.
+    const MAX_ITERS: usize = 32;
     for _ in 0..MAX_ITERS {
-        let snapshot = (func.blocks.len(), inst_count(func));
-        stats.constants_folded += fold_constants(func);
-        stats.algebraic_simplified += simplify_algebraic(func);
-        stats.cse_eliminated += eliminate_common_subexpressions(func);
-        stats.branches_folded += fold_constant_branches(func);
-        stats.dead_blocks_eliminated += eliminate_dead_blocks(func);
+        let folded = fold_constants(func);
+        let algebraic = simplify_algebraic(func);
+        let cse = eliminate_common_subexpressions(func);
+        let branches = fold_constant_branches(func);
+        let dead_blocks = eliminate_dead_blocks(func);
+        let blocks_before_merge = func.blocks.len();
         merge_linear_blocks(func);
-        stats.dead_instructions_eliminated += eliminate_dead_code(func);
-        stats.copies_propagated += propagate_copies(func);
-        let after = (func.blocks.len(), inst_count(func));
-        if after == snapshot {
-            break; // fixpoint
+        let merged = blocks_before_merge.saturating_sub(func.blocks.len());
+        let dead_insts = eliminate_dead_code(func);
+        let copies = propagate_copies(func);
+        stats.constants_folded += folded;
+        stats.algebraic_simplified += algebraic;
+        stats.cse_eliminated += cse;
+        stats.branches_folded += branches;
+        stats.dead_blocks_eliminated += dead_blocks;
+        stats.dead_instructions_eliminated += dead_insts;
+        stats.copies_propagated += copies;
+        let progress = folded + algebraic + cse + branches + dead_blocks + merged + dead_insts + copies;
+        if progress == 0 {
+            break; // fixpoint — no pass made any change this iteration
         }
     }
-}
-
-fn inst_count(func: &LirFunction) -> usize {
-    func.blocks.iter().map(|b| b.insts.len()).sum()
 }
 
 // ── Dead Function Elimination ───────────────────────────────────────────────
