@@ -493,7 +493,7 @@ mod tests {
             fields: vec![("data".into(), LirType::Ptr), ("len".into(), LirType::I64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                       });
 
         module.add_extern(LirExtern {

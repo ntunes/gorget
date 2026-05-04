@@ -497,7 +497,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                       });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
@@ -625,7 +625,7 @@ mod tests {
             fields: vec![("x".into(), LirType::I32)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                       });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);

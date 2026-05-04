@@ -846,6 +846,70 @@ impl<'a> LoweringContext<'a> {
         self.func_state.liveness.last_use_spans.contains(&span.start)
     }
 
+    /// Phase D4: First-class liveness query for the lower_var_decl typed
+    /// match. Returns true if the source operand's underlying local is
+    /// referenced AFTER `stmt_span`. For unnamed temps, returns false
+    /// (temps die at their last use, which is the current statement).
+    /// For non-place operands (constants), returns false. For named
+    /// locals, returns `!is_last_use_at(name, stmt_span)` — conservative
+    /// when liveness data is missing.
+    ///
+    /// Used by `lower_var_decl` to decide between Move (source dead) and
+    /// Borrow / Clone (source alive). Without this query, the function
+    /// fell back to four sidecar predicates (named_local, cow_unsafe_at,
+    /// drops.is_registered, needs_drop) that proxied liveness imprecisely.
+    pub fn source_live_past(
+        &self,
+        operand: &crate::ir::instructions::Operand,
+        stmt_span: crate::span::Span,
+        builder: &crate::ir::builder::FunctionBuilder,
+    ) -> bool {
+        use crate::ir::instructions::Operand;
+        let place = match operand {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return false,
+        };
+        if !place.projections.is_empty() {
+            return false; // Field/index access — conservative.
+        }
+        let local_idx = place.local.0 as usize;
+        if local_idx >= builder.locals.len() { return false; }
+        // Named locals: use liveness data via name lookup. Unnamed temps:
+        // not in liveness map → live=false (single-use by SSA-like
+        // construction).
+        if let Some(name) = builder.locals[local_idx].name_hint.as_deref() {
+            if self.func_state.named_locals.contains(&place.local) {
+                return !self.is_last_use_at(name, stmt_span);
+            }
+        }
+        false
+    }
+
+    /// Phase D4: returns the source operand's local ownership state, or
+    /// None for constants / non-place operands. The companion to
+    /// `source_live_past` for the typed match in `lower_var_decl`.
+    pub fn source_ownership(
+        &self,
+        operand: &crate::ir::instructions::Operand,
+        builder: &crate::ir::builder::FunctionBuilder,
+    ) -> Option<crate::ir::LocalOwnership> {
+        use crate::ir::instructions::Operand;
+        let place = match operand {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return None,
+        };
+        if !place.projections.is_empty() { return None; }
+        let local_idx = place.local.0 as usize;
+        if local_idx >= builder.locals.len() { return None; }
+        // Prefer the live func_state map (lowering-time canonical state)
+        // over builder.locals[].ownership which only reflects flushed
+        // post-lowering state.
+        if let Some(o) = self.func_state.local_ownership.get(&place.local) {
+            return Some(o.clone());
+        }
+        Some(builder.locals[local_idx].ownership.clone())
+    }
+
     /// Check if a local is a named variable (vs an anonymous temp).
     pub fn is_named_local(&self, local: LocalId) -> bool {
         self.func_state.named_locals.contains(&local)
