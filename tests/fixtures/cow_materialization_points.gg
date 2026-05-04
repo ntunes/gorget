@@ -147,18 +147,17 @@ void p7_field_chain_trim():
 
 void main():
     p1_reassign_direct()
-    # p1_reassign_chain_trim()  # KNOWN BROKEN — see TODO.md "CoW materialization
-                                  # of String views through expression-temp chains"
+    p1_reassign_chain_trim()
     p2_mutate_direct()
     p3a_struct_direct()
     p3a_struct_chain_trim()
     p3b_enum_direct()
-    # p3b_enum_chain_trim()     # KNOWN BROKEN — same TODO entry as p1
+    p3b_enum_chain_trim()
     p4_push_direct()
     p4_push_chain_trim()
     p5_return_calls()
     p6_move_direct()
     p6_move_chain_trim()
     p7_field_direct()
-    # p7_field_chain_trim()     # KNOWN BROKEN — same TODO entry as p1
+    p7_field_chain_trim()
     print("all materialization points ok")

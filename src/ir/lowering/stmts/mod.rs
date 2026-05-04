@@ -601,6 +601,30 @@ fn lower_var_decl(
                             assign_mode = AssignMode::Move;
                         }
                     }
+                    // CoW chain materialization: source is a view-returning
+                    // temp (trim/slice/strip result that didn't get
+                    // set_view_of due to the named-local guard) feeding a
+                    // value-typed String destination. The temp's bytes are
+                    // a cap=0 view into some upstream container; without a
+                    // clone here, x's view goes dangling once the chain's
+                    // upstream mutates. Emit gorget_string_clone_to_owned
+                    // explicitly. Mirrors the auto-clone path at line ~463
+                    // (Ptr-typed source) for the value-typed-but-View case.
+                    else if ctx.func_state.view_returning_temps.contains(&place.local)
+                        && rhs_type == ctx.type_mapper.owned_string_type
+                        && actual_var_type == ctx.type_mapper.owned_string_type
+                    {
+                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
+                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
+                            let ptr_type = ctx.register_ptr_type(rhs_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr_local, place.clone());
+                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                            ctx.set_owned(cloned);
+                            operand = FunctionBuilder::copy(cloned);
+                            assign_mode = AssignMode::Move;
+                        }
+                    }
                     // Drop-registered temp OR unregistered droppable temp → move.
                     // Temps (not named vars) that need drop should be moved to transfer
                     // ownership, preventing shallow-copy double-free on scope exit.

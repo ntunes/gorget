@@ -2208,6 +2208,15 @@ pub(super) fn lower_method_call(
                             ctx.set_view_of(result_local, recv_local);
                         }
                         ctx.func_state.has_string_borrows = true;
+                    } else {
+                        // Unnamed temp from a view-returning method (e.g.
+                        // `vec.get(0).unwrap().trim()`'s trim-result temp).
+                        // Tagging via set_view_of regressed receiver borrow
+                        // semantics elsewhere; instead record in a sidecar
+                        // that the VarDecl boundary reads to inject a
+                        // clone when the temp feeds a named String. See
+                        // TODO entry on CoW chain materialization.
+                        ctx.func_state.view_returning_temps.insert(result_local);
                     }
                 }
             }
