@@ -1,0 +1,71 @@
+# Test: field-store of an Option/Result enum value writes the WHOLE enum slot
+# (discriminant + payload), not just the payload. Snag #4b (2026-05-01).
+#
+# Root cause was in `try_enum_payload_extract` (LIR lowering): the function
+# checks dst.local's type to decide whether the destination is also an
+# Option/Result. When the dst is a *projection* into a struct field whose
+# type is Option[T], the bare local's type is the enclosing struct (not
+# Option), so the function fired the auto-unwrap shortcut that's only
+# correct for `T = Option[T]` cross-type assigns. The store landed only
+# the Some_0 payload bytes into the Option slot, leaving the discriminant
+# tag at None=0 — silent wrong-output bug.
+#
+# Fix: resolve dst's effective type via projections before the comparison.
+
+struct FM:
+    Option[String] desc
+    Option[int] count
+
+struct R:
+    Result[int, String] outcome
+
+struct Inner:
+    Option[String] v
+
+struct Outer:
+    Inner inn
+
+void main():
+    # Bare struct: assign Some(literal), then Some(value), then None.
+    FM fm = FM(None, None)
+    fm.desc = Some("hello")
+    fm.count = Some(42)
+    print(f"set: desc.is_some={fm.desc.is_some()} count.is_some={fm.count.is_some()}")
+    print(f"vals: desc={fm.desc.unwrap()} count={fm.count.unwrap()}")
+
+    fm.desc = Some("world")
+    print(f"reassigned: desc={fm.desc.unwrap()}")
+
+    fm.desc = None
+    fm.count = None
+    print(f"cleared: desc.is_some={fm.desc.is_some()} count.is_some={fm.count.is_some()}")
+
+    # Result-typed field: Ok and Error variants.
+    R r = R(Ok(0))
+    r.outcome = Ok(42)
+    match r.outcome:
+        case Ok(v): print(f"ok={v}")
+        case Error(e): print(f"err={e}")
+    r.outcome = Error("oops")
+    match r.outcome:
+        case Ok(v): print(f"ok={v}")
+        case Error(e): print(f"err={e}")
+
+    # Nested: outer.inner.field = Some(...) — projection chain.
+    Outer o = Outer(Inner(None))
+    o.inn.v = Some("nested")
+    if o.inn.v.is_some():
+        print(f"nested={o.inn.v.unwrap()}")
+    else:
+        print("nested: none")
+
+    # Local Option reassignment — the simplest shape, must also work.
+    Option[String] x = None
+    x = Some("first")
+    print(f"local x={x.unwrap()}")
+    x = Some("second")
+    print(f"local x={x.unwrap()}")
+    x = None
+    print(f"local cleared: is_some={x.is_some()}")
+
+    print("done")

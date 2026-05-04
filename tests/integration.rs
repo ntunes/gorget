@@ -17655,6 +17655,25 @@ all materialization points ok",
 }
 
 #[test]
+fn option_result_field_store() {
+    run_gg(
+        "option_result_field_store.gg",
+        "\
+set: desc.is_some=true count.is_some=true
+vals: desc=hello count=42
+reassigned: desc=world
+cleared: desc.is_some=false count.is_some=false
+ok=42
+err=oops
+nested=nested
+local x=first
+local x=second
+local cleared: is_some=false
+done",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }
