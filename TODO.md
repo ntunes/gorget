@@ -46,6 +46,18 @@
   - **F (line ~620, drop-registered temp or droppable temp) → arm 3 (Owned + dead → Move). PARTIAL 2026-05-04** — extended with typed `(needs_drop_target, source_dead, source_owned) => Move` to catch Option/Result-wrapper cases the legacy predicate misses (commit 886b4d0c). Legacy predicate retained as a strict subset until further investigation determines whether named drop-registered locals at non-last-use can be safely dropped from F.
   - **G (safety net) → catch-all. SHIPPED 2026-05-04** — predicate switched from `is_resource_type(rhs_type)` (source-keyed) to `target_resource` (target-keyed). Correct axis: Move applies to destination, not source.
 
+  **Probe findings (2026-05-04):**
+
+  Different sidecar/guard patterns yield different elegance outcomes — same probe-then-diagnose discipline, three possible conclusions:
+
+  1. **Real consumer bug hiding behind the guard** (the view_returning_temps case): probe surfaces a shallow-copy or aliasing bug in a downstream pass that misreads typed state. Fix the consumer, retire the sidecar. **Net win: -1 sidecar, +1 Phase C correctness improvement.**
+
+  2. **Guard is structurally non-trivial** (the Branch B case, commit cd9357f8): probe regresses many fixtures across diverse paths. The guard is genuine gating, not a workaround. **Document the rationale so the next session doesn't redo the probe.** Retiring requires architectural changes (e.g., widen is_resource_type to include enum-with-resource-payload, split the cross-type axis into its own arm).
+
+  3. **Guard is mechanically redundant** (no examples yet in this codebase): probe is fully green. Retire the sidecar with no further work.
+
+  When applying the discipline to remaining branches A/C/D, expect outcome (1) or (2). Each probe = ~10 min wall-clock for the integration sweep, so batch probes where the diagnosis isn't expected to interact.
+
   **Estimated 1-2 days for the remaining 6 branches; honest scope is closer to a week given the elegance bar.** Risk: medium — touches CoW alias creation, mark_string_borrow_source, drops.unregister, register_local re-binding. Validation: full integration sweep + cow_materialization_points fixture must stay green at every step. Migrate one branch at a time by replacing it with the typed-match arm and verifying integration. **The branch-E migration showed the right pattern: when typed-state migration regresses, the regression is almost always a downstream consumer with a latent correctness bug that the sidecar was hiding — fix the consumer, then migrate. That's the elegance step, not a workaround.**
 
   **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently. [added: 2026-05-01, plan refined: 2026-05-04, branch E shipped: 2026-05-04]
