@@ -247,6 +247,40 @@ pub(super) fn lower_assign(
                             {
                                 ctx.drops.unregister(place.local);
                                 assign_mode = AssignMode::Move;
+                            }
+                            // Branch B (cross-type): named non-resource RHS
+                            // with a clone_fn whose return type matches the
+                            // target — e.g. Str→GorgetString conversion. The
+                            // clone returns the TARGET type, not the source
+                            // type; without this, the safety-net Move would
+                            // either skip (rhs non-resource) or zero a
+                            // still-live primitive local. Mirrors
+                            // lower_var_decl's branch B exactly. The
+                            // is_named_local guard is genuine — see
+                            // commit cd9357f8 (probed: 16 fixtures regress
+                            // when removed; unnamed temps of types like
+                            // Result[Config, String] hit clone_fn_for_ptr
+                            // true via the recursively-droppable scan and
+                            // get routed through cross-type clone when they
+                            // should fall through to Move).
+                            else if ctx.is_named_local(place.local)
+                                && !ctx.type_registry.is_resource_type(rhs_type)
+                                && ctx.clone_fn_for_ptr(rhs_type).is_some()
+                            {
+                                ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
+                                let clone_fn = ctx.clone_fn_for_ptr(rhs_type)
+                                    .expect("BUG: clone_fn_for_ptr returned None after is_some check");
+                                let ptr_type = ctx.register_ptr_type(rhs_type);
+                                let ptr_local = builder.add_local(ptr_type, None);
+                                builder.emit_borrow(ptr_local, place.clone());
+                                // Clone returns the TARGET type (type_id),
+                                // not the source type. clone_fn may
+                                // produce an owned T from a view/borrow
+                                // shape distinct from the RHS type.
+                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], type_id);
+                                ctx.set_owned(cloned);
+                                operand = FunctionBuilder::copy(cloned);
+                                assign_mode = AssignMode::Move;
                             } else if ctx.is_named_local(place.local) {
                                 // Last-use optimization: if the RHS is dead after this
                                 // assignment, move instead of cloning. The source is
@@ -286,10 +320,15 @@ pub(super) fn lower_assign(
                             // sees cross-type cases where rhs is non-resource
                             // and target is resource — Move'ing the source
                             // would zero a non-resource (e.g. primitive)
-                            // local that's still alive elsewhere. The legacy
-                            // RHS-keyed read is the genuinely correct axis
-                            // here. Kept as-is; the mirror with branch G is
-                            // not appropriate at this site.
+                            // local that's still alive elsewhere. Adding a
+                            // Branch B analog (cross-type clone) catches the
+                            // named-source Str→GorgetString cases but the
+                            // dataframe regressions persist — there are
+                            // unnamed-temp paths where rhs is non-resource
+                            // and target is resource, and Branch B's
+                            // is_named_local guard skips them. Kept as
+                            // RHS-keyed; the mirror with branch G is not
+                            // appropriate at this site.
                             if assign_mode == AssignMode::Copy && ctx.type_registry.is_resource_type(rhs_type) {
                                 assign_mode = AssignMode::Move;
                             }
