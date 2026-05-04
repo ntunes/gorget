@@ -233,8 +233,8 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_string_append" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, Ptr]),
         // gorget_string_push_line(GorgetString* dst, const char* line)
         "gorget_string_push_line" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, CStr]),
-        // gorget_str_str(GorgetString*) — single ptr arg; sig is wrong (2 Str) but pre-existing
-        "gorget_str_str" => sig(vec![s(), s()], s(), vec![Auto, Auto]),
+        // gorget_str_str(GorgetString*) — single ptr arg, returns Str view of the string.
+        "gorget_str_str" => sig(vec![LirType::Ptr], s(), vec![Ptr]),
         // gorget_str_from_literal(const char* raw, size_t len) — arg is already const char*
         "gorget_str_from_literal" => sig(vec![LirType::Ptr, LirType::I64], s(), vec![Opaque, Scalar]),
         "gorget_str_from_int" | "gorget_str_from_float" | "gorget_str_from_bool" => {
@@ -253,9 +253,11 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
             // void gorget_array_set(GorgetArray* arr, size_t idx, const void* val)
             sig(vec![LirType::Ptr, LirType::I64, LirType::Ptr], LirType::Void, vec![Ptr, Scalar, VoidElem])
         }
-        "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
-        | "gorget_array_safe_get" => {
+        "gorget_array_get" | "gorget_array_pop" | "gorget_array_safe_get" => {
             sig(vec![LirType::Ptr, LirType::I64], LirType::Ptr, vec![Ptr, Scalar])
+        }
+        "gorget_array_first" | "gorget_array_last" => {
+            sig(vec![LirType::Ptr], LirType::Ptr, vec![Ptr])
         }
         "gorget_array_safe_pop" => {
             sig(vec![LirType::Ptr], LirType::Ptr, vec![Ptr])
@@ -278,10 +280,13 @@ pub(super) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
         "gorget_array_index_of" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::I64, vec![Ptr, VoidElem]),
         "gorget_array_binary_search" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::I64, vec![Ptr, VoidElem]),
         "gorget_array_clear" | "gorget_array_free" | "gorget_array_reverse"
-        | "gorget_array_dedup" | "gorget_array_extend" | "gorget_array_reserve" => {
+        | "gorget_array_dedup" => {
             sig(vec![LirType::Ptr], LirType::Void, vec![Ptr])
         }
-        "gorget_array_clone" | "gorget_array_slice" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
+        "gorget_array_extend" => sig(vec![LirType::Ptr, LirType::Ptr], LirType::Void, vec![Ptr, Ptr]),
+        "gorget_array_reserve" => sig(vec![LirType::Ptr, LirType::I64], LirType::Void, vec![Ptr, Scalar]),
+        "gorget_array_clone" => sig(vec![LirType::Ptr], arr_ty(), vec![Ptr]),
+        "gorget_array_slice" => sig(vec![LirType::Ptr, LirType::I64, LirType::I64], arr_ty(), vec![Ptr, Scalar, Scalar]),
         // Map methods (unordered)
         "gorget_map_new" => sig(vec![LirType::I64, LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar, Scalar]),
         "gorget_map_new_str" => sig(vec![LirType::I64], LirType::Struct(sr.lookup("GorgetMap").unwrap_or(StructId(0))), vec![Scalar]),

@@ -327,7 +327,7 @@ runtime_table! {
     StrSplit            => "gorget_str_split",             sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Array, F::Allocates);
     StrSplitn           => "gorget_str_splitn",            sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Array, F::Allocates);
     StrStartsWith       => "gorget_str_starts_with",       sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Bool, F::Pure);
-    StrStr              => "gorget_str_str",               sig(&[(T::Str, A::Auto), (T::Str, A::Auto)], T::Str, F::Pure);
+    StrStr              => "gorget_str_str",               sig(&[(T::Ptr, A::Ptr)], T::Str, F::Pure);
     StrStrip            => "gorget_str_strip",             sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrToCstr           => "gorget_str_to_cstr",           sig(&[(T::Str, A::GorgetString)], T::Ptr, F::Allocates);
     StrToLower          => "gorget_str_to_lower",          sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
@@ -355,27 +355,27 @@ runtime_table! {
     ArrayClone         => "gorget_array_clone",         sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
     ArrayContains      => "gorget_array_contains",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::I64, A::Scalar)], T::Bool, F::ReadOnly);
     ArrayDedup         => "gorget_array_dedup",         sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
-    ArrayExtend        => "gorget_array_extend",        sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
+    ArrayExtend        => "gorget_array_extend",        sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Void, F::Mutates);
     ArrayFill          => "gorget_array_fill",          sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
-    ArrayFirst         => "gorget_array_first",         sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::ReadOnly);
+    ArrayFirst         => "gorget_array_first",         sig(&[(T::Ptr, A::Ptr)], T::Ptr, F::ReadOnly);
     ArrayFree          => "gorget_array_free",          sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
     ArrayGet           => "gorget_array_get",           sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::ReadOnly);
     ArrayIndexOf       => "gorget_array_index_of",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::I64, F::ReadOnly);
     ArrayInsert        => "gorget_array_insert",        sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     ArrayIsEmpty       => "gorget_array_is_empty",      sig(&[(T::Ptr, A::Ptr)], T::Bool, F::ReadOnly);
-    ArrayLast          => "gorget_array_last",          sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::ReadOnly);
+    ArrayLast          => "gorget_array_last",          sig(&[(T::Ptr, A::Ptr)], T::Ptr, F::ReadOnly);
     ArrayLen           => "gorget_array_len",           sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
     ArrayNew           => "gorget_array_new",           sig(&[(T::I64, A::Scalar)], T::Array, F::Allocates);
     ArrayPop           => "gorget_array_pop",           sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::Mutates);
     ArrayPush          => "gorget_array_push",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     ArrayRemove        => "gorget_array_remove",        sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     ArrayRemoveOpt     => "gorget_array_remove_opt",    sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::Mutates);
-    ArrayReserve       => "gorget_array_reserve",       sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
+    ArrayReserve       => "gorget_array_reserve",       sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     ArrayReverse       => "gorget_array_reverse",       sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
     ArraySafeGet       => "gorget_array_safe_get",      sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::ReadOnly);
     ArraySafePop       => "gorget_array_safe_pop",      sig(&[(T::Ptr, A::Ptr)], T::Ptr, F::Mutates);
     ArraySet           => "gorget_array_set",           sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
-    ArraySlice         => "gorget_array_slice",         sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
+    ArraySlice         => "gorget_array_slice",         sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Array, F::Allocates);
     ArraySwap          => "gorget_array_swap",          sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Void, F::Mutates);
     ArraySwapRemove    => "gorget_array_swap_remove",   sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     ArrayWithCapacity  => "gorget_array_with_capacity", sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Array, F::Allocates);
@@ -668,11 +668,32 @@ pub fn promote_runtime_calls(module: &mut crate::lir::LirModule) {
             for inst in &mut block.insts {
                 if let Inst::CallExtern { dst, name, args, arg_abis, .. } = inst {
                     if let Some(callee) = RuntimeFn::from_c_name(name) {
+                        // Strip-family arity overload: `s.strip()` (1 arg)
+                        // means whitespace-trim; `s.strip(chars)` (2 args)
+                        // is the char-set version. Same for lstrip/rstrip.
+                        // Backends today rewrite the C name based on arg
+                        // count; we instead pick the right typed variant
+                        // here so the callee's signature matches the call.
+                        let callee = match (callee, args.len()) {
+                            (RuntimeFn::StrStrip, 1) => RuntimeFn::StrTrim,
+                            (RuntimeFn::StrLstrip, 1) => RuntimeFn::StrLstripWs,
+                            (RuntimeFn::StrRstrip, 1) => RuntimeFn::StrRstripWs,
+                            _ => callee,
+                        };
+                        // The CallExtern's arg_abis comes from the LirExtern
+                        // declaration's param_abis — which can be longer than
+                        // the actual call's args (e.g. strip's extern decl
+                        // has 2 abi tags but a no-chars call passes 1 arg).
+                        // Truncate to match the call shape; the CallRuntime
+                        // is canonical from here on.
+                        let moved_args = std::mem::take(args);
+                        let mut moved_abis = std::mem::take(arg_abis);
+                        moved_abis.truncate(moved_args.len());
                         *inst = Inst::CallRuntime {
                             dst: *dst,
                             callee,
-                            args: std::mem::take(args),
-                            arg_abis: std::mem::take(arg_abis),
+                            args: moved_args,
+                            arg_abis: moved_abis,
                         };
                     }
                 }
