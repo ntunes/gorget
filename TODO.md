@@ -261,7 +261,6 @@
 
 - **`shared_stress_yield` flaky deadlock**: Timing-dependent contention. [added: 2026-03-11]
 
-- **Inline `None()` without typed variable**: Produces garbage. Workaround: bind to typed `Option[T]` first. [added: 2026-03-11]
 
 - **`shared static` support**: Thread-safe module-level statics. Workaround: explicit `Mutex[int]`. [added: 2026-03-10]
 
