@@ -102,6 +102,16 @@ pub enum LirType {
     /// Semantically identical to `Ptr` at runtime (8 bytes, scalar), but carries
     /// the pointee identity so the C backend can emit correct dereferences.
     PtrTo(StructId),
+    /// Typed reference to a function. Produced by `Inst::FuncAddr` /
+    /// `Inst::NamedFuncAddr` and consumed by `Inst::CallByRef`.
+    ///
+    /// Pointer-shaped at the C/LLVM ABI (lowered to `void*` / LLVM `ptr`), but
+    /// semantically distinct from `Ptr` — it does NOT alias data, only code.
+    /// Tier E §8.6 (Unified Resource Model): the variant exists so a future
+    /// WASM backend can lower this to a table index + `call_indirect` rather
+    /// than a raw pointer, and so passes can distinguish "raw function ref"
+    /// from "boxed closure" without inspecting names.
+    FuncRef,
 
     // Aggregates (address-only — live in stack slots)
     Struct(StructId),
@@ -119,6 +129,12 @@ impl LirType {
     /// True if this is an aggregate that must live in a stack slot.
     pub fn is_aggregate(&self) -> bool {
         matches!(self, LirType::Struct(_))
+    }
+
+    /// True iff this is a `FuncRef` — a typed function reference distinct
+    /// from `Ptr` even though both lower to `void*` / `ptr` at the C/LLVM ABI.
+    pub fn is_funcref(&self) -> bool {
+        matches!(self, LirType::FuncRef)
     }
 
     /// True if this is an integer type (signed or unsigned).
@@ -141,9 +157,10 @@ impl LirType {
         matches!(self, LirType::F32 | LirType::F64)
     }
 
-    /// True if this is any pointer type (`Ptr` or `PtrTo`).
+    /// True if this is any pointer-shaped type (`Ptr`, `PtrTo`, or `FuncRef`).
+    /// All three lower to a single 8-byte register-sized pointer at the C/LLVM ABI.
     pub fn is_ptr(&self) -> bool {
-        matches!(self, LirType::Ptr | LirType::PtrTo(_))
+        matches!(self, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef)
     }
 
     /// If this is a `PtrTo(sid)`, return the pointee struct id.
@@ -172,6 +189,7 @@ impl fmt::Display for LirType {
             LirType::Bool => write!(f, "bool"),
             LirType::Ptr => write!(f, "ptr"),
             LirType::PtrTo(id) => write!(f, "ptr.{}", id.0),
+            LirType::FuncRef => write!(f, "funcref"),
             LirType::Struct(id) => write!(f, "{id}"),
             LirType::Void => write!(f, "void"),
         }
@@ -735,6 +753,18 @@ pub enum Inst {
     /// and `infer_inst_type` doesn't have to guess (the old default was
     /// `I64`, which broke aggregate-returning trait methods).
     CallPtr { dst: Option<ValueId>, callee: ValueId, args: Vec<ValueId>, ret_ty: LirType },
+    /// Indirect call through a typed function reference (`LirType::FuncRef`).
+    ///
+    /// Tier E §8.6 (Unified Resource Model): semantically identical to
+    /// `CallPtr` on C/LLVM today, but distinct in the IR so a future WASM
+    /// backend can lower this to `call_indirect <table-index>` rather than
+    /// an opaque indirect-pointer call. The `fref` operand must be a value
+    /// of type `LirType::FuncRef` (typically produced by `Inst::FuncAddr`
+    /// or `Inst::NamedFuncAddr`); `validate_module` bound-checks this.
+    ///
+    /// Backends today (C, LLVM) treat this exactly like `CallPtr`; only the
+    /// type carried on `fref` differs.
+    CallByRef { dst: Option<ValueId>, fref: ValueId, args: Vec<ValueId>, ret_ty: LirType },
     /// Indirect call through a closure (fn_ptr + env dispatch).
     /// `kind` distinguishes void*[2] (CallableParam) from GorgetClosure struct (EscapedClosure).
     /// `arg_abis` carries per-arg ABI decisions (deref for non-resource aggregates).
@@ -930,6 +960,7 @@ impl Inst {
             | Inst::CallExtern { dst, .. }
             | Inst::CallRuntime { dst, .. }
             | Inst::CallPtr { dst, .. }
+            | Inst::CallByRef { dst, .. }
             | Inst::CallClosure { dst, .. }
             | Inst::TraitCall { dst, .. }
             | Inst::HofExpand { dst, .. } => *dst,
@@ -988,6 +1019,11 @@ impl Inst {
             Inst::CallRuntime { args, .. } => args.clone(),
             Inst::CallPtr { callee, args, .. } => {
                 let mut v = vec![*callee];
+                v.extend(args);
+                v
+            }
+            Inst::CallByRef { fref, args, .. } => {
+                let mut v = vec![*fref];
                 v.extend(args);
                 v
             }

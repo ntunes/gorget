@@ -186,7 +186,7 @@ pub fn scalar_size(ty: &LirType) -> Option<u32> {
         LirType::I8 | LirType::U8 | LirType::Bool => Some(1),
         LirType::I16 | LirType::U16 => Some(2),
         LirType::I32 | LirType::U32 | LirType::F32 => Some(4),
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => Some(8),
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Some(8),
         LirType::Struct(_) | LirType::Void => None,
     }
 }
@@ -216,7 +216,9 @@ fn infer_inst_type(
         }
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
-        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        Inst::NullPtr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        // Tier E §8.6: function addresses carry the typed `FuncRef` variant.
+        Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } => Some(LirType::FuncRef),
         Inst::StrLit { .. } => {
             module.structs.iter().enumerate()
                 .find(|(_, s)| s.name == "GorgetString")
@@ -255,6 +257,13 @@ fn infer_inst_type(
             infer_call_extern_type(name, args, module, val_types)
         }
         Inst::CallPtr { dst, ret_ty, .. } => {
+            if dst.is_some() && !matches!(ret_ty, LirType::Void) {
+                Some(ret_ty.clone())
+            } else {
+                None
+            }
+        }
+        Inst::CallByRef { dst, ret_ty, .. } => {
             if dst.is_some() && !matches!(ret_ty, LirType::Void) {
                 Some(ret_ty.clone())
             } else {

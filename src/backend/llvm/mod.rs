@@ -48,7 +48,7 @@ fn llvm_type(ty: &LirType) -> &'static str {
         LirType::F32 => "float",
         LirType::F64 => "double",
         LirType::Bool => "i1",
-        LirType::Ptr | LirType::PtrTo(_) => "ptr",
+        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => "ptr",
         LirType::Struct(_) | LirType::Void => unreachable!("use llvm_type_full for these"),
     }
 }
@@ -255,7 +255,7 @@ fn lir_type_to_monomorphized(ty: &LirType, structs: &[StructDef]) -> String {
         LirType::F32 => "float".to_string(),
         LirType::F64 => "double".to_string(),
         LirType::Bool => "bool".to_string(),
-        LirType::Ptr | LirType::PtrTo(_) => "ptr".to_string(),
+        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => "ptr".to_string(),
         LirType::Struct(sid) => structs.get(sid.0 as usize)
             .map(|d| d.name.clone())
             .unwrap_or_else(|| format!("struct_{}", sid.0)),
@@ -528,7 +528,8 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
         }
         Inst::IConst { ty, .. } | Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
-        Inst::NullPtr { .. } | Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        Inst::NullPtr { .. } | Inst::GlobalAddr { .. } => Some(LirType::Ptr),
+        Inst::FuncAddr { .. } | Inst::NamedFuncAddr { .. } => Some(LirType::FuncRef),
         Inst::StrLit { .. } => {
             // StrLit returns ptr to GorgetString alloca — find GorgetString struct id
             let gs_id = module.structs.iter().position(|s| s.name == "GorgetString")
@@ -660,10 +661,16 @@ fn infer_inst_type(inst: &Inst, module: &LirModule, _val_types: &[Option<LirType
             }
             None
         }
-        Inst::CallPtr { dst, .. } => {
-            // CallPtr return type is hard to infer without more context.
-            // Default to i64 if there's a destination.
-            if dst.is_some() { Some(LirType::I64) } else { None }
+        Inst::CallPtr { dst, ret_ty, .. } | Inst::CallByRef { dst, ret_ty, .. } => {
+            // Return type is carried explicitly; fall back to i64 when the
+            // legacy `Void` sentinel is present (older lowering paths).
+            if dst.is_some() {
+                if matches!(ret_ty, LirType::Void) {
+                    Some(LirType::I64)
+                } else {
+                    Some(ret_ty.clone())
+                }
+            } else { None }
         }
 
         _ => None,
@@ -697,7 +704,7 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
         LirType::I8 | LirType::U8 | LirType::Bool => 1,
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 => 4,
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(def) = structs.get(sid.0 as usize) {
@@ -2638,7 +2645,7 @@ fn emit_function(
                             actual.map(int_bits).unwrap_or(64) != int_bits(param_ty)
                         };
                         let needs_agg_spill = phi_as_ptr
-                            && actual.map_or(false, |t| !matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                            && actual.map_or(false, |t| !matches!(t, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef));
                         if needs_int_cast || needs_agg_spill {
                             phi_entries.push(format!(
                                 "[ %br.cast.{}.{}.{pi}, %{pred_label} ]",
@@ -2887,7 +2894,7 @@ fn emit_inst(
                 // inference choosing payload type), use memcpy to treat the slot as raw storage
                 // for the Option struct that the ptr points to.
                 let slot_is_int = matches!(slot_ty, LirType::I64 | LirType::U64 | LirType::I32 | LirType::U32 | LirType::I16 | LirType::U16 | LirType::I8 | LirType::U8);
-                let val_is_ptr = val_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                let val_is_ptr = val_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef));
                 if slot_is_int && val_is_ptr {
                     // LIR typed this slot as a scalar but a ptr was stored — common when
                     // `auto` inference picks the payload type instead of the Option struct.
@@ -3000,7 +3007,7 @@ fn emit_inst(
             // Parameters are named %pN — just alias them
             // LLVM doesn't allow direct aliasing, so use a dummy add/bitcast
             match ty {
-                LirType::Ptr | LirType::PtrTo(_) => {
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => {
                     writeln!(out, "  %v{} = bitcast ptr %p{index} to ptr", dst.0).unwrap();
                 }
                 LirType::F32 => {
@@ -3249,8 +3256,8 @@ fn emit_inst(
             let src_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
             let to_ty = llvm_type(to);
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
-            let src_is_ptr = src_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
-            let to_is_ptr = matches!(to, LirType::Ptr | LirType::PtrTo(_));
+            let src_is_ptr = src_ty.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef));
+            let to_is_ptr = matches!(to, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef);
 
             // IntCast to float type → use sitofp/uitofp to convert value (not bitcast)
             if to.is_float() {
@@ -3333,7 +3340,7 @@ fn emit_inst(
             let src_ty_str = src_ty.map_or("i64", |t| llvm_type(t));
             let src_is_ptr = src_ty.map_or(false, |t| t.is_ptr());
             let dst_is_ptr = matches!(to,
-                LirType::Ptr | LirType::PtrTo(_));
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef);
             // LLVM's `bitcast` rejects pointer↔int conversions; those need
             // explicit `ptrtoint` / `inttoptr` opcodes. The C backend papers
             // over this with `(int64_t)p` / `(void*)i`. Same-kind casts (ptr→ptr,
@@ -3482,7 +3489,7 @@ fn emit_inst(
                                     LirType::I8 | LirType::U8 | LirType::Bool => 1,
                                     LirType::I16 | LirType::U16 => 2,
                                     LirType::I32 | LirType::U32 | LirType::F32 => 4,
-                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
                                     LirType::Struct(sid) => module.structs[sid.0 as usize].computed_c_size.unwrap_or(8),
                                     _ => 8,
                                 };
@@ -4316,7 +4323,7 @@ fn emit_inst(
                             let sdef = &module.structs[sid.0 as usize];
                             sdef.fields.get(1).map(|(_, fty)| {
                                 let sz = match fty {
-                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8usize,
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8usize,
                                     LirType::I32 | LirType::U32 | LirType::F32 => 4,
                                     LirType::I16 | LirType::U16 => 2,
                                     LirType::I8 | LirType::U8 | LirType::Bool => 1,
@@ -4542,7 +4549,7 @@ fn emit_inst(
                                     LirType::I8 | LirType::U8 | LirType::Bool => 1,
                                     LirType::I16 | LirType::U16 => 2,
                                     LirType::I32 | LirType::U32 => 4,
-                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+                                    LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
                                     LirType::F32 => 4,
                                     LirType::Void => 0,
                                     // Aggregate payload: compute actual size (must match LLVM struct layout)
@@ -5901,6 +5908,51 @@ fn emit_inst(
                 writeln!(out, "  call {ret_ty} %v{}({})", callee.0, arg_strs.join(", ")).unwrap();
             }
         }
+        // Tier E §8.6: typed indirect call through a `LirType::FuncRef`.
+        // Identical lowering to `CallPtr` (FuncRef → ptr at the LLVM ABI).
+        // The IR-level distinction exists for a future WASM backend that
+        // would emit `call_indirect <table-index>` here.
+        Inst::CallByRef { dst, fref, args, ret_ty: call_ret_ty } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| {
+                let pty = val_types.get(a.0 as usize)
+                    .and_then(|t| t.as_ref())
+                    .map(|t| llvm_arg_type(t, snames))
+                    .unwrap_or_else(|| "i64".to_string());
+                format!("{pty} %v{}", a.0)
+            }).collect();
+
+            if let Some(d) = dst {
+                if !matches!(call_ret_ty, LirType::Void) && needs_sret(call_ret_ty, &module.structs) {
+                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    let prepended = if arg_strs.is_empty() {
+                        format!("ptr sret({ret_ty}) %v{}", d.0)
+                    } else {
+                        format!("ptr sret({ret_ty}) %v{}, {}", d.0, arg_strs.join(", "))
+                    };
+                    writeln!(out, "  call void %v{}({prepended})", fref.0).unwrap();
+                } else if !matches!(call_ret_ty, LirType::Void) && call_ret_ty.is_aggregate() {
+                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    writeln!(out, "  %v{}.ret = call {ret_ty} %v{}({})", d.0, fref.0, arg_strs.join(", ")).unwrap();
+                    writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
+                    writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
+                } else {
+                    let ret_ty = if matches!(call_ret_ty, LirType::Void) {
+                        "i64".to_string()
+                    } else {
+                        llvm_type_full(call_ret_ty, snames)
+                    };
+                    writeln!(out, "  %v{} = call {ret_ty} %v{}({})", d.0, fref.0, arg_strs.join(", ")).unwrap();
+                }
+            } else {
+                let ret_ty = if matches!(call_ret_ty, LirType::Void) {
+                    "void".to_string()
+                } else {
+                    llvm_type_full(call_ret_ty, snames)
+                };
+                writeln!(out, "  call {ret_ty} %v{}({})", fref.0, arg_strs.join(", ")).unwrap();
+            }
+        }
 
         // ── Runtime Checks ──────────────────────────────────────────
         Inst::BoundsCheck { index, len } => {
@@ -6382,7 +6434,7 @@ fn emit_branch_arg_casts(
             // predecessor that has the struct value into a fresh alloca and
             // pass its pointer, so phi receives a homogeneous ptr stream.
             if param_ty.is_aggregate() {
-                let actual_is_ptr = actual.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_)));
+                let actual_is_ptr = actual.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef));
                 if !actual_is_ptr {
                     let agg_ty = llvm_type_full(param_ty, snames);
                     writeln!(out, "  %br.cast.{pred_bid}.{}.{ai} = alloca {agg_ty}",

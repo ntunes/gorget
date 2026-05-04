@@ -95,6 +95,7 @@ fn validate_function(func: &LirFunction, module: &LirModule, errors: &mut Vec<Li
             check_slot_refs(inst, num_slots, func, block.id, errors);
             check_struct_refs(inst, module, func, block.id, errors);
             check_runtime_call(inst, func, block.id, errors);
+            check_call_by_ref(inst, func, &defined, block.id, errors);
         }
 
         // Validate terminator
@@ -105,6 +106,29 @@ fn validate_function(func: &LirFunction, module: &LirModule, errors: &mut Vec<Li
             num_blocks,
             errors,
         );
+    }
+}
+
+/// Tier E §8.6 sanity check: `Inst::CallByRef.fref` must reference a defined
+/// SSA value (block param or instruction dst). The full SSA-dominance
+/// validator (`validate_ssa_dominance`) also catches this, but we surface a
+/// CallByRef-specific error here so the message points at the `fref` operand
+/// directly rather than a generic "undefined value" terminator note.
+fn check_call_by_ref(
+    inst: &Inst,
+    func: &LirFunction,
+    defined: &HashMap<ValueId, BlockId>,
+    block: BlockId,
+    errors: &mut Vec<LirError>,
+) {
+    if let Inst::CallByRef { fref, .. } = inst {
+        if !defined.contains_key(fref) {
+            errors.push(LirError {
+                func: func.name.clone(),
+                block: Some(block),
+                message: format!("CallByRef.fref {fref} references an undefined value"),
+            });
+        }
     }
 }
 

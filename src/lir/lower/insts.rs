@@ -2301,7 +2301,7 @@ impl<'a> FuncLowering<'a> {
         let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
             use crate::ir::abi::AbiKind;
             match ty {
-                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => AbiKind::Ptr,
                 LirType::Struct(_) => AbiKind::ByValue,
                 _ => AbiKind::Scalar,
             }
@@ -2498,7 +2498,7 @@ impl<'a> FuncLowering<'a> {
         let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
             use crate::ir::abi::AbiKind;
             match ty {
-                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => AbiKind::Ptr,
                 LirType::Struct(_) => AbiKind::ByValue,
                 _ => AbiKind::Scalar,
             }
@@ -2997,7 +2997,7 @@ impl<'a> FuncLowering<'a> {
         let abi_from_param_ty = |ty: &LirType| -> crate::ir::abi::AbiKind {
             use crate::ir::abi::AbiKind;
             match ty {
-                LirType::Ptr | LirType::PtrTo(_) => AbiKind::Ptr,
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => AbiKind::Ptr,
                 LirType::Struct(_) => AbiKind::ByValue,
                 _ => AbiKind::Scalar,
             }

@@ -1031,7 +1031,7 @@ pub(super) fn c_type_named(ty: &LirType, struct_names: &HashMap<u32, String>) ->
         LirType::F32 => "float".into(),
         LirType::F64 => "double".into(),
         LirType::Bool => "bool".into(),
-        LirType::Ptr | LirType::PtrTo(_) => "void*".into(),
+        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => "void*".into(),
         LirType::Struct(id) => struct_names
             .get(&id.0)
             .cloned()
@@ -1572,7 +1572,7 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
         Inst::FConst { ty, .. } => Some(ty.clone()),
         Inst::BoolConst { .. } => Some(LirType::Bool),
         Inst::NullPtr { .. } => Some(LirType::Ptr),
-        Inst::FuncAddr { .. } => Some(LirType::Ptr),
+        Inst::FuncAddr { .. } => Some(LirType::FuncRef),
         Inst::GlobalAddr { .. } => Some(LirType::Ptr),
         Inst::StrLit { .. } => {
             // Under 32-byte Str, StrLit produces a Str struct value (not a raw pointer).
@@ -1718,6 +1718,13 @@ pub(super) fn infer_inst_type(inst: &Inst, module: &LirModule, val_types: &[Opti
             }
         }
         Inst::CallPtr { ret_ty, .. } => {
+            if *ret_ty != LirType::Void {
+                Some(ret_ty.clone())
+            } else {
+                None
+            }
+        }
+        Inst::CallByRef { ret_ty, .. } => {
             if *ret_ty != LirType::Void {
                 Some(ret_ty.clone())
             } else {

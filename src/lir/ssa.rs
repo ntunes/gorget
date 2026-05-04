@@ -224,7 +224,7 @@ impl<'a> SsaBuilder<'a> {
                 LirType::Bool => Inst::BoolConst { dst: val, value: false },
                 LirType::F32 => Inst::FConst { dst: val, ty: LirType::F32, bits: 0 },
                 LirType::F64 => Inst::FConst { dst: val, ty: LirType::F64, bits: 0 },
-                LirType::Ptr | LirType::PtrTo(_) => Inst::NullPtr { dst: val },
+                LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => Inst::NullPtr { dst: val },
                 _ => Inst::IConst { dst: val, ty: ty.clone(), value: 0 },
             };
             self.func.blocks[bb.0 as usize].insts.insert(0, zero_inst);
@@ -523,6 +523,12 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
         }
         Inst::CallPtr { callee, args, .. } => {
             sub(callee);
+            for a in args.iter_mut() {
+                sub(a);
+            }
+        }
+        Inst::CallByRef { fref, args, .. } => {
+            sub(fref);
             for a in args.iter_mut() {
                 sub(a);
             }

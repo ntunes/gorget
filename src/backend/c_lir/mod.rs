@@ -1203,7 +1203,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 // to subsequent loads from that slot.
                 Inst::SlotStore { slot, value, .. } => {
                     if let Some(pt) = ptr_pointee.get(value.0 as usize).and_then(|p| p.clone()) {
-                        if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr | LirType::PtrTo(_)) {
+                        if matches!(func.slots[slot.0 as usize].ty, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef) {
                             slot_pointee[slot.0 as usize] = Some(pt);
                         }
                     }
@@ -1360,7 +1360,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(i + 1) {
                         if *value == *d {
                             let slot_ty = func.slots[slot.0 as usize].ty.clone();
-                            if !matches!(slot_ty, LirType::Ptr | LirType::PtrTo(_) | LirType::Void) {
+                            if !matches!(slot_ty, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef | LirType::Void) {
                                 val_types[d.0 as usize] = Some(norm(slot_ty));
                             }
                         }
@@ -1578,7 +1578,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                 // SlotStore: infer from the slot's declared type.
                 Inst::SlotStore { slot, value, .. } => {
                     let sty = slot_overrides.get(&slot.0).unwrap_or(&func.slots[slot.0 as usize].ty).clone();
-                    if !matches!(sty, LirType::Ptr | LirType::PtrTo(_) | LirType::Void) {
+                    if !matches!(sty, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef | LirType::Void) {
                         Some((sty, vec![*value]))
                     } else { None }
                 }
@@ -1620,7 +1620,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
         }
         // Also infer from block terminators: Ret(value) implies function return type.
         if let Term::Ret(val) = &block.terminator {
-            if !matches!(func.return_type, LirType::Void | LirType::Ptr | LirType::PtrTo(_)) {
+            if !matches!(func.return_type, LirType::Void | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef) {
                 if val_types.get(val.0 as usize).and_then(|t| t.as_ref()).is_none() {
                     val_types[val.0 as usize] = Some(norm(func.return_type.clone()));
                 }
@@ -2319,8 +2319,10 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             if is_str_lit {
                 // String literal → store the static Str pointer directly.
                 write!(out, "*(Str*)({}) = {};", v(*ptr), v(*value)).unwrap();
-            } else if matches!(val_ty, Some(LirType::Ptr)) {
-                // Source is a pointer — either an aggregate reference (memcpy) or a raw pointer value (direct store).
+            } else if matches!(val_ty, Some(LirType::Ptr) | Some(LirType::FuncRef)) {
+                // Source is a pointer-shaped value (raw Ptr, or Tier E §8.6 FuncRef
+                // which lowers identically at this layer) — either an aggregate
+                // reference (memcpy) or a raw pointer value (direct store).
                 let val_is_null = null_vals.get(value.0 as usize).copied().unwrap_or(false);
                 let pointee = ptr_pointee.get(value.0 as usize).and_then(|t| t.as_ref());
                 let dst_pointee = ptr_pointee.get(ptr.0 as usize).and_then(|t| t.as_ref());
@@ -2333,10 +2335,11 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                     } else {
                         write!(out, "*(void**)({p}) = NULL;", p = v(*ptr)).unwrap();
                     }
-                // If the destination field/slot itself holds a pointer (Ptr/Void), store the pointer
-                // value directly — don't memcpy through it.  This happens for MutRef captures
-                // (void* fields holding &outer_var).
-                } else if matches!(dst_pointee, Some(LirType::Ptr) | Some(LirType::PtrTo(_)) | Some(LirType::Void)) {
+                // If the destination field/slot itself holds a pointer (Ptr/Void/FuncRef),
+                // store the pointer value directly — don't memcpy through it.
+                // This happens for MutRef captures (void* fields holding &outer_var)
+                // and for direct FuncRef-typed slots.
+                } else if matches!(dst_pointee, Some(LirType::Ptr) | Some(LirType::PtrTo(_)) | Some(LirType::Void) | Some(LirType::FuncRef)) {
                     write!(out, "*(void**)({p}) = {val};", p = v(*ptr), val = v(*value)).unwrap();
                 } else {
                     // Str and GorgetString are the same 32-byte struct (unified).
@@ -2578,6 +2581,64 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
                 if is_str_lit_val {
                     // String literal → Ptr param: stack-allocated literal with header.
+                    write!(out, "&{v}", v = v(*a)).unwrap();
+                } else {
+                    match arg_ty {
+                        Some(t) if t.is_aggregate() => write!(out, "{}", v(*a)).unwrap(),
+                        _ => write!(out, "(void*){}", v(*a)).unwrap(),
+                    }
+                }
+            }
+            write!(out, ");").unwrap();
+        }
+        // Tier E §8.6: typed indirect call through a `LirType::FuncRef`.
+        // Identical lowering to `CallPtr` (FuncRef → void* / void(*)() at the
+        // ABI). The IR-level distinction exists for WASM and to keep "raw fn
+        // ref" separate from "boxed closure".
+        Inst::CallByRef { dst, fref, args, ret_ty: call_ret_ty } => {
+            if let Some(d) = dst {
+                write!(out, "{} = ", v(*d)).unwrap();
+            }
+            let ret_ty = if !matches!(call_ret_ty, LirType::Void) {
+                c_type_named(call_ret_ty, sn)
+            } else {
+                dst.and_then(|d| val_types.get(d.0 as usize).and_then(|t| t.as_ref()))
+                    .map(|t| c_type_named(t, sn))
+                    .unwrap_or_else(|| "void".to_string())
+            };
+            write!(out, "(({ret_ty}(*)(").unwrap();
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref());
+                if let Some(pt) = pointee {
+                    if pt.is_aggregate() {
+                        write!(out, "{}", c_type_named(pt, sn)).unwrap();
+                        continue;
+                    }
+                }
+                match arg_ty {
+                    Some(t) if t.is_aggregate() => write!(out, "{}", c_type_named(t, sn)).unwrap(),
+                    _ => write!(out, "void*").unwrap(),
+                }
+            }
+            write!(out, "))({}))(", v(*fref)).unwrap();
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    write!(out, ", ").unwrap();
+                }
+                let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                let pointee = ptr_pointee.get(a.0 as usize).and_then(|t| t.as_ref());
+                if let Some(pt) = pointee {
+                    if pt.is_aggregate() {
+                        write!(out, "*({}*){}", c_type_named(pt, sn), v(*a)).unwrap();
+                        continue;
+                    }
+                }
+                let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                if is_str_lit_val {
                     write!(out, "&{v}", v = v(*a)).unwrap();
                 } else {
                     match arg_ty {

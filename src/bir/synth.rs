@@ -353,6 +353,7 @@ fn mangle_lir_type(ty: &LirType) -> String {
         LirType::Void => "void".into(),
         LirType::Ptr => "ptr".into(),
         LirType::PtrTo(sid) => format!("ptrTo{}", sid.0),
+        LirType::FuncRef => "funcref".into(),
         LirType::Struct(sid) => format!("s{}", sid.0),
     }
 }

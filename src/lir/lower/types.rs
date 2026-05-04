@@ -159,7 +159,7 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 | LirType::F32 => 4,
         LirType::I64 | LirType::U64 | LirType::F64 => 8,
-        LirType::Ptr | LirType::PtrTo(_) => 8,
+        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
         LirType::Struct(_) => 8, // conservative; struct sizeof varies
         LirType::Void => 0,
     }
@@ -425,7 +425,7 @@ pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::I8 | LirType::U8 | LirType::Bool => 1,
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 => 4,
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
@@ -450,7 +450,7 @@ pub fn c_alignof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::I8 | LirType::U8 | LirType::Bool => 1,
         LirType::I16 | LirType::U16 => 2,
         LirType::I32 | LirType::U32 | LirType::F32 => 4,
-        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) => 8,
+        LirType::I64 | LirType::U64 | LirType::F64 | LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => 8,
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
                 if let Some(a) = sd.computed_c_align {
