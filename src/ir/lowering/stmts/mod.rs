@@ -527,9 +527,11 @@ fn lower_var_decl(
             // sidecar predicates (`named_local`, `cow_unsafe_at`,
             // `drops.is_registered`, `needs_drop`) until every arm is expressed
             // as `(target_resource, source_live, source_own)`.
-            let _target_resource = ctx.type_registry.is_resource_type(actual_var_type);
-            let _source_live = ctx.source_live_past(&operand, stmt_span, builder);
-            let _source_own = ctx.source_ownership(&operand, builder);
+            #[allow(unused_variables)]
+            let target_resource = ctx.type_registry.is_resource_type(actual_var_type);
+            #[allow(unused_variables)]
+            let source_live = ctx.source_live_past(&operand, stmt_span, builder);
+            let source_own = ctx.source_ownership(&operand, builder);
 
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                 if place.projections.is_empty() && place.local != local_id {
@@ -627,7 +629,7 @@ fn lower_var_decl(
                     // sidecar deleted after cow_materialize_view's
                     // shallow-copy bug was fixed (Move mode at the
                     // clone-to-owned assign).
-                    else if matches!(_source_own, Some(crate::ir::LocalOwnership::View { .. }))
+                    else if matches!(source_own, Some(crate::ir::LocalOwnership::View { .. }))
                         && rhs_type == ctx.type_mapper.owned_string_type
                         && actual_var_type == ctx.type_mapper.owned_string_type
                     {
