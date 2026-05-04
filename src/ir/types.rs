@@ -496,6 +496,19 @@ impl TypeRegistry {
     /// Reads `copy_semantics` and `collection_kind` from TypeDef metadata,
     /// with transitive struct-field check for user types containing
     /// resource-typed fields.
+    ///
+    /// **Phase D4 widening probe (2026-05-04, reverted):** adding a
+    /// transitive enum-variant-payload check (so Option[String] /
+    /// Result[String] return true) regressed 112 fixtures. Many
+    /// consumers — pattern lowering, collection-element clone routing,
+    /// drop accountant, ABI choice — depend on the current narrow
+    /// semantics where Option/Result are NOT resources at the wrapper
+    /// level (only their payloads are). Widening requires a coordinated
+    /// migration of those consumers, not a one-line change here. See
+    /// also `has_resource_fields` (which already checks enum variants
+    /// for the .get()-borrow-decision use case) — that's the right
+    /// shape, but not interchangeable with is_resource_type because
+    /// downstream consumers branch on different axes for each.
     fn is_resource_name(&self, name: &str) -> bool {
         if let Some(type_def) = self.get_type_def(name) {
             if type_def.metadata.collection_kind.is_some() {
