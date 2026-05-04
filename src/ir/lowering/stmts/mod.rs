@@ -527,9 +527,7 @@ fn lower_var_decl(
             // sidecar predicates (`named_local`, `cow_unsafe_at`,
             // `drops.is_registered`, `needs_drop`) until every arm is expressed
             // as `(target_resource, source_live, source_own)`.
-            #[allow(unused_variables)]
             let target_resource = ctx.type_registry.is_resource_type(actual_var_type);
-            #[allow(unused_variables)]
             let source_live = ctx.source_live_past(&operand, stmt_span, builder);
             let source_own = ctx.source_ownership(&operand, builder);
 
@@ -647,15 +645,39 @@ fn lower_var_decl(
                     // Drop-registered temp OR unregistered droppable temp → move.
                     // Temps (not named vars) that need drop should be moved to transfer
                     // ownership, preventing shallow-copy double-free on scope exit.
+                    //
+                    // Phase D4 migration in progress: the legacy predicate
+                    // `drops.is_registered(place.local)` doubles as a
+                    // liveness proxy for "this local will get scope-exit
+                    // dropped." The typed-match arm `(needs_drop_target,
+                    // source_dead, source_owned) => Move` is the principled
+                    // shape — `needs_drop(actual_var_type)` covers
+                    // Option/Result wrapper types where `is_resource_type`
+                    // returns false but the variant payload still requires
+                    // ownership transfer. Both predicates retained today;
+                    // the typed predicate strictly extends the legacy one
+                    // for the cases the legacy predicate misses.
                     else if ctx.drops.is_registered(place.local)
                         || (!ctx.is_named_local(place.local) && ctx.type_registry.needs_drop(rhs_type))
+                        || (matches!(source_own, Some(crate::ir::LocalOwnership::Owned))
+                            && !source_live
+                            && ctx.type_registry.needs_drop(actual_var_type))
                     {
                         assign_mode = AssignMode::Move;
                     }
-                    // Safety net: if still Copy for a resource type, use Move.
-                    // This catches edge cases not covered by the specific guards above
-                    // (e.g., named resource structs where clone_fn lookup failed).
-                    if assign_mode == AssignMode::Copy && ctx.type_registry.is_resource_type(rhs_type) {
+                    // Safety net: if still Copy and the TARGET is a resource
+                    // type, switch to Move. Catches edge cases not covered
+                    // by the specific guards above (e.g., named resource
+                    // structs where clone_fn lookup failed in branch D).
+                    //
+                    // Phase D4: typed `target_resource` replaces the legacy
+                    // `is_resource_type(rhs_type)` source-keyed read. The
+                    // correct axis is the destination's type — Move applies
+                    // to where the value lands, not where it came from.
+                    // Cross-type resource→non-resource assigns are caught
+                    // by earlier branches (B handles Str→GorgetString); the
+                    // remaining cases reach G with rhs_type==actual_var_type.
+                    if assign_mode == AssignMode::Copy && target_resource {
                         assign_mode = AssignMode::Move;
                     }
                 }
