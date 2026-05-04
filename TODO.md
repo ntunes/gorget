@@ -43,8 +43,8 @@
   - C (line 566, named resource + CoW-safe) → arm 4 (CoW alias)
   - D (line 590, named resource + CoW-unsafe) → arm 2 (Owned + live → Clone fallback)
   - **E (~line 624, view-returning result) → arm 5 (View → Clone). SHIPPED 2026-05-04** — typed `LocalOwnership::View` match, sidecar `view_returning_temps` retired (commit 9dc2cf4d). Required first fixing cow_materialize_view's shallow-copy bug (Move mode at the clone-to-owned assign) so View-tagging unnamed temps was safe.
-  - F (line ~620, drop-registered temp or droppable temp) → arm 3 (Owned + dead → Move)
-  - G (safety net) → catch-all
+  - **F (line ~620, drop-registered temp or droppable temp) → arm 3 (Owned + dead → Move). PARTIAL 2026-05-04** — extended with typed `(needs_drop_target, source_dead, source_owned) => Move` to catch Option/Result-wrapper cases the legacy predicate misses (commit 886b4d0c). Legacy predicate retained as a strict subset until further investigation determines whether named drop-registered locals at non-last-use can be safely dropped from F.
+  - **G (safety net) → catch-all. SHIPPED 2026-05-04** — predicate switched from `is_resource_type(rhs_type)` (source-keyed) to `target_resource` (target-keyed). Correct axis: Move applies to destination, not source.
 
   **Estimated 1-2 days for the remaining 6 branches; honest scope is closer to a week given the elegance bar.** Risk: medium — touches CoW alias creation, mark_string_borrow_source, drops.unregister, register_local re-binding. Validation: full integration sweep + cow_materialization_points fixture must stay green at every step. Migrate one branch at a time by replacing it with the typed-match arm and verifying integration. **The branch-E migration showed the right pattern: when typed-state migration regresses, the regression is almost always a downstream consumer with a latent correctness bug that the sidecar was hiding — fix the consumer, then migrate. That's the elegance step, not a workaround.**
 
