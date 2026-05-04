@@ -1415,6 +1415,34 @@ done",
 }
 
 #[test]
+fn drop_flag_param_seed() {
+    // Tier E §8.1: bb0 drop-flag init seeded from dataflow's bb0
+    // in-state. Exercises both the late-init pattern (slot
+    // `Uninitialized` for the entire bb0 prelude until a SlotStore
+    // inside an `if`) and the partial-move pattern (slot
+    // `Initialized` at bb0, conditional consume, post-merge drop on
+    // the no-consume path). The bb0 flag init now derives directly
+    // from the dataflow's bb0 in-state — `false` for locals that
+    // haven't been stored yet, `true` for the param case — instead
+    // of a blanket `false` patched by the param-SlotStore.
+    run_gg(
+        "drop_flag_param_seed.gg",
+        "\
+got late
+drop late
+late-done
+---
+late-done
+---
+consume ck
+ck-done
+---
+ck-done
+drop ck",
+    );
+}
+
+#[test]
 fn drop_dict_loop() {
     run_gg(
         "drop_dict_loop.gg",

@@ -67,8 +67,20 @@ fn build_val_to_slot(func: &LirFunction) -> HashMap<ValueId, SlotId> {
 /// Compute the per-block entry (in) states via a standard worklist-based
 /// forward dataflow analysis.
 ///
-/// Initial assumption: every slot is `Initialized` (optimistic — we only
-/// propagate `Uninitialized` from confirmed `Memset`-to-zero sites).
+/// **Entry seeding (bb0 in-state):** by GIR convention, slot 0 is the
+/// reserved return-value local and slots `1..=N` are the function
+/// parameters; everything beyond is a user local. At function entry,
+/// param slots are `Initialized` (the caller wrote the value), every
+/// other slot is `Uninitialized` (no user-level store has happened yet).
+/// Other blocks start at lattice Top (`None` — no predecessor info yet);
+/// the worklist propagates concrete states over the CFG until fixpoint.
+///
+/// This precise seed is what lets `insert_drop_flags` skip the
+/// "blanket false at bb0 + rely on the param SlotStore to fix it"
+/// dance: with params seeded `Initialized`, the bb0 flag init below
+/// directly emits `flag := true` for owning params, even if their
+/// explicit param-`SlotStore` were absent.  See
+/// `docs/internals/unified-resource-model.md` §8.1.
 fn forward_dataflow(
     func: &LirFunction,
     val_to_slot: &HashMap<ValueId, SlotId>,
@@ -78,21 +90,45 @@ fn forward_dataflow(
         return Vec::new();
     }
 
-    // All slots start Initialized.
-    let all_init: SlotStates = (0..func.slots.len() as u32)
-        .map(|i| (SlotId(i), InitState::Initialized))
+    // bb0 entry: params are Initialized (caller-supplied); slot 0 (return
+    // local) and slots beyond the parameter range start Uninitialized.
+    let num_params = func.params.len();
+    let bb0_init: SlotStates = (0..func.slots.len() as u32)
+        .map(|i| {
+            let s = SlotId(i);
+            let is_param = (i as usize) >= 1 && (i as usize) <= num_params;
+            (
+                s,
+                if is_param { InitState::Initialized } else { InitState::Uninitialized },
+            )
+        })
         .collect();
 
-    let mut in_states: Vec<SlotStates> = vec![all_init.clone(); n];
+    // Non-entry blocks start as "no information yet" (`None`), which is the
+    // lattice Top: meeting Top with any predecessor's out-state adopts that
+    // out-state directly. On subsequent predecessor merges we do a real
+    // element-wise meet. This avoids the prior bias where seeding non-entry
+    // blocks as `all_init` would collapse a sole `Uninitialized` predecessor
+    // into `MaybeInitialized` (because `meet(Init, Uninit) = Maybe`), which
+    // over-flagged definitely-dead slots.
+    let mut in_states: Vec<Option<SlotStates>> = vec![None; n];
     let mut out_states: Vec<SlotStates> = vec![HashMap::new(); n];
-    in_states[0] = all_init;
+    in_states[0] = Some(bb0_init);
 
-    // Process every block at least once.
-    let mut worklist: VecDeque<BlockId> = (0..n as u32).map(BlockId).collect();
+    // Worklist starts with only the entry block; successors get queued as
+    // their in-states acquire information from at least one predecessor.
+    let mut worklist: VecDeque<BlockId> = VecDeque::new();
+    worklist.push_back(BlockId(0));
 
     while let Some(bid) = worklist.pop_front() {
         let idx = bid.0 as usize;
-        let out = compute_transfer(&func.blocks[idx], &in_states[idx], val_to_slot);
+        // A block whose in-state is still None has no predecessor processed
+        // yet — skip until we get info. (Unreachable blocks stay None.)
+        let in_state = match &in_states[idx] {
+            Some(s) => s.clone(),
+            None => continue,
+        };
+        let out = compute_transfer(&func.blocks[idx], &in_state, val_to_slot);
         if out != out_states[idx] {
             out_states[idx] = out.clone();
             for succ in func.blocks[idx].terminator.successors() {
@@ -100,16 +136,25 @@ fn forward_dataflow(
                 if si >= n {
                     continue;
                 }
-                let new_in = meet_states(&out, &in_states[si], func.slots.len());
-                if new_in != in_states[si] {
-                    in_states[si] = new_in;
+                // Meet the predecessor's out into the successor's in.
+                // None on the successor side means "Top" → adopt out as-is;
+                // otherwise do an element-wise lattice meet.
+                let new_in = match &in_states[si] {
+                    None => out.clone(),
+                    Some(prev) => meet_states(&out, prev, func.slots.len()),
+                };
+                if Some(&new_in) != in_states[si].as_ref() {
+                    in_states[si] = Some(new_in);
                     worklist.push_back(succ);
                 }
             }
         }
     }
 
-    in_states
+    // Unreachable blocks keep an empty in-state (safe default — guard
+    // elaboration's `unwrap_or(MaybeInitialized)` will not eliminate
+    // anything for slots without entries).
+    in_states.into_iter().map(|s| s.unwrap_or_default()).collect()
 }
 
 /// Transfer function for one block: apply each instruction's effect on the
@@ -153,8 +198,10 @@ fn apply_inst_effect(
     }
 }
 
-/// Join two slot-state maps (one entry per slot).  For slots absent in a map
-/// we assume `MaybeInitialized` (safe default — don't eliminate unknown drops).
+/// Join two slot-state maps (one entry per slot).  Both inputs are expected
+/// to carry concrete information — the `None`/Top case is handled at the
+/// call site in `forward_dataflow`. For slots absent in a map we assume
+/// `MaybeInitialized` (safe default — don't eliminate unknown drops).
 fn meet_states(a: &SlotStates, b: &SlotStates, n_slots: usize) -> SlotStates {
     let mut result = HashMap::with_capacity(n_slots);
     for i in 0..n_slots as u32 {
@@ -339,6 +386,7 @@ fn insert_drop_flags(
     func: &mut LirFunction,
     val_to_slot: &HashMap<ValueId, SlotId>,
     maybe_init_slots: &HashSet<SlotId>,
+    bb0_in_state: &SlotStates,
 ) -> usize {
     if maybe_init_slots.is_empty() {
         return 0;
@@ -357,33 +405,45 @@ fn insert_drop_flags(
         slot_to_flag.insert(*slot, flag_id);
     }
 
-    // 2. Insert flag initialization (`false`) at the start of the entry block.
+    // 2. Insert flag initialization at the start of the entry block, seeded
+    //    from the dataflow's bb0 in-state for each slot.
     //
-    //   Why `false` (the slot is dead by default) and not `true`:
-    //   the flag must reflect whether the slot CURRENTLY holds an owned
-    //   resource. At function entry no user-level slot has yet been
-    //   stored to (function parameters are stored via explicit SlotStore
-    //   at bb0 by `lir/lower::lower()`; locals are stored at their
-    //   `let`-binding sites). The instrumentation below transitions the
-    //   flag to `true` after each SlotStore and back to `false` after
-    //   each MoveSlot / Memset, so the run-time value always tracks the
-    //   true ownership state.
+    //   The flag must reflect whether the slot CURRENTLY holds an owned
+    //   resource. At function entry, only function parameters hold a value
+    //   (the caller wrote it); locals are still uninitialized memory. The
+    //   `forward_dataflow` seed encodes this directly:
+    //     - `Initialized` at bb0 ⇒ a parameter (or another unconditionally-
+    //       live slot). Init flag = `true`.
+    //     - `Uninitialized` at bb0 ⇒ a local that hasn't been stored yet,
+    //       or the reserved return-value slot. Init flag = `false`.
+    //     - `MaybeInitialized` at bb0 (rare, since bb0 has no predecessors
+    //       and the seed is definite) ⇒ conservatively start `false`, the
+    //       SlotStore instrumentation below will lift it to `true` on the
+    //       first store.
     //
-    //   The previous contract (bb0 := true) was correct in the
-    //   common case where the slot was initialized at declaration and
-    //   never re-initialized after a move. It silently broke for the
-    //   loop-reinit pattern: iter N moves the slot (flag := false),
-    //   iter N+1 stores a fresh resource via SlotStore (flag stayed
-    //   false), so the end-of-body drop guard skipped the live
-    //   resource — leak with no observable signal except clone-stats.
-    //   See `drop_loop_reinit.gg` for the regression fixture.
+    //   The instrumentation in step 3 transitions the flag to `true` after
+    //   each SlotStore and back to `false` after each MoveSlot / Memset, so
+    //   the run-time value always tracks the true ownership state.
+    //
+    //   The previous "blanket false" seed was correct only because the
+    //   param-SlotStore at bb0 (lir/lower::lower) flipped param flags to
+    //   true at first sight. Seeding from dataflow makes the param case
+    //   work without that explicit fix-up — the flag is correct at bb0
+    //   entry by construction. See unified-resource-model §8.1.
+    //
+    //   The loop-reinit pattern (iter N moves slot, iter N+1 re-stores) is
+    //   handled by step 3's SlotStore arm — see `drop_loop_reinit.gg`.
     {
         let mut inits: Vec<Inst> = Vec::with_capacity(sorted_slots.len() * 2);
         for slot in &sorted_slots {
             let flag_slot = slot_to_flag[slot];
-            let v_false = func.next_value();
-            inits.push(Inst::BoolConst { dst: v_false, value: false });
-            inits.push(Inst::SlotStore { slot: flag_slot, value: v_false, is_move: false });
+            let initial = matches!(
+                bb0_in_state.get(slot).copied().unwrap_or(InitState::MaybeInitialized),
+                InitState::Initialized
+            );
+            let v_init = func.next_value();
+            inits.push(Inst::BoolConst { dst: v_init, value: initial });
+            inits.push(Inst::SlotStore { slot: flag_slot, value: v_init, is_move: false });
         }
         // Prepend to bb0 so the flags are initialized before any other code.
         let mut combined = inits;
@@ -397,8 +457,9 @@ fn insert_drop_flags(
     //
     //   The SlotStore arm covers re-initialization across iterations
     //   (the loop-reinit pattern that the prior bb0-only init missed)
-    //   AND the function-param case (params get SlotStored at bb0 by
-    //   `lir/lower::lower()`, so their flag transitions to true there).
+    //   AND the function-param case (the param-SlotStore at bb0 is
+    //   redundant with the dataflow-derived bb0 init now, but harmless —
+    //   it just rewrites `flag := true` over an already-true value).
     //
     //   We must avoid instrumenting the SlotStore that writes the FLAG
     //   itself — the flag slot is in `slot_to_flag.values()`, never in
@@ -552,9 +613,15 @@ pub fn elaborate_drops(module: &mut LirModule) -> ElabStats {
             remove_companion_memsets(func, &val_to_slot, &deleted_slots);
 
         // Phase 3: insert bool drop flags for MaybeInitialized slots, replacing the
-        // remaining memcmp-based guards with cheap bool checks.
+        // remaining memcmp-based guards with cheap bool checks. Seed the bb0 flag
+        // values from the dataflow's bb0 in-state so params start `true` and
+        // locals start `false` without relying on the param-SlotStore fix-up.
+        let bb0_in_state = in_states
+            .first()
+            .cloned()
+            .unwrap_or_default();
         stats.flags_inserted +=
-            insert_drop_flags(func, &val_to_slot, &maybe_init_slots);
+            insert_drop_flags(func, &val_to_slot, &maybe_init_slots, &bb0_in_state);
 
         // Phase 4: remove consumed MoveSlot annotations.  They served as dataflow
         // signals for phases 1-3 and have no runtime effect.
