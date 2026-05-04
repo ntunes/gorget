@@ -17,6 +17,33 @@ pub(super) fn lower_array_literal(
 ) -> Operand {
     let array_type = ctx.type_mapper.lookup_named("GorgetArray").unwrap_or(UNIT_TYPE);
 
+    // If the surrounding context has an expected type like Vector[Option[T]],
+    // propagate `Option[T]` as the per-element expected type so bare
+    // expressions like `None()` resolve to the right Option variant
+    // instead of falling through to Constant::Null. Without this,
+    // `Vector[Option[int]] v = [None(), Some(1)]` lowers None() to
+    // Null (i64 0), which the C backend assigns into a void* slot —
+    // silently wrong values at runtime.
+    //
+    // Only override expected_type for the non-empty branch — the
+    // empty-array branch reads ctx.func_state.expected_type to compute
+    // elem_size and needs the OUTER (Vector[T]) type there.
+    let saved_expected = ctx.func_state.expected_type;
+    let nonempty_expected_override = if !elems.is_empty() {
+        if let Some(outer) = saved_expected {
+            let outer_is_vector = matches!(ctx.type_registry.get(outer),
+                Some(GirType::Named(n))
+                    if n.starts_with("Vector__") || n == "GorgetArray"
+                        || n.starts_with("Deque__"));
+            if outer_is_vector {
+                Some(infer_collection_element_type(ctx, outer))
+            } else { None }
+        } else { None }
+    } else { None };
+    if let Some(elem_t) = nonempty_expected_override {
+        ctx.func_state.expected_type = Some(elem_t);
+    }
+
     // Infer element type from first element
     let elem_type = if !elems.is_empty() {
         let first = lower_expr(ctx, builder, &elems[0]);
@@ -93,6 +120,7 @@ pub(super) fn lower_array_literal(
         );
         FunctionBuilder::copy(arr_local)
     };
+    ctx.func_state.expected_type = saved_expected;
     elem_type
 }
 
