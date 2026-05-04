@@ -1967,6 +1967,33 @@ impl<'a> LoweringContext<'a> {
             if idx >= builder.locals.len() { continue; }
             builder.locals[idx].ownership = state.clone();
         }
+        // §6.8 Stage 3: derive `slot_kind` from (type, ownership) for
+        // every local. Walk all locals (not just the ones with explicit
+        // ownership entries above) so default-Owned Ptr locals get
+        // OwnedPtr correctly. The mapping mirrors LIR's current
+        // `is_ref()` behavior:
+        //
+        //   type=Ptr/MutPtr AND ownership.is_ref()  → BorrowedPtr
+        //   type=Ptr/MutPtr AND !is_ref             → OwnedPtr
+        //   type=non-Ptr                            → Value
+        //
+        // The empirical audit (1100-fixture sweep) showed zero locals in
+        // the "non-Ptr type with borrow ownership" combination, so we
+        // don't handle a fourth case. If one ever appears, the assert at
+        // Stage 4's LIR sites will surface it.
+        for local in builder.locals.iter_mut() {
+            let is_ptr = matches!(self.type_registry.get(local.type_id),
+                Some(crate::ir::types::GirType::Ptr(_) | crate::ir::types::GirType::MutPtr(_)));
+            local.slot_kind = if is_ptr {
+                if local.ownership.is_ref() {
+                    crate::ir::SlotKind::BorrowedPtr
+                } else {
+                    crate::ir::SlotKind::OwnedPtr
+                }
+            } else {
+                crate::ir::SlotKind::Value
+            };
+        }
     }
 
     // ── Copy-on-Write alias management ────────────────────────────────
