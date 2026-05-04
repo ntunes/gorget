@@ -545,6 +545,18 @@ fn lower_var_decl(
                         // Track that the source has been borrowed-from.
                         // If we later `return source`, the clone is needed because
                         // the target shares the source's heap data.
+                        //
+                        // Cannot use the typed `set_view_of(local_id, place.local)`
+                        // channel here: ViewOf flushes to OwnershipState::MaybeBorrowed
+                        // which the LIR backend treats as Ptr ABI (SlotLoad → void*).
+                        // The LHS here is a value-type GorgetString slot (32-byte
+                        // shallow copy that aliases source's heap data) — NOT a Ptr.
+                        // Tagging it ViewOf produces a slot/local-type mismatch in
+                        // C codegen ("incompatible types when assigning to type
+                        // 'void *' from type 'Str'"). ViewOf models cap=0 string
+                        // views (true byte-pointer slices into another buffer),
+                        // which are a different structural shape than this
+                        // value-aliasing case.
                         ctx.mark_string_borrow_source(place.local);
                         assign_mode = AssignMode::Borrow;
                     }

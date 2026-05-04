@@ -240,6 +240,25 @@ pub struct FunctionState {
     /// A local in this set has at least one other local sharing its heap data.
     /// Used by the return path: if the returned named local is NOT in this set,
     /// its string data is not shared → safe to move without cloning.
+    ///
+    /// **Phase D4 retirement attempt (2026-05-04, reverted).** The doc maps this
+    /// sidecar to `LocalOwnershipState::ViewOf { source }`. Probe outcome:
+    /// genuine gating — ViewOf flushes to `OwnershipState::MaybeBorrowed`,
+    /// which the LIR backend's `lower_place_addr` treats as a Ptr ABI
+    /// (`SlotLoad → void*` instead of `SlotAddr → Str*`). Tagging Branch A's
+    /// value-type LHS (a 32-byte GorgetString slot holding a shallow copy of
+    /// the source's `{data, cap, len, alloc}`) as ViewOf produces a slot/local
+    /// type mismatch in C codegen ("incompatible types when assigning to type
+    /// 'void *' from type 'Str'"). The structural difference: ViewOf models
+    /// cap=0 byte-slice views (a Str whose data field points into another
+    /// buffer), whereas this sidecar tracks value-aliasing — a full struct
+    /// copy that shares the heap region with the source. Both answer "if I
+    /// return X, must I clone?" but model different invariants. Retirement
+    /// requires either: (a) `flush_ownership_to_locals` leaving ViewOf as
+    /// Owned for value-typed Str locals, or (b) a separate
+    /// `LocalOwnershipState::SharedHeap { other }` variant that flushes to
+    /// Owned but propagates the same return-path signal. See TODO entry on
+    /// CoW materialization for related work.
     pub string_borrow_sources: rustc_hash::FxHashSet<LocalId>,
     /// When true, pattern extraction of string fields skips cloning because
     /// the scrutinee is dead and BOTH the scrutinee copy AND the original

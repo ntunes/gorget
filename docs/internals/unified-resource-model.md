@@ -545,11 +545,12 @@ This collapses the existing 7-variant `LocalOwnershipState`, the 3-variant `Owne
 |---|---|
 | `local_ownership[l] = BareParam` + `ownership = Ref` | `Borrowed { origin: Param(p), mutability: Shared }` |
 | `local_ownership[l] = CollectionRef { collection }` | `Borrowed { origin: CollectionElement(c), mutability: Shared }` |
-| `local_ownership[l] = ViewOf { source }` + `string_borrow_sources.insert(source)` | `View { source: Local(s) }` |
+| `local_ownership[l] = ViewOf { source }` (cap=0 byte-slice via `slice/trim/...`) | `View { source: Local(s) }` |
+| `string_borrow_sources.insert(source)` (Branch A: `String b = a` 32-byte shallow copy) | `View { source: Local(s) }` *with a value-aliasing variant* — see retirement note |
 | `mut_capture_locals.contains(l)` (param `&` or `!`) | `Borrowed { origin: Param(p), mutability: Unique }` |
 | `cow_ptr_params[l] = source` | absorbed into `Borrowed { origin, … }` |
 
-The `string_borrow_sources` set disappears: "has X been borrowed-from?" becomes a typed walk over `func.locals` matching `Borrowed { origin: Local(s), .. } | View { source: Local(s) }` — and is constant-time if we keep an inverted `borrowed_by` index next to it.
+**`string_borrow_sources` retirement gating (probed 2026-05-04, deferred).** The doc treats `ViewOf` and `string_borrow_sources` as siblings unifying to one `View { source }` variant, but today's `LocalOwnershipState::ViewOf` and the sidecar model **structurally different invariants** at the post-lowering layer: ViewOf flushes to `OwnershipState::MaybeBorrowed`, which the LIR backend's `lower_place_addr` reads as Ptr ABI (`SlotLoad → void*`). That's correct for cap=0 byte-slice views (the Str's `.data` does point into another buffer, the local IS a 32-byte struct whose `.data` field aliases another buffer's bytes). It is **wrong** for Branch A's value-aliasing case, where the LHS local holds a full 32-byte shallow copy of the source's `{data, cap, len, alloc}` and IS the new owner — not a pointer into anything. Tagging Branch A's LHS as ViewOf surfaces as a C codegen type mismatch ("incompatible types when assigning to type 'void *' from type 'Str'") at the drop site. Both invariants answer the same question on the read side ("if I move/return X, is its heap data shared with another live local?"), but the LIR-side encoding diverges. Retirement requires either (a) `flush_ownership_to_locals` distinguishing cap=0-view ViewOf from value-aliasing ViewOf and flushing only the former to MaybeBorrowed; or (b) a separate `LocalOwnershipState::SharedHeap { other }` variant that flushes to Owned but participates in `views_of_source` queries. Sidecar kept until §6.6's Stage D5 lands the typed unification on `Local.ownership` — at that point `View { source }` is a single shape and the Branch A / cap=0-view distinction lives on the **flush rule**, not the IR encoding.
 
 ### 6.3 First-class `BorrowOrigin`
 
