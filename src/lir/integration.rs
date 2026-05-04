@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::lir::{display, lower, optimize, ssa, validate};
+    use crate::lir::{display, lower, optimize, split_edges, ssa, validate};
     use crate::ir::lowering::{lower_module as gir_lower, LoweringOptions};
     use crate::parser::Parser;
 
@@ -25,8 +25,10 @@ mod tests {
         // GIR lowering
         let gir = gir_lower(&module, &result, &LoweringOptions::default());
 
-        // GIR → LIR lowering
+        // GIR → LIR lowering, then critical-edge split (Tier E §8.2) so SSA
+        // construction sees a critical-edge-free CFG.
         let mut lir = lower::lower_module(&gir);
+        split_edges::split_critical_edges_module(&mut lir);
 
         // Run SSA construction on each function
         for func in &mut lir.functions {

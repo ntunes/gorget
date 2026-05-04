@@ -35,6 +35,10 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     for func in &mut module.functions {
         optimize_function(func, &mut stats);
     }
+    // Validate the post-DCE/fold/CSE shape before drop-elaboration so any
+    // shape regression introduced by the inner fixed-point loop surfaces
+    // attributed to the optimizer rather than to drop_elab. Tier E §8.3.
+    super::validate::assert_module_valid(module, "optimize-fixpoint");
     // Drop elaboration (V1–V4).
     // Runs after the main optimization loop so DCE has already cleaned up the LIR.
     let elab = super::drop_elab::elaborate_drops(module);
@@ -42,6 +46,7 @@ pub fn optimize_module(module: &mut LirModule) -> OptStats {
     stats.memsets_removed = elab.memsets_removed;
     stats.drop_flags_inserted = elab.flags_inserted;
     stats.move_slots_removed = elab.move_slots_removed;
+    super::validate::assert_module_valid(module, "drop-elaboration");
     // Follow-up DCE to remove orphaned SlotAddr/IConst values left by deleted guards
     // and Memsets.
     if elab.total() > 0 || elab.flags_inserted > 0 {

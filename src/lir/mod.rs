@@ -10,6 +10,7 @@ mod integration;
 pub mod lower;
 pub mod optimize;
 pub mod queries;
+pub mod split_edges;
 pub mod ssa;
 pub mod types;
 pub mod validate;

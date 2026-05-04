@@ -513,9 +513,14 @@ fn try_build_ir(
             return Ok(PathBuf::from(stem));
         }
         let no_opt = std::env::var("LIR_NO_OPT").is_ok();
+        // Tier E §8.2: split critical edges before SSA so Braun et al. SSA
+        // construction (which assumes no critical edges) can run.
+        gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
         if !no_opt {
             let stats = gorget::lir::optimize::optimize_module(&mut lir_module);
             eprintln!("; LIR opt: {} dead fns, {} dead globals, {} dead insts, {} folded, {} copies prop'd, {} drops elab'd, {} memsets rm'd, {} flags, {} moves",
@@ -523,12 +528,17 @@ fn try_build_ir(
                 stats.dead_instructions_eliminated, stats.constants_folded,
                 stats.copies_propagated, stats.drops_elaborated, stats.memsets_removed,
                 stats.drop_flags_inserted, stats.move_slots_removed);
+            gorget::lir::validate::assert_module_valid(&lir_module, "optimize");
         }
         gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "compute-types");
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
         if !errors.is_empty() {
@@ -548,20 +558,31 @@ fn try_build_ir(
     // Dump C code generated from LIR if requested
     if emit_c_lir {
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
+        // Tier E §8.2: critical-edge split before SSA construction.
+        gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
         gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
         // Optimize runs post-BIR so synth fns (when present) get DCE/fold/CSE.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
         let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
         print!("{c_code}");
         let input_path = Path::new(filename);
@@ -577,24 +598,35 @@ fn try_build_ir(
         let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
         lir_module.target = target.to_string();
         lir_module.clone_stats = clone_stats;
+        // Tier E §8.2: critical-edge split before SSA construction.
+        gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
         for func in &mut lir_module.functions {
             gorget::lir::ssa::construct_ssa(func);
         }
+        gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
         gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
 
         // Save metadata we need after handing ownership to BirModule.
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
         // Optimize post-BIR so synth fns get DCE/fold/CSE, and so drop-elab
         // sees the expanded primitives from canonical ops (HofExpand, EnumInit,
         // etc.) rather than the opaque high-level shape.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
 
         // Hot-reload's two-phase build (host binary + guest .dylib) leans on
         // C-level syntax — `generate_hot_reload_split` searches for `int main(`
@@ -1323,20 +1355,27 @@ fn try_profile(
     let mut lir_module = gorget::lir::lower::lower_module(&gir_module);
     let lir_lower_ms = t.elapsed().as_secs_f64() * 1000.0;
 
-    // Phase 7: SSA construction
+    // Phase 7: SSA construction (with pre-pass critical-edge splitting; §8.2)
     let t = Instant::now();
+    gorget::lir::split_edges::split_critical_edges_module(&mut lir_module);
+    gorget::lir::validate::assert_module_valid(&lir_module, "lir-lowering");
     for func in &mut lir_module.functions {
         gorget::lir::ssa::construct_ssa(func);
     }
     let lir_ssa_ms = t.elapsed().as_secs_f64() * 1000.0;
+    gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
 
     // Phase 8a: LIR value-types (pre-BIR) — optimize moves to post-BIR
     // so synth fns benefit from DCE/fold/CSE.
     gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
+    gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
     gorget::lir::types::wire_collection_bridges(&mut lir_module);
+    gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
     gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
+    gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
     gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+    gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
     let lir_functions = lir_module.functions.len();
     let lir_instructions: usize = lir_module.functions.iter()
         .map(|f| f.blocks.iter().map(|b| b.insts.len()).sum::<usize>())
@@ -1346,9 +1385,12 @@ fn try_profile(
     let t = Instant::now();
     let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
         .map_err(|e| format!("BIR lowering failed: {e}"))?;
+    gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
     let lir_opt_stats = gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
+    gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
     gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
     gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+    gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
     let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();
     let backend = gorget::backend::c_lir::CLirBackend;

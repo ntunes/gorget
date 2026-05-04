@@ -29,6 +29,13 @@ impl std::fmt::Display for LirError {
 }
 
 /// Validate a full LIR module. Returns a list of errors (empty = valid).
+///
+/// Checks structural invariants plus CFG / SSA-form invariants (no critical
+/// edges, reducible CFG, every value use dominated by its definition).
+/// The SSA invariants are required post-`construct_ssa`; the critical-edge
+/// invariant is also required pre-SSA so `construct_ssa` (Braun et al.)
+/// and a future WASM backend (structured CFG) both have what they need.
+/// See unified-resource-model.md Tier E §8.2.
 pub fn validate_module(module: &LirModule) -> Vec<LirError> {
     let mut errors = Vec::new();
 
@@ -37,7 +44,69 @@ pub fn validate_module(module: &LirModule) -> Vec<LirError> {
         validate_function(func, module, &mut errors);
     }
 
+    // Tier E §8.2 — CFG + SSA invariants. Run after the structural checks
+    // so simpler errors surface first when both fire on the same module.
+    for func in &module.functions {
+        check_no_critical_edges(func, &mut errors);
+        check_reducible_cfg(func, &mut errors);
+        errors.extend(validate_ssa_dominance(func));
+    }
+
     errors
+}
+
+/// Type alias for a validator: takes a borrowed module, returns a list of
+/// errors. Empty list ⇒ this validator is satisfied.
+pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
+
+/// Registry of per-pass validators. Each entry runs after every LIR pass when
+/// `assert_module_valid` is active (debug builds or `GG_VALIDATE_PASSES` set).
+///
+/// Adding a new shape invariant: append a `fn(&LirModule) -> Vec<LirError>`
+/// here. Phase C's `validate_resource_moves` (§5.8 of unified-resource-model.md)
+/// plugs in via this exact registry — same shape, same per-pass invocation.
+const VALIDATORS: &[ValidatorFn] = &[validate_module];
+
+/// Assert that `module` satisfies every registered LIR invariant. Panics with
+/// a descriptive message tagged by `after` (the name of the pass that just
+/// completed) if any validator reports an error.
+///
+/// Cost model: in debug builds this runs unconditionally — cheap relative to
+/// debug compilation overall. In release builds it is a no-op unless the
+/// `GG_VALIDATE_PASSES` environment variable is set, which lets release
+/// integration runs opt in to catching shape regressions without paying the
+/// cost on the default release path.
+///
+/// See unified-resource-model.md §8.3 (Tier E).
+#[inline]
+pub fn assert_module_valid(module: &LirModule, after: &str) {
+    // The fast path is "debug build, no allocation" — but we still want
+    // release builds to be opt-in via env var, so the dispatch is a single
+    // cfg!() check + a (cached-by-getenv) env-var probe in release.
+    if cfg!(debug_assertions) {
+        run_validators(module, after);
+    } else if std::env::var_os("GG_VALIDATE_PASSES").is_some() {
+        run_validators(module, after);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn run_validators(module: &LirModule, after: &str) {
+    for validator in VALIDATORS {
+        let errors = validator(module);
+        if !errors.is_empty() {
+            // Render every error so the user sees the full picture, not just
+            // the first one. The leading line names the pass; subsequent lines
+            // are the LirError Display output ("in @fn bbN: message").
+            let mut msg = format!("LIR invariant violated after {after}:");
+            for e in &errors {
+                msg.push_str("\n  ");
+                msg.push_str(&e.to_string());
+            }
+            panic!("{msg}");
+        }
+    }
 }
 
 fn validate_function(func: &LirFunction, module: &LirModule, errors: &mut Vec<LirError>) {
@@ -326,6 +395,177 @@ fn validate_terminator(
                 check_target(*target, args, errors);
             }
             check_target(*default, default_args, errors);
+        }
+    }
+}
+
+/// Assert that no critical edges remain in `func`'s CFG.
+///
+/// A *critical edge* runs from a block with multiple successors to a block
+/// with multiple predecessors. The pre-SSA `split_critical_edges` pass
+/// eliminates them; this validator catches regressions if a later pass
+/// reintroduces one (e.g. a block-merging optimization that fuses non-linear
+/// shapes). Both pre- and post-SSA, the property must hold — Braun et al.
+/// SSA construction relies on it, and so does any structured-CFG backend.
+pub fn check_no_critical_edges(func: &LirFunction, errors: &mut Vec<LirError>) {
+    let n = func.blocks.len();
+    if n == 0 {
+        return;
+    }
+    let mut pred_count = vec![0u32; n];
+    for block in &func.blocks {
+        for succ in block.terminator.successors() {
+            let i = succ.0 as usize;
+            if i < n {
+                pred_count[i] += 1;
+            }
+        }
+    }
+    for block in &func.blocks {
+        let succs = block.terminator.successors();
+        if succs.len() <= 1 {
+            continue;
+        }
+        let nsuccs = succs.len();
+        for succ in succs {
+            let i = succ.0 as usize;
+            if i < n && pred_count[i] > 1 {
+                errors.push(LirError {
+                    func: func.name.clone(),
+                    block: Some(block.id),
+                    message: format!(
+                        "critical edge {} → {} (source has {nsuccs} succs, target has {} preds)",
+                        block.id,
+                        succ,
+                        pred_count[i],
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// Assert that `func`'s CFG is reducible: every back-edge in any DFS from
+/// the entry block targets a node that dominates its source.
+///
+/// WASM's structured control flow can encode reducible CFGs directly via
+/// nested `loop`/`block` constructs; irreducible CFGs require a relooper or
+/// node-splitting. We enforce reducibility at the LIR level so the WASM
+/// backend (and any future structured-CFG consumer) can assume it.
+pub fn check_reducible_cfg(func: &LirFunction, errors: &mut Vec<LirError>) {
+    let n = func.blocks.len();
+    if n == 0 {
+        return;
+    }
+
+    // Compute dominators (Cooper-Harvey-Kennedy). Same shape as
+    // `validate_ssa_dominance` so the two stay consistent.
+    let mut preds: Vec<Vec<usize>> = vec![vec![]; n];
+    for block in &func.blocks {
+        let idx = block.id.0 as usize;
+        for succ in block.terminator.successors() {
+            let s = succ.0 as usize;
+            if s < n {
+                preds[s].push(idx);
+            }
+        }
+    }
+    let rpo = compute_rpo(n, &func.blocks);
+    let mut rpo_order: Vec<usize> = vec![usize::MAX; n];
+    for (pos, &block_idx) in rpo.iter().enumerate() {
+        rpo_order[block_idx] = pos;
+    }
+    let mut idom: Vec<usize> = vec![usize::MAX; n];
+    idom[rpo[0]] = rpo[0];
+    let intersect = |mut a: usize, mut b: usize, idom: &[usize], rpo_order: &[usize]| -> usize {
+        while a != b {
+            while rpo_order[a] > rpo_order[b] {
+                a = idom[a];
+            }
+            while rpo_order[b] > rpo_order[a] {
+                b = idom[b];
+            }
+        }
+        a
+    };
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &b in &rpo[1..] {
+            let mut new_idom = usize::MAX;
+            for &p in &preds[b] {
+                if idom[p] != usize::MAX {
+                    new_idom = if new_idom == usize::MAX {
+                        p
+                    } else {
+                        intersect(new_idom, p, &idom, &rpo_order)
+                    };
+                }
+            }
+            if new_idom != usize::MAX && idom[b] != new_idom {
+                idom[b] = new_idom;
+                changed = true;
+            }
+        }
+    }
+    let dominates = |d: usize, b: usize| -> bool {
+        let mut cur = b;
+        loop {
+            if cur == d {
+                return true;
+            }
+            if idom[cur] == cur || idom[cur] == usize::MAX {
+                return false;
+            }
+            cur = idom[cur];
+        }
+    };
+
+    // Classify edges via a structural DFS. Edge `u → v` is a *back-edge*
+    // when `v` is an ancestor of `u` in the DFS tree (still on the stack).
+    // Reducible iff every back-edge target dominates its source.
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+    let mut color: Vec<Color> = (0..n).map(|_| Color::White).collect();
+    let entry = rpo[0];
+    let mut stack: Vec<(usize, usize)> = vec![(entry, 0)];
+    color[entry] = Color::Gray;
+
+    while let Some((u, i)) = stack.last().copied() {
+        let succs = func.blocks[u].terminator.successors();
+        if i < succs.len() {
+            stack.last_mut().unwrap().1 = i + 1;
+            let v = succs[i].0 as usize;
+            if v >= n {
+                continue;
+            }
+            match color[v] {
+                Color::White => {
+                    color[v] = Color::Gray;
+                    stack.push((v, 0));
+                }
+                Color::Gray => {
+                    if !dominates(v, u) {
+                        errors.push(LirError {
+                            func: func.name.clone(),
+                            block: Some(BlockId(u as u32)),
+                            message: format!(
+                                "irreducible CFG: back-edge bb{u} → bb{v} but \
+                                 bb{v} does not dominate bb{u}"
+                            ),
+                        });
+                    }
+                }
+                Color::Black => {
+                    // Forward or cross edge — fine.
+                }
+            }
+        } else {
+            color[u] = Color::Black;
+            stack.pop();
         }
     }
 }
@@ -734,6 +974,38 @@ mod tests {
     }
 
     #[test]
+    fn assert_module_valid_passes_for_valid_module() {
+        // Should not panic on a structurally valid module.
+        let module = make_valid_module();
+        assert_module_valid(&module, "test_pass");
+    }
+
+    #[test]
+    #[should_panic(expected = "LIR invariant violated after test_pass")]
+    fn assert_module_valid_panics_with_pass_name() {
+        // Construct a module with an invalid jump target so the structural
+        // validator reports an error and `assert_module_valid` panics.
+        let mut module = LirModule::new();
+        let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
+        let bb = func.add_block();
+        func.block_mut(bb).terminator = Term::Jump(BlockId(99), vec![]);
+        module.add_function(func);
+        assert_module_valid(&module, "test_pass");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid bb99")]
+    fn assert_module_valid_includes_validator_error() {
+        // Verify the validator's per-error text reaches the panic message.
+        let mut module = LirModule::new();
+        let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
+        let bb = func.add_block();
+        func.block_mut(bb).terminator = Term::Jump(BlockId(99), vec![]);
+        module.add_function(func);
+        assert_module_valid(&module, "test_pass");
+    }
+
+    #[test]
     fn ssa_dominance_passes_diamond_cfg() {
         // bb0 → bb1, bb2 → bb3 (diamond)
         let mut func = LirFunction::new("diamond".into(), vec![], LirType::I64);
@@ -769,5 +1041,169 @@ mod tests {
 
         let errors = validate_ssa_dominance(&func);
         assert!(errors.is_empty(), "errors: {errors:?}");
+    }
+
+    // ── Tier E §8.2 — critical edges, reducibility, dominance ──────────────
+
+    /// CFG with one critical edge (bb0 →then→ bb2): bb0 has 2 succs,
+    /// bb2 has 2 preds via the bb1 fall-through path.
+    fn make_critical_edge_cfg() -> LirFunction {
+        let mut func = LirFunction::new("ce".into(), vec![], LirType::Void);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+
+        let v = func.next_value();
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v,
+            then_block: bb2, then_args: vec![],
+            else_block: bb1, else_args: vec![],
+        };
+        func.block_mut(bb1).terminator = Term::Jump(bb2, vec![]);
+        func.block_mut(bb2).terminator = Term::RetVoid;
+        func
+    }
+
+    #[test]
+    fn critical_edge_detected_and_then_split() {
+        let mut func = make_critical_edge_cfg();
+        let mut errs = Vec::new();
+        check_no_critical_edges(&func, &mut errs);
+        assert_eq!(errs.len(), 1, "exactly one critical edge expected, got {errs:?}");
+        assert!(errs[0].message.contains("critical edge"));
+
+        crate::lir::split_edges::split_critical_edges(&mut func);
+        let mut errs = Vec::new();
+        check_no_critical_edges(&func, &mut errs);
+        assert!(errs.is_empty(), "post-split CFG should have no critical edges: {errs:?}");
+    }
+
+    #[test]
+    fn clean_diamond_has_no_critical_edges() {
+        let mut func = LirFunction::new("clean".into(), vec![], LirType::Void);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block();
+        let v = func.next_value();
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        func.block_mut(bb1).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb2).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb3).terminator = Term::RetVoid;
+
+        let mut errs = Vec::new();
+        check_no_critical_edges(&func, &mut errs);
+        assert!(errs.is_empty(), "diamond is critical-edge-free: {errs:?}");
+    }
+
+    #[test]
+    fn reducible_loop_passes() {
+        // bb0 → bb1 (loop header) ↔ bb1 (self-loop), bb1 → bb2 (exit).
+        let mut func = LirFunction::new("loop".into(), vec![], LirType::Void);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let v = func.next_value();
+        func.block_mut(bb0).terminator = Term::Jump(bb1, vec![]);
+        func.block_mut(bb1).insts.push(Inst::BoolConst { dst: v, value: true });
+        func.block_mut(bb1).terminator = Term::Branch {
+            cond: v,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        func.block_mut(bb2).terminator = Term::RetVoid;
+
+        let mut errs = Vec::new();
+        check_reducible_cfg(&func, &mut errs);
+        assert!(errs.is_empty(), "self-loop is reducible: {errs:?}");
+    }
+
+    #[test]
+    fn irreducible_cfg_detected() {
+        // Classic irreducible: two entry points (bb1 and bb2) into a cycle
+        // bb1 ↔ bb2; neither bb1 nor bb2 dominates the other.
+        let mut func = LirFunction::new("irreducible".into(), vec![], LirType::Void);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block(); // exit
+        let v = func.next_value();
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        let v1 = func.next_value();
+        func.block_mut(bb1).insts.push(Inst::BoolConst { dst: v1, value: true });
+        func.block_mut(bb1).terminator = Term::Branch {
+            cond: v1,
+            then_block: bb2, then_args: vec![],
+            else_block: bb3, else_args: vec![],
+        };
+        let v2 = func.next_value();
+        func.block_mut(bb2).insts.push(Inst::BoolConst { dst: v2, value: true });
+        func.block_mut(bb2).terminator = Term::Branch {
+            cond: v2,
+            then_block: bb1, then_args: vec![],
+            else_block: bb3, else_args: vec![],
+        };
+        func.block_mut(bb3).terminator = Term::RetVoid;
+
+        let mut errs = Vec::new();
+        check_reducible_cfg(&func, &mut errs);
+        assert!(
+            errs.iter().any(|e| e.message.contains("irreducible CFG")),
+            "expected irreducibility error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn dominance_violation_detected_by_validate_module() {
+        // v_one defined in bb1 (then-branch) and used in bb3, but bb3 is
+        // also reachable from bb2 — bb1 does NOT dominate bb3, so the use
+        // is illegal in SSA.
+        let mut module = LirModule::new();
+        let mut func = LirFunction::new("baddom".into(), vec![], LirType::I64);
+        let bb0 = func.add_block();
+        let bb1 = func.add_block();
+        let bb2 = func.add_block();
+        let bb3 = func.add_block();
+
+        let v_cond = func.next_value();
+        let v_one = func.next_value();
+        func.block_mut(bb0).insts.push(Inst::BoolConst { dst: v_cond, value: true });
+        func.block_mut(bb0).terminator = Term::Branch {
+            cond: v_cond,
+            then_block: bb1, then_args: vec![],
+            else_block: bb2, else_args: vec![],
+        };
+        func.block_mut(bb1).insts.push(Inst::IConst { dst: v_one, ty: LirType::I64, value: 1 });
+        func.block_mut(bb1).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb2).terminator = Term::Jump(bb3, vec![]);
+        func.block_mut(bb3).terminator = Term::Ret(v_one);
+        module.add_function(func);
+
+        let errors = validate_module(&module);
+        assert!(
+            errors.iter().any(|e| e.message.contains("does not dominate")),
+            "expected dominance violation, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_module_accepts_split_critical_edges() {
+        let mut module = LirModule::new();
+        let mut func = make_critical_edge_cfg();
+        crate::lir::split_edges::split_critical_edges(&mut func);
+        module.add_function(func);
+        let errors = validate_module(&module);
+        assert!(errors.is_empty(), "post-split CFG should validate cleanly: {errors:?}");
     }
 }

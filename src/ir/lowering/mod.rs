@@ -2884,6 +2884,8 @@ mod tests {
     /// Generate C code from a GIR module via the LIR → BIR pipeline.
     fn gir_to_lir_c(gir: &crate::ir::Module) -> String {
         let mut lir_module = crate::lir::lower::lower_module(gir);
+        // Tier E §8.2: critical-edge split before SSA construction.
+        crate::lir::split_edges::split_critical_edges_module(&mut lir_module);
         for func in &mut lir_module.functions {
             crate::lir::ssa::construct_ssa(func);
         }
