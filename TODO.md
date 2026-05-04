@@ -5,7 +5,7 @@
 - ~~**Phase C2 — fix highest-frequency resource-move violations**~~ **CLOSED 2026-05-04** — see DONE entry "§6.8 + Phase C C4 closed". Validator violations 11447 → 0 across 1100-fixture sweep. The for-string cluster fell out via the SlotKind axis migration; C4 (validator: warning → fatal panic) shipped same day. Phase C invariant now enforced unconditionally.
 
 
-- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04 after CoW chain fix added an 8th branch). 475-line function (`src/ir/lowering/stmts/mod.rs:242-717`) with 7+ branches reading 4 sidecar predicates (`named_local`, `cow_unsafe_at`, `drops.is_registered`, `needs_drop`) that are mostly liveness proxies.
+- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, branch E shipped 2026-05-04). 475-line function (`src/ir/lowering/stmts/mod.rs:242-717`) with 7 branches reading 4 sidecar predicates (`named_local`, `cow_unsafe_at`, `drops.is_registered`, `needs_drop`) that are mostly liveness proxies.
 
   **Refined plan (2026-05-04):**
 
@@ -42,13 +42,13 @@
   - B (line 545, named non-resource with clone_fn, e.g. Str→GorgetString) → emit Clone (cross-type case, may need its own arm)
   - C (line 566, named resource + CoW-safe) → arm 4 (CoW alias)
   - D (line 590, named resource + CoW-unsafe) → arm 2 (Owned + live → Clone fallback)
-  - E (line ~614, view-returning temp from #45 fix) → arm 5 (View → Clone)
+  - **E (~line 624, view-returning result) → arm 5 (View → Clone). SHIPPED 2026-05-04** — typed `LocalOwnership::View` match, sidecar `view_returning_temps` retired (commit 9dc2cf4d). Required first fixing cow_materialize_view's shallow-copy bug (Move mode at the clone-to-owned assign) so View-tagging unnamed temps was safe.
   - F (line ~620, drop-registered temp or droppable temp) → arm 3 (Owned + dead → Move)
   - G (safety net) → catch-all
 
-  **Estimated 1-2 days.** Risk: medium — touches CoW alias creation, mark_string_borrow_source, drops.unregister, register_local re-binding. Validation: full integration sweep + cow_materialization_points fixture must stay green at every step. Migrate one branch at a time by replacing it with the typed-match arm and verifying integration.
+  **Estimated 1-2 days for the remaining 6 branches; honest scope is closer to a week given the elegance bar.** Risk: medium — touches CoW alias creation, mark_string_borrow_source, drops.unregister, register_local re-binding. Validation: full integration sweep + cow_materialization_points fixture must stay green at every step. Migrate one branch at a time by replacing it with the typed-match arm and verifying integration. **The branch-E migration showed the right pattern: when typed-state migration regresses, the regression is almost always a downstream consumer with a latent correctness bug that the sidecar was hiding — fix the consumer, then migrate. That's the elegance step, not a workaround.**
 
-  **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently. [added: 2026-05-01, plan refined: 2026-05-04]
+  **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently. [added: 2026-05-01, plan refined: 2026-05-04, branch E shipped: 2026-05-04]
 
 - **Phase A residuals — 3 follow-ups left after the 13-commit consolidation (2026-05-02).** The 9-site migration off name-prefix matching landed; three pieces remain, each with different cost/value:
 
