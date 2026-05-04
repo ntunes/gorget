@@ -17631,6 +17631,30 @@ all boundaries ok",
 }
 
 #[test]
+fn cow_materialization_points() {
+    run_gg(
+        "cow_materialization_points.gg",
+        "\
+p1a x=hello
+p1c y=hello
+p2 src.len=2 alias.len=3
+p3a h.name=hello
+p3c h.name=hello
+p3b o=hello
+p3c o=hello
+p4a dst[0]=hello
+p4c dst[0]=hello
+p5a r1=hello
+p5c r2=world
+consumed=hello
+consumed=hello
+p7a h.name=hello
+p7c h.name=hello
+all materialization points ok",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }
