@@ -552,6 +552,23 @@ fn lower_var_decl(
                     }
                     // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
                     // still clone, not CoW alias (different types, not an alias relationship).
+                    //
+                    // Phase D4 probe (2026-05-04): removing the
+                    // is_named_local guard regressed 16 fixtures —
+                    // unnamed temps of types like Result[Config,
+                    // String] hit `clone_fn_for_ptr.is_some()` true
+                    // (the type-upgrade scan sets a clone fn on
+                    // recursively-droppable enums) and were routed
+                    // through this cross-type-clone path when they
+                    // should fall through to F's Move path. Unlike
+                    // the view_returning_temps case, this guard is
+                    // not hiding a downstream consumer bug — it's a
+                    // genuine "this branch only applies to named
+                    // sources" gate. Keeping the guard until either
+                    // (a) is_resource_type is widened to include
+                    // enum-with-resource-payload (so the !is_resource
+                    // check filters those), or (b) the cross-type
+                    // axis is split into a separate explicit arm.
                     else if ctx.is_named_local(place.local)
                         && !ctx.type_registry.is_resource_type(rhs_type)
                         && ctx.clone_fn_for_ptr(rhs_type).is_some()
