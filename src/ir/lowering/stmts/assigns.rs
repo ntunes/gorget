@@ -219,7 +219,6 @@ pub(super) fn lower_assign(
                         projections: vec![Projection::Deref],
                     };
                     builder.assign(deref_place, operand.clone());
-                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
                     // Unregister RHS temp — the deref store took ownership.
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         if place.projections.is_empty() && !ctx.is_named_local(place.local) {
@@ -289,7 +288,6 @@ pub(super) fn lower_assign(
                             }
                         }
                     }
-                    super::maybe_emit_field_move_zero(ctx, builder, &operand);
                     // Propagate ownership: if RHS local owned its data (call result),
                     // the target local now owns the data after move/clone.
                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
@@ -517,7 +515,6 @@ fn emit_field_store_with_cleanup(
             ctx.move_zero_and_mark(builder, p.local);
         }
     }
-    super::maybe_emit_field_move_zero(ctx, builder, rhs);
 }
 
 /// If the RHS is a bare GorgetString local being assigned to a GorgetString field,

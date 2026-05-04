@@ -2115,7 +2115,6 @@ pub(super) fn lower_method_call(
         // source local is not the call arg's local.
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
-            ctx.emit_field_origin_zero(builder, place.local);
             ctx.drops.mark_moved(place.local);
         }
 
@@ -2166,21 +2165,6 @@ pub(super) fn lower_method_call(
             ctx.move_zero_and_mark(builder, *local);
         }
 
-        // Zero source fields for resource-type args that came from field loads.
-        // This handles e.g. items.push(h.data) where the C backend zeros the temp
-        // but not the source field h.data — the struct's scope-end drop would
-        // double-free the field without this.
-        if is_mutating {
-            for op in &lowered_method_args {
-                if let Operand::Copy(place) | Operand::Move(place) = op {
-                    if place.projections.is_empty()
-                        && is_resource_type_local(place.local, builder, &ctx.type_registry)
-                    {
-                        ctx.emit_field_origin_zero(builder, place.local);
-                    }
-                }
-            }
-        }
         // Drain pending_move_zeros from lower_call_arg. These were borrowed
         // (borrow_mut) for the callee; now that the call has returned, zero
         // the source to prevent double-free at scope exit.

@@ -70,18 +70,6 @@ fn callable_local_return_type_bounded(
     }
 }
 
-fn maybe_emit_field_move_zero(
-    ctx: &mut LoweringContext,
-    builder: &mut FunctionBuilder,
-    operand: &Operand,
-) {
-    let source_local = match operand {
-        Operand::Copy(place) | Operand::Move(place) => place.local,
-        _ => return,
-    };
-    ctx.emit_field_origin_zero(builder, source_local);
-}
-
 /// Lower a block of statements.
 pub fn lower_block(
     ctx: &mut LoweringContext,
@@ -90,10 +78,6 @@ pub fn lower_block(
 ) {
     for stmt in &block.stmts {
         lower_stmt(ctx, builder, stmt);
-        // Clear unconsumed field_load_origins. Only VarDecl/Assign consume them
-        // via maybe_emit_field_move_zero. Field loads used as method receivers
-        // (e.g., h.data.push(x)) create dead temps that should not trigger zeroing.
-        ctx.func_state.field_load_origins.clear();
     }
 }
 
@@ -776,8 +760,6 @@ fn lower_var_decl(
                     }
                 }
             }
-            // Emit MoveZero for resource-type field loads to prevent double-free
-            maybe_emit_field_move_zero(ctx, builder, &operand);
         }
 
         Pattern::Tuple(parts) => {
@@ -1339,8 +1321,8 @@ fn lower_return(
         // to transfer ownership to the caller and prevent double-free.
         if !ctx.func_state.move_override_params.is_empty() {
             if let Expr::Identifier(name) = &expr.node {
-                if ctx.func_state.move_override_params.contains(name.as_str()) {
-                    if let Some((local_id, _)) = ctx.lookup_local(name.as_str()) {
+                if let Some((local_id, _)) = ctx.lookup_local(name.as_str()) {
+                    if ctx.func_state.move_override_params.contains(&local_id) {
                         builder.move_zero(crate::ir::instructions::Place {
                             local: local_id,
                             projections: vec![crate::ir::instructions::Projection::Deref],

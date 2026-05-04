@@ -197,17 +197,15 @@ pub struct FunctionState {
     /// Accumulated `assert return` postcondition expressions.
     /// Checked at every `return` site before the value is returned.
     pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
-    /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
-    /// The return path must zero the source through the pointer to prevent caller double-free.
-    pub move_override_params: std::collections::HashSet<String>,
+    /// Locals corresponding to params upgraded from Borrow to Move in generic
+    /// functions that return them directly. The return path zeroes the source
+    /// through the pointer to prevent caller double-free.
+    pub move_override_params: rustc_hash::FxHashSet<LocalId>,
     /// Name of the function currently being lowered (for tracking consumed params).
     pub current_fn_name: String,
     /// True when the current method has `!self` (consuming self). Field loads
     /// from self use MoveZeroSource for resource fields instead of Ptr borrows.
     pub consuming_self: bool,
-    /// Maps temp locals from field_load → (source_field_place, field_type).
-    /// Used by VarDecl/Assign to emit MoveZero after extracting resource-type fields.
-    pub field_load_origins: FxHashMap<LocalId, (crate::ir::instructions::Place, TypeId)>,
     /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
     /// Used by the return path to MoveZero element locals when returning a tuple.
     pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
@@ -2410,19 +2408,6 @@ impl<'a> LoweringContext<'a> {
         }
         // The old ref_local is now dead
         self.unset_ownership(ref_local);
-    }
-
-    /// If the given local came from a resource-type field load, emit MoveZero for the
-    /// source field to prevent double-free. Call this whenever a field_load temp is
-    /// consumed (via assignment, function call, push, etc.).
-    pub fn emit_field_origin_zero(
-        &mut self,
-        builder: &mut crate::ir::builder::FunctionBuilder,
-        local: LocalId,
-    ) {
-        if let Some((field_place, _)) = self.func_state.field_load_origins.remove(&local) {
-            builder.move_zero(field_place);
-        }
     }
 
     /// Populate the struct_fields cache from the TypeRegistry.

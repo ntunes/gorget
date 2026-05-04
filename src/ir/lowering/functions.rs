@@ -1156,9 +1156,6 @@ pub fn lower_generic_function(
     ctx.clear_locals();
     ctx.func_state.current_fn_name = mangled_name.to_string();
     ctx.callable_return_types_clear();
-    // Store move_override_params in context so return-statement lowering can zero sources.
-    // Must be set AFTER clear_locals() which resets it.
-    ctx.func_state.move_override_params = move_override_params.clone();
 
     let mut local_idx: u32 = 0;
     for p in template.params.iter() {
@@ -1168,13 +1165,17 @@ pub fn lower_generic_function(
         local_idx += 1;
         let local_id = LocalId(local_idx);
         let base_type = substitute_and_map_type(ctx, &p.node.type_.node, &subs);
-        let ownership = if move_override_params.contains(&p.node.name.node) {
+        let is_move_override = move_override_params.contains(&p.node.name.node);
+        let ownership = if is_move_override {
             Ownership::Move
         } else {
             p.node.ownership
         };
         let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.register_local(&p.node.name.node, local_id, gir_type);
+        if is_move_override {
+            ctx.func_state.move_override_params.insert(local_id);
+        }
         if ctx.is_ref_param(base_type, ownership) {
             ctx.set_bare_param(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
