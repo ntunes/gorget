@@ -526,8 +526,7 @@ fn lower_var_decl(
             // Branches below progressively read these instead of the legacy
             // sidecar predicates (`named_local`, `cow_unsafe_at`,
             // `drops.is_registered`, `needs_drop`) until every arm is expressed
-            // as `(target_resource, source_live, source_own)` plus the orthogonal
-            // `view_returning_temps` axis.
+            // as `(target_resource, source_live, source_own)`.
             let _target_resource = ctx.type_registry.is_resource_type(actual_var_type);
             let _source_live = ctx.source_live_past(&operand, stmt_span, builder);
             let _source_own = ctx.source_ownership(&operand, builder);
@@ -612,16 +611,23 @@ fn lower_var_decl(
                             assign_mode = AssignMode::Move;
                         }
                     }
-                    // CoW chain materialization: source is a view-returning
-                    // temp (trim/slice/strip result that didn't get
-                    // set_view_of due to the named-local guard) feeding a
-                    // value-typed String destination. The temp's bytes are
-                    // a cap=0 view into some upstream container; without a
-                    // clone here, x's view goes dangling once the chain's
-                    // upstream mutates. Emit gorget_string_clone_to_owned
-                    // explicitly. Mirrors the auto-clone path at line ~463
-                    // (Ptr-typed source) for the value-typed-but-View case.
-                    else if ctx.func_state.view_returning_temps.contains(&place.local)
+                    // CoW chain materialization: source is a view of some
+                    // upstream container (LocalOwnership::View — set on
+                    // every result of a view-returning string method:
+                    // trim / slice / strip / substring / str / as_str)
+                    // feeding a value-typed String destination. The view's
+                    // bytes are a cap=0 borrow; without a clone here, x's
+                    // view goes dangling once the chain's upstream
+                    // mutates. Emit gorget_string_clone_to_owned. Mirrors
+                    // the auto-clone path at line ~463 (Ptr-typed source)
+                    // for the value-typed-but-View case.
+                    //
+                    // Phase D4 (2026-05-04): typed read of LocalOwnership
+                    // replaces the legacy view_returning_temps sidecar —
+                    // sidecar deleted after cow_materialize_view's
+                    // shallow-copy bug was fixed (Move mode at the
+                    // clone-to-owned assign).
+                    else if matches!(_source_own, Some(crate::ir::LocalOwnership::View { .. }))
                         && rhs_type == ctx.type_mapper.owned_string_type
                         && actual_var_type == ctx.type_mapper.owned_string_type
                     {

@@ -2200,24 +2200,18 @@ pub(super) fn lower_method_call(
             if let Operand::Copy(ref result_place) | Operand::Move(ref result_place) = result {
                 if result_place.projections.is_empty() {
                     let result_local = result_place.local;
-                    // Track provenance: result borrows from receiver.
-                    // Only for named locals — expression temps in chains should
-                    // NOT be marked as refs (it changes receiver borrow semantics).
-                    if ctx.is_named_local(result_local) {
-                        if let Some(recv_local) = recv_local_for_move_zero {
-                            ctx.set_view_of(result_local, recv_local);
-                        }
-                        ctx.func_state.has_string_borrows = true;
-                    } else {
-                        // Unnamed temp from a view-returning method (e.g.
-                        // `vec.get(0).unwrap().trim()`'s trim-result temp).
-                        // Tagging via set_view_of regressed receiver borrow
-                        // semantics elsewhere; instead record in a sidecar
-                        // that the VarDecl boundary reads to inject a
-                        // clone when the temp feeds a named String. See
-                        // TODO entry on CoW chain materialization.
-                        ctx.func_state.view_returning_temps.insert(result_local);
+                    // Tag every view-returning method result as
+                    // LocalOwnership::View, regardless of whether the
+                    // local is named. The unnamed-temp path used to
+                    // require a separate `view_returning_temps` sidecar
+                    // because cow_materialize_view's clone-to-owned step
+                    // shallow-copied the cloned local — fixed in
+                    // cow_materialize_view by switching to AssignMode::Move
+                    // (matches its sibling cow_materialize_alias).
+                    if let Some(recv_local) = recv_local_for_move_zero {
+                        ctx.set_view_of(result_local, recv_local);
                     }
+                    ctx.func_state.has_string_borrows = true;
                 }
             }
         }

@@ -253,18 +253,6 @@ pub struct FunctionState {
     /// Set when a for-loop uses `index_load_borrow` for string elements.
     /// If false, return materialization can be skipped (no views to materialize).
     pub has_string_borrows: bool,
-    /// Locals produced by view-returning method calls (trim/slice/strip/...)
-    /// where the result is an UNNAMED temp. The result holds a cap=0 Str
-    /// view into the receiver chain's source. Used by VarDecl boundary to
-    /// emit `gorget_string_clone_to_owned` when assigning into a named
-    /// String — without the clone, x's view goes dangling once the chain's
-    /// upstream container mutates. See TODO entry "CoW materialization of
-    /// String views through expression-temp chains" and the
-    /// `*_chain_trim` cases in `cow_materialization_points.gg`.
-    /// Tracked separately from `LocalOwnership::View` because tagging temps
-    /// as View directly altered receiver borrow semantics for downstream
-    /// readers; this sidecar is read only at the VarDecl boundary.
-    pub view_returning_temps: rustc_hash::FxHashSet<LocalId>,
 }
 
 /// Tracks lowering state within a function.
@@ -2307,8 +2295,15 @@ impl<'a> LoweringContext<'a> {
                 vec![crate::ir::builder::FunctionBuilder::copy(view_local)], view_type);
             let name_hint = builder.local_name(view_local).map(|s| s.to_string());
             let owned_local = builder.add_local(view_type, name_hint.as_deref());
-            builder.assign(crate::ir::instructions::Place::local(owned_local),
-                          crate::ir::builder::FunctionBuilder::copy(cloned));
+            // Phase C: cloned is a fresh owned local dead at this single
+            // use — Move transfers ownership into owned_local. Plain
+            // assign (Copy mode) would alias the clone, leaking the
+            // original. Mirrors the sibling cow_materialize_alias below.
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                crate::ir::instructions::Place::local(owned_local),
+                crate::ir::builder::FunctionBuilder::copy(cloned),
+            );
             self.drops.register_local(owned_local, view_type, &self.type_registry);
             self.set_owned(owned_local);
             if let Some(ref hint) = builder.local_name(view_local).map(|s| s.to_string()) {
