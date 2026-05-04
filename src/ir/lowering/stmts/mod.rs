@@ -1859,8 +1859,21 @@ fn lower_snapshot(
 ) {
     let val_op = lower_expr(ctx, builder, value);
     let val_type = infer_operand_type_full(ctx, &val_op, builder);
+    // §6.8 / Phase C: for resource-typed values, the prior `assign(local, op)`
+    // was a shallow Copy. Use AssignMode::Borrow + skip drop registration —
+    // the snapshot runtime fn reads via &Str without taking ownership; the
+    // source's drop is the only one. For non-resource types, plain assign
+    // is correct (Copy = bitwise read of a value).
     let val_local = builder.add_local(val_type, None);
-    builder.assign(Place::local(val_local), val_op);
+    if ctx.type_registry.is_resource_type(val_type) {
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Borrow,
+            Place::local(val_local),
+            val_op,
+        );
+    } else {
+        builder.assign(Place::local(val_local), val_op);
+    }
 
     let point_name = name.node.replace('\\', "\\\\").replace('"', "\\\"");
     let point_arg = FunctionBuilder::const_str(&point_name);

@@ -1476,17 +1476,21 @@ pub fn lower_module(
         }
     }
 
-    // Phase C, Stage C1: resource-move warning pass. Gated behind
-    // GG_VALIDATE_RESOURCE_MOVES so default builds and CI are unaffected.
-    // Subsequent stages C2-C4 fix patterns by frequency and then promote
-    // to a fail-fast invariant in `validate`.
-    if std::env::var_os("GG_VALIDATE_RESOURCE_MOVES").is_some() {
+    // Phase C, Stage C4: resource-move validator promoted from warning
+    // to fatal invariant. Stages C1-C3 + §6.8 cleared all violations
+    // across the 1100-fixture sweep; the fail-fast contract here means
+    // any new lowering bug producing a shallow copy of a resource halts
+    // the build instead of leaking past the validator. The
+    // GG_VALIDATE_RESOURCE_MOVES env gate is removed; the check is
+    // unconditional in default builds and CI.
+    {
         let warnings = crate::ir::validate::validate_resource_moves(&module);
         if !warnings.is_empty() {
             eprintln!("[resource-moves] {} violation(s):", warnings.len());
             for w in &warnings {
                 eprintln!("  {}", w);
             }
+            panic!("GIR module failed resource-move validation ({} violation(s))", warnings.len());
         }
     }
 
