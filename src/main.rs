@@ -576,6 +576,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        gorget::lir::split_edges::split_critical_edges_module(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
         // Optimize runs post-BIR so synth fns (when present) get DCE/fold/CSE.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
@@ -618,6 +619,7 @@ fn try_build_ir(
         // Save metadata we need after handing ownership to BirModule.
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
+        gorget::lir::split_edges::split_critical_edges_module(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
         // Optimize post-BIR so synth fns get DCE/fold/CSE, and so drop-elab
         // sees the expanded primitives from canonical ops (HofExpand, EnumInit,
@@ -1385,6 +1387,8 @@ fn try_profile(
     let t = Instant::now();
     let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
         .map_err(|e| format!("BIR lowering failed: {e}"))?;
+    // Tier E §8.2: BIR synthesis adds new control flow.
+    gorget::lir::split_edges::split_critical_edges_module(bir_module.as_lir_mut());
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
     let lir_opt_stats = gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
