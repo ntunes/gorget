@@ -449,6 +449,32 @@ pub enum Mutability {
     Unique,
 }
 
+/// How a local's storage slot is laid out and accessed at the LIR layer.
+///
+/// `lower_place_addr` and the downstream LIR readers (`insts.rs:786`,
+/// `LoadRef`, `IndexLoad`) make different routing decisions per kind.
+/// See `unified-resource-model.md` §6.8.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SlotKind {
+    /// Slot holds the value directly (size = sizeof(type)). Address-of is
+    /// `&slot`. Reads project starting from the value type. Stores write
+    /// the bytes at `&slot`.
+    #[default]
+    Value,
+    /// Slot holds a pointer that this local OWNS. Type is `Ptr(T)`/`MutPtr(T)`.
+    /// `lower_place_addr` returns `&slot` (a pointer-to-pointer); downstream
+    /// must `Load` to materialize the pointer value before projecting.
+    /// Created via `borrow_mut`, `Option[Ref[T]]::unwrap`, etc.
+    OwnedPtr,
+    /// Slot holds a pointer that's a non-owning view. Type is `Ptr(T)`/`MutPtr(T)`.
+    /// `lower_place_addr` returns the pointer VALUE directly via `SlotLoad`.
+    /// Downstream skips the deref-Load. Drop is a no-op (the source owns).
+    /// Created via the borrow setters: `set_ref`, `set_bare_param`,
+    /// `set_param_borrow_unique`, `set_field_borrow`, `set_collection_ref`,
+    /// `set_view_of`, `set_cow_borrow`, `cow_register_alias`.
+    BorrowedPtr,
+}
+
 /// A local variable slot.
 #[derive(Debug, Clone)]
 pub struct Local {
@@ -459,6 +485,11 @@ pub struct Local {
     /// LIR consumers read the rich enum to decide drop, SlotLoad routing,
     /// and CoW materialisation.
     pub ownership: LocalOwnership,
+    /// Slot layout/access kind. §6.8: written by GIR borrow setters and
+    /// `add_local(ptr_type, ...)` paths; read by LIR slot-routing sites.
+    /// Will eventually subsume the slot-routing semantics that `is_ref()`
+    /// currently bundles into ownership.
+    pub slot_kind: SlotKind,
 }
 
 /// A basic block.
@@ -580,6 +611,7 @@ mod tests {
                 type_id: I32_TYPE,
                 name_hint: None,
                 ownership: LocalOwnership::default(),
+                slot_kind: SlotKind::default(),
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,
