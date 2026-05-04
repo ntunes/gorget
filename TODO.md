@@ -65,28 +65,47 @@
 
   **Audit lens (per user direction 2026-05-03):** every remaining shallow copy is either (a) a latent bug we fix in lowering, or (b) a missing IR / syntax / protocol primitive needed to express the necessity legally. There is no third "accept the violation" bucket — that would defeat the Phase C guarantee.
 
-  **Phase C C4 blocker (discovered 2026-05-03 evening): the §6.8 LIR conflation.**
+  **Phase C C4 blocker (discovered 2026-05-03 evening, refined 2026-05-04): the §6.8 LIR conflation.**
 
-  The for-string cluster (~16 violations, lower_for_string at for_loops.rs:165) has three iter_op shapes (literal cap=0 view / owned cap>0 clone / shared cap>0 borrow) that the IR can't currently distinguish. Option (c) — query iter_op's source ownership state via Phase D's BorrowOrigin + dispatch Move/Borrow accordingly — is the principled fix. It needs `set_ref` to mean "no-drop borrow" without ALSO triggering LIR SlotLoad routing.
+  The for-string cluster (~16 violations, lower_for_string at for_loops.rs:165) has three iter_op shapes (literal cap=0 view / owned cap>0 clone / shared cap>0 borrow) that the IR can't currently distinguish. Option (c) — query iter_op's source ownership state via Phase D's BorrowOrigin + dispatch Move/Borrow accordingly — is the principled fix.
 
-  But LIR's `is_ref()` predicate at 6 sites bundles two semantics:
-  - **Slot kind** (Ptr-sized vs value-sized for layout) — should check TypeId.
-  - **Drop discipline** (no-drop borrow vs owned) — should check ownership.
+  **Refined understanding (2026-05-04):** the original framing of the conflation was wrong. The 2026-05-03 audit ran instrumentation across all 1100 fixtures looking for locals where `ownership.is_ref()=true AND type≠Ptr` (the "layout-coincidence" case). Result: **zero**. Every `is_ref()` local has type=Ptr/MutPtr already.
 
-  Splitting `is_ref()` cleanly *without* touching the GIR doesn't work: the GIR has dozens of `set_ref(value_typed_local)` call sites that exploit the conflation to opt into LIR SlotLoad routing on value-typed locals. This works because of a **layout-coincidence dependency** — collection structs (GorgetString, GorgetArray) have the data pointer as their first field, so loading the first 8 bytes of the slot via SlotLoad happens to give the right pointer.
+  But replacing `is_ref()` with TypeId-only at `lower_place_addr` STILL regressed 104 fixtures (closures, auto_types, etc.). The reason: `is_ref()` discriminates **Owned-Ptr from Borrowed-Ptr**, BOTH of which are typed-Ptr. The 97k !REF+PTR locals (typed Ptr but ownership=Owned) are "Owned Ptr(T)" — a result of `borrow_mut` or `.unwrap()` on `Option[Ref[T]]` — where:
+  - `lower_place_addr` does **SlotAddr** (returns `&slot`, address of pointer storage)
+  - downstream `insts.rs:786` compensates with **Load** (turns `&slot` into pointer value)
+  - `LoadRef` at insts.rs:1414 has the `needs_two_step` bookkeeping for this
 
-  **Concrete attempt and result (2026-05-03):**
-  - Replaced LIR's 6 `is_ref()` calls with `is_ptr_typed_local` (TypeId-based).
-  - Wide regression: ~50 fixtures failed across diverse patterns (dataframe, xml, yaml, closures, control flow). The `set_ref` callers were depending on the SlotLoad routing.
-  - Reverted.
+  Borrowed Ptr(T) locals (the 36k REF+PTR cases) are different:
+  - `lower_place_addr` does **SlotLoad** (returns the pointer value directly — the slot's content)
+  - downstream `insts.rs:786` skips Load (already have the pointer)
 
-  **What full §6.8 needs (multi-day project):**
-  1. Audit all `set_ref` callers in src/ir/lowering. Categorise each:
-     - "Drop discipline only" — pure no-drop signal. Keep set_ref semantics.
-     - "Slot routing" — opt into LIR SlotLoad. Replace with explicit Ptr-typed local OR new typed flag.
-  2. Add a separate `slot_kind: PtrSlot | ValueSlot` axis on GIR Local (or LIR Slot per the original §6.8 vision).
-  3. LIR's 6 sites read slot_kind for routing, ownership for drop.
-  4. Validate via integration tests at each step.
+  Both end at the same final pointer, via different LIR instruction sequences. The conflation `is_ref()` reads is "did we take the SlotLoad shortcut?" — a per-local flag that lower_place_addr branched on, used for compensation downstream.
+
+  **The true §6.8 shape, then, is a 3-variant slot-kind axis, not 2:**
+
+  ```rust
+  pub enum SlotKind {
+      Value,         // slot holds value; lower_place_addr returns &slot
+      OwnedPtr,      // slot holds ptr we own; lower_place_addr returns &slot, downstream Loads
+      BorrowedPtr,   // slot holds ptr view; lower_place_addr returns slot's contents (SlotLoad)
+  }
+  ```
+
+  `is_ref()` ≡ `slot_kind == BorrowedPtr`. The 5 LIR sites all read this axis.
+
+  **What full §6.8 needs (multi-day, refined plan):**
+  1. Add `SlotKind` enum + `pub slot_kind: SlotKind` field on `Local`. Default `Value`.
+  2. At every `add_local(ptr_type, ...)` site, set `slot_kind = OwnedPtr`. At every `borrow_setter` (set_ref/set_bare_param/set_param_borrow_unique/set_field_borrow/set_collection_ref/set_view_of/set_cow_borrow/cow_register_alias) call, set `slot_kind = BorrowedPtr`. Don't read yet.
+  3. Validate: at flush time, assert `slot_kind == BorrowedPtr ⟺ ownership.is_ref()`. Fix any drift.
+  4. Migrate the 5 LIR sites to read `slot_kind == BorrowedPtr` instead of `ownership.is_ref()`. Should be a no-op semantically.
+  5. NOW the for-string cluster can change iter_local from a value-typed `String` slot to a `Ptr(String)` slot when source is borrowing-eligible — sets `slot_kind = BorrowedPtr` → SlotLoad routing → no double-free.
+  6. C3 audit & C4 promotion follow.
+
+  **Concrete attempts and results (2026-05-04):**
+  - Stage 1 audit landed: 0 REF+!PTR cases at flush time (the original "layout-coincidence" hypothesis was wrong).
+  - Stage 4 probe (TypeId-only at lower_place_addr): 104 fixtures regressed — confirms 3-variant axis needed.
+  - Stage 5 spike (drop-skip at lower_for_string when source is owning): leak_known_patterns P5 went from leaked=false to leaked=true. Reverted. Confirms simple drop-bookkeeping fix is insufficient — iter_local needs to be Ptr-typed for the borrow to be honest.
 
   **Decision (2026-05-03):** Phase C C4 (promote validator from warning to error) is GATED on §6.8. The validator stays warning-only until §6.8 lands. The persistent flag on the for-string cluster (~16 violations) IS the durable signal that work remains. Option (a) — always-clone — was considered and rejected because it would silence the validator and bury the architectural debt under a comment that future readers would miss.
 
