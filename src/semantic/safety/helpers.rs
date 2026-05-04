@@ -1048,6 +1048,38 @@ impl<'a> BorrowChecker<'a> {
         })
     }
 
+    /// If `expr` is `<receiver>.lock()` on a resolvable `Mutex` identifier,
+    /// returns the receiver's DefId and its name. Used by the double-lock
+    /// detector at VarDecl sites. RwLock is intentionally out of scope for
+    /// this first cut — its read/write semantics differ enough that a
+    /// strict same-receiver rule would generate noise on legitimate
+    /// patterns.
+    pub(super) fn lock_call_target(&self, expr: &Spanned<Expr>) -> Option<(DefId, String)> {
+        let (receiver, method_name) = match &expr.node {
+            Expr::MethodCall { receiver, method, .. } => (receiver.as_ref(), method.node.as_str()),
+            _ => return None,
+        };
+        if method_name != "lock" {
+            return None;
+        }
+        let recv_name = match &receiver.node {
+            Expr::Identifier(name) => name.clone(),
+            _ => return None,
+        };
+        let recv_def = self.resolution_map.get(&receiver.span.start).copied()
+            .or_else(|| self.scopes.lookup_def_by_span(&recv_name, receiver.span))
+            .or_else(|| self.find_def_by_name(&recv_name))?;
+        let tid = self.scopes.get_def(recv_def).type_id?;
+        let type_def_name = match self.types.get(tid) {
+            ResolvedType::Generic(did, _) | ResolvedType::Defined(did) => {
+                self.scopes.get_def(*did).name.clone()
+            }
+            _ => return None,
+        };
+        if type_def_name != "Mutex" { return None; }
+        Some((recv_def, recv_name))
+    }
+
     /// Check if a variable is a reference type, using its type annotation or resolved type.
     pub(super) fn is_var_reference_type(&self, def_id: DefId, type_annotation: Option<&Spanned<Type>>) -> bool {
         // Try the type annotation first (works even before type checking)

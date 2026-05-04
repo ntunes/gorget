@@ -528,6 +528,7 @@ impl<'a> BorrowChecker<'a> {
             diverges: self.diverged,
             fallible_states: self.fallible_states.clone(),
             index_borrow_sources: self.index_borrow_sources.clone(),
+            live_guards: self.live_guards.clone(),
         }
     }
 
@@ -545,6 +546,7 @@ impl<'a> BorrowChecker<'a> {
         self.diverged = state.diverges;
         self.fallible_states = state.fallible_states.clone();
         self.index_borrow_sources = state.index_borrow_sources.clone();
+        self.live_guards = state.live_guards.clone();
     }
 
     /// Merge multiple branch states: union var states (moved in either = moved),
@@ -573,6 +575,7 @@ impl<'a> BorrowChecker<'a> {
             self.stale_shared_derived = states[0].stale_shared_derived.clone();
             self.fallible_states = states[0].fallible_states.clone();
             self.index_borrow_sources = states[0].index_borrow_sources.clone();
+            self.live_guards = states[0].live_guards.clone();
             self.diverged = true;
             return;
         }
@@ -588,6 +591,7 @@ impl<'a> BorrowChecker<'a> {
         let mut merged_stale_shared = live[0].stale_shared_derived.clone();
         let mut merged_fallible = live[0].fallible_states.clone();
         let mut merged_index_borrows = live[0].index_borrow_sources.clone();
+        let mut merged_live_guards = live[0].live_guards.clone();
 
         for state in &live[1..] {
             // Merge var states: moved in either = moved
@@ -654,6 +658,12 @@ impl<'a> BorrowChecker<'a> {
             for (var_id, collection_id) in &state.index_borrow_sources {
                 merged_index_borrows.entry(*var_id).or_insert_with(|| collection_id.clone());
             }
+            // Merge live_guards: union (conservative — locked in any branch = locked).
+            // A subsequent .lock() at the join point would deadlock if either
+            // branch held the lock; flagging it is correct.
+            for (mutex_id, info) in &state.live_guards {
+                merged_live_guards.entry(*mutex_id).or_insert_with(|| info.clone());
+            }
         }
 
         self.var_states = merged_vars;
@@ -667,6 +677,7 @@ impl<'a> BorrowChecker<'a> {
         self.stale_shared_derived = merged_stale_shared;
         self.fallible_states = merged_fallible;
         self.index_borrow_sources = merged_index_borrows;
+        self.live_guards = merged_live_guards;
         self.diverged = false;
     }
 

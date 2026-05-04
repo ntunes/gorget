@@ -439,6 +439,10 @@ pub enum SemanticErrorKind {
 
     /// Returning a closure that captures a local variable (use-after-free).
     ClosureEscapesScope { closure_name: String, captured_name: String },
+
+    /// Calling `.lock()` on a Mutex/RwLock that already has a live Guard in scope.
+    /// Non-reentrant — the second lock would deadlock at runtime.
+    MutexDoubleLock { mutex_name: String, prior_guard_name: String, prior_lock_at: Span },
 }
 
 impl std::fmt::Display for SemanticError {
@@ -760,6 +764,9 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::ClosureEscapesScope { closure_name, captured_name } => {
                 write!(f, "cannot return closure `{closure_name}`: captures local variable `{captured_name}` which will be dropped")
+            }
+            SemanticErrorKind::MutexDoubleLock { mutex_name, prior_guard_name, .. } => {
+                write!(f, "cannot lock `{mutex_name}`: already locked — guard `{prior_guard_name}` is still in scope (would deadlock at runtime; non-reentrant)")
             }
         }
     }

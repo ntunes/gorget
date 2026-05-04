@@ -72,6 +72,28 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
 
+                // Mutex double-lock detection: `Guard[T] g2 = m.lock()`
+                // while a prior guard from the same Mutex is still in scope.
+                // Errors at compile time instead of deadlocking at runtime.
+                if let Pattern::Binding(name) = &pattern.node {
+                    if let Some((mutex_def, mutex_name)) = self.lock_call_target(value) {
+                        if let Some((_, prior_name, prior_span)) = self.live_guards.get(&mutex_def).cloned() {
+                            self.error(
+                                SemanticErrorKind::MutexDoubleLock {
+                                    mutex_name,
+                                    prior_guard_name: prior_name,
+                                    prior_lock_at: prior_span,
+                                },
+                                value.span,
+                            );
+                        } else if let Some(guard_def) = self.scopes.lookup_def_by_span(name, pattern.span)
+                            .or_else(|| self.find_def_by_name(name))
+                        {
+                            self.live_guards.insert(mutex_def, (guard_def, name.clone(), value.span));
+                        }
+                    }
+                }
+
                 // Track implicit CoW borrows from collection indexing/get.
                 // When `auto x = vec.get(0).unwrap()` or `auto x = vec[i]`,
                 // x implicitly borrows from vec. Record this so
@@ -1082,6 +1104,10 @@ impl<'a> BorrowChecker<'a> {
         // Collect closure variables declared in this block so we can release their
         // mutable capture locks when the block exits (closures go out of scope).
         let mut block_closure_defs: Vec<DefId> = Vec::new();
+        // Snapshot of live_guards entries owned at block-entry. Any new
+        // entry added during this block must be removed on exit so the
+        // guard's release at end-of-scope unblocks subsequent locks.
+        let live_guards_at_entry: Vec<DefId> = self.live_guards.keys().copied().collect();
 
         for stmt in &block.stmts {
             // Phase 2: Unreachable code — if the previous statement unconditionally
@@ -1129,6 +1155,12 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
         }
+
+        // Release Mutex Guards that went out of scope at this block's exit.
+        // Drop any live_guards entry not present at block entry — those were
+        // added inside this block, so their Guard binding's scope ended here.
+        let entry_set: FxHashSet<DefId> = live_guards_at_entry.into_iter().collect();
+        self.live_guards.retain(|mutex_def, _| entry_set.contains(mutex_def));
     }
 
     /// Check if a value expression is a bare identifier of a non-Copy type (needs `!`).
@@ -1313,6 +1345,7 @@ impl<'a> BorrowChecker<'a> {
         self.var_reassigned.clear();
         self.mut_param_mutated.clear();
         self.current_mut_params.clear();
+        self.live_guards.clear();
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes

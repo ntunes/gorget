@@ -196,6 +196,10 @@ pub(super) struct BranchState {
     /// path `gpu.shader_cache`, so `gpu.deform_face_indices.push(...)` doesn't
     /// invalidate it.
     pub(super) index_borrow_sources: FxHashMap<DefId, IndexBorrowSource>,
+    /// Live Mutex guards (Mutex DefId → (Guard DefId, name, lock span)).
+    /// Branched independently so that locks acquired in one arm don't leak
+    /// into the other arm (e.g. `if cond: lock_m() else: lock_m()`).
+    pub(super) live_guards: FxHashMap<DefId, (DefId, String, Span)>,
 }
 
 /// Where an implicit CoW borrow points: the root binding plus the field
@@ -397,6 +401,13 @@ pub(super) struct BorrowChecker<'a> {
     /// (Pattern::Tuple). Destructuring implicitly moves the value, so
     /// `MoveWithoutOperator` is suppressed.
     pub(super) in_destructuring_bind: bool,
+
+    /// Tracks live `Guard` bindings to detect double-lock deadlocks.
+    /// Maps Mutex/RwLock DefId → (Guard DefId, guard name, lock span). A
+    /// second `m.lock()` while the prior guard is still in scope would
+    /// deadlock at runtime (locks are non-reentrant). Entries are removed
+    /// on block exit (see `check_block`).
+    pub(super) live_guards: FxHashMap<DefId, (DefId, String, Span)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,6 +485,7 @@ impl<'a> BorrowChecker<'a> {
             current_mut_params: Vec::new(),
             warn_const: false,
             in_destructuring_bind: false,
+            live_guards: FxHashMap::default(),
         }
     }
 

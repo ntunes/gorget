@@ -754,6 +754,15 @@ fn sec_55_dict_float_nan_key() {
 }
 
 #[test]
+fn sec_56_mutex_double_lock() {
+    // Mutex.lock() on a Mutex that already has a live Guard in the
+    // current scope is a deadlock waiting to happen — non-reentrant.
+    // The borrow checker rejects it at compile time so it never reaches
+    // the runtime.
+    security_rejected("attack_56_mutex_double_lock", "already locked");
+}
+
+#[test]
 fn sec_57_box_cycle_via_shared() {
     security_safe("attack_57_box_cycle_via_shared", "done");
 }
