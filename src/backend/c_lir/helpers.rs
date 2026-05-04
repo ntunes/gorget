@@ -762,26 +762,46 @@ pub(super) fn is_collection_type_constructor(last_part: &str) -> bool {
 /// Vector__int64_t(cap) → gorget_array_with_capacity(sizeof(int64_t), cap)
 /// Vector__int64_t() → gorget_array_new(sizeof(int64_t))
 /// Return the C drop function name for a resource-type element, or None for trivial types.
-pub(super) fn elem_drop_fn_for_c_type(c_type: &str) -> Option<&'static str> {
-    if c_type.starts_with("GorgetArray") || c_type.starts_with("Vector__") {
-        Some("gorget_array_free")
-    } else if c_type.starts_with("GorgetMap") || c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
-        Some("gorget_map_free")
-    } else if c_type.starts_with("GorgetSet") || c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
-        Some("gorget_set_free")
-    } else if c_type == "GorgetString" {
-        Some("gorget_string_free")
-    } else if c_type == "GorgetClosure"
+///
+/// Phase A residual #3: reads `StructDef.elem_drop_fn` for runtime singletons
+/// (GorgetString/GorgetArray/GorgetMap/GorgetSet/GorgetClosure) — those are
+/// registered as named StructDefs with metadata. Mangled collection aliases
+/// (`Vector__T`, `Dict__K__V`, etc.) share the runtime StructId via
+/// `struct_reg.register(alias, runtime_sid)` rather than getting their own
+/// StructDef in `module.structs`, so lookup by the mangled name misses;
+/// we fall through to a prefix check that maps to the same drop fn the
+/// runtime alias would have. The Callable/MutCallable/ConsumeCallable
+/// fallback stays until Phase A residual #1 (TypeDef registration for
+/// closure types) lands.
+pub(super) fn elem_drop_fn_for_c_type(c_type: &str, module: &crate::lir::LirModule) -> Option<String> {
+    if let Some(sd) = module.structs.iter().find(|s| s.name == c_type) {
+        if let Some(ref f) = sd.elem_drop_fn {
+            return Some(f.clone());
+        }
+    }
+    // Mangled collection aliases — map to the same runtime free fn the
+    // runtime singleton's StructDef carries.
+    if c_type.starts_with("Vector__") || c_type.starts_with("Deque__") {
+        return Some("gorget_array_free".into());
+    }
+    if c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
+        return Some("gorget_map_free".into());
+    }
+    if c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
+        return Some("gorget_set_free".into());
+    }
+    // Callable / MutCallable / ConsumeCallable still need a name-prefix
+    // fallback because they don't carry a TypeDef yet (Phase A residual
+    // #1 — blocked on TypeDefKind::Alias routing or a c_runtime_alias
+    // protocol field). Once #1 lands, these become metadata reads.
+    if c_type == "GorgetClosure"
         || c_type.starts_with("Callable__")
         || c_type.starts_with("MutCallable__")
         || c_type.starts_with("ConsumeCallable__")
     {
-        // Closures stored in collections own a heap-alloc'd env (packed by
-        // `wrap_closure_args_at_void_elem`); container drop must free it.
-        Some("gorget_closure_free")
-    } else {
-        None
+        return Some("gorget_closure_free".into());
     }
+    None
 }
 
 // `elem_clone_fn_for_c_type` is gone — its only callers (Vector / Dict
@@ -816,7 +836,7 @@ pub(super) fn emit_collection_constructor(
             write!(out, "gorget_array_with_capacity(sizeof({elem_type}), {});", v(args[0])).unwrap();
         }
         // Set elem_drop for resource-type elements
-        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type) {
+        if let Some(drop_fn) = elem_drop_fn_for_c_type(elem_type, module) {
             if let Some(d) = dst {
                 write!(out, " {}.elem_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
             }
@@ -856,7 +876,7 @@ pub(super) fn emit_collection_constructor(
         let fn_name = if name.starts_with("Dict__") { "gorget_dict_new" } else { "gorget_map_new" };
         write!(out, "{fn_name}(sizeof({key_type}), sizeof({val_type}));").unwrap();
         // Set val_drop for resource-type values
-        if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type) {
+        if let Some(drop_fn) = elem_drop_fn_for_c_type(val_type, module) {
             if let Some(d) = dst {
                 write!(out, " {}.val_drop = (__gorget_drop_fn){drop_fn};", v(*d)).unwrap();
             }

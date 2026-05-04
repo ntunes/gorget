@@ -1287,16 +1287,24 @@ pub struct StructDef {
     /// Cached C alignment for this struct (in bytes). Max of field alignments,
     /// capped at 8. Used by the LLVM backend for inter-field padding.
     pub computed_c_align: Option<usize>,
+    /// Phase A residual #3: drop fn for an instance of this type when it
+    /// appears as a collection element (or any value-typed slot needing
+    /// cleanup). Populated at LIR lowering from GIR TypeDef
+    /// `metadata.drop_strategy == Trivial(name)`. Replaces the c_lir
+    /// `elem_drop_fn_for_c_type` name-prefix matching at
+    /// c_lir/helpers.rs:765 — c_lir reads from this field via
+    /// `LirModule::struct_drop_fn(name)` instead.
+    pub elem_drop_fn: Option<String>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {

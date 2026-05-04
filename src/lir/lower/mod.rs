@@ -683,7 +683,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8),
+                computed_c_align: Some(8), elem_drop_fn: None,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -742,7 +742,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8),
+                        computed_c_align: Some(8), elem_drop_fn: None,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -759,7 +759,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![("_0".into(), LirType::Ptr)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -777,7 +777,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -797,7 +797,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -930,7 +930,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -954,7 +954,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -970,7 +970,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
                               });
                 self.struct_reg.register(name, sid);
             }
