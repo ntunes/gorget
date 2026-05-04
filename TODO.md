@@ -5,7 +5,50 @@
 - ~~**Phase C2 — fix highest-frequency resource-move violations**~~ **CLOSED 2026-05-04** — see DONE entry "§6.8 + Phase C C4 closed". Validator violations 11447 → 0 across 1100-fixture sweep. The for-string cluster fell out via the SlotKind axis migration; C4 (validator: warning → fatal panic) shipped same day. Phase C invariant now enforced unconditionally.
 
 
-- **Phase D4 deferred — reference-grade refactor of `lower_var_decl` decision tree** (deferred 2026-05-01 in favour of minimal-D4 → D6 → C sequencing). The current 5-branch chain in `src/ir/lowering/stmts/mod.rs` reads four sidecar-style predicates (`named_local`, `cow_unsafe_at`, `drops.is_registered`, `needs_drop`) that are mostly liveness proxies. Reference shape: promote `func_state.liveness` to first-class axis via `source_live_past(local, span)` query, collapse to ~6-arm typed match on `(target.is_resource, source_live, source.ownership())`. ~1-2 days when picked up. **Why deferred:** Phase C's validator (post-D6) will provide a stronger fixture regression net for the refactor — bugs surfaced after C lands are likely real CoW correctness issues, not refactor-induced regressions, which is a strictly better debugging position. **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently — the whole point of the refactor is to make that "what axis am I reading" question explicit. [added: 2026-05-01]
+- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04 after CoW chain fix added an 8th branch). 475-line function (`src/ir/lowering/stmts/mod.rs:242-717`) with 7+ branches reading 4 sidecar predicates (`named_local`, `cow_unsafe_at`, `drops.is_registered`, `needs_drop`) that are mostly liveness proxies.
+
+  **Refined plan (2026-05-04):**
+
+  ```rust
+  // New helper on LoweringContext:
+  fn source_live_past(&self, local: LocalId, stmt_span: Span) -> bool {
+      // For named locals: !is_last_use_at(name, stmt_span).
+      // For temps: false (temps dead after their producer).
+      // For non-place operands: false.
+  }
+
+  fn source_ownership(&self, op: &Operand) -> Option<LocalOwnership> {
+      // Look up via builder.locals[p.local].ownership for Copy/Move.
+      // None for constants.
+  }
+
+  // Replaces the current 7-branch chain (~200 lines) with:
+  let target_resource = ctx.type_registry.is_resource_type(actual_var_type);
+  let source_live = ctx.source_live_past(operand.local(), stmt_span);
+  let source_own = ctx.source_ownership(&operand);
+
+  let assign_mode = match (target_resource, source_live, source_own) {
+      (false, _, _)                                       => Copy,
+      (true, _, Some(LocalOwnership::View { .. }))        => emit_clone_to_owned(),
+      (true, _, Some(LocalOwnership::Borrowed { .. }))    => Borrow,
+      (true, true,  Some(LocalOwnership::Owned))          => emit_cow_alias_or_clone(),
+      (true, false, Some(LocalOwnership::Owned))          => Move,
+      _                                                   => /* safety net */ Copy,
+  };
+  ```
+
+  **Map of current branches to target arms:**
+  - A (line 532, GorgetString same-type + named) → arm 4 (Owned + live → CoW alias path)
+  - B (line 545, named non-resource with clone_fn, e.g. Str→GorgetString) → emit Clone (cross-type case, may need its own arm)
+  - C (line 566, named resource + CoW-safe) → arm 4 (CoW alias)
+  - D (line 590, named resource + CoW-unsafe) → arm 2 (Owned + live → Clone fallback)
+  - E (line ~614, view-returning temp from #45 fix) → arm 5 (View → Clone)
+  - F (line ~620, drop-registered temp or droppable temp) → arm 3 (Owned + dead → Move)
+  - G (safety net) → catch-all
+
+  **Estimated 1-2 days.** Risk: medium — touches CoW alias creation, mark_string_borrow_source, drops.unregister, register_local re-binding. Validation: full integration sweep + cow_materialization_points fixture must stay green at every step. Migrate one branch at a time by replacing it with the typed-match arm and verifying integration.
+
+  **Discipline while deferred:** don't accumulate new branches in `lower_var_decl` whose predicates aren't expressible as liveness queries. Each new case must be reducible to `(target.is_resource, source_live, source.ownership())`; if a case requires reading a different axis, flag it here instead of adding the branch silently. [added: 2026-05-01, plan refined: 2026-05-04]
 
 - **Phase A residuals — 3 follow-ups left after the 13-commit consolidation (2026-05-02).** The 9-site migration off name-prefix matching landed; three pieces remain, each with different cost/value:
 
