@@ -82,10 +82,10 @@ pub(super) fn lower_assign(
                 }
                 // CoW clone-on-mutate: if LHS is an immutable borrow (Ptr, not MutPtr),
                 // materialize to owned before computing RHS. This is the CoW clone.
-                // MutPtr (& params) and mut_capture locals pass through without cloning.
+                // MutPtr (& params) and unique-borrow locals pass through without cloning.
                 {
                     use crate::ir::types::GirType;
-                    let is_mut = ctx.func_state.mut_capture_locals.contains_key(&local_id)
+                    let is_mut = ctx.is_param_borrow_unique(local_id)
                         || matches!(ctx.type_registry.get(type_id), Some(GirType::MutPtr(_)));
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
@@ -213,7 +213,7 @@ pub(super) fn lower_assign(
                     }
                 }
                 // If this is a mutable capture pointer, write through the pointer
-                if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
+                if ctx.is_param_borrow_unique(local_id) {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -372,11 +372,11 @@ pub(super) fn lower_field_assign(
     }
 
     // Fallback: lower_expr on object (may copy intermediate structs)
-    // For mut_capture_locals (mutable borrow params), use the pointer local directly
+    // For unique-borrow params (& or !), use the pointer local directly
     // instead of lower_expr which would copy the deref'd value to a temp
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
+            if ctx.is_param_borrow_unique(local_id) {
                 // Return the raw pointer local (not deref'd)
                 Operand::Copy(Place::local(local_id))
             } else {
@@ -802,9 +802,10 @@ pub(super) fn lower_compound_assign(
                 }
             }
 
-            let is_mut_capture = ctx.func_state.mut_capture_locals.contains_key(&local_id);
+            let is_mut_capture = ctx.is_param_borrow_unique(local_id);
             let value_type = if is_mut_capture {
-                ctx.func_state.mut_capture_locals[&local_id]
+                // The local's GIR type is MutPtr(T); pointee_type returns T.
+                ctx.pointee_type(builder.local_type(local_id)).unwrap_or(type_id)
             } else {
                 type_id
             };

@@ -899,9 +899,9 @@ fn lower_trait_method_body(
         let base_type = vtable_method.base_param_types[vt_idx];
         ctx.register_local(&p.node.name.node, LocalId(param_idx), vtable_type);
         // If this param is passed by pointer (base is resource type, vtable type is MutPtr),
-        // mark in mut_capture_locals so nested calls don't double-wrap.
+        // mark as Borrowed { Param(self), Unique } so nested calls don't double-wrap.
         if vtable_type != base_type {
-            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         }
         vt_idx += 1;
         param_idx += 1;
@@ -1456,12 +1456,9 @@ fn lower_static_trait_method(
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             ctx.set_bare_param(LocalId(param_idx));
-        } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
-            && ctx.type_registry.is_resource_type(base_type)
-        {
-            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         }
         param_idx += 1;
     }

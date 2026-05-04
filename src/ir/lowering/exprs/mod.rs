@@ -100,7 +100,12 @@ fn lower_expr_inner(
                 // If this is a &/! param (MutPtr), deref to get the value.
                 // ref_locals (bare-borrow Ptr params) are NOT auto-deref'd —
                 // they stay as Ptr throughout the callee body.
-                if let Some(&value_type) = ctx.func_state.mut_capture_locals.get(&local_id) {
+                let value_type = if ctx.is_param_borrow_unique(local_id) {
+                    ctx.pointee_type(builder.local_type(local_id))
+                } else {
+                    None
+                };
+                if let Some(value_type) = value_type {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -264,7 +269,7 @@ fn lower_expr_inner(
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
                     if ctx.is_ref_local(local_id)
-                        || ctx.func_state.mut_capture_locals.contains_key(&local_id)
+                        || ctx.is_param_borrow_unique(local_id)
                     {
                         return FunctionBuilder::copy(local_id);
                     }
@@ -1653,11 +1658,11 @@ fn lower_field_access(
         }
     }
 
-    // For mut_capture_locals (mutable borrow params), use the pointer directly
+    // For unique-borrow params (& or !), use the pointer directly
     // so field access goes through the pointer (*ptr).field instead of copying
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.func_state.mut_capture_locals.contains_key(&local_id) {
+            if ctx.is_param_borrow_unique(local_id) {
                 Operand::Copy(Place::local(local_id))
             } else {
                 lower_expr(ctx, builder, object)

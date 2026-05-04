@@ -164,9 +164,6 @@ pub struct FunctionState {
     pub locals: FxHashMap<String, (LocalId, TypeId)>,
     /// Stack of active loops for break/continue targeting.
     pub loop_stack: Vec<LoopInfo>,
-    /// LocalIds that are mutable capture pointers (need deref on read/write in closure bodies).
-    /// Tracks `&` (MutableBorrow) and `!` (Move) struct params, which are MutPtr in GIR.
-    pub mut_capture_locals: FxHashMap<LocalId, TypeId>,
     /// Unified ownership state for tracked locals. Replaces the former `ref_locals`,
     /// `owned_locals`, `cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`,
     /// `cow_collection_refs`, and the legacy 7-variant LocalOwnershipState
@@ -1897,6 +1894,19 @@ impl<'a> LoweringContext<'a> {
                 mutability: crate::ir::Mutability::Unique,
             }
         );
+    }
+
+    /// Whether `local` is a unique-borrow param-shape pointer:
+    /// `Borrowed { origin: Param(self), mutability: Unique }`.
+    /// Set by `set_param_borrow_unique` for `&` and `!` params (and
+    /// closure mut-captures, which share the same shape). Read sites
+    /// auto-deref through the MutPtr local.
+    pub fn is_param_borrow_unique(&self, local: LocalId) -> bool {
+        use crate::ir::{LocalOwnership, BorrowOrigin, Mutability};
+        matches!(self.func_state.local_ownership.get(&local),
+            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Unique })
+                if *p == local
+        )
     }
 
     /// A Ptr-typed local that's a borrow of a struct field (or enum

@@ -602,8 +602,9 @@ pub fn lower_function(
             // Bare-borrow resource param: Ptr, no auto-deref, clone-on-mutation
             ctx.set_bare_param(local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            // ! resource params and & trivial params: MutPtr, auto-deref + write-through
-            ctx.func_state.mut_capture_locals.insert(local_id, base_type);
+            // ! resource params and & trivial params: MutPtr, auto-deref + write-through.
+            // Per §6.2: typed shape is Borrowed { Param(self), Unique }.
+            ctx.set_param_borrow_unique(local_id);
         }
         // ! string params: caller transfers ownership — mark as owned
         // so clone_resource_args_for_init skips the clone.
@@ -892,12 +893,9 @@ pub fn lower_equip_method(
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             ctx.set_bare_param(LocalId(param_idx));
-        } else if matches!(p.node.ownership, crate::parser::ast::Ownership::MutableBorrow)
-            && ctx.type_registry.is_resource_type(base_type)
-        {
-            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
@@ -1179,12 +1177,9 @@ pub fn lower_generic_function(
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, ownership) {
             ctx.set_bare_param(local_id);
-        } else if matches!(ownership, Ownership::MutableBorrow)
-            && ctx.type_registry.is_resource_type(base_type)
-        {
-            ctx.set_param_borrow_unique(local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
-            ctx.func_state.mut_capture_locals.insert(local_id, base_type);
+            // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
+            ctx.set_param_borrow_unique(local_id);
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
@@ -1554,12 +1549,9 @@ fn lower_equip_method_with_subs(
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             ctx.set_bare_param(LocalId(param_idx));
-        } else if matches!(p.node.ownership, Ownership::MutableBorrow)
-            && ctx.type_registry.is_resource_type(base_type)
-        {
-            ctx.set_param_borrow_unique(LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
-            ctx.func_state.mut_capture_locals.insert(LocalId(param_idx), base_type);
+            // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
+            ctx.set_param_borrow_unique(LocalId(param_idx));
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {

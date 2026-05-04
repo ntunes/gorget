@@ -54,7 +54,7 @@
 
   2. **Guard is structurally non-trivial** (the Branch B case, commit cd9357f8): probe regresses many fixtures across diverse paths. The guard is genuine gating, not a workaround. **Document the rationale so the next session doesn't redo the probe.** Retiring requires architectural changes (e.g., widen is_resource_type to include enum-with-resource-payload, split the cross-type axis into its own arm).
 
-  3. **Guard is mechanically redundant** (no examples yet in this codebase): probe is fully green. Retire the sidecar with no further work.
+  3. **Guard is mechanically redundant** (the `mut_capture_locals` case, retired 2026-05-04): probe is fully green. Retire the sidecar with no further work. `mut_capture_locals: FxHashMap<LocalId, TypeId>` migrated to typed `is_param_borrow_unique` predicate + `pointee_type(builder.local_type(local))` for value-type lookup — 5 writers, 11 readers across 8 files; no consumer bug surfaced. See DONE entry. One less sidecar, one typed predicate where there was a name-keyed map.
 
   When applying the discipline to remaining branches A/C/D, expect outcome (1) or (2). Each probe = ~10 min wall-clock for the integration sweep, so batch probes where the diagnosis isn't expected to interact.
 

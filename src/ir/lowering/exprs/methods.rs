@@ -254,7 +254,7 @@ pub(super) fn lower_method_call(
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_ref_local(local_id)
-                || ctx.func_state.mut_capture_locals.contains_key(&local_id)
+                || ctx.is_param_borrow_unique(local_id)
             {
                 Some(local_id)
             } else {

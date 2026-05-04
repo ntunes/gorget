@@ -119,7 +119,7 @@ pub enum Instruction {
     },
 
     /// Load a value by dereferencing a Ptr-typed local.
-    /// Replaces the implicit auto-deref in `mut_capture_locals` handling.
+    /// Replaces the implicit auto-deref for unique-borrow params (& or !).
     /// The source local holds a Ptr(T); the result is the T value.
     LoadRef {
         dst: LocalId,
