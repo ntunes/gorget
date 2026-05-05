@@ -105,6 +105,16 @@ pub struct BuiltinTypeProtocol {
     pub materialize_fn: Option<&'static str>,
     /// Collection kind for metadata-based dispatch. None = not a collection.
     pub collection_kind: Option<CollectionKind>,
+    /// C runtime struct name this type aliases to (e.g. "GorgetClosure" for
+    /// Callable[T(...)]). When set, the C backend should emit a typedef to
+    /// this runtime struct instead of a fresh `__gg_X` struct definition.
+    /// Foundation for Phase A residual #1 (Callable TypeDef registration);
+    /// no consumers read this field yet — additive schema only. Migration
+    /// path requires (a) consumers in C-emit reading the field to skip the
+    /// `__gg_X` struct emission, (b) GIR type-mismatch correction at
+    /// `stmts/mod.rs` skipping aliases, and (c) Callable types registered
+    /// through the protocol with this field set to "GorgetClosure".
+    pub c_runtime_alias: Option<&'static str>,
     /// All methods on this type.
     pub methods: &'static [BuiltinMethodDecl],
 }
@@ -217,6 +227,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_array_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::Array),
+    c_runtime_alias: None,
     methods: &[
         // Mutating
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_array_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -300,6 +311,7 @@ pub static DEQUE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_array_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::Array),
+    c_runtime_alias: None,
     methods: VECTOR.methods, // Same interface as Vector
 };
 
@@ -312,6 +324,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_map_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::OrderedMap),
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "put", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
         BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
@@ -369,6 +382,7 @@ pub static HASHMAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_map_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::Map),
+    c_runtime_alias: None,
     methods: DICT.methods, // Same interface as Dict
 };
 
@@ -381,6 +395,7 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_set_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::OrderedSet),
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "insert", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -428,6 +443,7 @@ pub static HASHSET: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: Some("gorget_set_clone_inplace"),
     materialize_fn: None,
     collection_kind: Some(CollectionKind::Set),
+    c_runtime_alias: None,
     methods: SET.methods, // Same interface as Set
 };
 
@@ -440,6 +456,7 @@ pub static CHANNEL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "send", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "recv", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -461,6 +478,7 @@ pub static SHARED: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "get", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -487,6 +505,7 @@ pub static WEAK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "clone", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "upgrade", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: |a, ctx| {
@@ -506,6 +525,7 @@ pub static MUTEX: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "lock", runtime_callee: Some("gorget_mutex_lock"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: |a, ctx| {
             let elem_name = type_id_to_c_name(a.elem);
@@ -524,6 +544,7 @@ pub static GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
         BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -539,6 +560,7 @@ pub static RWLOCK: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "read", runtime_callee: Some("gorget_rwlock_read"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: |a, ctx| {
             let elem_name = type_id_to_c_name(a.elem);
@@ -560,6 +582,7 @@ pub static READ_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_read_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
     ],
@@ -574,6 +597,7 @@ pub static WRITE_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_write_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
         BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_write_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
@@ -589,6 +613,7 @@ pub static THREAD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "join", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "id", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
@@ -604,6 +629,7 @@ pub static HEAP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_heap_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "pop", runtime_callee: Some("gorget_heap_pop"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
@@ -622,6 +648,7 @@ pub static GORGET_STRING_VIEW: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         // Mutating (StringBuilder-style)
         BuiltinMethodDecl { name: "push", runtime_callee: Some("gorget_str_push"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![I64_TYPE], return_type: ret_void },
@@ -665,6 +692,7 @@ pub static OPTION: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         // Combinator methods: return the same Option type (self)
         BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
@@ -696,6 +724,7 @@ pub static RESULT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         // Combinator methods: return the same Result type (self)
         BuiltinMethodDecl { name: "map", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
@@ -722,6 +751,7 @@ pub static ATOMIC_INT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_void },
@@ -740,6 +770,7 @@ pub static ATOMIC_BOOL: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "load", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "store", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: true, returns_view: false, returns_fresh: false, params: |_| vec![BOOL_TYPE], return_type: ret_void },
@@ -757,6 +788,7 @@ pub static BARRIER: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "wait", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
     ],
@@ -771,6 +803,7 @@ pub static WAIT_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "add", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: int_param, return_type: ret_void },
         BuiltinMethodDecl { name: "done", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
@@ -787,6 +820,7 @@ pub static SEMAPHORE: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "acquire", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
         BuiltinMethodDecl { name: "release", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
@@ -803,6 +837,7 @@ pub static ONCE_FLAG: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "do_once", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "is_done", runtime_callee: None, self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
@@ -818,6 +853,7 @@ pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     clone_inplace_fn: None,
     materialize_fn: None,
     collection_kind: None,
+    c_runtime_alias: None,
     methods: &[
         BuiltinMethodDecl { name: "spawn", runtime_callee: Some("gorget_task_group_submit"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "join", runtime_callee: Some("gorget_task_group_join"), self_conv: SelfConvention::ByValue, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
