@@ -2344,6 +2344,38 @@ impl<'a> LoweringContext<'a> {
         for alias_local in shared_aliases {
             self.unset_ownership(alias_local);
         }
+
+        // Case 6: local is a struct with live NAMED field borrows pointing into it →
+        // materialize each. Triggered when the struct is reassigned or moved.
+        // Without this, `String path = imp.module_path; imp = NewImport()` leaves
+        // path dangling. Mirrors Case 3 (collection refs) for the field-borrow
+        // shape used by deferred String materialization site #1.
+        //
+        // Filter to NAMED locals: ephemeral field-load temps from
+        // expression lowering (e.g., the temp behind `obj.field` inside
+        // `f(obj.field, ...)`) carry the same Field origin tag but are
+        // dead immediately after the expression finishes. Materialising
+        // them produces duplicate clones of stale Ptr values.
+        let field_borrows = self.field_borrows_of(local);
+        for fb_local in field_borrows {
+            if !self.is_named_local(fb_local) { continue; }
+            self.unset_ownership(fb_local);
+            self.cow_materialize_alias(builder, fb_local, local, span);
+        }
+    }
+
+    /// Find every local borrowing some field of `base`. Phase D: scans v2 for
+    /// `Borrowed { Field { base, .. }, .. }` matching the target.
+    fn field_borrows_of(&self, base: LocalId) -> Vec<LocalId> {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership.iter()
+            .filter_map(|(&id, s)| match s {
+                LocalOwnership::Borrowed {
+                    origin: BorrowOrigin::Field { base: b, .. }, ..
+                } if *b == base => Some(id),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Before mutating a field-accessed collection (e.g., `self.data.push(x)`),
@@ -2397,6 +2429,18 @@ impl<'a> LoweringContext<'a> {
         let shared_aliases = self.shared_heap_aliases_of_source(source_local);
         for alias_local in shared_aliases {
             self.unset_ownership(alias_local);
+        }
+
+        // Materialize field borrows pointing at this source (deferred-string
+        // materialization: a Ptr-typed field-load like `String x = imp.field`
+        // is propagated as a Field borrow rather than eager-cloned, so source
+        // reassignment must clone the bytes back into the borrower).
+        // Filter to NAMED locals — see cow_before_mutation Case 6 rationale.
+        let fbs = self.field_borrows_of(source_local);
+        for fb in fbs {
+            if !self.is_named_local(fb) { continue; }
+            self.unset_ownership(fb);
+            self.cow_materialize_alias(builder, fb, source_local, span);
         }
     }
 
