@@ -409,6 +409,46 @@ pub enum DropGuardKind {
     NonZero { size: u32 },
 }
 
+// ── Value origin (per-value provenance) ─────────────────────────────────────
+
+/// Origin tag for an SSA value — what kind of producer created it.
+///
+/// Phase D6 of the unified resource model (`unified-resource-model.md` §6.8):
+/// the LIR-side counterpart to GIR's `BorrowOrigin`. Replaces the parallel
+/// per-value bitmaps the C backend used to reconstruct (`str_lit_vals`,
+/// `null_vals`, `cstr_vals` / `extern_cstr_return_vals`, `func_addr_targets`,
+/// `spawn_source_fn`). One typed field on `LirFunction.value_origins` indexed
+/// by `ValueId`, populated once at instruction construction, read at
+/// emit-decision sites via typed match.
+///
+/// `ptr_pointee` (the per-value pointee-type table) is intentionally **not**
+/// folded in here — it's a propagated typed type-inference table, not a
+/// single-shape origin tag, and is already shared via
+/// `LirFunction.pointee_types` (computed by `compute_module_pointee_types`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValueOrigin {
+    /// Value comes from an `Inst::StrLit { dst, value }` — i.e. a static
+    /// string literal whose runtime spelling is a pre-baked `Str*` constant.
+    /// Backends use this to skip wrapping at SlotStore (literal already has
+    /// the right shape).
+    StrLit,
+    /// Value is a NULL pointer (`Inst::NullPtr { dst }`). Backends use this
+    /// to memset rather than memcpy through a NULL source.
+    NullPtr,
+    /// Value comes from an extern call whose return ABI is `AbiKind::CStr`,
+    /// i.e. a raw `const char*`. `from_extern` distinguishes runtime fns
+    /// (heap, adopt) from extern "C" returns (may be static, copy).
+    CStr { from_extern: bool },
+    /// Value is a typed function address (`Inst::FuncAddr { dst, func }`).
+    /// Carries the FuncId for adapter generation and FuncRef tracking.
+    FuncAddr(FuncId),
+    /// Value is a void* extracted from `__gorget_spawn_<fn>` whose return
+    /// got reshaped to a non-Task struct. Carries the spawn-source function
+    /// suffix so `__gorget_task_group_submit` can reconstruct the full
+    /// Task struct with the right `__drop` fn.
+    SpawnSource(String),
+}
+
 // ── Instructions ────────────────────────────────────────────────────────────
 
 /// A single LIR instruction. Each produces at most one value (`dst`).
@@ -1216,6 +1256,15 @@ pub struct LirFunction {
     /// from a borrowed param it means "stay by-pointer"; see the LLVM
     /// `Inst::CallClosure` handler).
     pub pointee_types: Vec<Option<LirType>>,
+    /// Per-value origin tag (Phase D6 — `unified-resource-model.md` §6.8).
+    /// Indexed by `ValueId.0`. Populated by `compute_module_value_origins`
+    /// after function lowering; backends read this via typed match instead
+    /// of reconstructing origin information from instruction shapes.
+    ///
+    /// Replaces the C backend's parallel bitmaps `str_lit_vals`, `null_vals`,
+    /// `cstr_vals`, `extern_cstr_return_vals`, `func_addr_targets`,
+    /// `spawn_source_fn`.
+    pub value_origins: Vec<Option<ValueOrigin>>,
 }
 
 impl LirFunction {
@@ -1234,6 +1283,7 @@ impl LirFunction {
             str_ptr_values: rustc_hash::FxHashSet::default(),
             value_types: Vec::new(),
             pointee_types: Vec::new(),
+            value_origins: Vec::new(),
         }
     }
 

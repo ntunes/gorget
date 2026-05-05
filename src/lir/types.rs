@@ -747,6 +747,98 @@ pub fn compute_function_pointee_types_at(module: &mut LirModule, fi: usize) {
     module.functions[fi].pointee_types = pt;
 }
 
+/// Populate `func.value_origins` for every function in the module.
+///
+/// Phase D6 (`unified-resource-model.md` §6.8): the LIR-side per-value
+/// provenance. Each value gets at most one `ValueOrigin` tag, set at the
+/// instruction that produced it. Backends read this via typed match instead
+/// of reconstructing origin information from instruction shapes.
+///
+/// The mapping (one site per origin variant):
+/// - `Inst::StrLit { dst }`                                 → `StrLit`
+/// - `Inst::NullPtr { dst }`                                → `NullPtr`
+/// - `Inst::FuncAddr { dst, func }`                         → `FuncAddr(func)`
+/// - `Inst::CallExtern { dst, name, .. }` with CStr ret ABI → `CStr { from_extern: true }`
+/// - `Inst::CallExtern { dst, name = "__gorget_spawn_X", .. }` with non-Task return
+///                                                          → `SpawnSource("X")`
+///
+/// All other producers leave the origin as `None`.
+pub fn compute_module_value_origins(module: &mut LirModule) {
+    for i in 0..module.functions.len() {
+        compute_function_value_origins_at(module, i);
+    }
+}
+
+pub fn compute_function_value_origins_at(module: &mut LirModule, fi: usize) {
+    use crate::lir::{Inst, ValueOrigin};
+    let n = module.functions[fi].value_count() as usize;
+    let mut vo: Vec<Option<ValueOrigin>> = vec![None; n];
+
+    // First pass: per-value type info we need for the spawn-source decision
+    // (whether the spawn return type is the full Task struct or got reshaped
+    // to void*). The C backend's logic checks `val_types[d]` against
+    // "starts_with Task__"; mirror that here using the LIR's already-computed
+    // value_types when available, falling back to the per-instruction call
+    // return types if not yet populated.
+    let val_types: &[Option<LirType>] = &module.functions[fi].value_types;
+
+    for block in &module.functions[fi].blocks {
+        for inst in &block.insts {
+            match inst {
+                Inst::StrLit { dst, .. } => {
+                    if (dst.0 as usize) < n {
+                        vo[dst.0 as usize] = Some(ValueOrigin::StrLit);
+                    }
+                }
+                Inst::NullPtr { dst } => {
+                    if (dst.0 as usize) < n {
+                        vo[dst.0 as usize] = Some(ValueOrigin::NullPtr);
+                    }
+                }
+                Inst::FuncAddr { dst, func } => {
+                    if (dst.0 as usize) < n {
+                        vo[dst.0 as usize] = Some(ValueOrigin::FuncAddr(*func));
+                    }
+                }
+                Inst::CallExtern { dst: Some(d), name, .. } => {
+                    let ret_abi = module.externs.iter()
+                        .find(|e| &e.name == name)
+                        .map(|e| e.return_abi)
+                        .unwrap_or_default();
+                    if ret_abi == crate::ir::abi::AbiKind::CStr {
+                        if (d.0 as usize) < n {
+                            vo[d.0 as usize] = Some(ValueOrigin::CStr { from_extern: true });
+                        }
+                        continue;
+                    }
+                    if name.starts_with("__gorget_spawn_") {
+                        // Only tag when the return got reshaped away from
+                        // the full `Task__T` struct (the codegen extracts
+                        // .__task and downstream loses the spawn-fn link).
+                        let is_task_struct = matches!(
+                            val_types.get(d.0 as usize).and_then(|t| t.as_ref()),
+                            Some(LirType::Struct(sid)) if {
+                                module.structs.get(sid.0 as usize)
+                                    .map_or(false, |s| s.name.starts_with("Task__"))
+                            }
+                        );
+                        if !is_task_struct {
+                            let suffix = name.strip_prefix("__gorget_spawn_")
+                                .unwrap_or("").to_string();
+                            if (d.0 as usize) < n {
+                                vo[d.0 as usize] = Some(ValueOrigin::SpawnSource(suffix));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    module.functions[fi].value_origins = vo;
+}
+
 /// Compute value types for a single function at index `i` in `module.functions`.
 ///
 /// Split out from `compute_module_value_types` so BIR synthesis can populate

@@ -538,6 +538,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types");
         print!("{}", gorget::lir::display::dump_module(&lir_module));
         let errors = gorget::lir::validate::validate_module(&lir_module);
@@ -573,6 +574,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
             .map_err(|e| format!("BIR lowering failed: {e}"))?;
@@ -583,6 +585,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
         let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
         print!("{c_code}");
@@ -614,6 +617,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
         gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
 
         // Save metadata we need after handing ownership to BirModule.
@@ -628,6 +632,7 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
         gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
 
         // Hot-reload's two-phase build (host binary + guest .dylib) leans on
@@ -1377,6 +1382,7 @@ fn try_profile(
     gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
     gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+    gorget::lir::types::compute_module_value_origins(&mut lir_module);
     gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
     let lir_functions = lir_module.functions.len();
     let lir_instructions: usize = lir_module.functions.iter()
@@ -1394,6 +1400,7 @@ fn try_profile(
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
     gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
     gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+    gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
     let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
     let t = Instant::now();

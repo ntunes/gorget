@@ -1102,26 +1102,40 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     }
                 }
             }
-            if let Inst::StrLit { dst, .. } = inst {
-                str_lit_vals[dst.0 as usize] = true;
-            }
-            if let Inst::FuncAddr { dst, func } = inst {
-                func_addr_targets[dst.0 as usize] = Some(*func);
-            }
-            // Mark CallExtern results that return const char* (not struct pointers).
-            // Also override their value type to Ptr so they're declared as void* in C.
-            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                let ret_abi = module.externs.iter().find(|e| &e.name == name)
-                    .map(|e| e.return_abi).unwrap_or_default();
-                if ret_abi == crate::ir::abi::AbiKind::CStr {
-                    // Extern "C" return — may be static or heap, use safe copy.
-                    cstr_vals[d.0 as usize] = true;
-                    extern_cstr_return_vals[d.0 as usize] = true;
-                    val_types[d.0 as usize] = Some(LirType::Ptr);
+            // Phase D6 (`unified-resource-model.md` §6.8): seed the per-value
+            // bitmaps from the canonical `func.value_origins` table.
+            // `compute_module_value_origins` populated it from the same
+            // instruction shapes — read once, dispatch by typed match.
+            if let Some(dst) = inst.dst() {
+                let didx = dst.0 as usize;
+                if didx < max_val as usize {
+                    if let Some(origin) = func.value_origins.get(didx).and_then(|o| o.as_ref()) {
+                        match origin {
+                            ValueOrigin::StrLit => {
+                                str_lit_vals[didx] = true;
+                            }
+                            ValueOrigin::NullPtr => {
+                                null_vals[didx] = true;
+                            }
+                            ValueOrigin::FuncAddr(fid) => {
+                                func_addr_targets[didx] = Some(*fid);
+                            }
+                            ValueOrigin::CStr { from_extern } => {
+                                cstr_vals[didx] = true;
+                                if *from_extern {
+                                    extern_cstr_return_vals[didx] = true;
+                                }
+                                // CStr-returning extern: override declared
+                                // type to Ptr so the value is declared
+                                // `void*` in C (avoids const-discard).
+                                val_types[didx] = Some(LirType::Ptr);
+                            }
+                            ValueOrigin::SpawnSource(suffix) => {
+                                spawn_source_fn[didx] = Some(suffix.clone());
+                            }
+                        }
+                    }
                 }
-            }
-            if let Inst::NullPtr { dst } = inst {
-                null_vals[dst.0 as usize] = true;
             }
             // Track collection get results — pointers into internal storage that need cloning on Load.
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {

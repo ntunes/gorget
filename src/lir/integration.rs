@@ -51,6 +51,7 @@ mod tests {
         validate::assert_module_valid(&lir, "optimize");
         crate::lir::types::compute_module_value_types(&mut lir);
         crate::lir::types::compute_module_pointee_types(&mut lir);
+        crate::lir::types::compute_module_value_origins(&mut lir);
         validate::assert_module_valid(&lir, "compute-types");
 
         // Validate (post-optimization). `assert_module_valid` already
