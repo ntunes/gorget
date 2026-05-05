@@ -15,10 +15,12 @@ pub(super) fn emit_call_extern(
     let module = ctx.module;
     let sn = ctx.sn;
     let val_types = ctx.val_types;
+    // Phase D6 transitional: helpers like `emit_coerced_arg` still take a
+    // raw `&[bool]` for `str_lit_vals`; this binding feeds those calls.
+    // Direct reads in this file go through `ctx.is_str_lit(v)` /
+    // `ctx.is_null(v)` / `ctx.spawn_source(v)`.
     let str_lit_vals = ctx.str_lit_vals;
-    let null_vals = ctx.null_vals;
     let ptr_pointee = ctx.ptr_pointee;
-    let spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let _s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -251,7 +253,7 @@ pub(super) fn emit_call_extern(
                         "or" => {
                             // or takes a second Option value (passed as pointer)
                             let other_v = if args.len() > 1 { v(args[1]) } else { String::new() };
-                            let other_is_null = args.get(1).map_or(false, |a| null_vals.get(a.0 as usize).copied().unwrap_or(false));
+                            let other_is_null = args.get(1).map_or(false, |a| ctx.is_null(*a));
                             if other_is_null {
                                 // "or(None)" → if self is Some, return self, else return None
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
@@ -350,7 +352,7 @@ pub(super) fn emit_call_extern(
             // These C runtime functions use void+out-param ABI but GIR calls them
             // as if they return a single Result/struct value. Rewrite to out-param form.
             if let Some(outparam_code) = try_emit_outparam_call_lir(
-                emit_name, dst, args, val_types, str_lit_vals, sn, &module.structs,
+                emit_name, dst, args, val_types, func, sn, &module.structs,
             ) {
                 write!(out, "{}", outparam_code).unwrap();
                 return;
@@ -361,7 +363,7 @@ pub(super) fn emit_call_extern(
             // gorget_file_open(path) with 1 arg → gorget_file_open(cstr, "r")
             if emit_name == "gorget_file_create" && args.len() == 1 {
                 let a = args[0];
-                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let is_str_lit = ctx.is_str_lit(a);
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_gs = is_str_lit || matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
                 let path_expr = if is_gs {
@@ -399,7 +401,7 @@ pub(super) fn emit_call_extern(
             }
             if emit_name == "gorget_file_open" && args.len() == 1 {
                 let a = args[0];
-                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let is_str_lit = ctx.is_str_lit(a);
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let is_gs = is_str_lit || matches!(arg_ty, Some(LirType::Struct(sid)) if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
                 let path_expr = if is_gs {
@@ -419,7 +421,7 @@ pub(super) fn emit_call_extern(
             // GIR represents str(int_val) as gorget_str_cat("", int_val).
             // Rewrite to gorget_int_to_str / gorget_float_to_str + wrap.
             if emit_name == "gorget_str_cat" && args.len() == 2 {
-                let arg0_is_empty_str = str_lit_vals.get(args[0].0 as usize).copied().unwrap_or(false)
+                let arg0_is_empty_str = ctx.is_str_lit(args[0])
                     && func.blocks.iter().any(|blk| blk.insts.iter().any(|inst| {
                         matches!(inst, Inst::StrLit { dst, value } if *dst == args[0] && value.is_empty())
                     }));
@@ -489,7 +491,7 @@ pub(super) fn emit_call_extern(
                                         is_str_struct(t, module)
                                     })
                                 });
-                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let is_str_lit = ctx.is_str_lit(a);
                             if is_str_lit || arg_is_str {
                                 // 32-byte Str struct — extract .data for const char*
                                 format!("(const char*){}.data", v(a))
@@ -662,7 +664,7 @@ pub(super) fn emit_call_extern(
                         for (i, a) in emit_args.iter().enumerate() {
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let is_str_lit = ctx.is_str_lit(*a);
                             // ABI-driven marshalling: explicit tag or whitelist-derived.
                             {
                                 let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
@@ -678,7 +680,7 @@ pub(super) fn emit_call_extern(
                             }
                             // CStr cases handled by resolve_param_abi above; fallback for non-CStr.
                             let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            emit_coerced_arg(out, a, ext_param, val_types, func, sn);
                         }
                         write!(out, "); {opt_ty} __opt; if (__raw.start != -1) {{ __opt.tag = 0; __opt.Some_0 = __raw; }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
                         return;
@@ -706,7 +708,7 @@ pub(super) fn emit_call_extern(
                         for (i, a) in emit_args.iter().enumerate() {
                             if i > 0 { write!(out, ", ").unwrap(); }
                             let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                            let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                            let is_str_lit = ctx.is_str_lit(*a);
                             // ABI-driven marshalling.
                             {
                                 let inst_abi = arg_abis.get(i).copied().unwrap_or(crate::ir::abi::AbiKind::Auto);
@@ -721,7 +723,7 @@ pub(super) fn emit_call_extern(
                                 }
                             }
                             let ext_param = ext_params.and_then(|p| p.get(i));
-                            emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                            emit_coerced_arg(out, a, ext_param, val_types, func, sn);
                         }
                         write!(out, "); {opt_ty} __opt; if (__raw) {{ __opt.tag = 0; __opt.Some_0 = __raw; }} else {{ __opt.tag = 1; }} __opt; }});").unwrap();
                         return;
@@ -743,7 +745,7 @@ pub(super) fn emit_call_extern(
                 if is_ptr {
                     // Check if this void* was produced by a spawn (.__task extraction).
                     // If so, reconstruct the full Task__void struct with the correct __drop fn.
-                    if let Some(Some(spawn_fn)) = spawn_source_fn.get(task_arg.0 as usize) {
+                    if let Some(spawn_fn) = ctx.spawn_source(task_arg) {
                         let drop_fn = format!("__spawn_drop_{spawn_fn}");
                         // Use gorget_task_group_submit_raw directly to avoid macro comma issues
                         // with compound literals.
@@ -808,7 +810,7 @@ pub(super) fn emit_call_extern(
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
-                        emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                        emit_coerced_arg(out, a, ext_param, val_types, func, sn);
                     }
                 }
                 writeln!(out, ");").unwrap();
@@ -826,14 +828,14 @@ pub(super) fn emit_call_extern(
                     if i > 0 { write!(out, ", ").unwrap(); }
                     let spawn_c_ty = spawn_param_c_types.get(i).map(|s| s.as_str());
                     let arg_is_ptr = matches!(val_types.get(a.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Ptr));
-                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    let is_str_lit_arg = ctx.is_str_lit(*a);
                     if arg_is_ptr && is_str_lit_arg && matches!(spawn_c_ty, Some("Str" | "GorgetString")) {
                         write!(out, "{v}", v = v(*a)).unwrap();
                     } else if arg_is_ptr && matches!(spawn_c_ty, Some("Str" | "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet")) {
                         write!(out, "*({}*){}", spawn_c_ty.unwrap(), v(*a)).unwrap();
                     } else {
                         let ext_param = ext_params.and_then(|p| p.get(i));
-                        emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                        emit_coerced_arg(out, a, ext_param, val_types, func, sn);
                     }
                 }
                 writeln!(out, ").__task;").unwrap();
@@ -853,7 +855,7 @@ pub(super) fn emit_call_extern(
                 emit_args.first()
             } else { None };
             let _need_fmt_fix = is_printf && fmt_arg_id.map_or(false, |fid| {
-                str_lit_vals.get(fid.0 as usize).copied().unwrap_or(false)
+                ctx.is_str_lit(*fid)
             }) && emit_args.iter().skip(1).any(|a| {
                 let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
                 let ptr_to_str = is_str_ptr_opt(ty, module)
@@ -915,7 +917,7 @@ pub(super) fn emit_call_extern(
                     write!(out, ", ").unwrap();
                 }
                 let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let is_str_lit = ctx.is_str_lit(*a);
                 // ABI-driven marshalling: instruction-level tags (from runtime_extern_sig)
                 // take priority, then extern declaration tags, then whitelist fallback.
                 {
@@ -977,7 +979,7 @@ pub(super) fn emit_call_extern(
                         .find(|sf| sf.fn_name == spawn_fn_name)
                         .and_then(|sf| sf.params.get(i))
                         .map(|(_, ct)| ct.as_str());
-                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    let is_str_lit_arg = ctx.is_str_lit(*a);
                     if matches!(spawn_c_ty, Some("Str" | "GorgetString")) && is_str_lit_arg {
                         // String literal → Str param: wrap
                         write!(out, "{v}", v = v(*a)).unwrap();
@@ -1155,7 +1157,7 @@ pub(super) fn emit_call_extern(
                 // Use general coercion for extern params.
                 else {
                     let ext_param = ext_params.and_then(|p| p.get(i));
-                    emit_coerced_arg(out, a, ext_param, val_types, str_lit_vals, sn);
+                    emit_coerced_arg(out, a, ext_param, val_types, func, sn);
                 }
             }
             if deref_clone_extra_close {

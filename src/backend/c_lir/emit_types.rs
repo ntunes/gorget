@@ -924,16 +924,22 @@ pub(super) fn emit_abi_arg(
 }
 
 /// Handles: Ptr→Str (string literal wrapping), Ptr→Aggregate (dereference), GorgetString→Str.
+///
+/// Reads per-value origin info via `func.value_origins` (Phase D6) — no
+/// parallel `str_lit_vals` bitmap parameter required.
 pub(super) fn emit_coerced_arg(
     out: &mut String,
     a: &ValueId,
     param_ty: Option<&LirType>,
     val_types: &[Option<LirType>],
-    str_lit_vals: &[bool],
+    func: &LirFunction,
     sn: &HashMap<u32, String>,
 ) {
     let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-    let is_str_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+    let is_str_lit = matches!(
+        func.value_origins.get(a.0 as usize).and_then(|o| o.as_ref()),
+        Some(ValueOrigin::StrLit)
+    );
     let param_name = param_ty.map(|t| c_type_named(t, sn));
     let arg_name = arg_ty.map(|t| c_type_named(t, sn));
 

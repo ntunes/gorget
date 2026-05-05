@@ -366,7 +366,7 @@ pub(super) fn try_emit_outparam_call_lir(
     dst: &Option<ValueId>,
     args: &[ValueId],
     val_types: &[Option<LirType>],
-    str_lit_vals: &[bool],
+    func: &LirFunction,
     sn: &std::collections::HashMap<u32, String>,
     structs: &[StructDef],
 ) -> Option<String> {
@@ -385,7 +385,10 @@ pub(super) fn try_emit_outparam_call_lir(
     // Helper: coerce a string literal arg to Str, or pass a Str value as-is.
     // For Ptr args (e.g. pointer to Str slot), dereference to Str.
     let str_arg = |a: ValueId| -> String {
-        let is_lit = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+        let is_lit = matches!(
+            func.value_origins.get(a.0 as usize).and_then(|o| o.as_ref()),
+            Some(ValueOrigin::StrLit)
+        );
         let ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
         if is_lit {
             format!("gorget_str_from_literal({v}, strlen({v}))", v = v(a))

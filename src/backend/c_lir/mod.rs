@@ -25,6 +25,8 @@ pub(crate) struct EmitContext<'a> {
     /// Per-value inferred types (indexed by ValueId).
     pub val_types: &'a [Option<LirType>],
     /// Per-value: true if the value comes from a StrLit instruction.
+    /// (Phase D6 transitional: derived from `func.value_origins`. Once all
+    /// readers go through the typed accessors below, drop this field.)
     pub str_lit_vals: &'a [bool],
     /// Per-value: true if the value comes from a cstr-returning extern.
     pub cstr_vals: &'a [bool],
@@ -40,6 +42,61 @@ pub(crate) struct EmitContext<'a> {
     pub spawn_source_fn: &'a [Option<String>],
     /// String content → static literal index (Phase 3).
     pub string_lit_map: &'a HashMap<String, usize>,
+}
+
+impl<'a> EmitContext<'a> {
+    /// Typed accessor: the per-value origin (Phase D6 — read once, dispatch
+    /// by `match`). Returns `None` if the value carries no origin tag.
+    #[inline]
+    pub fn origin(&self, v: ValueId) -> Option<&'a ValueOrigin> {
+        self.func.value_origins.get(v.0 as usize).and_then(|o| o.as_ref())
+    }
+
+    /// Convenience predicate: is this value a string literal (`Inst::StrLit`)?
+    #[inline]
+    pub fn is_str_lit(&self, v: ValueId) -> bool {
+        matches!(self.origin(v), Some(ValueOrigin::StrLit))
+    }
+
+    /// Convenience predicate: is this value a NULL pointer (`Inst::NullPtr`)?
+    #[inline]
+    pub fn is_null(&self, v: ValueId) -> bool {
+        matches!(self.origin(v), Some(ValueOrigin::NullPtr))
+    }
+
+    /// Convenience predicate: is this value a const-char* (CStr-returning
+    /// extern call)?
+    #[inline]
+    pub fn is_cstr(&self, v: ValueId) -> bool {
+        matches!(self.origin(v), Some(ValueOrigin::CStr { .. }))
+    }
+
+    /// Convenience predicate: is this value an extern-"C" CStr return
+    /// (vs a runtime-fn CStr return)? Only valid when `is_cstr` is true.
+    #[inline]
+    pub fn is_cstr_extern(&self, v: ValueId) -> bool {
+        matches!(self.origin(v), Some(ValueOrigin::CStr { from_extern: true }))
+    }
+
+    /// Typed accessor: the FuncId carried by an `Inst::FuncAddr`-produced
+    /// value, if any.
+    #[inline]
+    pub fn func_addr_target(&self, v: ValueId) -> Option<FuncId> {
+        match self.origin(v) {
+            Some(ValueOrigin::FuncAddr(fid)) => Some(*fid),
+            _ => None,
+        }
+    }
+
+    /// Typed accessor: the spawn-source function suffix carried by a
+    /// reshaped `__gorget_spawn_*` return value, if any.
+    #[inline]
+    pub fn spawn_source(&self, v: ValueId) -> Option<&'a str> {
+        match self.origin(v) {
+            Some(ValueOrigin::SpawnSource(s)) => Some(s.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// Names of structs provided by the Gorget C runtime — these should NOT
@@ -1165,21 +1222,8 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     }
                 }
             }
-            // Track spawn source function for void* destinations.
-            // When __gorget_spawn_X returns Task__T but dst is void*, the codegen
-            // extracts .__task; we record X so task_group_submit can reconstruct
-            // the full Task struct with the correct __drop fn.
-            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                if name.starts_with("__gorget_spawn_") {
-                    let is_task_struct = matches!(val_types.get(d.0 as usize).and_then(|t| t.as_ref()), Some(LirType::Struct(sid)) if {
-                        module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Task__"))
-                    });
-                    if !is_task_struct {
-                        let fn_suffix = name.strip_prefix("__gorget_spawn_").unwrap_or("").to_string();
-                        spawn_source_fn[d.0 as usize] = Some(fn_suffix);
-                    }
-                }
-            }
+            // (spawn_source_fn now populated from `func.value_origins` above
+            //  — see ValueOrigin::SpawnSource branch.)
             // Track pointee types for pointer-producing instructions.
             match inst {
                 Inst::SlotAddr { dst, slot } => {
@@ -1699,8 +1743,9 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
             writeln!(out, "    {} __v{i};", c_override).unwrap();
             continue;
         }
-        // cstr_vals are const char* from runtime functions — declare as such to avoid const-discard warnings.
-        if cstr_vals.get(i).copied().unwrap_or(false) {
+        // CStr-origin values are const char* — declare as such to avoid
+        // const-discard warnings. Reads `func.value_origins` directly.
+        if matches!(func.value_origins.get(i).and_then(|o| o.as_ref()), Some(ValueOrigin::CStr { .. })) {
             writeln!(out, "    const char* __v{i};").unwrap();
             continue;
         }
@@ -1864,13 +1909,12 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
     let module = ctx.module;
     let sn = ctx.sn;
     let val_types = ctx.val_types;
+    // `str_lit_vals` is still threaded into helper signatures that take a
+    // raw bitmap (e.g. `emit_coerced_arg`); migrate those next. Local origin
+    // queries below go through the typed accessors `ctx.is_str_lit(v)` /
+    // `ctx.is_null(v)` / `ctx.is_cstr(v)` / `ctx.is_cstr_extern(v)`.
     let str_lit_vals = ctx.str_lit_vals;
-    let cstr_vals = ctx.cstr_vals;
-    let extern_cstr_return_vals = ctx.extern_cstr_return_vals;
-    let null_vals = ctx.null_vals;
     let ptr_pointee = ctx.ptr_pointee;
-    let _func_addr_targets = ctx.func_addr_targets;
-    let _spawn_source_fn = ctx.spawn_source_fn;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };
 
@@ -1887,8 +1931,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             let slot_is_str = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "Str"));
             let slot_is_gs = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetString"));
             let slot_is_closure = matches!(slot_ty, LirType::Struct(sid) if sn.get(&sid.0).map_or(false, |n| n == "GorgetClosure"));
-            let is_str_lit_val = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
-            let is_cstr = cstr_vals.get(value.0 as usize).copied().unwrap_or(false);
+            let is_str_lit_val = ctx.is_str_lit(*value);
+            let is_cstr = ctx.is_cstr(*value);
             // GorgetClosure slot with non-closure value (e.g. void*, int64_t, or void from another slot):
             // memcpy to avoid type mismatch. The value is always a pointer to closure data
             // (from SlotAddr, array_get, etc.), even when LIR types it as I64.
@@ -1902,8 +1946,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // String literal → Str slot: direct assign (Phase 3 — static .rodata, zero alloc).
                 write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
             } else if slot_is_str && is_cstr {
-                let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
-                if is_extern_ret {
+                if ctx.is_cstr_extern(*value) {
                     // Extern "C" return — may be static or heap, use safe copy.
                     write!(out, "{} = gorget_str_from_cstr({});", s(*slot), v(*value)).unwrap();
                 } else {
@@ -1914,8 +1957,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // String literal → GorgetString slot: direct assign (Phase 3 — static .rodata).
                 write!(out, "{} = {};", s(*slot), v(*value)).unwrap();
             } else if slot_is_gs && is_cstr {
-                let is_extern_ret = extern_cstr_return_vals.get(value.0 as usize).copied().unwrap_or(false);
-                if is_extern_ret {
+                if ctx.is_cstr_extern(*value) {
                     write!(out, "{} = gorget_str_from_cstr({});", s(*slot), v(*value)).unwrap();
                 } else {
                     write!(out, "{} = gorget_string_adopt((char*){});", s(*slot), v(*value)).unwrap();
@@ -1923,7 +1965,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             } else if slot_ty.is_aggregate() {
                 // Aggregate store: source may be a pointer (SlotAddr) or a struct value (ParamRef, Call result).
                 let val_is_ptr = matches!(val_ty, Some(LirType::Ptr));
-                let val_is_null = null_vals.get(value.0 as usize).copied().unwrap_or(false);
+                let val_is_null = ctx.is_null(*value);
                 let ty_name = c_type_named(slot_ty, sn);
                 if val_is_null {
                     // NullPtr → aggregate slot: zero out (e.g. None variant of Option).
@@ -2329,7 +2371,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
         Inst::Store { ptr, value } => {
             // Generic store — type is determined by context.
             let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
-            let is_str_lit = str_lit_vals.get(value.0 as usize).copied().unwrap_or(false);
+            let is_str_lit = ctx.is_str_lit(*value);
             if is_str_lit {
                 // String literal → store the static Str pointer directly.
                 write!(out, "*(Str*)({}) = {};", v(*ptr), v(*value)).unwrap();
@@ -2337,7 +2379,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 // Source is a pointer-shaped value (raw Ptr, or Tier E §8.6 FuncRef
                 // which lowers identically at this layer) — either an aggregate
                 // reference (memcpy) or a raw pointer value (direct store).
-                let val_is_null = null_vals.get(value.0 as usize).copied().unwrap_or(false);
+                let val_is_null = ctx.is_null(*value);
                 let pointee = ptr_pointee.get(value.0 as usize).and_then(|t| t.as_ref());
                 let dst_pointee = ptr_pointee.get(ptr.0 as usize).and_then(|t| t.as_ref());
                 if val_is_null {
@@ -2504,16 +2546,16 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                 let param_is_void = target_func.params.get(i)
                     .map_or(false, |p| p.is_ptr() || matches!(p, LirType::Void));
                 if param_is_void {
-                    let is_str_lit_arg = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                    let is_str_lit_arg = ctx.is_str_lit(*a);
                     let is_const = target_func.const_params.get(i).copied().unwrap_or(false);
                     if is_str_lit_arg && is_const {
                         // String literal → Str const param: stack-allocated literal with header.
                         write!(out, "&{v}", v = v(*a)).unwrap();
                     } else {
-                        emit_coerced_arg(out, a, target_func.params.get(i), val_types, str_lit_vals, sn);
+                        emit_coerced_arg(out, a, target_func.params.get(i), val_types, ctx.func, sn);
                     }
                 } else {
-                    emit_coerced_arg(out, a, target_func.params.get(i), val_types, str_lit_vals, sn);
+                    emit_coerced_arg(out, a, target_func.params.get(i), val_types, ctx.func, sn);
                 }
             }
             write!(out, ");").unwrap();
@@ -2592,7 +2634,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                         continue;
                     }
                 }
-                let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let is_str_lit_val = ctx.is_str_lit(*a);
                 if is_str_lit_val {
                     // String literal → Ptr param: stack-allocated literal with header.
                     write!(out, "&{v}", v = v(*a)).unwrap();
@@ -2651,7 +2693,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
                         continue;
                     }
                 }
-                let is_str_lit_val = str_lit_vals.get(a.0 as usize).copied().unwrap_or(false);
+                let is_str_lit_val = ctx.is_str_lit(*a);
                 if is_str_lit_val {
                     write!(out, "&{v}", v = v(*a)).unwrap();
                 } else {
