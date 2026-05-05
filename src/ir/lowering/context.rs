@@ -789,6 +789,25 @@ impl<'a> LoweringContext<'a> {
                 // For generic named types, check if the mangled name needs substitution.
                 // resolve_type_name handles both type_name_subs (pre-computed) and
                 // generic_fragment_subs (on-the-fly), e.g. "Vector__T" → "Vector__int64_t".
+                //
+                // Phase A residual #1, sub-TODO 1b: respect the Callable family
+                // local-form invariant. `Callable[T(P)]` at a local declaration
+                // must always lower to `GirType::FnPtr` for closure-call dispatch
+                // (`__gorget_closure_call_<N>`) at calls.rs:912; the Named form
+                // `Callable__GorgetClosure` is reserved for in-collection
+                // positions. `map_ast_type_mut` honors this via an explicit skip
+                // of the `named_types` lookup at types.rs:149; the same skip
+                // belongs here so that an eagerly-registered `Callable__…` Named
+                // TypeDef doesn't leak into a local's gir_type via the subs path
+                // (whose direct `named_types.get` lookup bypasses the special
+                // case). Without this, the local binds to Named, the dispatch
+                // at calls.rs falls past both the `UNIT_TYPE` and `FnPtr`
+                // branches, and a regular `Call { func: "h" }` is emitted —
+                // failing the `@h` undefined-function validator at calls.rs:880.
+                let base = name.node.as_str();
+                if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+                    return self.type_mapper.map_ast_type(ty); // None → UNIT_TYPE; caller falls back to map_ast_type_mut → FnPtr
+                }
                 let mangled = super::types::mangle_generic_name(&name.node, generic_args);
                 let resolved = self.resolve_type_name(&mangled);
                 if let Some(&id) = self.type_mapper.named_types.get(&resolved) {
