@@ -1,0 +1,21 @@
+# Test: std.process.exec_output captures the child's stderr separately
+# into ExecResult.errors, and doesn't leak it to the parent process.
+# Snag #10 (2026-05-06).
+#
+# Pre-fix, gorget_exec_output used popen(cmd, "r") which only captures
+# stdout. ExecResult.errors was hardcoded to "" and the child's stderr
+# fell through to the parent's stderr — so the API contract was broken
+# AND test runners had stderr noise from the child leaking through.
+#
+# Fix: replaced popen with fork + two pipes (stdout + stderr) + execvp
+# of /bin/sh -c <cmd>, with poll()-driven non-blocking reads on both
+# pipes so the parent doesn't deadlock on a full pipe buffer.
+
+from std.process import exec_output
+
+void main():
+    # echo to stdout, echo to stderr, exit with code 3
+    auto r = exec_output("echo hello && echo bye 1>&2; exit 3")
+    print(f"exit={r.exit_code}")
+    print(f"output=[{r.output.trim()}]")
+    print(f"errors=[{r.errors.trim()}]")

@@ -17849,6 +17849,31 @@ done",
 }
 
 #[test]
+fn match_expr_block_arms() {
+    run_gg(
+        "match_expr_block_arms.gg",
+        "\
+got: hello
+err: bad input
+default: default
+0
+1
+2",
+    );
+}
+
+#[test]
+fn exec_output_captures_stderr() {
+    run_gg(
+        "exec_output_captures_stderr.gg",
+        "\
+exit=3
+output=[hello]
+errors=[bye]",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }

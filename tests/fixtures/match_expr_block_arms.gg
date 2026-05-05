@@ -1,0 +1,55 @@
+# Test: match-as-expression with multi-statement arm bodies, including
+# arms that diverge (return / throw). Snag #11 (2026-05-06).
+#
+# Pre-fix, `T x = match scrutinee: case ...:\n    block\n    return ...` was
+# rejected by the parser ("expected expression, found NEWLINE"). The parser
+# only supported single-line arm bodies in expression-form match (`T x =
+# match n: case 0: 0 case 1: 1 else: 2` — same-line per arm).
+#
+# Fix: route match-expression arm bodies through `parse_arm_body`, the same
+# helper match-statement arms already use. It accepts either an inline
+# expression or an indented block (wrapped as `Expr::Block`). The IR
+# lowering's `lower_block_expr` walks the block's last stmt as the value
+# (or routes a trailing diverging stmt through normally), so multi-statement
+# arms with early-exit tails compose with the match's value type. Combined
+# with `infer_stmt_tail_type` returning Never for return/throw/break/continue
+# (so the type-checker doesn't reject the arm as `void`), and the
+# match-expr lowering's `assign_mode = Move` for resource arm values.
+
+struct Frontmatter:
+    String desc
+
+# (1) Block arm body that produces the arm's value.
+Frontmatter parse_or_default(Result[Frontmatter, String] r):
+    return match r:
+        case Ok(f):
+            f
+        case Error(_):
+            Frontmatter("default")
+
+# (2) Multi-statement arm with diverging tail. The Error arm prints and
+# returns; the Ok arm produces the match's value.
+void run(Result[Frontmatter, String] r):
+    Frontmatter fm = match r:
+        case Ok(f):
+            f
+        case Error(msg):
+            print(f"err: {msg}")
+            return
+    print(f"got: {fm.desc}")
+
+# (3) Single-line arms still work (no regression).
+int classify(int n):
+    return match n:
+        case 0: 0
+        case 1: 1
+        else: 2
+
+void main():
+    run(Ok(Frontmatter("hello")))
+    run(Error("bad input"))
+    Frontmatter d = parse_or_default(Error("nope"))
+    print(f"default: {d.desc}")
+    print(classify(0))
+    print(classify(1))
+    print(classify(99))
