@@ -451,9 +451,25 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             || runtime_defined_named.contains(&def.name.as_str())
             || is_monomorphized_wrapper_type(&def.name)
             || lir_to_runtime_name(&def.name).is_some()
+            // Phase A residual #1: Named types tagged with `c_runtime_alias`
+            // (e.g. `Callable__T_args` → "GorgetClosure") are emitted as a
+            // typedef to the runtime struct further down — skip the
+            // synthetic `__gg_X` struct definition entirely.
+            || def.c_runtime_alias.is_some()
     };
     for (i, def) in module.structs.iter().enumerate() {
-        if skip_struct(def) { continue; }
+        if skip_struct(def) {
+            // Emit `typedef <runtime> <c-name>;` for c_runtime_alias-tagged
+            // types so the C name resolves to the runtime layout. Other
+            // skipped categories (RUNTIME_STRUCTS, runtime_defined_named,
+            // monomorphized wrappers, lir_to_runtime_name aliases) are
+            // typedef'd elsewhere — don't double-emit here.
+            if let Some(ref rt) = def.c_runtime_alias {
+                let cname = &struct_names[&(i as u32)];
+                writeln!(out, "typedef {rt} {cname};").unwrap();
+            }
+            continue;
+        }
         let cname = &struct_names[&(i as u32)];
         writeln!(out, "typedef struct {cname} {cname};").unwrap();
     }

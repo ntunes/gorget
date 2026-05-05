@@ -388,7 +388,27 @@ fn lower_var_decl(
                 // Reinfer to the RHS type so the variable's slot matches the value, preventing
                 // the Move assign from storing a pointer-as-int into a mismatched slot.
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
-                if inferred != gir_type
+                // Skip the corrective when the declared type and the inferred
+                // type both ultimately land on the same C runtime struct.
+                // Concretely: a `Callable[int()]` local lowers to GirType::FnPtr,
+                // but Callable values inside collections come back as
+                // GirType::Named("Callable__T_args") with `c_runtime_alias =
+                // "GorgetClosure"`. Both are 16-byte GorgetClosure handles —
+                // overwriting the FnPtr type with the Named form breaks the
+                // closure-call dispatch (`call @f1`-style codegen) at calls.rs.
+                // Layering-discipline: the metadata field is on the typed
+                // TypeDef, NOT a name match. Phase A residual #1.
+                let gir_is_fnptr = matches!(ctx.type_registry.get(gir_type), Some(GirType::FnPtr { .. }));
+                let inferred_is_alias_of_closure = matches!(
+                    ctx.type_registry.get(inferred),
+                    Some(GirType::Named(n))
+                        if ctx.type_registry.get_type_def(n)
+                            .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                            == Some("GorgetClosure")
+                );
+                let same_runtime_alias = gir_is_fnptr && inferred_is_alias_of_closure;
+                if !same_runtime_alias
+                    && inferred != gir_type
                     && !matches!(ctx.type_registry.get(inferred), Some(GirType::Ptr(_)))
                     && ctx.type_registry.is_resource_type(inferred)
                     && !ctx.type_registry.is_resource_type(gir_type)

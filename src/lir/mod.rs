@@ -1382,16 +1382,25 @@ pub struct StructDef {
     /// c_lir/helpers.rs:765 — c_lir reads from this field via
     /// `LirModule::struct_drop_fn(name)` instead.
     pub elem_drop_fn: Option<String>,
+    /// Phase A residual #1: when set, this Named type is a typedef alias of
+    /// the named C runtime struct (e.g. `Callable__T_args` →
+    /// `"GorgetClosure"`). The C backend emits
+    /// `typedef <c_runtime_alias> <name>;` and skips the `__gg_<name>` struct
+    /// definition entirely. Mirrors `TypeMetadata.c_runtime_alias` and
+    /// `BuiltinTypeProtocol::c_runtime_alias`. Read by c_lir at struct
+    /// emission and at struct-name-resolution sites that previously
+    /// name-matched on `Callable__`.
+    pub c_runtime_alias: Option<String>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {

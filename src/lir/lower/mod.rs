@@ -683,7 +683,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8), elem_drop_fn: None,
+                computed_c_align: Some(8), elem_drop_fn: None, c_runtime_alias: None,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -742,7 +742,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8), elem_drop_fn: None,
+                        computed_c_align: Some(8), elem_drop_fn: None, c_runtime_alias: None,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -759,7 +759,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![("_0".into(), LirType::Ptr)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -777,7 +777,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -792,12 +792,45 @@ impl<'a> LoweringContext<'a> {
 
             match &def.kind {
                 gir_types::TypeDefKind::Struct(_) | gir_types::TypeDefKind::Enum(_) => {
+                    // Phase A residual #1: when a Named type carries
+                    // `c_runtime_alias = Some(rt)` (e.g. `Callable__T_args` →
+                    // "GorgetClosure"), the runtime struct already provides
+                    // the layout. Synthesize a StructDef whose fields mirror
+                    // the runtime struct (same size + same field-load offsets)
+                    // and tag it with `c_runtime_alias` so the C backend
+                    // emits `typedef <rt> <name>;` instead of a fresh struct
+                    // definition. The fields are populated below from the
+                    // runtime struct's LIR StructDef so SlotLoad / FieldStore
+                    // through this Named TypeId still resolves to the right
+                    // offsets at LIR-emit time.
+                    if let Some(ref rt) = def.metadata.c_runtime_alias {
+                        if let Some(rt_sid) = self.struct_reg.lookup(rt) {
+                            let rt_def = self.module.struct_def(rt_sid).clone();
+                            let sid = self.module.add_struct(StructDef {
+                                name: def.name.clone(),
+                                fields: rt_def.fields.clone(),
+                                enum_kind: rt_def.enum_kind,
+                                is_union_layout: rt_def.is_union_layout,
+                                computed_c_size: rt_def.computed_c_size,
+                                computed_c_align: rt_def.computed_c_align,
+                                elem_drop_fn: rt_def.elem_drop_fn.clone(),
+                                c_runtime_alias: Some(rt.clone()),
+                            });
+                            self.struct_reg.register(&def.name, sid);
+                            // Skip deferred Pass-2: the GIR TypeDef has no
+                            // user-visible fields (Callable__T is opaque to
+                            // user code), so leaving the runtime fields in
+                            // place is correct.
+                            continue;
+                        }
+                    }
                     let sid = self.module.add_struct(StructDef {
                         name: def.name.clone(),
                         fields: vec![],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            c_runtime_alias: def.metadata.c_runtime_alias.clone(),
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -930,7 +963,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -954,7 +987,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -970,7 +1003,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                               });
                 self.struct_reg.register(name, sid);
             }
@@ -1096,20 +1129,26 @@ pub(super) fn collection_runtime_type(
 ) -> Option<&'static str> {
     use crate::ir::types::CollectionKind;
     if let Some(td) = gir_types.get_type_def(name) {
+        // Phase A residual #1: `c_runtime_alias` covers the Callable family
+        // (and any future Named-types-that-are-runtime-typedef-aliases).
+        // Reads precede `collection_kind` so a type with both falls back to
+        // the alias spelling — currently no such type exists; the field is
+        // mutually exclusive in practice.
+        if let Some(ref rt) = td.metadata.c_runtime_alias {
+            return match rt.as_str() {
+                "GorgetClosure" => Some("GorgetClosure"),
+                "GorgetArray"   => Some("GorgetArray"),
+                "GorgetMap"     => Some("GorgetMap"),
+                "GorgetSet"     => Some("GorgetSet"),
+                "GorgetString"  => Some("GorgetString"),
+                _               => None, // unknown runtime alias; refuse to invent
+            };
+        }
         return td.metadata.collection_kind.map(|kind| match kind {
             CollectionKind::Array => "GorgetArray",
             CollectionKind::Map | CollectionKind::OrderedMap => "GorgetMap",
             CollectionKind::Set | CollectionKind::OrderedSet => "GorgetSet",
         });
-    }
-    // Callable types lack TypeDef registration today; explicit fallback
-    // until that gap closes (Phase A residual #1 in TODO.md).
-    if name.starts_with("Callable__")
-        || name.starts_with("MutCallable__")
-        || name.starts_with("ConsumeCallable__")
-        || name == "GorgetClosure"
-    {
-        return Some("GorgetClosure");
     }
     None
 }

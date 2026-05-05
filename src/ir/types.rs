@@ -170,6 +170,13 @@ pub struct TypeMetadata {
     pub collection_kind: Option<CollectionKind>,
     /// Enum category for Option/Result detection (replaces starts_with("Option__") matching).
     pub enum_category: Option<EnumCategory>,
+    /// C runtime struct name this Named type aliases to (e.g. `Callable__T_args`
+    /// → `"GorgetClosure"`). When set, the C backend emits a typedef to this
+    /// runtime struct instead of a fresh `__gg_X` struct definition. Read by
+    /// the GIR type-mismatch corrective at `stmts/mod.rs` (skip overwrites
+    /// when the inferred Named type is just an alias of a runtime struct).
+    /// Mirrors `BuiltinTypeProtocol::c_runtime_alias`.
+    pub c_runtime_alias: Option<String>,
 }
 
 impl Default for TypeMetadata {
@@ -184,6 +191,7 @@ impl Default for TypeMetadata {
             materialize_fn: None,
             collection_kind: None,
             enum_category: None,
+            c_runtime_alias: None,
         }
     }
 }

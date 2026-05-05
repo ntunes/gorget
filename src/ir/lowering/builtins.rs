@@ -860,6 +860,75 @@ pub static TASK_GROUP: BuiltinTypeProtocol = BuiltinTypeProtocol {
     ],
 };
 
+// ── Callable family ────────────────────────────────────────────────────
+//
+// Callable / MutCallable / ConsumeCallable monomorphizations (Callable[T(args)])
+// and the runtime singleton `GorgetClosure` all share the same C runtime
+// layout: a 16-byte `{fn_ptr, env}` struct backed by `gorget_closure_*` runtime
+// helpers. The protocols carry full metadata — copy_semantics = Resource, drop
+// + clone fns — so consumers read TypeDef.metadata uniformly. The
+// `c_runtime_alias = "GorgetClosure"` field tells the C backend to typedef
+// these Named types to the runtime struct (no fresh `__gg_X` definition).
+//
+// Note: the user-facing local form of `Callable[int(int)]` lowers to
+// `GirType::FnPtr` (NOT `GirType::Named("Callable__…")`) — see
+// `map_ast_type_mut`'s special case. The Named form only appears via
+// `resolve_inner_type` when a Callable shows up as a collection element /
+// dict value / Option payload. So these protocols supply metadata for the
+// collection-element path; the local FnPtr path is unaffected.
+
+pub static CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "Callable",
+    type_arity: 1,
+    copy_semantics: CopySemantics::Resource,
+    drop_fn: Some("gorget_closure_free"),
+    clone_fn: Some("gorget_closure_clone_to_owned"),
+    clone_inplace_fn: Some("gorget_closure_clone_inplace"),
+    materialize_fn: None,
+    collection_kind: None,
+    c_runtime_alias: Some("GorgetClosure"),
+    methods: &[],
+};
+
+pub static MUT_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "MutCallable",
+    type_arity: 1,
+    copy_semantics: CopySemantics::Resource,
+    drop_fn: Some("gorget_closure_free"),
+    clone_fn: Some("gorget_closure_clone_to_owned"),
+    clone_inplace_fn: Some("gorget_closure_clone_inplace"),
+    materialize_fn: None,
+    collection_kind: None,
+    c_runtime_alias: Some("GorgetClosure"),
+    methods: &[],
+};
+
+pub static CONSUME_CALLABLE: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "ConsumeCallable",
+    type_arity: 1,
+    copy_semantics: CopySemantics::Resource,
+    drop_fn: Some("gorget_closure_free"),
+    clone_fn: Some("gorget_closure_clone_to_owned"),
+    clone_inplace_fn: Some("gorget_closure_clone_inplace"),
+    materialize_fn: None,
+    collection_kind: None,
+    c_runtime_alias: Some("GorgetClosure"),
+    methods: &[],
+};
+
+pub static GORGET_CLOSURE: BuiltinTypeProtocol = BuiltinTypeProtocol {
+    base_name: "GorgetClosure",
+    type_arity: 0,
+    copy_semantics: CopySemantics::Resource,
+    drop_fn: Some("gorget_closure_free"),
+    clone_fn: Some("gorget_closure_clone_to_owned"),
+    clone_inplace_fn: Some("gorget_closure_clone_inplace"),
+    materialize_fn: None,
+    collection_kind: None,
+    c_runtime_alias: Some("GorgetClosure"),
+    methods: &[],
+};
+
 // ── Lookup ────────────────────────────────────────────────────────────
 
 /// All registered builtin type protocols.
@@ -870,6 +939,7 @@ static ALL_PROTOCOLS: &[&BuiltinTypeProtocol] = &[
     &THREAD, &HEAP,
     &GORGET_STRING_VIEW, &OPTION, &RESULT,
     &ATOMIC_INT, &ATOMIC_BOOL, &BARRIER, &WAIT_GROUP, &SEMAPHORE, &ONCE_FLAG, &TASK_GROUP,
+    &CALLABLE, &MUT_CALLABLE, &CONSUME_CALLABLE, &GORGET_CLOSURE,
 ];
 
 /// Look up a builtin type protocol by base name (e.g., "Vector", "Dict").

@@ -2738,6 +2738,7 @@ impl<'a> LoweringContext<'a> {
                         materialize_fn: protocol.materialize_fn.map(String::from),
                         collection_kind: protocol.collection_kind,
                         enum_category: None,
+                        c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                     },
                 });
             }

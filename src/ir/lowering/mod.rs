@@ -270,6 +270,7 @@ pub fn lower_module(
                 materialize_fn: None,
                 collection_kind: Some(CollectionKind::Array),
                 enum_category: None,
+                c_runtime_alias: None,
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -290,6 +291,7 @@ pub fn lower_module(
                 materialize_fn: None,
                 collection_kind: Some(CollectionKind::Map),
                 enum_category: None,
+                c_runtime_alias: None,
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -310,6 +312,7 @@ pub fn lower_module(
                 materialize_fn: None,
                 collection_kind: Some(CollectionKind::Set),
                 enum_category: None,
+                c_runtime_alias: None,
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -379,6 +382,7 @@ pub fn lower_module(
                         materialize_fn: protocol.materialize_fn.map(String::from),
                         collection_kind: protocol.collection_kind,
                         enum_category: None,
+                        c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                     },
                 });
                 let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
@@ -418,6 +422,7 @@ pub fn lower_module(
                             materialize_fn: vector_protocol.materialize_fn.map(String::from),
                             collection_kind: vector_protocol.collection_kind,
                             enum_category: None,
+                            c_runtime_alias: vector_protocol.c_runtime_alias.map(String::from),
                         },
                     });
                 }

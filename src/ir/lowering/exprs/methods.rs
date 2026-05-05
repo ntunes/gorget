@@ -2871,7 +2871,35 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
         "GorgetString" => ctx.type_mapper.owned_string_type,
         name => {
             if let Some(id) = ctx.type_mapper.lookup_named(name) {
+                // Even if the Named TypeId was inserted earlier, it may lack a
+                // TypeDef. For Callable types that's the only place where
+                // metadata-driven consumers (clone_fn_for_ptr, infer_drop_strategy,
+                // …) can pick up drop / clone / c_runtime_alias instead of
+                // falling back to name-prefix matching. Idempotent.
+                if name == "GorgetClosure"
+                    || name.starts_with("Callable__")
+                    || name.starts_with("MutCallable__")
+                    || name.starts_with("ConsumeCallable__")
+                {
+                    super::super::types::register_callable_alias(
+                        &mut ctx.type_mapper, &mut ctx.type_registry, name,
+                    );
+                }
                 return id;
+            }
+            // Callable / MutCallable / ConsumeCallable — register both Named TypeId
+            // AND a TypeDef carrying protocol metadata (drop_fn, clone_fn,
+            // c_runtime_alias = "GorgetClosure", …). Routes through the same
+            // helper as `register_collection_alias` so consumers read TypeDef
+            // metadata uniformly.
+            if name.starts_with("Callable__")
+                || name.starts_with("MutCallable__")
+                || name.starts_with("ConsumeCallable__")
+                || name == "GorgetClosure"
+            {
+                return super::super::types::register_callable_alias(
+                    &mut ctx.type_mapper, &mut ctx.type_registry, name,
+                );
             }
             // Collection/compound types might not be registered yet —
             // register them on-the-fly as Named types so the C backend can emit the right typedef.
@@ -2880,7 +2908,6 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
                 || name.starts_with("HashSet__")
                 || name.starts_with("Task__") || name.starts_with("Tuple__")
                 || name.starts_with("Channel__")
-                || name.starts_with("Callable__")
             {
                 let type_id = ctx.type_registry.insert(GirType::Named(name.to_string()));
                 ctx.type_mapper.register_named(name.to_string(), type_id);

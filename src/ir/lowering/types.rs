@@ -165,6 +165,22 @@ impl TypeMapper {
                             make_result_type_def(n, ok_type, err_type)
                         });
                     }
+                    // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
+                    // so locals declared as Callable[T(P)] get GorgetClosure C type and
+                    // use __gorget_closure_call_N dispatch.
+                    // NOT cached in named_types so map_ast_type (immutable, used for
+                    // function parameters) still returns UNIT_TYPE → void* __callable_N ABI.
+                    // Must precede the protocol-table branch — Callable's protocol
+                    // exists (so consumers can read c_runtime_alias / drop / clone
+                    // for the Named form) but we don't want the protocol path's
+                    // get_or_register to inject a Named TypeDef for the local form.
+                    if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+                        return if generic_args.len() == 1 {
+                            self.map_ast_type_mut(&generic_args[0].node, registry)
+                        } else {
+                            registry.insert(GirType::FnPtr { params: vec![], return_type: UNIT_TYPE })
+                        };
+                    }
                     // Auto-register builtin generic types via protocol table.
                     // Collections, concurrency types, etc. — drop metadata, clone_fn,
                     // collection_kind all come from the BuiltinTypeProtocol.
@@ -199,6 +215,7 @@ impl TypeMapper {
                             td.metadata.clone_inplace_fn = protocol.clone_inplace_fn.map(String::from);
                             td.metadata.materialize_fn = protocol.materialize_fn.map(String::from);
                             td.metadata.collection_kind = protocol.collection_kind;
+                            td.metadata.c_runtime_alias = protocol.c_runtime_alias.map(String::from);
                         }
 
                         // Defer fn_sigs population (needs LoweringContext, not available here)
@@ -233,18 +250,6 @@ impl TypeMapper {
                         let type_id = registry.insert(GirType::Named(mangled.clone()));
                         self.named_types.insert(mangled, type_id);
                         return type_id;
-                    }
-                    // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
-                    // so locals declared as Callable[T(P)] get GorgetClosure C type and
-                    // use __gorget_closure_call_N dispatch.
-                    // NOT cached in named_types so map_ast_type (immutable, used for
-                    // function parameters) still returns UNIT_TYPE → void* __callable_N ABI.
-                    if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
-                        return if generic_args.len() == 1 {
-                            self.map_ast_type_mut(&generic_args[0].node, registry)
-                        } else {
-                            registry.insert(GirType::FnPtr { params: vec![], return_type: UNIT_TYPE })
-                        };
                     }
                     return UNIT_TYPE;
                 }
@@ -681,10 +686,84 @@ pub(super) fn register_collection_alias(
                 materialize_fn: protocol.materialize_fn.map(String::from),
                 collection_kind: protocol.collection_kind,
                 enum_category: None,
+                c_runtime_alias: protocol.c_runtime_alias.map(String::from),
             },
         };
         registry.add_type_def(type_def);
     }
+}
+
+/// Register a Callable / MutCallable / ConsumeCallable / GorgetClosure Named
+/// type alias as a TypeDef carrying the protocol's metadata. The local-form
+/// `Callable[T(args)]` lowers to `GirType::FnPtr` via `map_ast_type_mut`'s
+/// special case (no Named insert). The Named form arises only when a Callable
+/// shows up as a collection element / dict value / Option payload — at which
+/// point `resolve_inner_type` (or this helper) inserts the Named GIR type and
+/// we want a TypeDef behind it so consumers (clone_fn_for_ptr, infer_drop_strategy,
+/// elem_drop_fn_for_type, …) can read drop / clone / `c_runtime_alias` uniformly
+/// instead of name-prefix-matching.
+pub(super) fn register_callable_alias(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    mangled_name: &str,
+) -> TypeId {
+    // Reuse an existing Named TypeId if one was already inserted (e.g., by a
+    // direct `registry.insert(GirType::Named(...))` somewhere upstream); we
+    // only want to attach the TypeDef if it isn't already there.
+    let type_id = if let Some(&id) = mapper.named_types.get(mangled_name) {
+        id
+    } else {
+        let id = registry.insert(GirType::Named(mangled_name.to_string()));
+        mapper.named_types.insert(mangled_name.to_string(), id);
+        id
+    };
+
+    // Idempotent: skip if a TypeDef is already attached (e.g., from a previous
+    // resolve pass or an explicit registration).
+    if registry.get_type_def(mangled_name).is_some() {
+        return type_id;
+    }
+
+    // Pick the protocol from the base prefix. `GorgetClosure` (the runtime
+    // singleton) and `Callable__…` / `MutCallable__…` / `ConsumeCallable__…`
+    // monomorphizations all share the same closure ABI.
+    let base = if mangled_name == "GorgetClosure" {
+        "GorgetClosure"
+    } else if mangled_name.starts_with("Callable__") {
+        "Callable"
+    } else if mangled_name.starts_with("MutCallable__") {
+        "MutCallable"
+    } else if mangled_name.starts_with("ConsumeCallable__") {
+        "ConsumeCallable"
+    } else {
+        return type_id;
+    };
+    let protocol = match builtins::lookup_protocol(base) {
+        Some(p) => p,
+        None => return type_id,
+    };
+    let drop_strat = match protocol.drop_fn {
+        Some(f) => DropStrategy::Trivial(f.to_string()),
+        None => DropStrategy::None,
+    };
+    let type_def = TypeDef {
+        name: mangled_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+        metadata: TypeMetadata {
+            size: None,
+            align: None,
+            copy_semantics: protocol.copy_semantics,
+            drop_strategy: drop_strat,
+            clone_fn: protocol.clone_fn.map(String::from),
+            clone_inplace_fn: protocol.clone_inplace_fn.map(String::from),
+            materialize_fn: protocol.materialize_fn.map(String::from),
+            collection_kind: protocol.collection_kind,
+            enum_category: None,
+            c_runtime_alias: protocol.c_runtime_alias.map(String::from),
+        },
+    };
+    registry.add_type_def(type_def);
+    type_id
 }
 
 /// Register a user-defined enum from AST into the TypeRegistry and TypeMapper.
