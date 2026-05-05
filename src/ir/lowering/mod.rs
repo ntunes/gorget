@@ -1494,6 +1494,62 @@ pub fn lower_module(
         }
     }
 
+    // Phase C extension promoted: `Call/CallExtern` resource args.
+    // 2026-05-04 sweep: 0 violations across 1056 fixtures, so the
+    // class is fatal. Any future lowering that passes a resource by
+    // shallow-copy at a `ByValue`/`GorgetString` ABI position halts
+    // the build instead of leaking past the validator.
+    {
+        let arg_warnings = crate::ir::validate::validate_resource_call_args(&module);
+        if !arg_warnings.is_empty() {
+            eprintln!("[resource-call-args] {} violation(s):", arg_warnings.len());
+            for w in &arg_warnings {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed resource call-arg validation ({} violation(s))", arg_warnings.len());
+        }
+    }
+
+    // Phase C extension: remaining read-site validators (FieldLoad,
+    // IndexLoad, EnumFieldLoad). Stage 1 — gated behind
+    // `GG_VALIDATE_RESOURCE_READS`, prints per-class counts to a log
+    // file (path is the env var value) without panicking. The
+    // 2026-05-04 sweep counts: field=2568, index=2556, enum=12294. Each
+    // class needs its own lowering migration before promotion. Output
+    // goes to a file (not stderr) because `cargo test` captures
+    // subprocess stderr and only surfaces it on failure.
+    if let Ok(log_path) = std::env::var("GG_VALIDATE_RESOURCE_READS") {
+        if !log_path.is_empty() {
+            let reads = crate::ir::validate::validate_resource_reads(&module);
+            if !reads.is_empty() {
+                use crate::ir::validate::ResourceMoveWarningKind as K;
+                use std::io::Write;
+                let mut field_n = 0usize;
+                let mut index_n = 0usize;
+                let mut enum_n = 0usize;
+                let mut arg_n = 0usize;
+                for w in &reads {
+                    match &w.kind {
+                        K::ShallowCopyOfResourceField { .. } => field_n += 1,
+                        K::ShallowReadOfResourceElement { .. } => index_n += 1,
+                        K::ShallowCopyOfEnumPayload { .. } => enum_n += 1,
+                        K::ShallowCopyOfResourceArg { .. } => arg_n += 1,
+                        _ => {}
+                    }
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true).append(true).open(&log_path)
+                {
+                    let _ = writeln!(f, "[resource-reads] module total={} field={} index={} enum={} arg={}",
+                        reads.len(), field_n, index_n, enum_n, arg_n);
+                    for w in &reads {
+                        let _ = writeln!(f, "  {}", w);
+                    }
+                }
+            }
+        }
+    }
+
     // Propagate directive flags to module
     module.runtime.overflow_wrap = ctx.overflow_wrap;
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;

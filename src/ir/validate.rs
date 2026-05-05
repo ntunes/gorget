@@ -911,6 +911,41 @@ pub enum ResourceMoveWarningKind {
         local: LocalId,
         type_name: String,
     },
+    /// `FieldLoad { dst, base, field }` where the field type is
+    /// resource and the base is value-typed: produces a shallow copy of
+    /// resource data into dst. Phase C: must be a Borrow-mode bind or a
+    /// Clone at the boundary.
+    ShallowCopyOfResourceField {
+        dst: LocalId,
+        field_type_name: String,
+    },
+    /// `IndexLoad { dst, base, index, borrow: false }` where the
+    /// element type is resource: produces a shallow alias of a
+    /// collection element. Phase C: must use `borrow: true` (LIR will
+    /// emit a borrow), or the upstream lowering must clone explicitly.
+    ShallowReadOfResourceElement {
+        dst: LocalId,
+        elem_type_name: String,
+    },
+    /// `EnumFieldLoad { dst, base, variant, field }` where the
+    /// variant's payload field is resource and not GorgetString (which
+    /// auto-zeros on extract): produces a shallow copy of the payload
+    /// without zeroing the source.
+    ShallowCopyOfEnumPayload {
+        dst: LocalId,
+        variant: String,
+        payload_type_name: String,
+    },
+    /// `Call { args }` or `CallExtern { args }` where an arg is
+    /// `Operand::Copy(place)` of a resource-typed local AND the
+    /// callee's parameter is `ByValue` (no borrow shape): the resource
+    /// flows by shallow-copy across the call boundary. Phase C: must
+    /// be Move (with MoveZero on the source slot) or Clone.
+    ShallowCopyOfResourceArg {
+        callee: String,
+        arg_index: usize,
+        arg_type_name: String,
+    },
 }
 
 impl std::fmt::Display for ResourceMoveWarningKind {
@@ -918,6 +953,18 @@ impl std::fmt::Display for ResourceMoveWarningKind {
         match self {
             Self::ShallowCopyOfResource { local, type_name } => {
                 write!(f, "shallow copy of resource _{} : {}", local.0, type_name)
+            }
+            Self::ShallowCopyOfResourceField { dst, field_type_name } => {
+                write!(f, "shallow copy of resource field into _{} : {}", dst.0, field_type_name)
+            }
+            Self::ShallowReadOfResourceElement { dst, elem_type_name } => {
+                write!(f, "shallow read of resource element into _{} : {} (borrow=false)", dst.0, elem_type_name)
+            }
+            Self::ShallowCopyOfEnumPayload { dst, variant, payload_type_name } => {
+                write!(f, "shallow copy of enum payload {} into _{} : {}", variant, dst.0, payload_type_name)
+            }
+            Self::ShallowCopyOfResourceArg { callee, arg_index, arg_type_name } => {
+                write!(f, "shallow copy of resource arg #{} : {} into call to {}", arg_index, arg_type_name, callee)
             }
         }
     }
@@ -1028,6 +1075,328 @@ fn check_resource_moves(
                     type_name,
                 },
             });
+        }
+    }
+}
+
+// ── Phase C extension: read-site validators ──────────────────────────
+// Four additional read sites whose silent shallow-copy semantics are
+// the structural cousins of `Assign { mode: Copy }`. Phase C's
+// guarantee — no shallow alias of an owned resource — applies equally
+// here. Stage 1: gated behind `GG_VALIDATE_RESOURCE_READS=1`, callers
+// print warnings, do not panic. Once a class shows zero violations on
+// the integration sweep, it can be promoted to fatal alongside the
+// existing `validate_resource_moves` panic site.
+
+/// Run the four extension validators for the read-side classes:
+/// FieldLoad, IndexLoad, EnumFieldLoad, Call/CallExtern args. Returns a
+/// flat `Vec<ResourceMoveWarning>`. Caller groups by kind.
+pub fn validate_resource_reads(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        check_field_load_reads(func, &module.type_registry, &mut warnings);
+        check_index_load_reads(func, &module.type_registry, &mut warnings);
+        check_enum_field_load_reads(func, &module.type_registry, &mut warnings);
+        check_call_arg_reads(func, module, &mut warnings);
+    }
+    warnings
+}
+
+/// Just the Call/CallExtern args check — promoted to fatal at the
+/// `validate_resource_moves` site after the 2026-05-04 sweep showed
+/// 0 violations across 1056 fixtures. Splitting it out so it can run
+/// unconditionally while the other three classes (field/index/enum)
+/// still surface warnings only.
+pub fn validate_resource_call_args(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        check_call_arg_reads(func, module, &mut warnings);
+    }
+    warnings
+}
+
+/// Resolve the type at the end of a place's projection chain. Walks
+/// Field projections through Struct/Enum TypeDefs and follows Deref
+/// through Ptr/MutPtr. Index projections are traversed through Vector
+/// element types when discoverable. Returns `None` when any projection
+/// step can't be resolved (the validator simply skips those sites).
+fn resolve_place_type(
+    place: &Place,
+    func: &Function,
+    registry: &TypeRegistry,
+) -> Option<TypeId> {
+    let local_idx = place.local.0 as usize;
+    if local_idx >= func.locals.len() { return None; }
+    let mut cur = func.locals[local_idx].type_id;
+    for proj in &place.projections {
+        match proj {
+            Projection::Deref => {
+                match registry.get(cur)? {
+                    GirType::Ptr(inner) | GirType::MutPtr(inner) => cur = *inner,
+                    _ => return None,
+                }
+            }
+            Projection::Field(f) => {
+                let name = match registry.get(cur)? {
+                    GirType::Named(n) => n.clone(),
+                    GirType::Ptr(inner) | GirType::MutPtr(inner) => {
+                        match registry.get(*inner)? {
+                            GirType::Named(n) => n.clone(),
+                            _ => return None,
+                        }
+                    }
+                    _ => return None,
+                };
+                let td = registry.get_type_def(&name)?;
+                if let TypeDefKind::Struct(ref sd) = td.kind {
+                    cur = sd.fields.get(*f as usize)?.type_id;
+                } else {
+                    return None;
+                }
+            }
+            Projection::Index(_) => {
+                // Index projections in GIR Place are rare; we don't
+                // need element-type resolution for the validator's
+                // base-type checks.
+                return None;
+            }
+        }
+    }
+    Some(cur)
+}
+
+/// Field type at index `field` for a value-typed struct base, or
+/// `None` if the base type isn't a struct or the field is OOB. Looks
+/// through Ptr/MutPtr wrapping (the field is on the pointee struct).
+fn resolve_field_type_id(
+    base_ty: TypeId,
+    field: u32,
+    registry: &TypeRegistry,
+) -> Option<TypeId> {
+    let pointee = match registry.get(base_ty)? {
+        GirType::Ptr(inner) | GirType::MutPtr(inner) => *inner,
+        _ => base_ty,
+    };
+    let name = match registry.get(pointee)? {
+        GirType::Named(n) => n.clone(),
+        _ => return None,
+    };
+    let td = registry.get_type_def(&name)?;
+    if let TypeDefKind::Struct(ref sd) = td.kind {
+        sd.fields.get(field as usize).map(|f| f.type_id)
+    } else {
+        None
+    }
+}
+
+/// Variant payload field type, or None when the type isn't an enum or
+/// variant/field is OOB.
+fn resolve_enum_field_type_id(
+    base_ty: TypeId,
+    variant: &str,
+    field: u32,
+    registry: &TypeRegistry,
+) -> Option<TypeId> {
+    let pointee = match registry.get(base_ty)? {
+        GirType::Ptr(inner) | GirType::MutPtr(inner) => *inner,
+        _ => base_ty,
+    };
+    let name = match registry.get(pointee)? {
+        GirType::Named(n) => n.clone(),
+        _ => return None,
+    };
+    let td = registry.get_type_def(&name)?;
+    if let TypeDefKind::Enum(ref ed) = td.kind {
+        let v = ed.variants.iter().find(|v| v.name == variant)?;
+        v.fields.get(field as usize).map(|f| f.type_id)
+    } else {
+        None
+    }
+}
+
+/// Quick predicate: is `ty` a Ptr/MutPtr at the top level? Used to
+/// skip dst-is-Ptr cases where the LIR materializes a borrow rather
+/// than a value copy.
+fn type_is_ptr(ty: TypeId, registry: &TypeRegistry) -> bool {
+    matches!(registry.get(ty), Some(GirType::Ptr(_) | GirType::MutPtr(_)))
+}
+
+fn check_field_load_reads(
+    func: &Function,
+    registry: &TypeRegistry,
+    warnings: &mut Vec<ResourceMoveWarning>,
+) {
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            let Instruction::FieldLoad { dst, base, field } = inst else { continue };
+            // dst-is-Ptr branch is borrow-shaped at LIR level (returns
+            // field address, not field value). Not a shallow copy.
+            let dst_idx = dst.0 as usize;
+            if dst_idx >= func.locals.len() { continue; }
+            let dst_ty = func.locals[dst_idx].type_id;
+            if type_is_ptr(dst_ty, registry) { continue; }
+            // Resolve base place type (after projections), look up
+            // field type, check if it's resource.
+            let base_ty = match resolve_place_type(base, func, registry) {
+                Some(t) => t,
+                None => continue,
+            };
+            let field_ty = match resolve_field_type_id(base_ty, *field, registry) {
+                Some(t) => t,
+                None => continue,
+            };
+            if !registry.is_resource_type(field_ty) { continue; }
+            // The dst type and field type should match for genuine
+            // shallow-copy (cross-type would be a generic-mono bug,
+            // out of scope).
+            if dst_ty != field_ty { continue; }
+            let field_type_name = registry.type_name(field_ty)
+                .unwrap_or_else(|| format!("ty{}", field_ty.0));
+            warnings.push(ResourceMoveWarning {
+                function: func.name.clone(),
+                block: BlockId(b as u32),
+                inst_index: i,
+                kind: ResourceMoveWarningKind::ShallowCopyOfResourceField {
+                    dst: *dst,
+                    field_type_name,
+                },
+            });
+        }
+    }
+}
+
+fn check_index_load_reads(
+    func: &Function,
+    registry: &TypeRegistry,
+    warnings: &mut Vec<ResourceMoveWarning>,
+) {
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            let Instruction::IndexLoad { dst, base: _, index: _, borrow } = inst else { continue };
+            if *borrow { continue; }
+            let dst_idx = dst.0 as usize;
+            if dst_idx >= func.locals.len() { continue; }
+            let dst_ty = func.locals[dst_idx].type_id;
+            // Ptr-typed dst: LIR returns raw element pointer (borrow shape).
+            if type_is_ptr(dst_ty, registry) { continue; }
+            if !registry.is_resource_type(dst_ty) { continue; }
+            let elem_type_name = registry.type_name(dst_ty)
+                .unwrap_or_else(|| format!("ty{}", dst_ty.0));
+            warnings.push(ResourceMoveWarning {
+                function: func.name.clone(),
+                block: BlockId(b as u32),
+                inst_index: i,
+                kind: ResourceMoveWarningKind::ShallowReadOfResourceElement {
+                    dst: *dst,
+                    elem_type_name,
+                },
+            });
+        }
+    }
+}
+
+fn check_enum_field_load_reads(
+    func: &Function,
+    registry: &TypeRegistry,
+    warnings: &mut Vec<ResourceMoveWarning>,
+) {
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            let Instruction::EnumFieldLoad { dst, base, variant, field } = inst else { continue };
+            let dst_idx = dst.0 as usize;
+            if dst_idx >= func.locals.len() { continue; }
+            let dst_ty = func.locals[dst_idx].type_id;
+            // Ptr-typed dst: LIR returns field address (borrow shape).
+            if type_is_ptr(dst_ty, registry) { continue; }
+            let base_ty = match resolve_place_type(base, func, registry) {
+                Some(t) => t,
+                None => continue,
+            };
+            let payload_ty = match resolve_enum_field_type_id(base_ty, variant, *field, registry) {
+                Some(t) => t,
+                None => continue,
+            };
+            if !registry.is_resource_type(payload_ty) { continue; }
+            // GorgetString payloads are auto-zeroed by the LIR lowering
+            // (see lir/lower/insts.rs is_str_field path). Skip — that's
+            // a Move-semantic at LIR even though GIR shape is identical.
+            if registry.type_name(payload_ty).as_deref() == Some("GorgetString") { continue; }
+            let payload_type_name = registry.type_name(payload_ty)
+                .unwrap_or_else(|| format!("ty{}", payload_ty.0));
+            warnings.push(ResourceMoveWarning {
+                function: func.name.clone(),
+                block: BlockId(b as u32),
+                inst_index: i,
+                kind: ResourceMoveWarningKind::ShallowCopyOfEnumPayload {
+                    dst: *dst,
+                    variant: variant.clone(),
+                    payload_type_name,
+                },
+            });
+        }
+    }
+}
+
+fn check_call_arg_reads(
+    func: &Function,
+    module: &Module,
+    warnings: &mut Vec<ResourceMoveWarning>,
+) {
+    use crate::ir::lowering::context::ParamABI;
+    let registry = &module.type_registry;
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            // Internal calls: ParamABI per arg.
+            if let Instruction::Call { func: callee, args, .. } = inst {
+                let Some(abis) = module.fn_param_abis.get(callee) else { continue };
+                for (idx, arg) in args.iter().enumerate() {
+                    let abi = abis.get(idx).copied().unwrap_or(ParamABI::ByValue);
+                    if !matches!(abi, ParamABI::ByValue) { continue; }
+                    let Operand::Copy(p) = arg else { continue };
+                    let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
+                    if !registry.is_resource_type(src_ty) { continue; }
+                    let arg_type_name = registry.type_name(src_ty)
+                        .unwrap_or_else(|| format!("ty{}", src_ty.0));
+                    warnings.push(ResourceMoveWarning {
+                        function: func.name.clone(),
+                        block: BlockId(b as u32),
+                        inst_index: i,
+                        kind: ResourceMoveWarningKind::ShallowCopyOfResourceArg {
+                            callee: callee.clone(),
+                            arg_index: idx,
+                            arg_type_name,
+                        },
+                    });
+                }
+            }
+            // External calls: AbiKind per arg. Treat ByValue /
+            // GorgetString / Auto as "by-value" shallow positions; Ptr
+            // / VoidElem / CStr / BytePtr / Opaque / Scalar are not
+            // resource-shallow-copy shapes.
+            if let Instruction::CallExtern { func: callee, args, .. } = inst {
+                let Some(extern_decl) = module.find_extern(callee) else { continue };
+                for (idx, arg) in args.iter().enumerate() {
+                    use crate::ir::abi::AbiKind;
+                    let abi = extern_decl.param_abis.get(idx).copied().unwrap_or(AbiKind::Auto);
+                    let by_value = matches!(abi, AbiKind::ByValue | AbiKind::GorgetString);
+                    if !by_value { continue; }
+                    let Operand::Copy(p) = arg else { continue };
+                    let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
+                    if !registry.is_resource_type(src_ty) { continue; }
+                    let arg_type_name = registry.type_name(src_ty)
+                        .unwrap_or_else(|| format!("ty{}", src_ty.0));
+                    warnings.push(ResourceMoveWarning {
+                        function: func.name.clone(),
+                        block: BlockId(b as u32),
+                        inst_index: i,
+                        kind: ResourceMoveWarningKind::ShallowCopyOfResourceArg {
+                            callee: callee.clone(),
+                            arg_index: idx,
+                            arg_type_name,
+                        },
+                    });
+                }
+            }
         }
     }
 }
