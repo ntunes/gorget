@@ -226,12 +226,6 @@ pub struct FunctionState {
     /// Populated by lower_call_arg when a Move param borrows a local, drained by
     /// the call lowering site after emitting the Call instruction.
     pub pending_move_zeros: Vec<LocalId>,
-    /// Locals whose string heap data is a fresh allocation — not shared with any
-    /// other variable. Set for function/extern call results returning the owned
-    /// string type directly (gorget_str_cat, gorget_string_format, user functions).
-    /// NOT set for struct inits, field loads, or pattern extracts (these may share
-    /// string data with the source). Used by the return path to skip redundant clones.
-    pub fresh_string_locals: rustc_hash::FxHashSet<LocalId>,
     /// When true, pattern extraction of string fields skips cloning because
     /// the scrutinee is dead and BOTH the scrutinee copy AND the original
     /// variable will be MoveZeroed after extraction. Set by lower_match_stmt.
@@ -1812,17 +1806,11 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local's string data is a fresh allocation not shared with any
     /// other variable. True only for direct function/extern call results that
-    /// return the owned string type. Phase D4: reads typed `FreshOwned` state
-    /// OR the legacy `fresh_string_locals` sidecar — whichever fires first.
-    /// The dual read is harmless: every sidecar-write site also upgrades the
-    /// typed state, so the two channels are equivalent at this point.
+    /// return the owned string type. Phase D4: reads the typed `FreshOwned`
+    /// state — the legacy `fresh_string_locals` sidecar has been retired.
     pub fn is_fresh_string(&self, local: LocalId) -> bool {
-        if self.func_state.local_ownership.get(&local)
+        self.func_state.local_ownership.get(&local)
             .map_or(false, |s| s.is_fresh())
-        {
-            return true;
-        }
-        self.func_state.fresh_string_locals.contains(&local)
     }
 
     /// Check if a local has been borrowed-from via the `String b = a`
