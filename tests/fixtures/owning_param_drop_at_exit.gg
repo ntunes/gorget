@@ -1,0 +1,82 @@
+# Owning `!` parameter must drop at function exit when not transferred onward.
+#
+# Pre-existing GIR drop-accountant miss surfaced 2026-05-04 by §8.1 agent
+# during drop-flag dataflow init work. Filed in TODO under "Owning `!`
+# parameter not always given end-of-function drop guard".
+#
+# The `!` sigil means "ownership transferred to callee." If the callee
+# doesn't transfer it onward (no inner consume), the resource MUST drop at
+# the callee's exit — otherwise it leaks unconditionally.
+#
+# This fixture is wired into integration.rs as #[ignore] until the GIR drop
+# accountant emits the missing exit drop. Run manually:
+#
+#   cargo test --test integration -- --ignored owning_param_drop_at_exit
+#
+# Currently produces output missing every `drop X` line below. With the fix,
+# all five drop prints should appear in the expected positions.
+
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+void consume(R !r):
+    print(f"consume {r.name}")
+
+# Case 1: simplest — no transfer, just use. Expect drop at exit.
+void simple(R !r):
+    print(f"simple {r.name}")
+
+# Case 2: conditional consume — drop on the no-consume branch only.
+void conditional(R !r, bool yes):
+    if yes:
+        consume(!r)
+    print(f"cond-done {yes}")
+
+# Case 3: chained transfer — pass !r through one layer of indirection.
+# Drop must fire in `inner` (the chain end), not at `outer`.
+void inner(R !r):
+    print(f"inner {r.name}")
+
+void outer(R !r):
+    inner(!r)
+    print("outer-done")
+
+# Case 4: early-return — function returns before any transfer. Drop at the
+# return-edge, not the function-exit-edge (must work for both).
+bool early(R !r, bool short):
+    if short:
+        print(f"early-short {r.name}")
+        return false
+    print(f"early-full {r.name}")
+    return true
+
+void main():
+    R r1 = R("p1")
+    simple(!r1)
+    print("---")
+
+    R r2 = R("p2")
+    conditional(!r2, true)
+    print("---")
+
+    R r3 = R("p3")
+    conditional(!r3, false)
+    print("---")
+
+    R r4 = R("p4")
+    outer(!r4)
+    print("---")
+
+    R r5 = R("p5")
+    bool b1 = early(!r5, true)
+    print(f"early-1 {b1}")
+    print("---")
+
+    R r6 = R("p6")
+    bool b2 = early(!r6, false)
+    print(f"early-2 {b2}")

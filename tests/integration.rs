@@ -1443,6 +1443,44 @@ drop ck",
 }
 
 #[test]
+#[ignore]
+fn owning_param_drop_at_exit() {
+    // Pre-existing GIR drop-accountant gap: a `!` parameter that the
+    // function doesn't transfer onward (via consume / push / put / etc.)
+    // is never dropped at function exit, leaking the resource. See TODO
+    // entry "Owning `!` parameter not always given end-of-function drop
+    // guard" — universal for `!` params, not just conditional-consume.
+    //
+    // Marked #[ignore] so the integration suite stays green; remove the
+    // attribute when the GIR fix lands. Run manually with:
+    //   cargo test --test integration -- --ignored owning_param_drop_at_exit
+    run_gg(
+        "owning_param_drop_at_exit.gg",
+        "\
+simple p1
+drop p1
+---
+consume p2
+cond-done true
+---
+cond-done false
+drop p3
+---
+inner p4
+drop p4
+outer-done
+---
+early-short p5
+drop p5
+early-1 false
+---
+early-full p6
+drop p6
+early-2 true",
+    );
+}
+
+#[test]
 fn drop_dict_loop() {
     run_gg(
         "drop_dict_loop.gg",
