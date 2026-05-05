@@ -1312,16 +1312,29 @@ fn lower_return(
                         // the tuple is copied into the return slot. Without zeroing
                         // the element locals, both the return tuple and the locals
                         // own the same heap data → double-free at scope exit.
-                        if let Some(elem_locals) = ctx.func_state.tuple_element_locals.get(&place.local) {
-                            for &elem_local in elem_locals {
-                                if elem_local != LocalId(0)
-                                    && !ctx.drops.is_moved(elem_local)
-                                {
-                                    let elem_type = builder.local_type(elem_local);
-                                    if ctx.type_registry.needs_drop(elem_type) {
-                                        builder.move_zero(Place::local(elem_local));
-                                        ctx.drops.mark_moved(elem_local);
-                                    }
+                        //
+                        // Phase D migration: union the typed walk over
+                        // `LocalOwnership::Borrowed { TupleElement { tuple, .. } }`
+                        // with the legacy sidecar. The typed side covers anonymous
+                        // temps tagged at TupleInit; the sidecar still covers named
+                        // locals that retained their pre-existing ownership state.
+                        let mut elem_locals: Vec<LocalId> =
+                            ctx.tuple_element_sources(place.local);
+                        if let Some(side) = ctx.func_state.tuple_element_locals.get(&place.local) {
+                            for &el in side {
+                                if !elem_locals.contains(&el) {
+                                    elem_locals.push(el);
+                                }
+                            }
+                        }
+                        for elem_local in elem_locals {
+                            if elem_local != LocalId(0)
+                                && !ctx.drops.is_moved(elem_local)
+                            {
+                                let elem_type = builder.local_type(elem_local);
+                                if ctx.type_registry.needs_drop(elem_type) {
+                                    builder.move_zero(Place::local(elem_local));
+                                    ctx.drops.mark_moved(elem_local);
                                 }
                             }
                         }

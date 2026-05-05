@@ -1938,6 +1938,36 @@ impl<'a> LoweringContext<'a> {
         );
     }
 
+    /// Tag `local` as the source for element `index` of tuple temp `tuple`.
+    /// Recorded at `Inst::TupleInit` emission so the return path can
+    /// MoveZero element sources when the tuple is returned. Replaces the
+    /// `tuple_element_locals` sidecar — see unified-resource-model.md §6.3.
+    pub fn set_tuple_element_borrow(&mut self, local: LocalId, tuple: LocalId, index: u32) {
+        self.func_state.local_ownership.insert(local,
+            crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
+                mutability: crate::ir::Mutability::Shared,
+            }
+        );
+    }
+
+    /// Walk `func.locals` and yield each local tagged as a TupleElement of
+    /// the given `tuple` temp. Replaces the legacy `tuple_element_locals`
+    /// sidecar lookup. Yields the source local id alongside its index;
+    /// callers iterate without ordering guarantees because the return-path
+    /// MoveZero is order-insensitive.
+    pub fn tuple_element_sources(&self, tuple: LocalId) -> Vec<LocalId> {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        self.func_state.local_ownership.iter()
+            .filter_map(|(local, state)| match state {
+                LocalOwnership::Borrowed {
+                    origin: BorrowOrigin::TupleElement { tuple: t, .. }, ..
+                } if *t == tuple => Some(*local),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Mark a local as a CoW borrow (deferred clone). The placeholder
     /// `CowBorrowPending` origin distinguishes this from generic
     /// `set_ref`'s `Alias(self)` so `is_cow_borrow` can match. A

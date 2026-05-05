@@ -439,6 +439,16 @@ pub enum BorrowOrigin {
     /// lands (set_cow_borrow gains a source-known-at-call-time
     /// signature).
     CowBorrowPending,
+    /// Element source for a tuple temp. Recorded at `Inst::TupleInit`
+    /// emission time so the return path can MoveZero the original
+    /// element locals when a tuple is returned: the tuple struct
+    /// shallow-copies element values, and without zeroing the sources
+    /// both the returned tuple and the surviving locals own the same
+    /// heap data. `tuple` is the tuple temp's local; `index` is the
+    /// 0-based position of this local inside that tuple. Replaces the
+    /// legacy `tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>`
+    /// sidecar — see unified-resource-model.md §6.3.
+    TupleElement { tuple: LocalId, index: u32 },
 }
 
 /// Mutability of a borrow. Today this distinguishes `&` / `!` mutable

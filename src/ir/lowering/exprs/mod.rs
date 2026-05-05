@@ -435,6 +435,21 @@ fn lower_expr_inner(
             let type_id = register_tuple_type(ctx, &elem_types);
             let dst = builder.tuple_init(operands, type_id);
             if !elem_locals.is_empty() {
+                // Phase D: record per-element provenance via typed setter.
+                // Only tag locals that don't already carry an ownership
+                // state — a named local with Owned/Borrowed/View must keep
+                // its existing tag to avoid breaking drop registration,
+                // CoW, and ABI decisions between TupleInit and the return
+                // site. The reader-side typed walk is unioned with the
+                // sidecar lookup during transition; the sidecar continues
+                // to capture the named-local case until a follow-up either
+                // lifts TupleElement to a separate provenance axis or
+                // confirms the named-local case is unreachable.
+                for (index, &elem_local) in elem_locals.iter().enumerate() {
+                    if !ctx.func_state.local_ownership.contains_key(&elem_local) {
+                        ctx.set_tuple_element_borrow(elem_local, dst, index as u32);
+                    }
+                }
                 ctx.func_state.tuple_element_locals.insert(dst, elem_locals);
             }
             FunctionBuilder::copy(dst)
