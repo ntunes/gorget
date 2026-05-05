@@ -171,6 +171,16 @@ pub struct RuntimeSig {
     pub params: &'static [(CRuntimeType, AbiKind)],
     pub ret: CRuntimeType,
     pub side_effects: SideEffects,
+    /// True iff the runtime fn ALWAYS returns a fresh, independently
+    /// heap-allocated buffer that does not alias any input. Distinct from
+    /// `SideEffects::Allocates` (which is a coarse may-allocate tag covering
+    /// view-returners that build cap=0 views without owning their data).
+    /// Read by IR lowering's CoW machinery to decide whether the result of a
+    /// call can skip the self-referential reassignment clone guard and the
+    /// return-clone-elision check (see `is_fresh_string` in
+    /// `src/ir/lowering/context.rs`). Replaces the deprecated
+    /// `is_fresh_allocating_extern` name list.
+    pub returns_fresh: bool,
 }
 
 /// Runtime-resolved signature in `LirType` terms.
@@ -186,7 +196,17 @@ const fn sig(
     ret: CRuntimeType,
     fx: SideEffects,
 ) -> RuntimeSig {
-    RuntimeSig { params, ret, side_effects: fx }
+    RuntimeSig { params, ret, side_effects: fx, returns_fresh: false }
+}
+
+/// Like [`sig`] but tags `returns_fresh: true` — for runtime fns that always
+/// return an independently heap-allocated buffer (no aliasing into inputs).
+const fn sig_fresh(
+    params: &'static [(CRuntimeType, AbiKind)],
+    ret: CRuntimeType,
+    fx: SideEffects,
+) -> RuntimeSig {
+    RuntimeSig { params, ret, side_effects: fx, returns_fresh: true }
 }
 
 struct Entry {
@@ -260,12 +280,12 @@ runtime_table! {
     Tan    => "gorget_tan",    sig(&[(T::F64, A::Scalar)], T::F64, F::Pure);
 
     // ── Conversion ────────────────────────────────────────────────────────
-    BoolToStr        => "gorget_bool_to_str",        sig(&[(T::Bool, A::Scalar)], T::Str, F::Allocates);
+    BoolToStr        => "gorget_bool_to_str",        sig_fresh(&[(T::Bool, A::Scalar)], T::Str, F::Allocates);
     CharChr          => "gorget_char_chr",           sig(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
     CodepointToUtf8  => "gorget_codepoint_to_utf8",  sig(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
-    FloatToStr       => "gorget_float_to_str",       sig(&[(T::F64, A::Scalar)], T::Str, F::Allocates);
+    FloatToStr       => "gorget_float_to_str",       sig_fresh(&[(T::F64, A::Scalar)], T::Str, F::Allocates);
     IntToFloat       => "gorget_int_to_float",       sig(&[(T::I64, A::Scalar)], T::F64, F::Pure);
-    IntToStr         => "gorget_int_to_str",         sig(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
+    IntToStr         => "gorget_int_to_str",         sig_fresh(&[(T::I64, A::Scalar)], T::Str, F::Allocates);
 
     // ── String — by-value (Str, 32 bytes) ─────────────────────────────────
     StrByteAt           => "gorget_str_byte_at",           sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar)], T::U8,  F::Pure);
@@ -273,7 +293,7 @@ runtime_table! {
     StrByteSlice        => "gorget_str_byte_slice",        sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Str, F::Allocates);
     StrBytes            => "gorget_str_bytes",             sig(&[(T::Str, A::GorgetString)], T::Array, F::Allocates);
     StrCapacity         => "gorget_str_capacity",          sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
-    StrCat              => "gorget_str_cat",               sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrCat              => "gorget_str_cat",               sig_fresh(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrCharAt           => "gorget_str_char_at",           sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Str, F::Allocates);
     StrChars            => "gorget_str_chars",             sig(&[(T::Str, A::GorgetString)], T::Array, F::Allocates);
     StrClear            => "gorget_str_clear",             sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
@@ -306,21 +326,21 @@ runtime_table! {
     StrIsLower          => "gorget_str_is_lower",          sig(&[(T::Str, A::GorgetString)], T::Bool, F::Pure);
     StrIsUpper          => "gorget_str_is_upper",          sig(&[(T::Str, A::GorgetString)], T::Bool, F::Pure);
     StrIsWhitespace     => "gorget_str_is_whitespace",     sig(&[(T::Str, A::GorgetString)], T::Bool, F::Pure);
-    StrJoin             => "gorget_str_join",              sig(&[(T::Str, A::GorgetString), (T::Array, A::ByValue)], T::Str, F::Allocates);
+    StrJoin             => "gorget_str_join",              sig_fresh(&[(T::Str, A::GorgetString), (T::Array, A::ByValue)], T::Str, F::Allocates);
     StrLines            => "gorget_str_lines",             sig(&[(T::Str, A::GorgetString)], T::Array, F::Allocates);
     StrLstrip           => "gorget_str_lstrip",            sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrLstripWs         => "gorget_str_lstrip_ws",         sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrOrd              => "gorget_str_ord",               sig(&[(T::Str, A::GorgetString)], T::I64, F::Pure);
-    StrPadLeft          => "gorget_str_pad_left",          sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::Str, A::GorgetString)], T::Str, F::Allocates);
-    StrPadRight         => "gorget_str_pad_right",         sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrPadLeft          => "gorget_str_pad_left",          sig_fresh(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrPadRight         => "gorget_str_pad_right",         sig_fresh(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrPush             => "gorget_str_push",              sig(&[(T::Ptr, A::Ptr), (T::Str, A::GorgetString)], T::Void, F::Mutates);
     StrPushChar         => "gorget_str_push_char",         sig(&[(T::Ptr, A::Ptr), (T::Str, A::GorgetString)], T::Void, F::Mutates);
     StrPushLine         => "gorget_str_push_line",         sig(&[(T::Ptr, A::Ptr), (T::Str, A::GorgetString)], T::Void, F::Mutates);
     StrRemoveprefix     => "gorget_str_removeprefix",      sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrRemovesuffix     => "gorget_str_removesuffix",      sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
-    StrRepeat           => "gorget_str_repeat",            sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Str, F::Allocates);
-    StrReplace          => "gorget_str_replace",           sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
-    StrReplacen         => "gorget_str_replacen",          sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Str, F::Allocates);
+    StrRepeat           => "gorget_str_repeat",            sig_fresh(&[(T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Str, F::Allocates);
+    StrReplace          => "gorget_str_replace",           sig_fresh(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrReplacen         => "gorget_str_replacen",          sig_fresh(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::Str, A::GorgetString), (T::I64, A::Scalar)], T::Str, F::Allocates);
     StrRstrip           => "gorget_str_rstrip",            sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrRstripWs         => "gorget_str_rstrip_ws",         sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrSlice            => "gorget_str_slice",             sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Str, F::Allocates);
@@ -330,8 +350,8 @@ runtime_table! {
     StrStr              => "gorget_str_str",               sig(&[(T::Ptr, A::Ptr)], T::Str, F::Pure);
     StrStrip            => "gorget_str_strip",             sig(&[(T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrToCstr           => "gorget_str_to_cstr",           sig(&[(T::Str, A::GorgetString)], T::Ptr, F::Allocates);
-    StrToLower          => "gorget_str_to_lower",          sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
-    StrToUpper          => "gorget_str_to_upper",          sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrToLower          => "gorget_str_to_lower",          sig_fresh(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
+    StrToUpper          => "gorget_str_to_upper",          sig_fresh(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
     StrTrim             => "gorget_str_trim",              sig(&[(T::Str, A::GorgetString)], T::Str, F::Allocates);
     Utf8CodepointLenAt  => "gorget_utf8_codepoint_len_at", sig(&[(T::Str, A::GorgetString), (T::I64, A::Scalar)], T::I64, F::Pure);
 

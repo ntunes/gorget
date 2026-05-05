@@ -1014,7 +1014,7 @@ impl<'a> LoweringContext<'a> {
         if return_type == self.type_mapper.owned_string_type {
             let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
             let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
-                .map_or(false, |rt| is_fresh_allocating_extern(rt));
+                .map_or(false, |rt| runtime_returns_fresh(rt));
             if is_user_fn || is_fresh_builtin {
                 self.func_state.fresh_string_locals.insert(local);
             }
@@ -1038,9 +1038,10 @@ impl<'a> LoweringContext<'a> {
         self.set_owned(local);
         // Mark fresh for extern string functions that provably allocate new buffers.
         // Most runtime string functions return views (Str), but these return owned
-        // GorgetString with independent heap data:
+        // GorgetString with independent heap data. Driven by the typed
+        // `RuntimeSig.returns_fresh` flag — see `runtime_returns_fresh` below.
         if return_type == self.type_mapper.owned_string_type
-            && is_fresh_allocating_extern(&func_name)
+            && runtime_returns_fresh(&func_name)
         {
             self.func_state.fresh_string_locals.insert(local);
         }
@@ -2833,17 +2834,18 @@ fn count_name_in_expr(expr: &Expr, name: &str, count: &mut u32) {
     }
 }
 
-/// Extern string functions that provably allocate fresh buffers.
-/// Their results are independent of any input — safe to skip the
-/// self-referential reassignment clone guard.
-fn is_fresh_allocating_extern(name: &str) -> bool {
-    matches!(name,
-        "gorget_str_to_upper" | "gorget_str_to_lower"
-        | "gorget_str_replace" | "gorget_str_repeat"
-        | "gorget_str_pad_left" | "gorget_str_pad_right"
-        | "gorget_str_join"
-        | "gorget_str_cat"
-        | "gorget_string_format"
-        | "gorget_int_to_str" | "gorget_float_to_str" | "gorget_bool_to_str"
-    )
+/// True iff the runtime fn `name` always returns a fresh, independently
+/// heap-allocated buffer (no aliasing into any input).
+///
+/// The source of truth is `RuntimeSig.returns_fresh` in `src/lir/runtime.rs`.
+/// Replaces the previous `is_fresh_allocating_extern` matches!() name list.
+///
+/// Special case: `gorget_string_format` is not in the typed RuntimeFn registry
+/// (it's a variadic-shaped formatter emitted only via the f-string lowering
+/// path) — its result is tagged at the emission site directly. See
+/// `src/ir/lowering/exprs/mod.rs` for that direct write.
+fn runtime_returns_fresh(name: &str) -> bool {
+    crate::lir::runtime::RuntimeFn::from_c_name(name)
+        .map(|f| f.signature().returns_fresh)
+        .unwrap_or(false)
 }
