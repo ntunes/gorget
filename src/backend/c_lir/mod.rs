@@ -15,8 +15,11 @@ use self::helpers::*;
 use self::emit_types::*;
 
 /// Per-function analysis context for instruction emission.
-/// Consolidates the parallel arrays that were previously passed as
-/// 10+ individual parameters to emit_inst() and emit_call_extern().
+///
+/// Phase D6 (`unified-resource-model.md` §6.8): per-value origin info
+/// (StrLit / NullPtr / CStr / FuncAddr / SpawnSource) is read directly
+/// from `func.value_origins` via the typed accessors below — no parallel
+/// per-value bitmaps in this struct.
 pub(crate) struct EmitContext<'a> {
     pub func: &'a LirFunction,
     pub module: &'a LirModule,
@@ -24,22 +27,9 @@ pub(crate) struct EmitContext<'a> {
     pub sn: &'a HashMap<u32, String>,
     /// Per-value inferred types (indexed by ValueId).
     pub val_types: &'a [Option<LirType>],
-    /// Per-value: true if the value comes from a StrLit instruction.
-    /// (Phase D6 transitional: derived from `func.value_origins`. Once all
-    /// readers go through the typed accessors below, drop this field.)
-    pub str_lit_vals: &'a [bool],
-    /// Per-value: true if the value comes from a cstr-returning extern.
-    pub cstr_vals: &'a [bool],
-    /// Per-value: true if the value is from an extern with cstr return.
-    pub extern_cstr_return_vals: &'a [bool],
-    /// Per-value: true if the value is NullPtr.
-    pub null_vals: &'a [bool],
     /// Per-value: the pointee type (if the value is a pointer).
+    /// Not part of value_origins (it's a propagated type, not an origin tag).
     pub ptr_pointee: &'a [Option<LirType>],
-    /// Per-value: the FuncId target (if the value is a FuncAddr).
-    pub func_addr_targets: &'a [Option<FuncId>],
-    /// Per-value: the source function name (for spawn).
-    pub spawn_source_fn: &'a [Option<String>],
     /// String content → static literal index (Phase 3).
     pub string_lit_map: &'a HashMap<String, usize>,
 }
@@ -76,16 +66,6 @@ impl<'a> EmitContext<'a> {
     #[inline]
     pub fn is_cstr_extern(&self, v: ValueId) -> bool {
         matches!(self.origin(v), Some(ValueOrigin::CStr { from_extern: true }))
-    }
-
-    /// Typed accessor: the FuncId carried by an `Inst::FuncAddr`-produced
-    /// value, if any.
-    #[inline]
-    pub fn func_addr_target(&self, v: ValueId) -> Option<FuncId> {
-        match self.origin(v) {
-            Some(ValueOrigin::FuncAddr(fid)) => Some(*fid),
-            _ => None,
-        }
     }
 
     /// Typed accessor: the spawn-source function suffix carried by a
@@ -1117,17 +1097,6 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // Build a type map from instructions (two passes for arithmetic type propagation).
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Track which values originate from StrLit instructions (raw `const char*`).
-    let mut str_lit_vals: Vec<bool> = vec![false; max_val as usize];
-    // Track which values are raw C strings (const char*) from runtime functions.
-    // Only these should be wrapped with gorget_str_from_literal when stored to Str slots.
-    let mut cstr_vals: Vec<bool> = vec![false; max_val as usize];
-    let mut extern_cstr_return_vals: Vec<bool> = vec![false; max_val as usize];
-    // Track which values are NullPtr (so we can avoid memcpy from NULL).
-    let mut null_vals: Vec<bool> = vec![false; max_val as usize];
-    // Track which values are FuncAddr — maps value → FuncId for adapter generation.
-    let mut func_addr_targets: Vec<Option<FuncId>> = vec![None; max_val as usize];
-    // Track which spawn function produced a void* value (for task_group_submit reconstruction).
-    let mut spawn_source_fn: Vec<Option<String>> = vec![None; max_val as usize];
     // Track the pointee type for Ptr-typed values.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Propagate pointee types through Ptr-typed slots (SlotStore → SlotLoad).
@@ -1159,38 +1128,22 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     }
                 }
             }
-            // Phase D6 (`unified-resource-model.md` §6.8): seed the per-value
-            // bitmaps from the canonical `func.value_origins` table.
-            // `compute_module_value_origins` populated it from the same
-            // instruction shapes — read once, dispatch by typed match.
+            // Phase D6 (`unified-resource-model.md` §6.8): origin info for
+            // this value lives in `func.value_origins` (typed `ValueOrigin`).
+            // Backend reads it via `EmitContext::is_str_lit / is_null /
+            // is_cstr / spawn_source`. The only side-effect we still need
+            // here is overriding val_types[d] = Ptr for CStr-origin values
+            // so they're declared `const char*` (not whatever the extern's
+            // declared return is) — that survives even after the bitmaps
+            // are gone.
             if let Some(dst) = inst.dst() {
                 let didx = dst.0 as usize;
                 if didx < max_val as usize {
-                    if let Some(origin) = func.value_origins.get(didx).and_then(|o| o.as_ref()) {
-                        match origin {
-                            ValueOrigin::StrLit => {
-                                str_lit_vals[didx] = true;
-                            }
-                            ValueOrigin::NullPtr => {
-                                null_vals[didx] = true;
-                            }
-                            ValueOrigin::FuncAddr(fid) => {
-                                func_addr_targets[didx] = Some(*fid);
-                            }
-                            ValueOrigin::CStr { from_extern } => {
-                                cstr_vals[didx] = true;
-                                if *from_extern {
-                                    extern_cstr_return_vals[didx] = true;
-                                }
-                                // CStr-returning extern: override declared
-                                // type to Ptr so the value is declared
-                                // `void*` in C (avoids const-discard).
-                                val_types[didx] = Some(LirType::Ptr);
-                            }
-                            ValueOrigin::SpawnSource(suffix) => {
-                                spawn_source_fn[didx] = Some(suffix.clone());
-                            }
-                        }
+                    if matches!(
+                        func.value_origins.get(didx).and_then(|o| o.as_ref()),
+                        Some(ValueOrigin::CStr { .. })
+                    ) {
+                        val_types[didx] = Some(LirType::Ptr);
                     }
                 }
             }
@@ -1222,8 +1175,6 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     }
                 }
             }
-            // (spawn_source_fn now populated from `func.value_origins` above
-            //  — see ValueOrigin::SpawnSource branch.)
             // Track pointee types for pointer-producing instructions.
             match inst {
                 Inst::SlotAddr { dst, slot } => {
@@ -1828,13 +1779,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     let ectx = EmitContext {
         func, module, sn,
         val_types: &val_types,
-        str_lit_vals: &str_lit_vals,
-        cstr_vals: &cstr_vals,
-        extern_cstr_return_vals: &extern_cstr_return_vals,
-        null_vals: &null_vals,
         ptr_pointee: &ptr_pointee,
-        func_addr_targets: &func_addr_targets,
-        spawn_source_fn: &spawn_source_fn,
         string_lit_map,
     };
 
@@ -1909,11 +1854,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
     let module = ctx.module;
     let sn = ctx.sn;
     let val_types = ctx.val_types;
-    // `str_lit_vals` is still threaded into helper signatures that take a
-    // raw bitmap (e.g. `emit_coerced_arg`); migrate those next. Local origin
-    // queries below go through the typed accessors `ctx.is_str_lit(v)` /
-    // `ctx.is_null(v)` / `ctx.is_cstr(v)` / `ctx.is_cstr_extern(v)`.
-    let str_lit_vals = ctx.str_lit_vals;
+    // Per-value origin queries go through the typed accessors
+    // `ctx.is_str_lit / is_null / is_cstr / is_cstr_extern / spawn_source`.
     let ptr_pointee = ctx.ptr_pointee;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let s = |id: SlotId| -> String { format!("__s{}", id.0) };

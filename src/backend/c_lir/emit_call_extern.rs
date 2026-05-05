@@ -15,11 +15,8 @@ pub(super) fn emit_call_extern(
     let module = ctx.module;
     let sn = ctx.sn;
     let val_types = ctx.val_types;
-    // Phase D6 transitional: helpers like `emit_coerced_arg` still take a
-    // raw `&[bool]` for `str_lit_vals`; this binding feeds those calls.
-    // Direct reads in this file go through `ctx.is_str_lit(v)` /
-    // `ctx.is_null(v)` / `ctx.spawn_source(v)`.
-    let str_lit_vals = ctx.str_lit_vals;
+    // Per-value origin queries go through the typed accessors
+    // `ctx.is_str_lit / is_null / is_cstr / is_cstr_extern / spawn_source`.
     let ptr_pointee = ctx.ptr_pointee;
     let v = |id: ValueId| -> String { format!("__v{}", id.0) };
     let _s = |id: SlotId| -> String { format!("__s{}", id.0) };
