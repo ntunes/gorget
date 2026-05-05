@@ -216,13 +216,13 @@ independent copy. These are the SEVEN points where materialization occurs:
 
 | Point | Trigger | Status |
 |-------|---------|--------|
-| 1. Assignment | `x = expr` where x is borrowed | Done (assign handler) — but see chain caveat below |
+| 1. Assignment | `x = expr` where x is borrowed | Done (assign handler) |
 | 2. Mutating method | `x.push(val)` where x is borrowed | Done (cow_before_mutation) |
-| 3. Struct/enum init | `Foo(x)` where x is borrowed | Done (emit_enum_init_owned + LIR FieldLoad clone) — but see chain caveat below |
+| 3. Struct/enum init | `Foo(x)` where x is borrowed | Done (emit_enum_init_owned + LIR FieldLoad clone) |
 | 4. Collection put | `v.push(x)` where x is borrowed | Done (clone_multi_use_resource_args + runtime materialize hook) |
 | 5. Return | `return x` where x is borrowed | Done (lower_return Ptr→T auto-clone) |
 | 6. Move transfer | `consume(!x)` where x is borrowed | Done (Ownership::Move Ptr→clone) |
-| 7. Field store | `self.field = x` where x is borrowed | Done (lower_field_assign Ptr→clone) — but see chain caveat below |
+| 7. Field store | `self.field = x` where x is borrowed | Done (lower_field_assign Ptr→clone) |
 
 Point 7 covers field assignments where the RHS is a `Ptr`-typed local
 (a borrowed parameter or reference). Without cloning, the field and the
@@ -235,47 +235,61 @@ its copy, the field becomes a dangling pointer. `lower_field_assign` in
 `ensure_owned_string` has been deleted — its role is now handled by the
 generic `is_non_owned_string` check in the resource clone paths.
 
-### Chain caveat — view provenance is not transitive (open bug, 2026-05-01)
+### Chain caveat — fixed 2026-05-04
 
-Points 1, 3, and 7 silently skip materialization when the source local's
-value is a String view that came through a chain of expression temps.
-Concretely:
+Earlier (filed 2026-05-01), points 1, 3, and 7 silently skipped
+materialization when the source local's value was a String view that
+came through a chain of expression temps:
 
 ```gorget
 String x = vec.get(0).unwrap().trim()   # x's value is a cap=0 view of vec[0]
-Option[String] o = Some(x)              # point 3b: NO clone fires
-String y = x                            # point 1:  NO clone fires
-h.field = x                             # point 7:  NO clone fires
-vec.set(0, "...")                       # the source mutates
-# o.unwrap(), y, h.field — all dangling
+Option[String] o = Some(x)              # point 3b: NO clone fired
+String y = x                            # point 1:  NO clone fired
+h.field = x                             # point 7:  NO clone fired
+vec.set(0, "...")                       # the source mutated
+# o.unwrap(), y, h.field — were all dangling
 ```
 
-Root cause: `set_view_of` only marks the result of view-returning methods
-as `ViewOf` when the result is a **named** local (`exprs/methods.rs:2237`).
-For chain temps, the View flag is dropped, the temp is tagged `Owned` by
-default (`call_tracked`), and VarDecl propagates `Owned` to the named
-local. The boundary checks then see `is_owned_local(x) == true` and skip
-the clone.
+Original root cause: `set_view_of` was guarded on `is_named_local`, so
+the result of view-returning methods was only marked as `ViewOf` for
+named locals. For chain temps the View flag was dropped, the temp was
+tagged `Owned` by default (`call_tracked`), and VarDecl propagated
+`Owned` to the named local — boundary checks then saw `is_owned_local(x)
+== true` and skipped the clone.
 
-The same bug surfaces for direct `substring` / `slice` / `char_at` when
-the receiver is itself a borrow:
+Two changes shipped that closed the bug:
+
+1. **`cow_materialize_view`'s clone-to-owned step uses `AssignMode::Move`**
+   (matches its sibling `cow_materialize_alias`). The previous shallow-
+   copy variant produced a Phase C validator violation that the
+   named-local guard was *masking*.
+2. **The named-local guard at `exprs/methods.rs` removed** —
+   `set_view_of` now fires for every view-returning method result, named
+   or unnamed. The `view_returning_temps` sidecar is gone; the typed
+   `LocalOwnership::View` channel is the sole source of truth. VarDecl's
+   E branch reads it directly.
+
+Both changes are in commit `9dc2cf4d`. The matching DONE entry —
+"Phase D4 partial: cow_materialize_view shallow-copy fix retires the
+`view_returning_temps` sidecar" — captures the diagnostic. Fixture
+`tests/fixtures/cow_materialization_points.gg` is wired into the
+integration suite and exercises all seven points with both direct and
+chained-view source shapes; every sub-case prints `hello` and the
+fixture is part of the gating sweep.
+
+The substring-on-borrow-source variant —
 
 ```gorget
-String src = vec.get(0).unwrap()        # src is a borrow into vec
-String view = src.substring(0, 5)       # view is ViewOf(src), not ViewOf(vec)
-Option[String] o = Some(view)           # boundary check sees ViewOf(src), src is alive — skip
-vec.set(0, "...")                       # vec mutates, src and view become stale
+String src = vec.get(0).unwrap()
+String view = src.substring(0, 5)
+Option[String] o = Some(view)
+vec.set(0, "...")                       # both src and view materialize transitively
 ```
 
-Fixture: `tests/fixtures/cow_materialization_points.gg` exercises all
-seven points with both direct and chained-view source shapes; the
-`.expected` shows the intended behaviour (every sub-case prints `hello`).
-
-The right structural fix is documented in TODO.md (High) — short version:
-plumb `BuiltinMethodDecl.returns_view` through the call result regardless
-of named-vs-temp status; propagate ViewOf through VarDecl; resolve the
-codegen ABI mismatch (today `flush_ownership_to_locals` maps ViewOf to
-`OwnershipState::MaybeBorrowed` which the C-LIR backend treats as a Ptr).
+— is also correct now: `cow_before_mutation(vec)` walks
+`views_of_source(vec)` to find `src` (a CoW alias of `vec`), calls
+`cow_materialize_view(src)`, which recurses into `views_of_source(src)`
+to find `view`, and materializes both before the source mutation lands.
 
 ## Additional Safety Checks
 
