@@ -2772,10 +2772,11 @@ fn lower_string_interpolation(
     let dst = builder.call_extern("gorget_string_format", all_args, owned_string_type);
     // Register for drop — needs_drop() handles type filtering.
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
-    ctx.set_owned(dst);
     // gorget_string_format always allocates a fresh buffer — mark as fresh so
     // the self-referential clone guard in assigns.rs skips the redundant clone.
+    // Phase D4: dual-write — sidecar AND typed FreshOwned state.
     ctx.func_state.fresh_string_locals.insert(dst);
+    ctx.set_owned_fresh(dst);
     FunctionBuilder::copy(dst)
 }
 

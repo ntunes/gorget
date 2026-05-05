@@ -983,12 +983,15 @@ impl<'a> LoweringContext<'a> {
         // have the return clone path ensuring independence) AND for builtin method
         // calls whose runtime callee provably allocates fresh buffers (replace,
         // upper, lower, repeat, pad, join, etc.).
+        // Phase D4: dual-write — populate the legacy sidecar AND upgrade the
+        // typed state to FreshOwned so readers can migrate to typed signal.
         if return_type == self.type_mapper.owned_string_type {
             let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
             let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
                 .map_or(false, |rt| runtime_returns_fresh(rt));
             if is_user_fn || is_fresh_builtin {
                 self.func_state.fresh_string_locals.insert(local);
+                self.set_owned_fresh(local);
             }
         }
         local
@@ -1011,11 +1014,14 @@ impl<'a> LoweringContext<'a> {
         // Mark fresh for extern string functions that provably allocate new buffers.
         // Most runtime string functions return views (Str), but these return owned
         // GorgetString with independent heap data. Driven by the typed
-        // `RuntimeSig.returns_fresh` flag — see `runtime_returns_fresh` below.
+        // `RuntimeSig.returns_fresh` flag (see `runtime_returns_fresh` below).
+        // Phase D4: dual-write — sidecar AND typed FreshOwned state during
+        // transition. Sidecar will retire once readers fully migrate.
         if return_type == self.type_mapper.owned_string_type
             && runtime_returns_fresh(&func_name)
         {
             self.func_state.fresh_string_locals.insert(local);
+            self.set_owned_fresh(local);
         }
         local
     }
@@ -1783,14 +1789,23 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is tracked as definitely owning its data.
-    /// Phase D: reads `local_ownership`.
+    /// Phase D: reads `local_ownership`. Both `Owned` and `FreshOwned`
+    /// own their data — fresh is the strictly-stronger sub-axis.
     pub fn is_owned_local(&self, local: LocalId) -> bool {
-        matches!(self.func_state.local_ownership.get(&local), Some(crate::ir::LocalOwnership::Owned))
+        self.func_state.local_ownership.get(&local)
+            .map_or(false, |s| s.is_owned())
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
     pub fn set_owned(&mut self, local: LocalId) {
         self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::Owned);
+    }
+
+    /// Mark a local as owning a freshly-allocated buffer (no aliasing).
+    /// Strictly stronger than `set_owned`. The return-clone elision and
+    /// self-referential reassign guard rely on this stronger fact.
+    pub fn set_owned_fresh(&mut self, local: LocalId) {
+        self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::FreshOwned);
     }
 
     /// Drop ownership tracking for a local.
@@ -1800,7 +1815,8 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local's string data is a fresh allocation not shared with any
     /// other variable. True only for direct function/extern call results that
-    /// return the owned string type.
+    /// return the owned string type. Phase D4: reads typed `FreshOwned` state
+    /// OR the legacy `fresh_string_locals` sidecar — whichever fires first.
     pub fn is_fresh_string(&self, local: LocalId) -> bool {
         self.func_state.fresh_string_locals.contains(&local)
     }

@@ -332,9 +332,20 @@ pub struct InnerSharedSpawn {
 /// them across sidecar maps. Source of truth at the GIR/LIR boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LocalOwnership {
-    /// Owns its data. Registered for drop at scope exit.
+    /// Owns its data. Registered for drop at scope exit. Heap data may be
+    /// shared with another local (e.g., via Move from a non-fresh source,
+    /// via value-aliasing). For the strictly stronger "no aliasing" case
+    /// see `FreshOwned`.
     #[default]
     Owned,
+    /// Owns its data AND the heap allocation is provably fresh — no other
+    /// local shares the same buffer. Sibling of `Owned`; strictly stronger.
+    /// Set when a runtime callee returns a freshly allocated GorgetString
+    /// (gorget_str_cat, gorget_string_format, gorget_str_to_upper, …) or
+    /// when a user-defined function's return path guaranteed independence.
+    /// Used by the return-clone elision and the self-referential reassign
+    /// guard, both of which are sound when aliasing is excluded.
+    FreshOwned,
     /// Borrowed — does NOT drop. Carries provenance (which root the
     /// borrow points into) and mutability (shared vs unique).
     Borrowed { origin: BorrowOrigin, mutability: Mutability },
@@ -369,7 +380,30 @@ impl LocalOwnership {
     /// SharedHeap returns false: it IS owned at runtime (32-byte value
     /// struct in its own slot) — only the heap data behind it is shared.
     pub fn is_ref(&self) -> bool {
-        !matches!(self, LocalOwnership::Owned | LocalOwnership::SharedHeap { .. })
+        !matches!(self,
+            LocalOwnership::Owned
+            | LocalOwnership::FreshOwned
+            | LocalOwnership::SharedHeap { .. }
+        )
+    }
+
+    /// Whether this state owns its data. Returns true for `Owned`,
+    /// `FreshOwned`, and `SharedHeap` — all three carry their slot at
+    /// runtime; `FreshOwned` adds the no-aliasing axis on top of `Owned`,
+    /// `SharedHeap` adds source-provenance for value-aliasing.
+    pub fn is_owned(&self) -> bool {
+        matches!(self,
+            LocalOwnership::Owned
+            | LocalOwnership::FreshOwned
+            | LocalOwnership::SharedHeap { .. }
+        )
+    }
+
+    /// Whether the heap data is provably fresh — no other local shares the
+    /// same buffer. Strictly stronger than `is_owned()`. The return-clone
+    /// elision relies on this predicate.
+    pub fn is_fresh(&self) -> bool {
+        matches!(self, LocalOwnership::FreshOwned)
     }
 
     /// Whether this is a "pure" borrow with no chance of being materialized.

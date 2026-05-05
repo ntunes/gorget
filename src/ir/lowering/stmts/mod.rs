@@ -715,7 +715,7 @@ fn lower_var_decl(
                     // for the cases the legacy predicate misses.
                     else if ctx.drops.is_registered(place.local)
                         || (!ctx.is_named_local(place.local) && ctx.type_registry.needs_drop(rhs_type))
-                        || (matches!(source_own, Some(crate::ir::LocalOwnership::Owned))
+                        || (source_own.map_or(false, |s| s.is_owned())
                             && !source_live
                             && ctx.type_registry.needs_drop(actual_var_type))
                     {
