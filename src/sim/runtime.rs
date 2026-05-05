@@ -714,6 +714,8 @@ pub fn call_extern(
         | "gorget_string_borrow"
         | "gorget_string_materialize_inplace"
         | "gorget_string_clone_inplace" => {
+            // The Ptr arg is auto-dereffed by `is_string_method_call` upstream
+            // (dispatch.rs); we receive the underlying Str/String value here.
             let s = args.first()
                 .and_then(Value::try_to_sim_str)
                 .map(|s| s.as_str().to_string())

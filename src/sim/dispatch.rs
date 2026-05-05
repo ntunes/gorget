@@ -2714,6 +2714,20 @@ impl<'m> Interpreter<'m> {
             || name.starts_with("gorget_str_to_upper_to_str")
             || name.starts_with("gorget_str_to_lower_to_str")
             || name.starts_with("gorget_str_char_at")
+            // CoW materialization helpers — all take a `const GorgetString*`
+            // (Value::Ptr in sim); the runtime handler `try_to_sim_str`
+            // doesn't read through Ptr, so without this auto-deref the helper
+            // would see an empty string and propagate "" through the rest of
+            // the call chain. Snag #6 cascade (2026-05-05): the assertion
+            // failure on `tail.index_of("---*/")` reduced to a String=""
+            // input at index_of because the upstream `clone_to_owned` saw
+            // Ptr(addr) and produced "" instead of dereffing.
+            || matches!(name,
+                "gorget_string_clone_to_owned"
+                | "gorget_string_copy_cow"
+                | "gorget_string_borrow"
+                | "gorget_string_materialize_inplace"
+                | "gorget_string_clone_inplace")
             || name.starts_with("__option_")
             || name.starts_with("__result_")
     }
