@@ -57,6 +57,14 @@ impl TypeMapper {
     ///
     /// Returns `UNIT_TYPE` for types not yet registered. Use `try_map_ast_type`
     /// when you need to distinguish "genuinely void" from "unknown type."
+    ///
+    /// **Local-form invariant (Phase A residual #1, sub-TODO 1b):** for the
+    /// Callable family (`Callable[T(P)]`, `MutCallable`, `ConsumeCallable`),
+    /// returns `UNIT_TYPE` (the void* __callable_N ABI). The `Function` and
+    /// `Ref` variants follow the same pattern via `try_map_ast_type` — see
+    /// the comment there. Callers that need a non-void TypeId at a local
+    /// declaration must fall back to `map_ast_type_mut` (see VarDecl path
+    /// in `stmts/mod.rs:240`).
     pub fn map_ast_type(&self, ty: &Type) -> TypeId {
         self.try_map_ast_type(ty).unwrap_or(UNIT_TYPE)
     }
@@ -66,6 +74,40 @@ impl TypeMapper {
     /// Returns `None` when the type is not registered (not yet monomorphized,
     /// unresolved generic, function pointer, etc.). Unlike `map_ast_type`, this
     /// lets callers distinguish "genuinely void" from "unknown type."
+    ///
+    /// **Local-form invariant — types with stored-vs-local-form distinctions
+    /// (Phase A residual #1, sub-TODO 1b audit, 2026-05-05):**
+    ///
+    /// - `Callable[T(P)]` / `MutCallable[T(P)]` / `ConsumeCallable[T(P)]`:
+    ///   returns `None` so callers fall through to `map_ast_type_mut`, which
+    ///   produces a fresh `GirType::FnPtr`. The Named form
+    ///   `Callable__GorgetClosure` is reserved for in-collection positions
+    ///   (where the runtime needs typed elem_size / elem_drop / elem_clone).
+    ///
+    /// - `Type::Function`: returns `None`. At local positions, callers fall
+    ///   back to `map_ast_type_mut` → `FnPtr`. At param/return positions,
+    ///   the resulting `UNIT_TYPE` activates the `void* __callable_N` ABI,
+    ///   which is the intentional design (closure values are passed as 16-byte
+    ///   `GorgetClosure` structs but spelled as `void*` at the C ABI).
+    ///
+    /// - `Type::Ref` (ownership-suffix variant `T &` from generic args /
+    ///   return positions; NOT `Param.ownership = MutableBorrow` which
+    ///   doesn't go through `Type::Ref`): returns `None`. The mutable path
+    ///   treats `Type::Ref` as transparent (same TypeId as inner). Today's
+    ///   only consumer is type-arg positions like `Vector[T &]` (iterator-
+    ///   intent marker); callers that need `Ptr(T)` at field/local positions
+    ///   should write the AST as `Ref[T]` (which is `Type::Named` with
+    ///   `name = "Ref"` and parses through `map_ast_type_mut`'s
+    ///   `Ref`/`MutRef` branch into `GirType::Ptr`/`GirType::MutPtr`).
+    ///
+    /// **Audit conclusion (Phase A residual #2, 2026-05-05):** these are the
+    /// ONLY three Type variants with a stored-vs-local-form distinction. No
+    /// other type (Box, Shared, Weak, Mutex, Channel, Vector, Dict, Set, …)
+    /// has this asymmetry — they all flow through `lookup_protocol(base)` →
+    /// `get_or_register(&mangled, …)` which caches in `named_types`
+    /// uniformly. `map_type_with_subs` (`context.rs:780`) honors the Callable
+    /// invariant explicitly; `Type::Function` and `Type::Ref` inherit it via
+    /// the immutable-path fallthrough at line 818.
     pub fn try_map_ast_type(&self, ty: &Type) -> Option<TypeId> {
         match ty {
             Type::Primitive(prim) => Some(self.map_primitive(prim)),
