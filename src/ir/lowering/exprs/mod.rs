@@ -2774,8 +2774,7 @@ fn lower_string_interpolation(
     ctx.drops.register_local(dst, owned_string_type, &ctx.type_registry);
     // gorget_string_format always allocates a fresh buffer — mark as fresh so
     // the self-referential clone guard in assigns.rs skips the redundant clone.
-    // Phase D4: dual-write — sidecar AND typed FreshOwned state.
-    ctx.func_state.fresh_string_locals.insert(dst);
+    // Phase D4: typed-only signal — sidecar writer retired.
     ctx.set_owned_fresh(dst);
     FunctionBuilder::copy(dst)
 }

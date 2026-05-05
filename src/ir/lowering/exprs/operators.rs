@@ -177,6 +177,8 @@ pub(super) fn lower_binary_op(
         // `RuntimeSig.returns_fresh` flag on `RuntimeFn::StrCat`.
         AstOp::Add if is_string => {
             let owned_type = ctx.type_mapper.owned_string_type;
+            // call_extern_tracked already upgrades the dst to FreshOwned via
+            // is_fresh_allocating_extern — no extra mark needed here.
             let dst = ctx.call_extern_tracked(builder, "gorget_str_cat", vec![lhs, rhs], owned_type);
             FunctionBuilder::copy(dst)
         }

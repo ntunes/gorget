@@ -983,14 +983,12 @@ impl<'a> LoweringContext<'a> {
         // have the return clone path ensuring independence) AND for builtin method
         // calls whose runtime callee provably allocates fresh buffers (replace,
         // upper, lower, repeat, pad, join, etc.).
-        // Phase D4: dual-write — populate the legacy sidecar AND upgrade the
-        // typed state to FreshOwned so readers can migrate to typed signal.
+        // Phase D4: typed-only signal — sidecar writer retired.
         if return_type == self.type_mapper.owned_string_type {
             let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
             let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
                 .map_or(false, |rt| runtime_returns_fresh(rt));
             if is_user_fn || is_fresh_builtin {
-                self.func_state.fresh_string_locals.insert(local);
                 self.set_owned_fresh(local);
             }
         }
@@ -1015,12 +1013,11 @@ impl<'a> LoweringContext<'a> {
         // Most runtime string functions return views (Str), but these return owned
         // GorgetString with independent heap data. Driven by the typed
         // `RuntimeSig.returns_fresh` flag (see `runtime_returns_fresh` below).
-        // Phase D4: dual-write — sidecar AND typed FreshOwned state during
-        // transition. Sidecar will retire once readers fully migrate.
+        // Phase D4: typed-only signal via `set_owned_fresh` — sidecar
+        // writer retired in commit b0a962e8.
         if return_type == self.type_mapper.owned_string_type
             && runtime_returns_fresh(&func_name)
         {
-            self.func_state.fresh_string_locals.insert(local);
             self.set_owned_fresh(local);
         }
         local
