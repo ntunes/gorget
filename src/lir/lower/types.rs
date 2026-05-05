@@ -179,17 +179,30 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
                 return 152;
             }
-            // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes.
-            // Phase A residual #1: the c_runtime_alias-tagged StructDef
-            // lookup above handles the registered-LIR case. This arm is the
-            // string-only fallback for `array_elem_size_from_monomorphized`
-            // and similar parsers that derive a type name from a generated
-            // function spelling (e.g. `Vector__Callable__GorgetClosure__new`)
-            // — the elem name surfaces here BEFORE the matching LIR
-            // StructDef is built. Tracked in TODO Medium "Hardcoded type
-            // size database".
-            if type_name == "GorgetClosure" || type_name.starts_with("Callable_") {
-                return 16;
+            // GorgetClosure / Callable family = {fn_ptr, env} = 16 bytes.
+            // Phase A residual #1 (sub-TODO 1a, 2026-05-05): the
+            // c_runtime_alias-tagged StructDef lookup above handles the
+            // registered-LIR case. This is the pre-registration fallback for
+            // `array_elem_size_from_monomorphized` and similar parsers that
+            // derive a type name from a generated function spelling (e.g.
+            // `Vector__Callable__GorgetClosure__new`) — the elem name
+            // surfaces here BEFORE the matching LIR StructDef is built.
+            //
+            // No name-matching: the recognizer reads `c_runtime_alias` from
+            // the matching `BuiltinTypeProtocol` (single source of truth,
+            // shared with `register_callable_alias`). The runtime size then
+            // comes from the alias's StructDef in `structs` (preferred) or
+            // from `opaque_runtime_size` (the parallel runtime-size table).
+            // Tracked in TODO Medium "Hardcoded type size database".
+            if let Some(alias) = crate::ir::lowering::builtins::c_runtime_alias_for_mangled_name(type_name) {
+                if let Some(sd) = structs.iter().find(|s| s.name == alias) {
+                    if let Some(sz) = sd.computed_c_size {
+                        return sz;
+                    }
+                }
+                if let Some(sz) = opaque_runtime_size(alias) {
+                    return sz;
+                }
             }
             // Task__T = { void* __task; void (*__drop)(void*); } = 16 bytes
             if type_name.starts_with("Task__") {

@@ -957,6 +957,22 @@ pub fn protocol_for_mangled_name(mangled: &str) -> Option<&'static BuiltinTypePr
     }).copied()
 }
 
+/// Return the C runtime struct this mangled name aliases to, if any.
+///
+/// Reads `c_runtime_alias` from the matching `BuiltinTypeProtocol`. The Callable
+/// family (`Callable[T(...)]`, `MutCallable[…]`, `ConsumeCallable[…]`, and the
+/// runtime singleton `GorgetClosure`) all alias to `"GorgetClosure"`; protocols
+/// without a runtime alias return `None`.
+///
+/// Single source of truth for "this mangled name lowers to a known runtime
+/// struct" — used by both the GIR-side TypeDef registrar (`register_callable_alias`)
+/// and the LIR-side size lookup (`c_sizeof_with_structs`) so neither has to
+/// re-implement the name-shape recognizer. The protocol's `c_runtime_alias`
+/// field IS the contract; this accessor reads it through one helper.
+pub fn c_runtime_alias_for_mangled_name(mangled: &str) -> Option<&'static str> {
+    protocol_for_mangled_name(mangled).and_then(|p| p.c_runtime_alias)
+}
+
 /// Check if a type uses by-value receiver convention (Copy-semantics pointer handles).
 /// Used by the generic dispatch path to skip borrow creation for these types.
 pub fn is_by_value_receiver(type_name: &str) -> bool {

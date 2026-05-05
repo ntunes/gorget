@@ -724,23 +724,16 @@ pub(super) fn register_callable_alias(
         return type_id;
     }
 
-    // Pick the protocol from the base prefix. `GorgetClosure` (the runtime
-    // singleton) and `Callable__…` / `MutCallable__…` / `ConsumeCallable__…`
-    // monomorphizations all share the same closure ABI.
-    let base = if mangled_name == "GorgetClosure" {
-        "GorgetClosure"
-    } else if mangled_name.starts_with("Callable__") {
-        "Callable"
-    } else if mangled_name.starts_with("MutCallable__") {
-        "MutCallable"
-    } else if mangled_name.starts_with("ConsumeCallable__") {
-        "ConsumeCallable"
-    } else {
-        return type_id;
-    };
-    let protocol = match builtins::lookup_protocol(base) {
-        Some(p) => p,
-        None => return type_id,
+    // Pick the protocol via the mangled-name recognizer. `GorgetClosure` (the
+    // runtime singleton) and `Callable__…` / `MutCallable__…` /
+    // `ConsumeCallable__…` monomorphizations all share the same closure ABI.
+    // Filter to only the family this helper registers — protocols whose
+    // `c_runtime_alias` resolves to `"GorgetClosure"`. Other protocols
+    // (Vector, Dict, …) get registered via `register_collection_alias`, not
+    // here.
+    let protocol = match builtins::protocol_for_mangled_name(mangled_name) {
+        Some(p) if p.c_runtime_alias == Some("GorgetClosure") => p,
+        _ => return type_id,
     };
     let drop_strat = match protocol.drop_fn {
         Some(f) => DropStrategy::Trivial(f.to_string()),
