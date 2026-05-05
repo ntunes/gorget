@@ -56,7 +56,10 @@ void main():
     Option[int] no_score = None()
     scores.put("bob", no_score)
     scores.put("carol", Some(88))
-    # use keys().len() as workaround for Dict.len() codegen bug with Option value type
+    # NOTE: this used to be a keys().len() workaround for a Dict.len()
+    # codegen bug on Option-typed values; the bug appears fixed as of
+    # 2026-05-04 (see dict_len_option_value.gg for direct .len() coverage).
+    # Kept as keys().len() here to also exercise the keys() path.
     Vector[String] sk = scores.keys()
     print(f"{sk.len()}")
 

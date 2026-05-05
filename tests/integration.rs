@@ -5324,6 +5324,30 @@ fn dict_items() {
 }
 
 #[test]
+fn dict_len_option_value() {
+    // Regression: test_collections_nested_advanced.gg has carried a workaround
+    // since 2026-03-11 that uses scores.keys().len() instead of scores.len()
+    // on a Dict[String, Option[int]], with the comment "Dict.len() codegen
+    // bug with Option value type". As of 2026-05-04 the natural .len() call
+    // returns the correct count for all four variants below; the bug appears
+    // to have been silently fixed by intervening LIR / CoW / drop work.
+    // This test locks that down so we don't regress.
+    run_gg(
+        "dict_len_option_value.gg",
+        "\
+--- A: Dict[String, Option[int]] ---
+3
+--- B: Dict[String, Option[String]] ---
+3
+--- C: Dict[int, Option[int]] ---
+3
+--- D: Dict[String, Option[Vector[int]]] ---
+3
+done",
+    );
+}
+
+#[test]
 fn dict_order_remove() {
     run_gg(
         "dict_order_remove.gg",
