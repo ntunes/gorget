@@ -17796,6 +17796,35 @@ done",
 }
 
 #[test]
+fn move_across_branches() {
+    run_gg(
+        "move_across_branches.gg",
+        "\
+if_elif b=x
+if_else b=y
+three_way b=z
+match b=m
+first_branch a=first
+done",
+    );
+}
+
+#[test]
+fn field_store_auto_clones_live_source() {
+    run_gg(
+        "field_store_auto_clones_live_source.gg",
+        "\
+after_use items=hello f.a=hello
+last_use_move f.a=only
+chained_ifs f.b=x
+explicit_move f.a=forced
+explicit_clone items=cloned f.a=cloned
+index_store_live inner=idx outer[0]=idx
+done",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }

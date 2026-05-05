@@ -243,7 +243,18 @@ fn uses_expr(
             live.remove(&variable.node);
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
-        Expr::StringLiteral(_, _) => {}
+        Expr::StringLiteral(_, interp_exprs) => {
+            // F-string interpolations are real uses of any locals they reference
+            // (`f"x={items.get(0).unwrap()}"`). Without walking them, liveness
+            // misses the use, and a preceding consuming-arg / field-store would
+            // emit `move_zero` on a still-live source — the read inside the
+            // interpolation then becomes a `local _N read after MoveZero` GIR
+            // validation panic. Surfaced 2026-05-05 wiring field-assign through
+            // `ensure_owned_at_consuming_arg`.
+            for interp in interp_exprs {
+                uses_expr(&interp.node, interp.span.start, live, lu);
+            }
+        }
         _ => {} // Literals, type names, etc.
     }
 }

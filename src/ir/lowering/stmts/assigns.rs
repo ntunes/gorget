@@ -424,7 +424,7 @@ pub(super) fn lower_field_assign(
     // instead of copying the intermediate struct to a temp.
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
         let mut rhs = lower_expr(ctx, builder, value);
-        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value.span);
+        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
         emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
         return;
     }
@@ -447,7 +447,7 @@ pub(super) fn lower_field_assign(
         lower_expr(ctx, builder, object)
     };
     let mut rhs = lower_expr(ctx, builder, value);
-    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value.span);
+    clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
@@ -535,22 +535,25 @@ pub(super) fn lower_field_assign(
     }
 }
 
-/// Clone a Ptr-typed RHS (borrowed reference) to produce an independently owned copy.
-/// Without this, storing a borrowed param into a struct field creates aliased ownership —
-/// when the caller drops its copy, the field becomes a dangling pointer.
-// Thin wrapper over `ensure_owned_at_boundary` for field-store paths that want
-// to clone a Ptr(T) RHS to an owned T before writing into a struct field.
-// Kept as a standalone helper only so the call sites can pass `&mut rhs`
-// instead of passing/returning the operand.
+/// Apply the 3-way ownership rule (auto-move if dead / auto-clone if live /
+/// always-clone if borrow) to a field-store RHS. Mirrors
+/// `ensure_owned_at_consuming_arg` semantics — used at every other consuming
+/// position (`push`, `put`, `set`, `insert`, `send`, `v[i]=x`, `Struct(field)`,
+/// `Variant(payload)`). Field-assign was the only outlier prior to 2026-05-05;
+/// routing through the same helper closes snag #8 (heap corruption when a
+/// non-Copy local was field-stored across alternative branches) by giving
+/// each live-source case its own clone, and closes the user-reported
+/// "Compiler internal panic" — `f.a = items; print(items)` previously
+/// hit `local _N read after MoveZero` GIR validation.
 fn clone_ptr_rhs_if_needed(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     rhs: &mut Operand,
-    span: crate::span::Span,
+    value: &Spanned<Expr>,
 ) {
     let taken = std::mem::replace(rhs, Operand::Constant(Constant::Unit));
-    *rhs = ctx.ensure_owned_at_boundary(
-        builder, taken, span, crate::ir::ImplicitCloneReason::StructFieldFromBorrow,
+    *rhs = ctx.ensure_owned_at_consuming_arg(
+        builder, taken, value, crate::ir::ImplicitCloneReason::StructFieldFromBorrow,
     );
 }
 
