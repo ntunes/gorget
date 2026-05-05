@@ -2145,8 +2145,18 @@ fn lower_match_expr(
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
     let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
 
-    // Allocate result local (placeholder type — will be overwritten)
-    let result_local = builder.add_local(I64_TYPE, None);
+    // Allocate result local with the surrounding context's expected type when
+    // available (VarDecl `T x = match …`, return-position match, struct
+    // field init, etc.). Without the expected type the local is sized as
+    // I64 — fine for primitive arms but corrupts struct/String/Vector arms
+    // because the slot allocation undersizes the actual value. The type is
+    // refined further once we lower the first non-divergent arm so that
+    // contexts without an expected_type (statement-level `match` whose
+    // expression value is later coerced) still produce a correctly-sized
+    // result.
+    let result_type_init = ctx.func_state.expected_type.unwrap_or(I64_TYPE);
+    let result_local = builder.add_local(result_type_init, None);
+    let mut result_type_refined = ctx.func_state.expected_type.is_some();
     let merge_bb = builder.new_block();
 
     for (i, arm) in arms.iter().enumerate() {
@@ -2166,7 +2176,21 @@ fn lower_match_expr(
         super::stmts::emit_pattern_bindings(ctx, builder, &arm.pattern, scrut_local, scrut_type);
         let arm_val = lower_expr(ctx, builder, &arm.body);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_local), arm_val);
+            if !result_type_refined {
+                let arm_ty = infer_operand_type_full(ctx, &arm_val, builder);
+                builder.locals[result_local.0 as usize].type_id = arm_ty;
+                result_type_refined = true;
+            }
+            // Phase C: arm value flows into the match's result slot. Each arm
+            // body produces a fresh single-use value (the result of its tail
+            // expression) — Move is the correct mode for resource types so
+            // the validator doesn't flag a shallow copy of the arm's owned
+            // value into the result slot.
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(result_local),
+                arm_val,
+            );
             builder.jump(merge_bb);
         }
 
@@ -2178,7 +2202,15 @@ fn lower_match_expr(
     if let Some(else_expr) = else_arm {
         let else_val = lower_expr(ctx, builder, else_expr);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_local), else_val);
+            if !result_type_refined {
+                let else_ty = infer_operand_type_full(ctx, &else_val, builder);
+                builder.locals[result_local.0 as usize].type_id = else_ty;
+            }
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(result_local),
+                else_val,
+            );
             builder.jump(merge_bb);
         }
     }

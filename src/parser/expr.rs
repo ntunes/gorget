@@ -1705,8 +1705,14 @@ impl Parser {
         let scrutinee = self.parse_expr()?;
         self.expect(&Token::Colon)?;
 
-        // Match expression arms on same or next lines
-        // In expression context, arms use: case Pattern: expr
+        // Match expression arms accept the same body shape as match-statement
+        // arms (`parse_arm_body`): either a single inline expression
+        // (`case P: expr`) or an indented block (`case P:\n    stmts...\n    tail`)
+        // wrapped as `Expr::Block`. The IR lowering's `lower_block_expr` walks
+        // the block's last stmt as the value (or routes a trailing diverging
+        // `return`/`throw` through normally), so a multi-statement arm body
+        // with an early-exit tail composes correctly with the match's value.
+        // Snag #11 (2026-05-06).
         let mut arms = Vec::new();
         let mut else_arm = None;
 
@@ -1720,12 +1726,14 @@ impl Parser {
             }
 
             if self.match_keyword(Keyword::Else) {
+                let else_start = self.peek_span();
                 self.expect(&Token::Colon)?;
-                else_arm = Some(Box::new(self.parse_expr()?));
-                self.consume_newline();
+                let body = self.parse_arm_body(else_start)?;
+                else_arm = Some(Box::new(body));
                 continue;
             }
 
+            let arm_start = self.peek_span();
             self.expect_keyword(Keyword::Case)?;
             let pattern = self.parse_pattern()?;
 
@@ -1737,9 +1745,8 @@ impl Parser {
 
             self.expect(&Token::Colon)?;
             let pattern_span = pattern.span;
-            let body = self.parse_expr()?;
+            let body = self.parse_arm_body(arm_start)?;
             let arm_end = body.span;
-            self.consume_newline();
 
             arms.push(MatchArm {
                 pattern,

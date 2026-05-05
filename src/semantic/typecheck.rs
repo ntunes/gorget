@@ -2016,7 +2016,31 @@ impl<'a> TypeChecker<'a> {
                 result_type
             }
 
-            Expr::Block(block) => self.check_block(block),
+            Expr::Block(block) => {
+                // A block used as an expression takes its value from the
+                // tail. If the tail is a divergent statement (return / throw
+                // / break / continue), the block has type Never — `unify`
+                // treats Never as compatible with anything, so a match arm
+                // whose body ends in `return` composes correctly with the
+                // match's overall value type. Without this special-case,
+                // `check_block` would return void for the divergent tail
+                // and the surrounding match-expression would fail to type.
+                // (Done here at the value-position site, not in
+                // `check_block` itself, because `check_block` is also called
+                // for function bodies — making it return Never for any
+                // body ending in `return` would mislead generic
+                // monomorphization for returning trait methods.)
+                let last_is_divergent = block.stmts.last().map_or(false, |s| matches!(
+                    &s.node,
+                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue
+                ));
+                let block_ty = self.check_block(block);
+                if last_is_divergent {
+                    self.types.never_id
+                } else {
+                    block_ty
+                }
+            }
 
             Expr::Do { body } => self.check_block(body),
 
@@ -2079,12 +2103,30 @@ impl<'a> TypeChecker<'a> {
                 // Determine the closure's return type: use the body's type for
                 // expression bodies / tail expressions, or the type collected
                 // from `return` statements for block bodies.
-                let return_type = if body_type != self.types.void_id {
+                //
+                // Skip body_type when it's Never — that happens when the body
+                // is an `Expr::Block` whose last statement is `Stmt::Return`
+                // (the parser wraps closure expression-bodies in an explicit
+                // `Return` when destructure-desugar produces a synthetic
+                // block). The Stmt::Return handler already unified
+                // closure_ret_var with the returned expression's type, so the
+                // resolved closure_ret_var carries the correct return type;
+                // body_type=Never would otherwise specialize the closure as
+                // returning Never (e.g. `Closure[Never(int, (int, int))]`)
+                // and break monomorphization for tuple-destructured closures
+                // (closure_tuple_destructure regression, 2026-05-06).
+                let return_type = if body_type != self.types.void_id
+                    && body_type != self.types.never_id
+                {
                     body_type
                 } else {
                     let resolved = self.resolve_type(closure_ret_var);
                     if matches!(self.types.get(resolved), ResolvedType::Var(_)) {
-                        self.types.void_id
+                        if body_type == self.types.never_id {
+                            self.types.never_id
+                        } else {
+                            self.types.void_id
+                        }
                     } else {
                         resolved
                     }
