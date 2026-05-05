@@ -543,28 +543,31 @@ pub(crate) fn runtime_extern_sig(name: &str, sr: &StructRegistry) -> Option<Runt
 pub(super) fn clone_fn_for_collection_element(
     elem_type_name: &str,
     gir_types: &crate::ir::types::TypeRegistry,
+    structs: &[crate::lir::StructDef],
 ) -> Option<String> {
     // Reads `metadata.clone_fn` from the type's TypeDef — every collection
     // type and runtime singleton carries this set at registration via
-    // BuiltinTypeProtocol (see src/ir/lowering/types.rs and mod.rs).
+    // BuiltinTypeProtocol (see src/ir/lowering/types.rs and mod.rs),
+    // including Callable / MutCallable / ConsumeCallable / GorgetClosure
+    // (Phase A residual #1).
     if let Some(td) = gir_types.get_type_def(elem_type_name) {
         if let Some(ref f) = td.metadata.clone_fn {
             return Some(f.clone());
         }
     }
 
-    // Callable elements: deep-clone on read so the source slot stays
-    // intact. Without this, the IndexLoad path treats the Callable's
-    // `Trivial("gorget_closure_free")` drop strategy as a Move, memsets
-    // the slot to zero after the read, and the next iteration of (e.g.)
-    // a middleware loop reads `fn_ptr=NULL` → SEGV calling the closure.
-    // Callable types still don't have TypeDef registration today.
-    if elem_type_name == "GorgetClosure"
-        || elem_type_name.starts_with("Callable__")
-        || elem_type_name.starts_with("MutCallable__")
-        || elem_type_name.starts_with("ConsumeCallable__")
-    {
-        return Some("gorget_closure_clone_to_owned".to_string());
+    // Phase A residual #1 fallback: typed read from the LIR StructDef.
+    // GIR TypeDef may be missing for Callable element types when the
+    // collection arose via mangling-only paths (no `map_ast_type_mut` for
+    // the inner Callable). The LIR StructDef carries `c_runtime_alias =
+    // "GorgetClosure"` in those cases — read it as the authoritative
+    // source-of-truth for the runtime layout. Without this, `Vector[
+    // Callable]`-via-method-monomorphization paths drop the deep-clone on
+    // collection read and SEGV on the next iteration.
+    if let Some(sd) = structs.iter().find(|s| s.name == elem_type_name) {
+        if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+            return Some("gorget_closure_clone_to_owned".to_string());
+        }
     }
 
     None

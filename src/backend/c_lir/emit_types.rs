@@ -1424,12 +1424,12 @@ fn box_inner_drop_fn(inner: &str, module: &LirModule) -> Option<String> {
     if inner == "GorgetString" || inner == "Str" || inner == "String" {
         return Some("gorget_string_free".into());
     }
-    if inner == "GorgetClosure"
-        || inner.starts_with("Callable__")
-        || inner.starts_with("MutCallable__")
-        || inner.starts_with("ConsumeCallable__")
-    {
-        return Some("gorget_closure_free".into());
+    // Phase A residual #1: Callable family aliases of GorgetClosure read
+    // through their LIR StructDef's `c_runtime_alias` / `elem_drop_fn`.
+    if let Some(sd) = module.structs.iter().find(|s| s.name == inner) {
+        if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+            return Some("gorget_closure_free".into());
+        }
     }
     // Nested Box[Box[T]]: route through the inner Box's wrapper. The inner
     // box's heap allocation is itself a slot containing the next-level

@@ -374,22 +374,14 @@ impl TypeRegistry {
         // Callable values lower to either `GirType::FnPtr` (the bare type-level
         // form, e.g. a `Callable[int()] f` local) or `GirType::Named("Callable__…")`
         // (the mangled monomorphized form used inside collections and after
-        // `clone_fn_for_ptr` materializes a value). Both shapes carry a
-        // heap-alloc'd env at runtime (via `__gorget_closure_env_alloc`) that
-        // must be freed on scope exit, otherwise `Vector[Callable].get(i).
-        // unwrap().clone()` leaks one env per call. Callable types still don't
-        // have TypeDef registration today, so the explicit fallback is needed.
+        // `clone_fn_for_ptr` materializes a value). The FnPtr shape — used
+        // for local Callable bindings — carries a heap-alloc'd env at runtime
+        // (via `__gorget_closure_env_alloc`); the Named form reads through
+        // its TypeDef metadata (Phase A residual #1).
         if matches!(self.get(type_id), Some(GirType::FnPtr { .. })) {
             return true;
         }
         if let Some(GirType::Named(name)) = self.get(type_id) {
-            if name == "GorgetClosure"
-                || name.starts_with("Callable__")
-                || name.starts_with("MutCallable__")
-                || name.starts_with("ConsumeCallable__")
-            {
-                return true;
-            }
             if let Some(type_def) = self.get_type_def(name) {
                 if type_def.metadata.copy_semantics == CopySemantics::Resource
                     || type_def.metadata.drop_strategy != DropStrategy::None

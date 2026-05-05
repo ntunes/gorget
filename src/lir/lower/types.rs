@@ -112,41 +112,20 @@ pub(super) fn elem_drop_fn_for_type(elem_type: &str, gir_types: &TypeRegistry) -
         }
     }
 
-    // Closures stored in collections own a heap-alloc'd env (packed by
-    // `wrap_closure_args_at_void_elem`); container drop must free it.
-    // Callable types lack TypeDef registration today.
-    if elem_type == "GorgetClosure"
-        || elem_type.starts_with("Callable__")
-        || elem_type.starts_with("MutCallable__")
-        || elem_type.starts_with("ConsumeCallable__")
-    {
-        return Some("gorget_closure_free".into());
-    }
-
     None
 }
 
 /// Determine the elem_clone function name for a collection element type.
 ///
 /// Reads `metadata.clone_inplace_fn` — every collection type and runtime
-/// singleton carries this set at registration via BuiltinTypeProtocol.
-/// Callable types still need the explicit fallback until TypeDef
-/// registration lands for them.
+/// singleton carries this set at registration via BuiltinTypeProtocol,
+/// including Callable / MutCallable / ConsumeCallable / GorgetClosure
+/// (Phase A residual #1).
 pub(super) fn elem_clone_fn_for_type(elem_type: &str, gir_types: &TypeRegistry) -> Option<String> {
     if let Some(td) = gir_types.get_type_def(elem_type) {
         if let Some(ref f) = td.metadata.clone_inplace_fn {
             return Some(f.clone());
         }
-    }
-
-    // `Vector[Callable].clone()` deep-clones each element so the new
-    // vector's closures own independent envs.
-    if elem_type == "GorgetClosure"
-        || elem_type.starts_with("Callable__")
-        || elem_type.starts_with("MutCallable__")
-        || elem_type.starts_with("ConsumeCallable__")
-    {
-        return Some("gorget_closure_clone_inplace".into());
     }
 
     None
@@ -176,6 +155,19 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
         // GorgetString is a 32-byte fat struct { data, cap, len, alloc }
         "GorgetString" | "String" | "Str" => 32,
         _ => {
+            // Phase A residual #1: Callable__T_args (and friends)
+            // monomorphizations now register a LIR StructDef whose
+            // `computed_c_size` is inherited from the GorgetClosure runtime
+            // struct (16 bytes). Read `c_runtime_alias` from the StructDef
+            // cache here so this site doesn't fall through to the size-8
+            // pointer fallback when the LIR struct exists but the GIR
+            // TypeDef registration didn't fire (cross-module, monomorph
+            // synthetics — same caveat as `infer_drop_strategy`).
+            if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
+                if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+                    return 16;
+                }
+            }
             // Runtime collection structs.
             if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
                 return 64; // {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
@@ -187,8 +179,16 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
             if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
                 return 152;
             }
-            // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes
-            if type_name == "GorgetClosure" || type_name.starts_with("Callable__") || type_name.starts_with("Callable_") {
+            // GorgetClosure / Callable = {fn_ptr, env} = 16 bytes.
+            // Phase A residual #1: the c_runtime_alias-tagged StructDef
+            // lookup above handles the registered-LIR case. This arm is the
+            // string-only fallback for `array_elem_size_from_monomorphized`
+            // and similar parsers that derive a type name from a generated
+            // function spelling (e.g. `Vector__Callable__GorgetClosure__new`)
+            // — the elem name surfaces here BEFORE the matching LIR
+            // StructDef is built. Tracked in TODO Medium "Hardcoded type
+            // size database".
+            if type_name == "GorgetClosure" || type_name.starts_with("Callable_") {
                 return 16;
             }
             // Task__T = { void* __task; void (*__drop)(void*); } = 16 bytes

@@ -1406,10 +1406,18 @@ impl<'a> FuncLowering<'a> {
                     let is_packed_callable = match self.gir_types.get(gir_ty) {
                         Some(ir::types::GirType::FnPtr { .. }) => true,
                         Some(ir::types::GirType::Named(n)) => {
-                            n == "GorgetClosure"
-                                || n.starts_with("Callable__")
-                                || n.starts_with("MutCallable__")
-                                || n.starts_with("ConsumeCallable__")
+                            // Phase A residual #1: typed read via the GIR
+                            // TypeDef metadata (or the LIR StructDef as a
+                            // fallback for cross-module / mangling-only paths
+                            // that bypass `register_callable_alias`). Both
+                            // produce `c_runtime_alias = "GorgetClosure"`.
+                            self.gir_types.get_type_def(n)
+                                .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                                == Some("GorgetClosure")
+                            || self.struct_reg.lookup(n)
+                                .and_then(|sid| self.module_structs.get(sid.0 as usize))
+                                .and_then(|sd| sd.c_runtime_alias.as_deref())
+                                == Some("GorgetClosure")
                         }
                         _ => false,
                     };

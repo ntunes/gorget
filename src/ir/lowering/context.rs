@@ -1423,29 +1423,14 @@ impl<'a> LoweringContext<'a> {
             // Metadata-based: clone_fn populated at registration from
             // BuiltinTypeProtocol (or hand-set for the runtime-named singletons
             // GorgetString / GorgetArray / GorgetMap / GorgetSet). Covers
-            // every Vector/Deque/Dict/HashMap/Set/HashSet instantiation +
-            // GorgetString and the runtime-named collection types.
+            // every Vector/Deque/Dict/HashMap/Set/HashSet instantiation,
+            // GorgetString, the runtime-named collection types, and (after
+            // Phase A residual #1) Callable / MutCallable / ConsumeCallable /
+            // GorgetClosure via the c_runtime_alias-tagged TypeDef.
             if let Some(type_def) = self.type_registry.get_type_def(name) {
                 if let Some(ref clone_fn) = type_def.metadata.clone_fn {
                     return Some(clone_fn.clone());
                 }
-            }
-
-            // Callable/MutCallable/ConsumeCallable/GorgetClosure don't have
-            // TypeDef registration today (Callable values lower to GirType::FnPtr
-            // at locals; the Named form only appears via collection-elem
-            // resolve_inner_type fallback). Closures own a heap-alloc'd env via
-            // __gorget_closure_env_alloc; `.clone()` on a borrow must produce
-            // an independently-owned closure with its own env — shallow memcpy
-            // would leave both the slot and the clone aliasing the same heap
-            // region and UAF when the source drops. Will be retired when
-            // Callable types get TypeDef registration.
-            if name.starts_with("Callable__")
-                || name.starts_with("MutCallable__")
-                || name.starts_with("ConsumeCallable__")
-                || name == "GorgetClosure"
-            {
-                return Some("gorget_closure_clone_to_owned".to_string());
             }
 
             // User structs with Recursive or Custom drop → generated {Name}__clone.

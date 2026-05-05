@@ -672,28 +672,35 @@ impl<'a> FuncLowering<'a> {
 
     /// Infer drop strategy for a type from its TypeDef metadata.
     ///
-    /// All collection types (Vector__/Deque__/Dict__/HashMap__/Set__/HashSet__)
-    /// and runtime-named singletons (GorgetString/GorgetArray/GorgetMap/GorgetSet)
-    /// carry `drop_strategy` set at registration via BuiltinTypeProtocol — see
-    /// the four registration paths in `src/ir/lowering/types.rs` and
-    /// `src/ir/lowering/mod.rs`. Callable*/GorgetClosure types don't get
-    /// TypeDef registration today; they're handled by the explicit fallback
-    /// below until that gap closes.
+    /// All collection types (Vector__/Deque__/Dict__/HashMap__/Set__/HashSet__),
+    /// runtime-named singletons (GorgetString/GorgetArray/GorgetMap/GorgetSet),
+    /// and the Callable family (Callable__/MutCallable__/ConsumeCallable__/
+    /// GorgetClosure — Phase A residual #1) carry `drop_strategy` set at
+    /// registration via BuiltinTypeProtocol. See the four registration paths
+    /// in `src/ir/lowering/types.rs` and `src/ir/lowering/mod.rs`.
+    ///
+    /// Fallback path: when a type appears in LIR without a corresponding
+    /// GIR TypeDef (cross-module imports, certain monomorphized synthetic
+    /// names), look up the matching LIR StructDef and read its
+    /// `c_runtime_alias` to recover the drop fn for the Callable family.
+    /// Without this fallback, httpserver fixtures (which build Callables via
+    /// trait dispatch through paths that bypass `resolve_inner_type`'s
+    /// TypeDef registration) double-free closures.
     pub(super) fn infer_drop_strategy(&self, type_name: &str) -> crate::ir::types::DropStrategy {
         use crate::ir::types::DropStrategy;
         if let Some(td) = self.gir_types.get_type_def(type_name) {
             return td.metadata.drop_strategy.clone();
         }
-        // Callable values that flowed through `wrap_closure_args_at_void_elem`
-        // own a heap-alloc'd env (size-prefix header + env data); on scope
-        // exit the value's drop frees that allocation. `__Closure_N` source
-        // structs stay None — they're stack envs that haven't escaped yet.
-        if type_name.starts_with("Callable__")
-            || type_name.starts_with("MutCallable__")
-            || type_name.starts_with("ConsumeCallable__")
-            || type_name == "GorgetClosure"
-        {
-            return DropStrategy::Trivial("gorget_closure_free".to_string());
+        // Phase A residual #1 fallback: typed read from the LIR StructDef.
+        // The struct registry may carry a `c_runtime_alias` ("GorgetClosure")
+        // even when the GIR TypeDef wasn't materialized for this name
+        // (cross-module imports, certain monomorphized synthetic names).
+        if let Some(sid) = self.struct_reg.lookup(type_name) {
+            if let Some(sd) = self.module_structs.get(sid.0 as usize) {
+                if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+                    return DropStrategy::Trivial("gorget_closure_free".to_string());
+                }
+            }
         }
         DropStrategy::None
     }

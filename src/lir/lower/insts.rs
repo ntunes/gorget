@@ -1007,7 +1007,7 @@ impl<'a> FuncLowering<'a> {
                     // instead of move+zero so the parent collection retains the original.
                     // Other resource types (Task, user structs) are still moved+zeroed
                     // since they may be intentionally consumed (e.g., task.await()).
-                    let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types);
+                    let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types, self.module_structs);
 
                     if let Some(clone_fn_name) = clone_fn {
                         // Borrow mode: zero-copy view instead of clone for strings.

@@ -781,6 +781,13 @@ pub(super) fn elem_drop_fn_for_c_type(c_type: &str, module: &crate::lir::LirModu
         if let Some(ref f) = sd.elem_drop_fn {
             return Some(f.clone());
         }
+        // Phase A residual #1: read `c_runtime_alias` to recover the
+        // drop fn for Callable family aliases of GorgetClosure.
+        if let Some(ref rt) = sd.c_runtime_alias {
+            return module.structs.iter()
+                .find(|s| s.name == *rt)
+                .and_then(|s| s.elem_drop_fn.clone());
+        }
     }
     // Mangled collection aliases — map to the same runtime free fn the
     // runtime singleton's StructDef carries.
@@ -792,17 +799,6 @@ pub(super) fn elem_drop_fn_for_c_type(c_type: &str, module: &crate::lir::LirModu
     }
     if c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
         return Some("gorget_set_free".into());
-    }
-    // Callable / MutCallable / ConsumeCallable still need a name-prefix
-    // fallback because they don't carry a TypeDef yet (Phase A residual
-    // #1 — blocked on TypeDefKind::Alias routing or a c_runtime_alias
-    // protocol field). Once #1 lands, these become metadata reads.
-    if c_type == "GorgetClosure"
-        || c_type.starts_with("Callable__")
-        || c_type.starts_with("MutCallable__")
-        || c_type.starts_with("ConsumeCallable__")
-    {
-        return Some("gorget_closure_free".into());
     }
     None
 }

@@ -862,17 +862,21 @@ pub fn promote_collection_ctors(module: &mut crate::lir::LirModule) {
             n if n.starts_with("Set__") || n.starts_with("HashSet__") => {
                 ElemMeta::Resource(ResourceKind::GorgetSet)
             }
-            n if n.starts_with("Callable__")
-                || n.starts_with("MutCallable__")
-                || n.starts_with("ConsumeCallable__") =>
-            {
-                ElemMeta::Resource(ResourceKind::GorgetClosure)
+            n => {
+                // Phase A residual #1: Callable / MutCallable / ConsumeCallable
+                // tagged via the LIR StructDef's `c_runtime_alias`. Read the
+                // struct table so name-prefix matching isn't needed.
+                if let Some((_, sd)) = structs.iter().enumerate().find(|(_, s)| s.name == n) {
+                    if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+                        return ElemMeta::Resource(ResourceKind::GorgetClosure);
+                    }
+                }
+                structs
+                    .iter()
+                    .position(|s| s.name == n)
+                    .map(|i| ElemMeta::UserType(StructId(i as u32)))
+                    .unwrap_or(ElemMeta::Primitive(crate::lir::LirType::Ptr))
             }
-            n => structs
-                .iter()
-                .position(|s| s.name == n)
-                .map(|i| ElemMeta::UserType(StructId(i as u32)))
-                .unwrap_or(ElemMeta::Primitive(crate::lir::LirType::Ptr)),
         }
     }
 

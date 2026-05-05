@@ -2718,6 +2718,26 @@ pub(super) fn lower_index_access(
     Operand::Constant(Constant::Unit)
 }
 
+/// Phase A residual #1: a mangled type-name fragment is a Callable family
+/// alias of the runtime GorgetClosure layout. Reads `c_runtime_alias`
+/// from the GIR TypeDef when present; falls back to a name-shape check for
+/// the bootstrap path where no TypeDef has been registered yet (the
+/// `register_callable_alias` helper hasn't run for this collection-elem
+/// name). Returning `true` here means "treat the elem as a 16-byte
+/// GorgetClosure handle, NOT a fresh user struct".
+fn is_callable_alias_name(ctx: &LoweringContext, name: &str) -> bool {
+    if let Some(td) = ctx.type_registry.get_type_def(name) {
+        return td.metadata.c_runtime_alias.as_deref() == Some("GorgetClosure");
+    }
+    // Pre-registration fallback: Callable__T_args is mangled by
+    // `mangle_generic_name`/`mangle_type_for_name` and the registration
+    // happens lazily — at this site we may be the first to see the name.
+    name == "GorgetClosure"
+        || name.starts_with("Callable__")
+        || name.starts_with("MutCallable__")
+        || name.starts_with("ConsumeCallable__")
+}
+
 /// Infer the element type of a collection from its TypeId.
 /// Returns the element TypeId, or I64_TYPE if unknown.
 pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringContext, collection_type: TypeId) -> TypeId {
@@ -2732,10 +2752,7 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
             // writes only the first 8 bytes of the closure into the slot,
             // leaving env uninitialized and causing SIGSEGV/SIGBUS when the
             // closure is read back and called (attack_82).
-            if elem_name.starts_with("Callable__")
-                || elem_name.starts_with("MutCallable__")
-                || elem_name.starts_with("ConsumeCallable__")
-            {
+            if is_callable_alias_name(ctx, elem_name) {
                 return ctx.type_registry.insert(GirType::FnPtr {
                     params: vec![],
                     return_type: I64_TYPE,
@@ -2749,7 +2766,7 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
             if let Some(pos) = rest.find("__") {
                 let val_name = &rest[pos + 2..];
                 // Callable value types → FnPtr TypeId so the local is declared as GorgetClosure
-                if val_name.starts_with("Callable__") || val_name.starts_with("MutCallable__") || val_name.starts_with("ConsumeCallable__") {
+                if is_callable_alias_name(ctx, val_name) {
                     return ctx.type_registry.insert(GirType::FnPtr { params: vec![], return_type: I64_TYPE });
                 }
                 let val_name = val_name.to_string();
