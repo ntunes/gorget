@@ -12,8 +12,6 @@ use super::types::TypeMapper;
 
 use crate::ir::types::BlockId;
 
-/// Unified ownership state for a GIR local variable.
-/// Replaces the scattered `ref_locals`, `owned_locals`, `cow_alias_sources`,
 /// Identity of a collection for CowBorrow provenance tracking.
 /// Tracks which collection a borrowed element came from, so that
 /// mutation of that collection triggers materialization of the borrow.
@@ -164,12 +162,22 @@ pub struct FunctionState {
     pub locals: FxHashMap<String, (LocalId, TypeId)>,
     /// Stack of active loops for break/continue targeting.
     pub loop_stack: Vec<LoopInfo>,
-    /// Unified ownership state for tracked locals. Replaces the former `ref_locals`,
-    /// `owned_locals`, `cow_alias_sources`, `cow_alias_targets`, `cow_ptr_params`,
-    /// `cow_collection_refs`, and the legacy 7-variant LocalOwnershipState
-    /// map (deleted in Phase D3-full). Most locals are untracked (not in
-    /// this map); only locals with ownership significance have entries.
-    /// See `docs/internals/unified-resource-model.md` §6.
+    /// Unified ownership state for tracked locals. Subsumes the legacy
+    /// `ref_locals` / `owned_locals` / `cow_alias_sources` / `cow_alias_targets`
+    /// / `cow_ptr_params` / `cow_collection_refs` sidecars and the 7-variant
+    /// `LocalOwnershipState` enum (all deleted by Phase D4). Most locals are
+    /// untracked (not present in this map); only locals with ownership
+    /// significance carry entries.
+    ///
+    /// **Phase D4.5 follow-up:** this remains a `FxHashMap` parallel to
+    /// `Local.ownership` (see `src/ir/mod.rs`). `flush_ownership_to_locals`
+    /// copies entries onto `Local.ownership` at the GIR/LIR boundary; the
+    /// FxHashMap survives as the active mutable store during lowering. The
+    /// final hop — writing through `&mut FunctionBuilder` so `Local.ownership`
+    /// IS the source of truth during lowering — is tracked separately because
+    /// it touches every setter call site.
+    ///
+    /// See `docs/internals/unified-resource-model.md` §6.6.
     pub local_ownership: FxHashMap<LocalId, crate::ir::LocalOwnership>,
     /// LocalIds that are named variables (vs anonymous temps from expressions).
     /// Used to distinguish variable-to-variable assignment (needs clone) from

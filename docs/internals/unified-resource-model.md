@@ -657,6 +657,13 @@ Stage D3: Migrate consumers one at a time. Easiest first (`is_owned_local`, `is_
 
 Stage D4: Delete `local_ownership: FxHashMap`, the six sidecar maps (`string_borrow_sources`, `cow_alias_sources`, `cow_ptr_params`, `move_override_params`, `mut_capture_locals`, `tuple_element_locals`), and the old `OwnershipState` enum.
 
+> **Status (2026-05-05):** D4 is mostly landed.
+> - `OwnershipState` enum: deleted (D6 column).
+> - 7-variant `LocalOwnershipState` enum: deleted.
+> - `cow_alias_sources`, `cow_ptr_params`, `string_borrow_sources` (writer side), `view_returning_temps`, `cow_collection_refs`, `cow_alias_targets`: retired in favor of `LocalOwnership::Borrowed` / `View` variants.
+> - `move_override_params`: retired from `HashSet<String>` to `FxHashSet<LocalId>` (typed key).
+> - `local_ownership: FxHashMap<LocalId, LocalOwnership>`: **deferred to D4.5** — see TODO. The map remains the active store during lowering; `flush_ownership_to_locals` copies onto `Local.ownership` at the GIR/LIR boundary. Promoting `Local.ownership` to the active store touches every setter / reader (~30 sites) and `SavedScope`, distinct in shape from the sidecar pass.
+
 Stage D5: Introduce `ReadMode` as the shared enum. Migrate `AssignMode`, `FieldLoadMode`, `IndexLoad.borrow`, `ArgOwnership` to be typed views of it. Update the validator (§5.4) to use the unified `validate_read()` rule.
 
 Stage D6: Persist `LocalOwnership` through GIR → LIR (`Slot.origin: Option<BorrowOrigin>`). This unblocks future borrow-aware codegen optimisations.

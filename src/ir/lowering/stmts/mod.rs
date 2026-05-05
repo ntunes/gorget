@@ -358,8 +358,10 @@ fn lower_var_decl(
                 }
             }
             // CoW: Ptr(T) bindings from BORROWED sources stay as borrows.
-            // Only propagate Ptr for operands that are actually borrowed
-            // (from cow_ptr_params or ref_locals), not from owned function returns.
+            // Only propagate Ptr for operands whose source local is currently
+            // tracked as `LocalOwnership::Borrowed` (e.g. `set_bare_param`,
+            // `set_ref`, `set_collection_ref`), not from owned function
+            // returns or fresh allocations.
             if !needs_reinfer {
                 let inferred = infer_operand_type_with_builder(ctx, &operand, builder);
                 // Option[Ref[T]] → Option[T] conversion. `v.get(i)` returns
