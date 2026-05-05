@@ -1832,8 +1832,18 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local has been borrowed-from via string Borrow assignment.
     /// If true, another local shares its heap data → clone needed on return.
+    /// Phase D4 widening (2026-05-05): OR with the typed SharedHeap walk so
+    /// the typed channel is strictly superset of the legacy sidecar during
+    /// transition. The sidecar half is dropped in Phase 3.
     pub fn has_string_borrowers(&self, local: LocalId) -> bool {
-        self.func_state.string_borrow_sources.contains(&local)
+        if self.func_state.string_borrow_sources.contains(&local) {
+            return true;
+        }
+        use crate::ir::LocalOwnership;
+        self.func_state.local_ownership.values().any(|state| matches!(
+            state,
+            LocalOwnership::SharedHeap { source } if *source == local
+        ))
     }
 
     /// Mark a local as the source of a string Borrow assignment (`String b = a`).
