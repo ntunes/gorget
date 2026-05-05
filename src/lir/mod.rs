@@ -1832,7 +1832,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);
