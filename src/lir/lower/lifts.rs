@@ -722,6 +722,17 @@ impl<'a> FuncLowering<'a> {
 
     /// For a resource-type payload from a collection read, return the clone function
     /// name.  Returns None for Ptr payloads (borrowed) or consuming methods (moved out).
+    ///
+    /// **Asymmetry note (2026-05-04):** `Vector.get()` returns `Option[Ref[T]]` —
+    /// payload is a Ptr, no clone. `Dict.get()` returns `Option[V]` BY VALUE,
+    /// so the payload here is the actual element type. For resource payloads
+    /// we MUST deep-clone or the Option's payload aliases the collection's
+    /// storage; the unwrap result then carries a shallow copy whose drop
+    /// double-frees against the collection's val_drop.
+    /// Closures (`GorgetClosure`) hit the same shape — they own a heap-alloc'd
+    /// env behind the 16-byte handle, so a memcpy aliases the source env.
+    /// `gorget_closure_clone_to_owned` produces a fresh-env handle. Without
+    /// this branch, `Dict[K, Callable].get().unwrap()` double-frees the env.
     fn resource_clone_fn_for_payload(&self, payload_ty: &LirType, consuming: bool) -> Option<String> {
         if consuming { return None; }
         match payload_ty {
@@ -733,6 +744,7 @@ impl<'a> FuncLowering<'a> {
                     "GorgetMap" => Some("gorget_map_clone".into()),
                     "GorgetSet" => Some("gorget_set_clone".into()),
                     "GorgetString" => Some("gorget_string_clone".into()),
+                    "GorgetClosure" => Some("gorget_closure_clone_to_owned".into()),
                     _ => {
                         // Recursive/custom-drop types
                         if self.recursive_drop_structs.contains_key(name)

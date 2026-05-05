@@ -2219,6 +2219,37 @@ missing ok
 }
 
 #[test]
+fn dict_callable_get_clone() {
+    // SECURITY regression: Dict[K, Callable].get().unwrap().clone() used to
+    // double-free the closure env (TODO 2026-04-28). The Option payload built
+    // by gorget_map_get's lift was a shallow GorgetClosure copy, so the
+    // unwrap result aliased the dict slot's env. Fixed by cloning closure
+    // payloads in `resource_clone_fn_for_payload` (lifts.rs), giving the
+    // Option an independently-owned closure handle.
+    run_gg(
+        "dict_callable_get_clone.gg",
+        "\
+2
+11
+done",
+    );
+}
+
+#[test]
+fn dict_callable_get_no_clone() {
+    // Companion to dict_callable_get_clone.gg without the explicit .clone().
+    // Pre-fix, `Dict[K, Callable].get().unwrap()` (no .clone()) double-freed
+    // the same way — the .clone() was a red herring; the bug was in the lift.
+    run_gg(
+        "dict_callable_get_no_clone.gg",
+        "\
+2
+11
+done",
+    );
+}
+
+#[test]
 fn dict_user_key_auto() {
     run_gg(
         "dict_user_key_auto.gg",
