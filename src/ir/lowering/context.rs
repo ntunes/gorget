@@ -1817,7 +1817,14 @@ impl<'a> LoweringContext<'a> {
     /// other variable. True only for direct function/extern call results that
     /// return the owned string type. Phase D4: reads typed `FreshOwned` state
     /// OR the legacy `fresh_string_locals` sidecar — whichever fires first.
+    /// The dual read is harmless: every sidecar-write site also upgrades the
+    /// typed state, so the two channels are equivalent at this point.
     pub fn is_fresh_string(&self, local: LocalId) -> bool {
+        if self.func_state.local_ownership.get(&local)
+            .map_or(false, |s| s.is_fresh())
+        {
+            return true;
+        }
         self.func_state.fresh_string_locals.contains(&local)
     }
 
