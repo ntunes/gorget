@@ -1072,6 +1072,28 @@ fn lower_return(
         let prev_expected = ctx.func_state.expected_type;
         let ret_type = builder.locals[0].type_id;
         ctx.func_state.expected_type = Some(ret_type);
+
+        // `return v` where `v` is a `!`-sigil resource parameter: the body is
+        // transferring its owned pointee onward through the return value.
+        // Track the source local so we can MoveZero it after the return-slot
+        // assignment — without this, the function-exit `DropIfAlive { *v }`
+        // would fire and free the data that the return value still aliases
+        // (the standard Identifier Move-Deref-into-temp path doesn't zero
+        // the source slot, only the temp). The MoveZero flips the LIR
+        // drop flag to false, suppressing the exit drop.
+        let owning_param_returned: Option<LocalId> = if let Expr::Identifier(name) = &expr.node {
+            ctx.lookup_local(name).and_then(|(local_id, _)| {
+                let idx = local_id.0 as usize;
+                if idx < builder.locals.len() && builder.locals[idx].is_owning_param {
+                    Some(local_id)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+
         let operand = lower_expr(ctx, builder, expr);
         // Auto-propagate: if returning a Result value from a throws function,
         // unwrap so the Ok-wrapping below works on the inner value.
@@ -1386,6 +1408,14 @@ fn lower_return(
 
         // Postcondition checks: `assert return <expr>` — check before returning
         emit_postcondition_checks(ctx, builder);
+
+        // `return v` where `v` is a `!`-sigil resource parameter: invalidate the
+        // param slot now so the function-exit owning-param drop guard's flag
+        // flips to false. The return slot already holds the data (memcpy'd
+        // from `*v` via the lower_expr Move/Copy path).
+        if let Some(owning_local) = owning_param_returned {
+            ctx.move_zero_and_mark(builder, owning_local);
+        }
 
         // P2.6: Emit cleanup drops for all scopes being exited
         // Exclude the local being returned (it's moved into _0, not consumed)

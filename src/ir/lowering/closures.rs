@@ -385,6 +385,12 @@ pub fn emit_closure_call_function(
         } else if ctx.is_mut_ref_param(*type_id, ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(local_id);
+            if matches!(ownership, Ownership::Move)
+                && ctx.type_registry.is_resource_type(*type_id)
+            {
+                ctx.set_owning_param(&mut builder, local_id);
+                ctx.drops.register_owning_param(local_id, *type_id, &ctx.type_registry);
+            }
         }
     }
 

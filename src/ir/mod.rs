@@ -500,6 +500,19 @@ pub struct Local {
     /// Will eventually subsume the slot-routing semantics that `is_ref()`
     /// currently bundles into ownership.
     pub slot_kind: SlotKind,
+    /// True for `!`-sigil resource parameters: the caller transferred
+    /// ownership of the underlying value, but the slot itself holds a
+    /// pointer (MutPtr) for ABI uniformity. The callee owns the data
+    /// behind the pointer and MUST drop it at function exit unless it
+    /// transfers ownership onward (via inner `consume`/`push`/`put`/etc.,
+    /// which emit a `MoveZero` on the param slot).
+    ///
+    /// Distinguishes `!` from `&` resource params: both have
+    /// `Borrowed { Param(self), Unique }` ownership and `BorrowedPtr`
+    /// slot kind for read-site routing, but only `!` owns its pointee
+    /// and needs the exit drop. Read by `lower_drop` (LIR) to bypass the
+    /// `is_pure_borrow_for` Nop and emit the deref-aware drop sequence.
+    pub is_owning_param: bool,
 }
 
 /// A basic block.
@@ -622,6 +635,7 @@ mod tests {
                 name_hint: None,
                 ownership: LocalOwnership::default(),
                 slot_kind: SlotKind::default(),
+                is_owning_param: false,
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,

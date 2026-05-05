@@ -221,14 +221,33 @@ fn lower_expr_inner(
 
         // -- P2.6: Move/Borrow --
         Expr::Move { expr: inner } => {
-            // CoW: if moving a borrowed local, materialize first
-            if let Expr::Identifier(name) = &inner.node {
+            // CoW: if moving a borrowed local, materialize first.
+            //
+            // For `!`-sigil resource parameters (`is_owning_param`),
+            // the explicit `!x` at the use site is a transfer — the
+            // bytes at `*x` move to whatever consumes the resulting
+            // operand (struct field, push, send, etc.). Capture the
+            // source local up front so we can MoveZero it after the
+            // transfer; without this, the function-exit owning-param
+            // drop's flag stays `true` and the data is freed twice
+            // (once at exit, once by the recipient's drop).
+            let owning_param_source: Option<LocalId> = if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
                     if ctx.is_bare_param(local_id) {
                         ctx.cow_before_mutation(builder, local_id, inner.span);
                     }
+                    let idx = local_id.0 as usize;
+                    if idx < builder.locals.len() && builder.locals[idx].is_owning_param {
+                        Some(local_id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
                 }
-            }
+            } else {
+                None
+            };
             let val = lower_expr(ctx, builder, inner);
             // Copy value to a temp BEFORE zeroing the source, so we don't read
             // zeroed data. Phase C: emit Move mode for resource types — the
@@ -256,6 +275,18 @@ fn lower_expr_inner(
                 let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
                 for r in stale_refs {
                     ctx.unset_ownership(r);
+                }
+                // Owning-`!`-param transferred via explicit `!x`: invalidate the
+                // original param slot too. The Identifier-Move-Deref path above
+                // produced `tmp_a` (a memcpy of `*x`) and we just zeroed it,
+                // but the param slot still holds the pointer to the source
+                // bytes — the function-exit `DropIfAlive { *x }` would free
+                // that data, which is now also owned by the recipient (the
+                // struct field, collection element, etc.) the caller of
+                // this `Expr::Move` is about to construct. The MoveZero on
+                // the param slot flips the LIR drop flag to false.
+                if let Some(src) = owning_param_source {
+                    ctx.move_zero_and_mark(builder, src);
                 }
                 FunctionBuilder::copy(tmp)
             } else {

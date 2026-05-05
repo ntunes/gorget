@@ -902,6 +902,13 @@ fn lower_trait_method_body(
         // mark as Borrowed { Param(self), Unique } so nested calls don't double-wrap.
         if vtable_type != base_type {
             ctx.set_param_borrow_unique(LocalId(param_idx));
+            // `!` resource params: callee owns the pointee. Tag the local so the
+            // LIR drop lowering uses the deref-aware path.
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, LocalId(param_idx));
+            }
         }
         vt_idx += 1;
         param_idx += 1;
@@ -917,7 +924,13 @@ fn lower_trait_method_body(
                 continue;
             }
             let vtable_type = vtable_method.param_types[vt_idx2];
+            let base_type = vtable_method.base_param_types[vt_idx2];
             ctx.drops.register_param(LocalId(pidx), vtable_type, &ctx.type_registry);
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.drops.register_owning_param(LocalId(pidx), base_type, &ctx.type_registry);
+            }
             vt_idx2 += 1;
             pidx += 1;
         }
@@ -1459,11 +1472,33 @@ fn lower_static_trait_method(
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(LocalId(param_idx));
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, LocalId(param_idx));
+            }
         }
         param_idx += 1;
     }
 
     ctx.drops.push_scope(DropScopeKind::Function);
+
+    // Register `!` resource params for owning-param drop at function exit.
+    // The drop accountant emits `DropIfAlive { *local }` so the LIR drop-flag
+    // dataflow controls whether the drop fires (suppressed if the body
+    // transferred ownership onward).
+    {
+        let mut pidx = 1u32;
+        for p in method.params.iter().filter(|p| p.node.name.node != "self") {
+            let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.drops.register_owning_param(LocalId(pidx), base_type, &ctx.type_registry);
+            }
+            pidx += 1;
+        }
+    }
 
     match &method.body {
         FunctionBody::Block(block) => {

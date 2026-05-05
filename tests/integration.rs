@@ -1388,6 +1388,7 @@ fn drop_match_partial_init() {
         "drop_match_partial_init.gg",
         "\
 consume r1
+drop r1
 after-match
 ---
 keep r2
@@ -1406,10 +1407,13 @@ fn drop_loop_reinit() {
         "drop_loop_reinit.gg",
         "\
 consume iter-0
+drop iter-0
 drop iter-1
 consume iter-2
+drop iter-2
 drop iter-3
 consume iter-4
+drop iter-4
 done",
     );
 }
@@ -1435,6 +1439,7 @@ late-done
 late-done
 ---
 consume ck
+drop ck
 ck-done
 ---
 ck-done
@@ -1443,17 +1448,14 @@ drop ck",
 }
 
 #[test]
-#[ignore]
 fn owning_param_drop_at_exit() {
-    // Pre-existing GIR drop-accountant gap: a `!` parameter that the
-    // function doesn't transfer onward (via consume / push / put / etc.)
-    // is never dropped at function exit, leaking the resource. See TODO
-    // entry "Owning `!` parameter not always given end-of-function drop
-    // guard" — universal for `!` params, not just conditional-consume.
-    //
-    // Marked #[ignore] so the integration suite stays green; remove the
-    // attribute when the GIR fix lands. Run manually with:
-    //   cargo test --test integration -- --ignored owning_param_drop_at_exit
+    // GIR drop accountant emits `DropIfAlive { *local }` for every `!`
+    // resource parameter at function exit, with the slot tracked by the
+    // existing LIR drop-flag dataflow. The flag starts `true` (params are
+    // `Initialized` at bb0 — caller transferred ownership) and flips to
+    // `false` after every consume/transfer site (each emits a MoveZero on
+    // the param slot via the typed `is_owning_param` shortcut in
+    // `lower_call_arg`).
     run_gg(
         "owning_param_drop_at_exit.gg",
         "\
@@ -1461,6 +1463,7 @@ simple p1
 drop p1
 ---
 consume p2
+drop p2
 cond-done true
 ---
 cond-done false

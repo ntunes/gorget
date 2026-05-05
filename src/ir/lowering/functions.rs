@@ -605,6 +605,15 @@ pub fn lower_function(
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through.
             // Per §6.2: typed shape is Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(local_id);
+            // `!` resource params: callee owns the pointee. Tag the Local so
+            // the LIR drop lowering knows to dereference through the pointer
+            // for the exit drop. Distinct from `&` (MutableBorrow) which
+            // shares the same borrow shape but does not own.
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, local_id);
+            }
         }
         // ! string params: caller transfers ownership — mark as owned
         // so clone_resource_args_for_init skips the clone.
@@ -631,11 +640,20 @@ pub fn lower_function(
 
     // Register function parameters with the drop elaborator so that ref-counted
     // types (Channel, Shared, Weak) passed by value are released at scope exit.
+    // For `!` resource params, also register an owning-param drop on the
+    // pointee — the callee accepted ownership and must drop it at exit unless
+    // the body transfers it onward (which emits a MoveZero on the param slot
+    // and flips the LIR drop flag, suppressing the exit drop).
     for (i, p) in func.params.iter().enumerate() {
         let local_id = LocalId((i + 1) as u32);
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
+        if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+            && ctx.type_registry.is_resource_type(base_type)
+        {
+            ctx.drops.register_owning_param(local_id, base_type, &ctx.type_registry);
+        }
     }
 
     // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
@@ -896,6 +914,11 @@ pub fn lower_equip_method(
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(LocalId(param_idx));
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, LocalId(param_idx));
+            }
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
@@ -917,6 +940,11 @@ pub fn lower_equip_method(
             let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.drops.register_owning_param(LocalId(pidx), base_type, &ctx.type_registry);
+            }
             pidx += 1;
         }
     }
@@ -1181,6 +1209,11 @@ pub fn lower_generic_function(
         } else if ctx.is_mut_ref_param(base_type, ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(local_id);
+            if matches!(ownership, Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, local_id);
+            }
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
@@ -1208,6 +1241,11 @@ pub fn lower_generic_function(
         };
         let gir_type = ctx.resolve_param_type(base_type, ownership);
         ctx.drops.register_param(local_id, gir_type, &ctx.type_registry);
+        if matches!(ownership, Ownership::Move)
+            && ctx.type_registry.is_resource_type(base_type)
+        {
+            ctx.drops.register_owning_param(local_id, base_type, &ctx.type_registry);
+        }
     }
 
     // Lower the body
@@ -1553,6 +1591,11 @@ fn lower_equip_method_with_subs(
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
             ctx.set_param_borrow_unique(LocalId(param_idx));
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.set_owning_param(&mut builder, LocalId(param_idx));
+            }
         }
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {
@@ -1574,6 +1617,11 @@ fn lower_equip_method_with_subs(
             let base_type = substitute_and_map_type(ctx, &p.node.type_.node, subs);
             let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
             ctx.drops.register_param(LocalId(pidx), gir_type, &ctx.type_registry);
+            if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
+                && ctx.type_registry.is_resource_type(base_type)
+            {
+                ctx.drops.register_owning_param(LocalId(pidx), base_type, &ctx.type_registry);
+            }
             pidx += 1;
         }
     }

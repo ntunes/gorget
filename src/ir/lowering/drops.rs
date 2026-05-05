@@ -51,6 +51,17 @@ struct DropEntry {
     maybe_moved: bool,
     /// If true, bypass needs_drop checks at emission time.
     force_drop: bool,
+    /// If true, the local is a `!`-sigil resource parameter: the slot
+    /// holds a pointer (MutPtr) but the callee owns the pointee. The
+    /// drop must dereference through the pointer; the GIR `DropIfAlive`
+    /// is emitted on a `Place { local, projections: [Deref] }` so the
+    /// LIR lowering goes through the correct addr-load path. The slot
+    /// is `Initialized` at bb0 (caller-supplied), so the LIR drop_elab
+    /// dataflow seeds the drop flag to `true` automatically; subsequent
+    /// `MoveZero`/`MoveSlot` emissions on the slot (when the function
+    /// transfers ownership onward via `consume`/`push`/`put`/etc.) flip
+    /// the flag to `false` and suppress the exit drop.
+    owning_param: bool,
 }
 
 impl DropElaborator {
@@ -103,6 +114,7 @@ impl DropElaborator {
                 type_id,
                 maybe_moved: false,
                 force_drop: false,
+                owning_param: false,
             });
         }
     }
@@ -115,6 +127,7 @@ impl DropElaborator {
         if let Some(scope) = self.scopes.last_mut() {
             scope.entries.push(DropEntry {
                 local, type_id, maybe_moved: true, force_drop: true,
+                owning_param: false,
             });
         }
     }
@@ -141,6 +154,7 @@ impl DropElaborator {
                     type_id,
                     maybe_moved: false,
                     force_drop: false,
+                    owning_param: false,
                 });
                 return;
             }
@@ -152,6 +166,7 @@ impl DropElaborator {
                 type_id,
                 maybe_moved: false,
                 force_drop: false,
+                owning_param: false,
             });
         }
     }
@@ -171,6 +186,39 @@ impl DropElaborator {
                 type_id,
                 maybe_moved: false,
                 force_drop: false,
+                owning_param: false,
+            });
+        }
+    }
+
+    /// Register a `!`-sigil resource parameter for drop at function exit.
+    /// The parameter slot holds a `MutPtr` (caller-supplied address), but the
+    /// callee owns the pointee. Drop must dereference through the pointer; the
+    /// emitted `DropIfAlive` carries a `Place { local, projections: [Deref] }`
+    /// so the LIR lowering goes through the correct addr-load path and
+    /// `lower_drop`'s `is_pure_borrow_for` Nop short-circuit (which only fires
+    /// for empty-projection places) is bypassed.
+    ///
+    /// `type_id` is the BASE type (e.g. `R`), not the slot's `MutPtr<R>`.
+    /// `DropIfAlive` is emitted unconditionally for owning-param entries (the
+    /// drop-flag dataflow at the LIR layer controls firing — `Initialized`
+    /// → unconditional drop, `MoveSlot` from inner `consume`/`push`/etc.
+    /// flips the slot to `Uninitialized`/`MaybeInitialized` → drop guard
+    /// strips/becomes a flag check). We do NOT set `maybe_moved=true` here:
+    /// that flag also feeds `is_moved(local)`, which is consulted by other
+    /// passes to skip post-call `MoveZero` emission. A `!`-param starts
+    /// alive at function entry and should appear "live" to those passes.
+    pub fn register_owning_param(&mut self, local: LocalId, type_id: TypeId, registry: &TypeRegistry) {
+        if !needs_drop(type_id, registry) {
+            return;
+        }
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.entries.push(DropEntry {
+                local,
+                type_id,
+                maybe_moved: false,
+                force_drop: false,
+                owning_param: true,
             });
         }
     }
@@ -370,8 +418,11 @@ fn emit_scope_drops_ordered(
     for &idx in &order {
         let entry = &entries[idx];
         if !entry.force_drop && !needs_drop(entry.type_id, registry) { continue; }
-        let place = Place::local(entry.local);
-        if entry.maybe_moved {
+        let place = drop_place_for(entry);
+        // Owning-`!`-param entries always use DropIfAlive — the LIR drop-flag
+        // dataflow controls whether the drop actually fires (suppressed when
+        // the body emitted a `MoveZero` on the param slot).
+        if entry.maybe_moved || entry.owning_param {
             builder.drop_if_alive(place);
         } else {
             builder.drop(place);
@@ -399,12 +450,30 @@ fn emit_scope_drops_excluding(
             continue;
         }
 
-        let place = Place::local(entry.local);
-        if entry.maybe_moved {
+        let place = drop_place_for(entry);
+        if entry.maybe_moved || entry.owning_param {
             builder.drop_if_alive(place);
         } else {
             builder.drop(place);
         }
+    }
+}
+
+/// Build the GIR `Place` to emit for a drop entry. Owning-`!`-param entries
+/// emit `*local` (Deref projection) so the LIR drop lowering goes through
+/// the addr-load path that resolves to the underlying resource type — the
+/// `is_pure_borrow_for` Nop in `lir/lower/drops.rs` only fires for
+/// empty-projection places, so the explicit Deref opt-in keeps that
+/// soundness check in place for genuine `&` borrows. Other entries emit
+/// the bare `local` place.
+fn drop_place_for(entry: &DropEntry) -> Place {
+    if entry.owning_param {
+        Place {
+            local: entry.local,
+            projections: vec![crate::ir::instructions::Projection::Deref],
+        }
+    } else {
+        Place::local(entry.local)
     }
 }
 

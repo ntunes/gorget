@@ -58,6 +58,24 @@ impl<'a> FuncLowering<'a> {
 
         let local_idx = place.local.0 as usize;
 
+        // `!`-sigil resource params: the slot holds a `MutPtr` to the
+        // caller-supplied value, but the callee owns the pointee. Drop must
+        // dereference through the pointer; the GIR drop accountant emits a
+        // `Place { local, projections: [Deref] }` to opt into this path.
+        // The guard checks the slot's pointer bits (8 bytes — null after a
+        // `MoveZero`/`MoveSlot` upstream) so val_to_slot maps the guard
+        // value back to the slot for `drop_elab.rs` to replace with a bool
+        // drop flag. The drop call receives the loaded pointer.
+        let is_owning_param = self.gir_func.locals.get(local_idx)
+            .map_or(false, |l| l.is_owning_param);
+        if is_owning_param
+            && place.projections.first() == Some(&Projection::Deref)
+            && place.projections.len() == 1
+        {
+            self.lower_owning_param_drop(place, bb, conditional);
+            return;
+        }
+
         // Skip drops for pure-borrow locals — they're borrows with no
         // chance of materialization (self-rooted Param/Alias placeholders,
         // Field-projected borrows, CowBorrowPending). The owner drops the
@@ -373,6 +391,119 @@ impl<'a> FuncLowering<'a> {
                     self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
                 }
             }
+        }
+    }
+
+    /// Emit the drop sequence for an owning `!`-sigil resource parameter.
+    ///
+    /// The slot holds an 8-byte `MutPtr` to the caller-supplied value. The
+    /// callee owns the pointee and must drop it at exit unless the body
+    /// transferred ownership onward (which emitted a `MoveZero` →
+    /// `Inst::MoveSlot { slot }` upstream, flipping the LIR drop flag).
+    ///
+    /// Sequence:
+    /// 1. `SlotAddr(slot) → guard_addr` — `&slot`. `val_to_slot` maps this
+    ///    back to the slot, so `drop_elab.rs::insert_drop_flags` can
+    ///    replace the runtime `memcmp` guard with a bool flag check.
+    /// 2. `DropGuardOpen { NonZero { size: 8 }, value: guard_addr }` —
+    ///    checks the slot's pointer bits (null after a MoveSlot, non-null
+    ///    otherwise). Size is sizeof(Ptr), not sizeof(R), so the guard
+    ///    inspects the slot's bytes — never reads through a possibly-null
+    ///    pointer.
+    /// 3. Inside the guard: `SlotLoad(slot, ty=Ptr) → drop_arg`, then call
+    ///    the drop fn with `drop_arg` (the pointer to the underlying R).
+    /// 4. `DropGuardClose`.
+    fn lower_owning_param_drop(&mut self, place: &Place, bb: BlockId, conditional: bool) {
+        use crate::ir::types::DropStrategy;
+        let local_idx = place.local.0 as usize;
+        let slot = self.local_to_slot[local_idx];
+
+        // Resolve the pointee type (the Deref projection's target).
+        let type_id = self.resolve_gir_place_type(place);
+        let (type_name, strategy) = if let Some(GirType::Named(name)) = self.gir_types.get(type_id) {
+            let strat = if let Some(type_def) = self.gir_types.get_type_def(name) {
+                type_def.metadata.drop_strategy.clone()
+            } else {
+                self.infer_drop_strategy(name)
+            };
+            (Some(name.clone()), strat)
+        } else {
+            (None, DropStrategy::None)
+        };
+
+        // No drop strategy registered → nothing to do.
+        if matches!(strategy, DropStrategy::None) {
+            self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+            return;
+        }
+
+        // Open the guard on the slot's pointer bits (8 bytes).
+        if conditional {
+            let guard_addr = self.lir_func.next_value();
+            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                dst: guard_addr,
+                slot,
+            });
+            self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                kind: DropGuardKind::NonZero { size: 8 },
+                value: guard_addr,
+            });
+        }
+
+        // Load the pointer value for the drop call.
+        let drop_arg = self.lir_func.next_value();
+        self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+            dst: drop_arg,
+            slot,
+            ty: LirType::Ptr,
+        });
+
+        // Dispatch to the drop fn based on the strategy. Mirrors the
+        // Custom/Recursive/Trivial paths in `lower_drop`, but always
+        // uses the unified `Type__drop` helper when present (which is
+        // the case for any user-defined `equip ... with Drop`).
+        match strategy {
+            DropStrategy::Custom(ref fn_name) | DropStrategy::Trivial(ref fn_name) => {
+                let unified_drop_fn = type_name.as_ref()
+                    .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
+                    .map(|info| info.drop_fn_name.clone());
+                let drop_fn = unified_drop_fn.unwrap_or_else(|| fn_name.clone());
+                if let Some(&fid) = self.func_index.get(drop_fn.as_str()) {
+                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        dst: None, func: fid, args: vec![drop_arg],
+                    });
+                } else {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: drop_fn, args: vec![drop_arg],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
+            }
+            DropStrategy::Recursive => {
+                let unified_drop_fn = type_name.as_ref()
+                    .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
+                    .map(|info| info.drop_fn_name.clone());
+                if let Some(drop_fn) = unified_drop_fn {
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: drop_fn, args: vec![drop_arg],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                } else if let Some(ref tn) = type_name {
+                    let drop_fn = format!("{tn}__drop");
+                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        dst: None, name: drop_fn, args: vec![drop_arg],
+                        original_name: None,
+                        arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
+                    });
+                }
+            }
+            DropStrategy::None => unreachable!("guarded above"),
+        }
+
+        if conditional {
+            self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
         }
     }
 

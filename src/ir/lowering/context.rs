@@ -1914,6 +1914,26 @@ impl<'a> LoweringContext<'a> {
         );
     }
 
+    /// Tag a `!`-sigil resource parameter so the LIR drop lowering knows the
+    /// callee owns the pointee (not just borrows through the MutPtr). The flag
+    /// is read by `lir/lower/drops.rs::lower_drop` to bypass the
+    /// `is_pure_borrow_for` Nop and emit the deref-aware drop sequence. The
+    /// drop accountant pairs this with `register_owning_param`, which emits
+    /// `DropIfAlive { *local }` so the drop-flag dataflow controls whether
+    /// the drop fires (suppressed if the body transferred ownership onward).
+    ///
+    /// Mirrors `set_param_borrow_unique` for read-site routing — both `&` and
+    /// `!` resource params share the same `Borrowed { Param(self), Unique }`
+    /// ownership shape and `BorrowedPtr` slot kind. The `is_owning_param`
+    /// flag is the single typed bit distinguishing them at the GIR/LIR
+    /// boundary.
+    pub fn set_owning_param(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].is_owning_param = true;
+        }
+    }
+
     /// Whether `local` is a unique-borrow param-shape pointer:
     /// `Borrowed { origin: Param(self), mutability: Unique }`.
     /// Set by `set_param_borrow_unique` for `&` and `!` params (and

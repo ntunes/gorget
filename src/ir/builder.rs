@@ -37,6 +37,7 @@ impl FunctionBuilder {
             name_hint: None,
             ownership: LocalOwnership::default(),
             slot_kind: SlotKind::default(),
+            is_owning_param: false,
         });
 
         // _1.._N = parameters
@@ -48,6 +49,7 @@ impl FunctionBuilder {
                 name_hint: hint.map(|s| s.to_string()),
                 ownership: LocalOwnership::default(),
                 slot_kind: SlotKind::default(),
+                is_owning_param: false,
             });
         }
 
@@ -76,6 +78,7 @@ impl FunctionBuilder {
             name_hint: name_hint.map(|s| s.to_string()),
             ownership: LocalOwnership::default(),
             slot_kind: SlotKind::default(),
+            is_owning_param: false,
         });
         id
     }

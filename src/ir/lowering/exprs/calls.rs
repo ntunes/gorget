@@ -73,6 +73,39 @@ pub(super) fn lower_call_arg(
             }
         }
     }
+
+    // Special case: !name where name is a `!`-sigil resource parameter (the
+    // local already holds a MutPtr to caller-owned data). Forward the pointer
+    // directly and emit MoveZero on the param slot, bypassing the
+    // Identifier-path's deref-into-temp + memcpy. Without this, the temp
+    // and the caller's R buffer would alias the same heap data; both the
+    // inner callee's exit drop (on the temp's transferred ownership) and
+    // this function's exit drop (on its own `!`-param) would fire,
+    // double-freeing the resource.
+    //
+    // Detection: `is_owning_param` is the typed bit set at param
+    // registration for `Ownership::Move` resource params. The flag drives
+    // both this fast-path and the `lower_drop` deref-aware emission, so
+    // there's no name-matching or shape inference downstream.
+    if matches!(arg.node.ownership, Ownership::Move) {
+        if let Expr::Identifier(name) = &arg.node.value.node {
+            if let Some((local_id, _)) = ctx.lookup_local(name) {
+                let is_owning_param = (local_id.0 as usize) < builder.locals.len()
+                    && builder.locals[local_id.0 as usize].is_owning_param;
+                if is_owning_param {
+                    // Sever any CoW aliases of the source slot before transfer.
+                    ctx.cow_before_mutation(builder, local_id, arg.span);
+                    // Forward the pointer (the local holds a MutPtr already).
+                    // Schedule a post-call MoveZero on the param slot so the
+                    // exit drop's flag flips to false — this function no
+                    // longer owns the pointee.
+                    ctx.drops.mark_moved(local_id);
+                    ctx.func_state.pending_move_zeros.push(local_id);
+                    return FunctionBuilder::copy(local_id);
+                }
+            }
+        }
+    }
     let val = lower_expr(ctx, builder, &arg.node.value);
     match arg.node.ownership {
         Ownership::MutableBorrow => {
