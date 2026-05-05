@@ -979,115 +979,113 @@ impl std::fmt::Display for ResourceMoveWarning {
 }
 
 /// Walk every Assign in the module and flag resource-typed shallow
-/// copies. Stage C1: callers print these as warnings; the IR is not
-/// rejected.
+/// copies. Phase D5 (this file's collapse) routes through the unified
+/// [`validate_read`] predicate — the per-Assign upstream skips
+/// (auto-deref shapes, cross-type generic-mono noise, self-assign,
+/// constant-source) live in [`assign_read_site`] and flag the site as
+/// ReadMode-Borrow / out-of-scope so the unified rule never sees them.
 pub fn validate_resource_moves(module: &Module) -> Vec<ResourceMoveWarning> {
     let mut warnings = Vec::new();
     for func in &module.functions {
-        check_resource_moves(func, &module.type_registry, &mut warnings);
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                let Some(site) = assign_read_site(func, &module.type_registry, inst, b, i) else { continue };
+                if let Some(w) = validate_read(site, &module.type_registry) {
+                    warnings.push(w);
+                }
+            }
+        }
     }
     warnings
 }
 
-fn check_resource_moves(
-    func: &Function,
+/// Extract the conceptual ReadSite for an `Assign { mode: Copy }`
+/// instruction, applying the per-Assign skips before returning. Returns
+/// `None` when the assign is out-of-scope for the validator (any of the
+/// skip predicates fires) — letting the unified [`validate_read`] rule
+/// see ONLY the same shallow-copy-of-resource shape it sees for the
+/// other classes.
+///
+/// Skips folded into the extractor:
+/// * non-Copy modes (Move/Clone/Borrow are sound by construction);
+/// * projected destinations (FieldStore semantics — handled by FieldLoad);
+/// * constant-source operands (`x = 42` isn't a shallow alias);
+/// * self-assignments (`x = x`);
+/// * auto-deref bare-place / single-Deref shapes (`dst:T = copy src:Ptr<T>`);
+/// * cross-type bare-place assigns (generic-mono bugs, out of scope).
+fn assign_read_site<'a>(
+    func: &'a Function,
     registry: &TypeRegistry,
-    warnings: &mut Vec<ResourceMoveWarning>,
-) {
-    for (b, bb) in func.blocks.iter().enumerate() {
-        for (i, inst) in bb.instructions.iter().enumerate() {
-            let Instruction::Assign { mode, dst, value } = inst else { continue };
-            if *mode != AssignMode::Copy { continue; }
-            // Only flag whole-local destinations. Projected stores
-            // (`_x.field = ...`) are FieldStore semantics — the dst's
-            // field type, not the whole struct, is what gets the copy.
-            // The struct-typed base is incidental, not an alias source.
-            if !dst.projections.is_empty() { continue; }
-            // Only resource-typed destinations.
-            let local_idx = dst.local.0 as usize;
-            if local_idx >= func.locals.len() { continue; }
-            let dst_ty = func.locals[local_idx].type_id;
-            if !registry.is_resource_type(dst_ty) { continue; }
-            // Only place-sourced operands. `Assign { mode: Copy, value:
-            // Constant(_) }` is fine — that's a literal, not a shallow
-            // alias of an owned resource.
-            let src_place = match value {
-                Operand::Copy(p) | Operand::Move(p) => p,
-                _ => continue,
-            };
-            // Self-assignments aren't shallow copies in the bug sense.
-            if src_place.local == dst.local && src_place.projections.is_empty() {
-                continue;
+    inst: &'a Instruction,
+    b: usize,
+    i: usize,
+) -> Option<ReadSite<'a>> {
+    let Instruction::Assign { mode, dst, value } = inst else { return None };
+    if *mode != AssignMode::Copy { return None; }
+    // FieldStore semantics — the dst's field type drives the check, not
+    // the whole-local case. Out of Assign scope.
+    if !dst.projections.is_empty() { return None; }
+    let local_idx = dst.local.0 as usize;
+    if local_idx >= func.locals.len() { return None; }
+    let dst_ty = func.locals[local_idx].type_id;
+    // Constants (`x = 42`) aren't shallow aliases of owned resources.
+    let src_place = match value {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        _ => return None,
+    };
+    // Self-assignments — not the shallow-alias bug shape.
+    if src_place.local == dst.local && src_place.projections.is_empty() {
+        return None;
+    }
+    // Auto-deref + cross-type skips: see the original commentary in
+    // c6fedd4c. Both flag dst as Borrow-shaped for the unified rule
+    // (sound), so we don't need a separate path.
+    let src_idx = src_place.local.0 as usize;
+    if src_idx < func.locals.len() {
+        let src_ty = func.locals[src_idx].type_id;
+        let pointee = match registry.get(src_ty) {
+            Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) => Some(*inner),
+            _ => None,
+        };
+        // `dst:T = copy src:Ptr<T>` (bare-place) or `dst:T = copy src.*`
+        // (single-Deref) — codegen materialises this as a LoadRef-equivalent
+        // borrow, not a shallow copy.
+        if pointee == Some(dst_ty) {
+            let is_bare = src_place.projections.is_empty();
+            let is_single_deref = src_place.projections.len() == 1
+                && matches!(src_place.projections[0], Projection::Deref);
+            if is_bare || is_single_deref {
+                return None;
             }
-            // Auto-deref: two recognised shapes that codegen handles
-            // correctly today (LoadRef-equivalent reads through a
-            // pointer into a value slot). They're flagged duplicates,
-            // not runtime risks; upstream lowering will be migrated to
-            // explicit LoadRef / Borrow modes.
-            //
-            //   1. `dst:T = copy src:Ptr<T>`  — bare-place auto-deref
-            //      (printer renders this as `dst = copy src`; the type
-            //      mismatch tells codegen to deref).
-            //   2. `dst:T = copy src.*`       — explicit Deref projection
-            //      where src is `Ptr<T>`. Same semantic, different shape.
-            {
-                let src_idx = src_place.local.0 as usize;
-                if src_idx < func.locals.len() {
-                    let src_ty = func.locals[src_idx].type_id;
-                    use crate::ir::types::GirType;
-                    use crate::ir::instructions::Projection;
-                    let pointee = match registry.get(src_ty) {
-                        Some(GirType::Ptr(inner) | GirType::MutPtr(inner)) => Some(*inner),
-                        _ => None,
-                    };
-                    if pointee == Some(dst_ty) {
-                        let is_bare = src_place.projections.is_empty();
-                        let is_single_deref = src_place.projections.len() == 1
-                            && matches!(src_place.projections[0], Projection::Deref);
-                        if is_bare || is_single_deref {
-                            continue;
-                        }
-                    }
-                    // Type-mismatched assigns (`dst:Vector = copy src:i64`) are
-                    // generic-monomorphization bugs, not shallow-resource-alias
-                    // bugs. The Phase C validator is scoped to "shallow copy of
-                    // owned resource"; flagging type-mismatched assigns is out
-                    // of scope (and the runtime is producing wrong results
-                    // there independently of the GIR mode label). Skip when
-                    // src isn't the same resource type as dst.
-                    //
-                    // We allow same-type assigns (the genuine shallow-alias
-                    // case) and assigns where src is non-place (constants,
-                    // already excluded above). Other cross-type assigns fall
-                    // out of validator scope.
-                    if src_ty != dst_ty && src_place.projections.is_empty() {
-                        continue;
-                    }
-                }
-            }
-            let type_name = registry.type_name(dst_ty)
-                .unwrap_or_else(|| format!("ty{}", dst_ty.0));
-            warnings.push(ResourceMoveWarning {
-                function: func.name.clone(),
-                block: BlockId(b as u32),
-                inst_index: i,
-                kind: ResourceMoveWarningKind::ShallowCopyOfResource {
-                    local: dst.local,
-                    type_name,
-                },
-            });
+        }
+        // Cross-type bare-place assigns — generic-mono bugs, not shallow-alias.
+        if src_ty != dst_ty && src_place.projections.is_empty() {
+            return None;
         }
     }
+    Some(ReadSite {
+        func_name: &func.name,
+        block: BlockId(b as u32),
+        inst_index: i,
+        mode: ReadMode::Copy,
+        source_ty: dst_ty,
+        class: ReadSiteClass::Assign { dst_local: dst.local },
+    })
 }
 
 // ── Phase C extension: read-site validators ──────────────────────────
-// Four additional read sites whose silent shallow-copy semantics are
-// the structural cousins of `Assign { mode: Copy }`. Phase C's
-// guarantee — no shallow alias of an owned resource — applies equally
-// here. Stage 1: gated behind `GG_VALIDATE_RESOURCE_READS=1`, callers
-// print warnings, do not panic. Once a class shows zero violations on
-// the integration sweep, it can be promoted to fatal alongside the
-// existing `validate_resource_moves` panic site.
+// Phase D5 collapse (unified-resource-model.md §6.4 / §6.6):
+// the four read-site classes (FieldLoad, IndexLoad, EnumFieldLoad,
+// Call/CallExtern args) and the original Assign-Copy class share one
+// underlying rule:
+//
+//   "is this read of a resource-typed value shaped as a shallow copy?"
+//
+// Each per-instruction walker now extracts a typed [`ReadSite`]
+// describing the conceptual read (mode + source type + per-class
+// metadata) and routes through the single [`validate_read`] predicate.
+// Adding a future read class only requires extending [`ReadSite`] and
+// registering one extractor — the validation rule itself is one match.
 
 /// Run the four extension validators for the read-side classes:
 /// FieldLoad, IndexLoad, EnumFieldLoad, Call/CallExtern args. Returns a
@@ -1095,15 +1093,16 @@ fn check_resource_moves(
 pub fn validate_resource_reads(module: &Module) -> Vec<ResourceMoveWarning> {
     let mut warnings = Vec::new();
     for func in &module.functions {
-        check_field_load_reads(func, &module.type_registry, &mut warnings);
-        check_index_load_reads(func, &module.type_registry, &mut warnings);
-        check_enum_field_load_reads(func, &module.type_registry, &mut warnings);
-        check_call_arg_reads(func, module, &mut warnings);
+        for_each_read_site(func, module, |site| {
+            if let Some(w) = validate_read(site, &module.type_registry) {
+                warnings.push(w);
+            }
+        });
     }
     warnings
 }
 
-/// Just the Call/CallExtern args check — promoted to fatal at the
+/// Just the Call/CallExtern args class — promoted to fatal at the
 /// `validate_resource_moves` site after the 2026-05-04 sweep showed
 /// 0 violations across 1056 fixtures. Splitting it out so it can run
 /// unconditionally while the other three classes (field/index/enum)
@@ -1111,9 +1110,243 @@ pub fn validate_resource_reads(module: &Module) -> Vec<ResourceMoveWarning> {
 pub fn validate_resource_call_args(module: &Module) -> Vec<ResourceMoveWarning> {
     let mut warnings = Vec::new();
     for func in &module.functions {
-        check_call_arg_reads(func, module, &mut warnings);
+        for_each_read_site(func, module, |site| {
+            if !matches!(site.class, ReadSiteClass::CallArg { .. }) { return; }
+            if let Some(w) = validate_read(site, &module.type_registry) {
+                warnings.push(w);
+            }
+        });
     }
     warnings
+}
+
+/// A typed read-site descriptor: enough to (a) route through the unified
+/// validator and (b) build the per-class warning when a violation fires.
+///
+/// Each case in [`ReadSiteClass`] corresponds to one of the read-site
+/// classes from §6.4. Adding a new class is a one-shot extension — the
+/// validate rule is shared and the location plumbing is shared.
+struct ReadSite<'a> {
+    /// Function whose body owns this site (for the warning's display).
+    func_name: &'a str,
+    /// Block + instruction index that emitted the site.
+    block: BlockId,
+    inst_index: usize,
+    /// How the value is read at this site.
+    mode: ReadMode,
+    /// Type that flows out of the read (the dst's effective type, or
+    /// the field/element type).
+    source_ty: TypeId,
+    /// Shape-specific data needed to build the warning kind.
+    class: ReadSiteClass<'a>,
+}
+
+enum ReadSiteClass<'a> {
+    /// `Assign { mode, dst, value }` — D5: AssignMode IS ReadMode.
+    /// The Phase C-original class. `dst_local` carries the dst place's
+    /// LocalId for the warning; `is_auto_deref_skip` and friends are
+    /// resolved upstream by the extractor (the predicate here stays
+    /// shape-agnostic).
+    Assign { dst_local: LocalId },
+    /// `FieldLoad { dst, base, field }`. ReadMode is implicit at this
+    /// site (FieldLoad has no mode field — it always copies bytes), so
+    /// the extractor synthesises `ReadMode::Copy` for shallow-copy
+    /// extraction and `ReadMode::Borrow` when the dst is Ptr-typed.
+    FieldLoad { dst_local: LocalId },
+    /// `IndexLoad { dst, base, index, read }` — D5: `read` is the
+    /// authoritative ReadMode for the site.
+    IndexLoad { dst_local: LocalId },
+    /// `EnumFieldLoad { dst, base, variant, field }`. ReadMode is
+    /// synthesised: the extractor knows the LIR auto-zeroes
+    /// GorgetString payloads (effectively Move) and that other resource
+    /// payloads stay shallow-copy unless upstream lowering opts in.
+    EnumFieldLoad { dst_local: LocalId, variant: &'a str },
+    /// Call / CallExtern arg position. ReadMode synthesised from ABI:
+    /// ByValue/GorgetString/Auto positions are shallow-copy candidates;
+    /// Ptr/borrow positions are `ReadMode::Borrow`.
+    CallArg { callee: &'a str, arg_index: usize },
+}
+
+/// The unified rule. Returns `Some(warning)` when the site is a shallow
+/// alias of an owned resource, `None` when sound or out-of-scope.
+///
+/// Per unified-resource-model.md §6.4 the rule is:
+/// * If `source_ty` is non-resource → sound (any mode is fine).
+/// * `Borrow` → sound (destination is a reference / view).
+/// * `Move`   → sound (ownership transfer; source becomes dead).
+/// * `Clone`  → sound (deep clone via the type's clone fn).
+/// * `Copy`   → **violation** — shallow alias of an owned resource.
+fn validate_read(site: ReadSite<'_>, registry: &TypeRegistry) -> Option<ResourceMoveWarning> {
+    if !registry.is_resource_type(site.source_ty) { return None; }
+    match site.mode {
+        ReadMode::Borrow | ReadMode::Move | ReadMode::Clone => None,
+        ReadMode::Copy => Some(ResourceMoveWarning {
+            function: site.func_name.to_string(),
+            block: site.block,
+            inst_index: site.inst_index,
+            kind: warning_kind_for(&site, registry),
+        }),
+    }
+}
+
+/// Build the per-class warning kind from the site descriptor. The
+/// fan-out lives here (one match) instead of being duplicated across
+/// per-class checkers.
+fn warning_kind_for(site: &ReadSite<'_>, registry: &TypeRegistry) -> ResourceMoveWarningKind {
+    let type_name = registry.type_name(site.source_ty)
+        .unwrap_or_else(|| format!("ty{}", site.source_ty.0));
+    match &site.class {
+        ReadSiteClass::Assign { dst_local } => ResourceMoveWarningKind::ShallowCopyOfResource {
+            local: *dst_local,
+            type_name,
+        },
+        ReadSiteClass::FieldLoad { dst_local } => ResourceMoveWarningKind::ShallowCopyOfResourceField {
+            dst: *dst_local,
+            field_type_name: type_name,
+        },
+        ReadSiteClass::IndexLoad { dst_local } => ResourceMoveWarningKind::ShallowReadOfResourceElement {
+            dst: *dst_local,
+            elem_type_name: type_name,
+        },
+        ReadSiteClass::EnumFieldLoad { dst_local, variant } => ResourceMoveWarningKind::ShallowCopyOfEnumPayload {
+            dst: *dst_local,
+            variant: variant.to_string(),
+            payload_type_name: type_name,
+        },
+        ReadSiteClass::CallArg { callee, arg_index } => ResourceMoveWarningKind::ShallowCopyOfResourceArg {
+            callee: callee.to_string(),
+            arg_index: *arg_index,
+            arg_type_name: type_name,
+        },
+    }
+}
+
+/// Walk every instruction in `func`, extract the conceptual read sites
+/// of resource values, and call `visit` on each. Per-instruction shape
+/// extraction lives here — the validation rule itself is one match in
+/// [`validate_read`]. The Phase C `Assign { mode: Copy }` class lives
+/// in [`check_resource_moves`] (which uses its own auto-deref skip
+/// logic that doesn't fit the simple ReadMode rule); the four extension
+/// classes flow through this walker.
+fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
+    func: &'a Function,
+    module: &'a Module,
+    mut visit: F,
+) {
+    let registry = &module.type_registry;
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            let block = BlockId(b as u32);
+            match inst {
+                Instruction::FieldLoad { dst, base, field } => {
+                    let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
+                    // Ptr-typed dst at LIR level is borrow-shaped (field address, not value).
+                    let mode = if type_is_ptr(dst_ty, registry) { ReadMode::Borrow } else { ReadMode::Copy };
+                    let Some(base_ty) = resolve_place_type(base, func, registry) else { continue };
+                    let Some(field_ty) = resolve_field_type_id(base_ty, *field, registry) else { continue };
+                    // Cross-type assigns (`dst:Vector = field of unrelated`) are
+                    // generic-mono bugs, out of validator scope.
+                    if dst_ty != field_ty { continue; }
+                    visit(ReadSite {
+                        func_name: &func.name,
+                        block,
+                        inst_index: i,
+                        mode,
+                        source_ty: field_ty,
+                        class: ReadSiteClass::FieldLoad { dst_local: *dst },
+                    });
+                }
+                Instruction::IndexLoad { dst, base: _, index: _, read } => {
+                    let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
+                    // Ptr-typed dst: raw element pointer == borrow.
+                    let mode = if type_is_ptr(dst_ty, registry) { ReadMode::Borrow } else { *read };
+                    visit(ReadSite {
+                        func_name: &func.name,
+                        block,
+                        inst_index: i,
+                        mode,
+                        source_ty: dst_ty,
+                        class: ReadSiteClass::IndexLoad { dst_local: *dst },
+                    });
+                }
+                Instruction::EnumFieldLoad { dst, base, variant, field } => {
+                    let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
+                    // Ptr-typed dst: LIR returns field address (borrow).
+                    if type_is_ptr(dst_ty, registry) {
+                        // No need to resolve — borrow is sound regardless of payload type.
+                        visit(ReadSite {
+                            func_name: &func.name,
+                            block,
+                            inst_index: i,
+                            mode: ReadMode::Borrow,
+                            source_ty: dst_ty,
+                            class: ReadSiteClass::EnumFieldLoad { dst_local: *dst, variant },
+                        });
+                        continue;
+                    }
+                    let Some(base_ty) = resolve_place_type(base, func, registry) else { continue };
+                    let Some(payload_ty) = resolve_enum_field_type_id(base_ty, variant, *field, registry) else { continue };
+                    // GorgetString payloads are auto-zeroed by the LIR lowering
+                    // (see lir/lower/insts.rs is_str_field path) — that's a Move
+                    // semantic at LIR even though the GIR shape is identical.
+                    let mode = if registry.type_name(payload_ty).as_deref() == Some("GorgetString") {
+                        ReadMode::Move
+                    } else {
+                        ReadMode::Copy
+                    };
+                    visit(ReadSite {
+                        func_name: &func.name,
+                        block,
+                        inst_index: i,
+                        mode,
+                        source_ty: payload_ty,
+                        class: ReadSiteClass::EnumFieldLoad { dst_local: *dst, variant },
+                    });
+                }
+                Instruction::Call { func: callee, args, .. } => {
+                    use crate::ir::lowering::context::ParamABI;
+                    let Some(abis) = module.fn_param_abis.get(callee) else { continue };
+                    for (idx, arg) in args.iter().enumerate() {
+                        let abi = abis.get(idx).copied().unwrap_or(ParamABI::ByValue);
+                        // Internal calls: only ByValue is shallow-copy-shaped.
+                        let mode = if matches!(abi, ParamABI::ByValue) { ReadMode::Copy } else { ReadMode::Borrow };
+                        let Operand::Copy(p) = arg else { continue };
+                        let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
+                        visit(ReadSite {
+                            func_name: &func.name,
+                            block,
+                            inst_index: i,
+                            mode,
+                            source_ty: src_ty,
+                            class: ReadSiteClass::CallArg { callee, arg_index: idx },
+                        });
+                    }
+                }
+                Instruction::CallExtern { func: callee, args, .. } => {
+                    use crate::ir::abi::AbiKind;
+                    let Some(extern_decl) = module.find_extern(callee) else { continue };
+                    for (idx, arg) in args.iter().enumerate() {
+                        let abi = extern_decl.param_abis.get(idx).copied().unwrap_or(AbiKind::Auto);
+                        // Externs: ByValue/GorgetString/Auto are shallow-copy positions;
+                        // Ptr/VoidElem/CStr/BytePtr/Opaque/Scalar are borrow-shaped.
+                        let by_value = matches!(abi, AbiKind::ByValue | AbiKind::GorgetString);
+                        let mode = if by_value { ReadMode::Copy } else { ReadMode::Borrow };
+                        let Operand::Copy(p) = arg else { continue };
+                        let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
+                        visit(ReadSite {
+                            func_name: &func.name,
+                            block,
+                            inst_index: i,
+                            mode,
+                            source_ty: src_ty,
+                            class: ReadSiteClass::CallArg { callee, arg_index: idx },
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Resolve the type at the end of a place's projection chain. Walks
@@ -1220,189 +1453,6 @@ fn resolve_enum_field_type_id(
 /// than a value copy.
 fn type_is_ptr(ty: TypeId, registry: &TypeRegistry) -> bool {
     matches!(registry.get(ty), Some(GirType::Ptr(_) | GirType::MutPtr(_)))
-}
-
-fn check_field_load_reads(
-    func: &Function,
-    registry: &TypeRegistry,
-    warnings: &mut Vec<ResourceMoveWarning>,
-) {
-    for (b, bb) in func.blocks.iter().enumerate() {
-        for (i, inst) in bb.instructions.iter().enumerate() {
-            let Instruction::FieldLoad { dst, base, field } = inst else { continue };
-            // dst-is-Ptr branch is borrow-shaped at LIR level (returns
-            // field address, not field value). Not a shallow copy.
-            let dst_idx = dst.0 as usize;
-            if dst_idx >= func.locals.len() { continue; }
-            let dst_ty = func.locals[dst_idx].type_id;
-            if type_is_ptr(dst_ty, registry) { continue; }
-            // Resolve base place type (after projections), look up
-            // field type, check if it's resource.
-            let base_ty = match resolve_place_type(base, func, registry) {
-                Some(t) => t,
-                None => continue,
-            };
-            let field_ty = match resolve_field_type_id(base_ty, *field, registry) {
-                Some(t) => t,
-                None => continue,
-            };
-            if !registry.is_resource_type(field_ty) { continue; }
-            // The dst type and field type should match for genuine
-            // shallow-copy (cross-type would be a generic-mono bug,
-            // out of scope).
-            if dst_ty != field_ty { continue; }
-            let field_type_name = registry.type_name(field_ty)
-                .unwrap_or_else(|| format!("ty{}", field_ty.0));
-            warnings.push(ResourceMoveWarning {
-                function: func.name.clone(),
-                block: BlockId(b as u32),
-                inst_index: i,
-                kind: ResourceMoveWarningKind::ShallowCopyOfResourceField {
-                    dst: *dst,
-                    field_type_name,
-                },
-            });
-        }
-    }
-}
-
-fn check_index_load_reads(
-    func: &Function,
-    registry: &TypeRegistry,
-    warnings: &mut Vec<ResourceMoveWarning>,
-) {
-    for (b, bb) in func.blocks.iter().enumerate() {
-        for (i, inst) in bb.instructions.iter().enumerate() {
-            let Instruction::IndexLoad { dst, base: _, index: _, read } = inst else { continue };
-            // Phase D5: ReadMode::Borrow == legacy `borrow: true` (zero-copy view);
-            // any other mode (Clone today; Copy/Move reserved) is value-shaped and
-            // therefore the shallow-read class.
-            if matches!(read, ReadMode::Borrow) { continue; }
-            let dst_idx = dst.0 as usize;
-            if dst_idx >= func.locals.len() { continue; }
-            let dst_ty = func.locals[dst_idx].type_id;
-            // Ptr-typed dst: LIR returns raw element pointer (borrow shape).
-            if type_is_ptr(dst_ty, registry) { continue; }
-            if !registry.is_resource_type(dst_ty) { continue; }
-            let elem_type_name = registry.type_name(dst_ty)
-                .unwrap_or_else(|| format!("ty{}", dst_ty.0));
-            warnings.push(ResourceMoveWarning {
-                function: func.name.clone(),
-                block: BlockId(b as u32),
-                inst_index: i,
-                kind: ResourceMoveWarningKind::ShallowReadOfResourceElement {
-                    dst: *dst,
-                    elem_type_name,
-                },
-            });
-        }
-    }
-}
-
-fn check_enum_field_load_reads(
-    func: &Function,
-    registry: &TypeRegistry,
-    warnings: &mut Vec<ResourceMoveWarning>,
-) {
-    for (b, bb) in func.blocks.iter().enumerate() {
-        for (i, inst) in bb.instructions.iter().enumerate() {
-            let Instruction::EnumFieldLoad { dst, base, variant, field } = inst else { continue };
-            let dst_idx = dst.0 as usize;
-            if dst_idx >= func.locals.len() { continue; }
-            let dst_ty = func.locals[dst_idx].type_id;
-            // Ptr-typed dst: LIR returns field address (borrow shape).
-            if type_is_ptr(dst_ty, registry) { continue; }
-            let base_ty = match resolve_place_type(base, func, registry) {
-                Some(t) => t,
-                None => continue,
-            };
-            let payload_ty = match resolve_enum_field_type_id(base_ty, variant, *field, registry) {
-                Some(t) => t,
-                None => continue,
-            };
-            if !registry.is_resource_type(payload_ty) { continue; }
-            // GorgetString payloads are auto-zeroed by the LIR lowering
-            // (see lir/lower/insts.rs is_str_field path). Skip — that's
-            // a Move-semantic at LIR even though GIR shape is identical.
-            if registry.type_name(payload_ty).as_deref() == Some("GorgetString") { continue; }
-            let payload_type_name = registry.type_name(payload_ty)
-                .unwrap_or_else(|| format!("ty{}", payload_ty.0));
-            warnings.push(ResourceMoveWarning {
-                function: func.name.clone(),
-                block: BlockId(b as u32),
-                inst_index: i,
-                kind: ResourceMoveWarningKind::ShallowCopyOfEnumPayload {
-                    dst: *dst,
-                    variant: variant.clone(),
-                    payload_type_name,
-                },
-            });
-        }
-    }
-}
-
-fn check_call_arg_reads(
-    func: &Function,
-    module: &Module,
-    warnings: &mut Vec<ResourceMoveWarning>,
-) {
-    use crate::ir::lowering::context::ParamABI;
-    let registry = &module.type_registry;
-    for (b, bb) in func.blocks.iter().enumerate() {
-        for (i, inst) in bb.instructions.iter().enumerate() {
-            // Internal calls: ParamABI per arg.
-            if let Instruction::Call { func: callee, args, .. } = inst {
-                let Some(abis) = module.fn_param_abis.get(callee) else { continue };
-                for (idx, arg) in args.iter().enumerate() {
-                    let abi = abis.get(idx).copied().unwrap_or(ParamABI::ByValue);
-                    if !matches!(abi, ParamABI::ByValue) { continue; }
-                    let Operand::Copy(p) = arg else { continue };
-                    let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
-                    if !registry.is_resource_type(src_ty) { continue; }
-                    let arg_type_name = registry.type_name(src_ty)
-                        .unwrap_or_else(|| format!("ty{}", src_ty.0));
-                    warnings.push(ResourceMoveWarning {
-                        function: func.name.clone(),
-                        block: BlockId(b as u32),
-                        inst_index: i,
-                        kind: ResourceMoveWarningKind::ShallowCopyOfResourceArg {
-                            callee: callee.clone(),
-                            arg_index: idx,
-                            arg_type_name,
-                        },
-                    });
-                }
-            }
-            // External calls: AbiKind per arg. Treat ByValue /
-            // GorgetString / Auto as "by-value" shallow positions; Ptr
-            // / VoidElem / CStr / BytePtr / Opaque / Scalar are not
-            // resource-shallow-copy shapes.
-            if let Instruction::CallExtern { func: callee, args, .. } = inst {
-                let Some(extern_decl) = module.find_extern(callee) else { continue };
-                for (idx, arg) in args.iter().enumerate() {
-                    use crate::ir::abi::AbiKind;
-                    let abi = extern_decl.param_abis.get(idx).copied().unwrap_or(AbiKind::Auto);
-                    let by_value = matches!(abi, AbiKind::ByValue | AbiKind::GorgetString);
-                    if !by_value { continue; }
-                    let Operand::Copy(p) = arg else { continue };
-                    let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
-                    if !registry.is_resource_type(src_ty) { continue; }
-                    let arg_type_name = registry.type_name(src_ty)
-                        .unwrap_or_else(|| format!("ty{}", src_ty.0));
-                    warnings.push(ResourceMoveWarning {
-                        function: func.name.clone(),
-                        block: BlockId(b as u32),
-                        inst_index: i,
-                        kind: ResourceMoveWarningKind::ShallowCopyOfResourceArg {
-                            callee: callee.clone(),
-                            arg_index: idx,
-                            arg_type_name,
-                        },
-                    });
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
