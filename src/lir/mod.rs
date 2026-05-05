@@ -1382,6 +1382,19 @@ pub struct StructDef {
     /// c_lir/helpers.rs:765 — c_lir reads from this field via
     /// `LirModule::struct_drop_fn(name)` instead.
     pub elem_drop_fn: Option<String>,
+    /// Phase A residual #2 (closes 2026-05-05): in-place clone fn for an
+    /// instance of this type when copied between collection slots
+    /// (`void(*)(void* dst, const void* src)`). Mirrors GIR
+    /// `TypeMetadata.clone_inplace_fn`. Populated at LIR lowering for
+    /// runtime singletons (`gorget_string_clone_inplace`, `gorget_array_clone_inplace`,
+    /// …) and resolved through the alias chain (Vector__T → GorgetArray)
+    /// via `LirModule::struct_def_by_name`.
+    pub elem_clone_fn: Option<String>,
+    /// Phase A residual #2: CoW materialize fn — view → owned in place
+    /// (`void(*)(void*)`). e.g., `gorget_string_materialize_inplace`. None
+    /// for types with no view/owner distinction. Mirrors GIR
+    /// `TypeMetadata.materialize_fn`.
+    pub materialize_fn: Option<String>,
     /// Phase A residual #1: when set, this Named type is a typedef alias of
     /// the named C runtime struct (e.g. `Callable__T_args` →
     /// `"GorgetClosure"`). The C backend emits
@@ -1396,11 +1409,11 @@ pub struct StructDef {
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {
@@ -1585,6 +1598,13 @@ pub struct LirModule {
     /// a `[clone-stats] ...` line to stderr at program exit. Set by the
     /// `--clone-stats` CLI flag on `gg build`/`gg run`.
     pub clone_stats: bool,
+    /// Phase A residual #2: name-keyed alias map, populated at LIR lowering
+    /// alongside `StructRegistry::register(alias, runtime_sid)`. Lets
+    /// downstream consumers (notably `c_lir/helpers.rs::elem_drop_fn_for_c_type`)
+    /// resolve mangled collection names (`Vector__int64_t`, `Dict__K__V`, …)
+    /// to the underlying runtime StructDef without re-deriving the mapping
+    /// from name prefixes. Read via `LirModule::struct_def_by_name`.
+    pub struct_aliases: HashMap<String, StructId>,
 }
 
 /// Specification for a generated `Type__drop` function.
@@ -1627,6 +1647,7 @@ impl LirModule {
             type_drop_fns: HashMap::new(),
             target: "native".to_string(),
             clone_stats: false,
+            struct_aliases: HashMap::new(),
         }
     }
 
@@ -1686,6 +1707,22 @@ impl LirModule {
     /// Look up a struct definition by StructId.
     pub fn struct_def(&self, id: StructId) -> &StructDef {
         &self.structs[id.0 as usize]
+    }
+
+    /// Look up a struct definition by name. Resolves aliases (e.g.
+    /// `Vector__int64_t` → GorgetArray's StructDef) via
+    /// `struct_aliases`. Use this — not the inline
+    /// `module.structs.iter().find(|s| s.name == X)` — when consuming
+    /// per-type metadata (`elem_drop_fn`, `elem_clone_fn`, `materialize_fn`,
+    /// `c_runtime_alias`) at backend boundaries. Phase A residual #2.
+    pub fn struct_def_by_name(&self, name: &str) -> Option<&StructDef> {
+        if let Some(sd) = self.structs.iter().find(|s| s.name == name) {
+            return Some(sd);
+        }
+        if let Some(sid) = self.struct_aliases.get(name) {
+            return self.structs.get(sid.0 as usize);
+        }
+        None
     }
 
     /// Look up a function by FuncId.
@@ -1832,7 +1869,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

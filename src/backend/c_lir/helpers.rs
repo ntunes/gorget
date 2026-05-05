@@ -766,39 +766,27 @@ pub(super) fn is_collection_type_constructor(last_part: &str) -> bool {
 /// Vector__int64_t() → gorget_array_new(sizeof(int64_t))
 /// Return the C drop function name for a resource-type element, or None for trivial types.
 ///
-/// Phase A residual #3: reads `StructDef.elem_drop_fn` for runtime singletons
-/// (GorgetString/GorgetArray/GorgetMap/GorgetSet/GorgetClosure) — those are
-/// registered as named StructDefs with metadata. Mangled collection aliases
-/// (`Vector__T`, `Dict__K__V`, etc.) share the runtime StructId via
-/// `struct_reg.register(alias, runtime_sid)` rather than getting their own
-/// StructDef in `module.structs`, so lookup by the mangled name misses;
-/// we fall through to a prefix check that maps to the same drop fn the
-/// runtime alias would have. The Callable/MutCallable/ConsumeCallable
-/// fallback stays until Phase A residual #1 (TypeDef registration for
-/// closure types) lands.
+/// Phase A residual #2 (closes 2026-05-05): reads `StructDef.elem_drop_fn`
+/// via `LirModule::struct_def_by_name`, which transparently resolves alias
+/// names (`Vector__int64_t`, `Dict__K__V`, …) to the runtime singleton's
+/// StructDef. The previous name-prefix fallback retired here — every
+/// collection alias is registered in `module.struct_aliases` at LIR
+/// lowering time, so the resolved StructDef carries the typed metadata
+/// uniformly. CLAUDE.md "no name matching" applied to the LIR/c_lir
+/// boundary.
 pub(super) fn elem_drop_fn_for_c_type(c_type: &str, module: &crate::lir::LirModule) -> Option<String> {
-    if let Some(sd) = module.structs.iter().find(|s| s.name == c_type) {
-        if let Some(ref f) = sd.elem_drop_fn {
-            return Some(f.clone());
-        }
-        // Phase A residual #1: read `c_runtime_alias` to recover the
-        // drop fn for Callable family aliases of GorgetClosure.
-        if let Some(ref rt) = sd.c_runtime_alias {
-            return module.structs.iter()
-                .find(|s| s.name == *rt)
-                .and_then(|s| s.elem_drop_fn.clone());
-        }
+    let sd = module.struct_def_by_name(c_type)?;
+    if let Some(ref f) = sd.elem_drop_fn {
+        return Some(f.clone());
     }
-    // Mangled collection aliases — map to the same runtime free fn the
-    // runtime singleton's StructDef carries.
-    if c_type.starts_with("Vector__") || c_type.starts_with("Deque__") {
-        return Some("gorget_array_free".into());
-    }
-    if c_type.starts_with("Dict__") || c_type.starts_with("HashMap__") {
-        return Some("gorget_map_free".into());
-    }
-    if c_type.starts_with("Set__") || c_type.starts_with("HashSet__") {
-        return Some("gorget_set_free".into());
+    // c_runtime_alias path: when the StructDef itself doesn't carry the
+    // metadata directly but aliases another runtime struct via the C
+    // typedef path. Mostly subsumed by `struct_def_by_name` once the
+    // alias map is populated; kept defensive for paths where the
+    // alias entry is absent but the StructDef carries `c_runtime_alias`.
+    if let Some(ref rt) = sd.c_runtime_alias {
+        return module.struct_def_by_name(rt)
+            .and_then(|s| s.elem_drop_fn.clone());
     }
     None
 }

@@ -683,7 +683,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8), elem_drop_fn: None, c_runtime_alias: None,
+                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -700,6 +700,14 @@ impl<'a> LoweringContext<'a> {
             if let Some(runtime_name) = collection_runtime_type(&def.name, &self.gir.type_registry) {
                 if let Some(runtime_sid) = self.struct_reg.lookup(runtime_name) {
                     self.struct_reg.register(&def.name, runtime_sid);
+                    // Phase A residual #2: record the alias on the LirModule
+                    // so c_lir's `struct_def_by_name` can resolve the mangled
+                    // collection name (`Vector__int64_t`, `Dict__K__V`, …) to
+                    // the runtime StructDef without re-deriving the mapping
+                    // from name prefixes. The runtime singleton's StructDef
+                    // already carries `elem_drop_fn` / `elem_clone_fn` /
+                    // `materialize_fn`, so the consumer reads typed metadata.
+                    self.module.struct_aliases.insert(def.name.clone(), runtime_sid);
                     continue;
                 }
             }
@@ -742,7 +750,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8), elem_drop_fn: None, c_runtime_alias: None,
+                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -759,7 +767,7 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![("_0".into(), LirType::Ptr)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -777,7 +785,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -814,6 +822,8 @@ impl<'a> LoweringContext<'a> {
                                 computed_c_size: rt_def.computed_c_size,
                                 computed_c_align: rt_def.computed_c_align,
                                 elem_drop_fn: rt_def.elem_drop_fn.clone(),
+                                elem_clone_fn: rt_def.elem_clone_fn.clone(),
+                                materialize_fn: rt_def.materialize_fn.clone(),
                                 c_runtime_alias: Some(rt.clone()),
                             });
                             self.struct_reg.register(&def.name, sid);
@@ -829,7 +839,13 @@ impl<'a> LoweringContext<'a> {
                         fields: vec![],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            computed_c_size: None, computed_c_align: None,
+            elem_drop_fn: match &def.metadata.drop_strategy {
+                crate::ir::types::DropStrategy::Trivial(f) => Some(f.clone()),
+                _ => None,
+            },
+            elem_clone_fn: def.metadata.clone_inplace_fn.clone(),
+            materialize_fn: def.metadata.materialize_fn.clone(),
             c_runtime_alias: def.metadata.c_runtime_alias.clone(),
                                   });
                     self.struct_reg.register(&def.name, sid);
@@ -963,7 +979,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -987,7 +1003,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1003,7 +1019,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
                               });
                 self.struct_reg.register(name, sid);
             }
