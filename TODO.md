@@ -2,6 +2,22 @@
 
 ## High
 
+- **Self-host typechecker doesn't model `Expr::Block` Never-tail rule + closure return inference** (added 2026-05-06 alongside snag #11 — match-as-expression with block arms).
+
+  After the round-5 fix, the Rust typechecker treats `Expr::Block` whose last statement is divergent (return / throw / break / continue) as type `Never`, and the closure return-type inference falls back to `closure_ret_var` when `body_type == Never` (so the parser's destructure-desugar `Block { ..., Return(expr) }` doesn't mis-specialize tuple-destructured closures as `Closure[Never(...)]`). The self-host typechecker has no analogous rules — its parser stores match arm bodies as `Vector[Stmt]` directly (no `Expr::Block` wrapper to special-case), and walks them through normal statement-checking where `Stmt::Return` doesn't carry an upward "this block diverges" signal.
+
+  No current fixture exercises this divergence — `parser_comparison`, `resolver_comparison`, `type_comparison`, `check_comparison`, `lowerer_comparison` all stay green at HEAD. The gap will surface when a fixture has a VarDecl assignment from a match-expression with a diverging-tail arm AND a typed binding whose type the self-host needs to compute (e.g. `Frontmatter fm = match parsed: case Ok(f): f case Error(msg): print(msg); return`).
+
+  Two paths when it bites:
+
+  1. **Mirror the Rust rule on the self-host side** — add a "diverging tail" check in self-host's match-arm typechecking (it walks `Vector[Stmt]`, so the rule is "if the arm's last stmt is SReturn/SThrow/SBreak/SContinue, the arm produces no value-type contribution; let the other arms determine the match's overall type"). Closure return inference would also need a parallel "skip Never body_type" branch. Maybe ~30 lines across `typecheck.gg` + `infer.gg`.
+
+  2. **Restructure the self-host AST** — add an `EBlock(Vector[Stmt])` variant and route multi-line match arm bodies through it (matching the Rust shape). Bigger refactor; touches parser + AST + resolver + typecheck across all five driver dirs (parser, resolver, typechecker, check + lowerer via symlink). Right answer for self-host parity but multi-week.
+
+  Path 1 is the "fix when it bites" answer. Path 2 is the "self-host should mirror Rust's structure" answer; defer until other AST-shape divergences justify the cost.
+
+  Also: the self-host parser's `parse_match_expr` always wraps single-line arm bodies in a 1-element block (because it always calls `parse_block()`), so it over-introduces a block scope for single-line cases. Harmless today but technically over-scopes pattern bindings' shadowing relative to Rust. Same fix path as above (1 narrow / 2 structural). [added: 2026-05-06]
+
 - **Phase C extension: 3 read-site classes still emit shallow copies; promote to fatal once each lowering migration lands** [added 2026-05-05 by Phase C read-site validator commit; Call/CallExtern args class promoted to fatal in same commit at zero violations]. The validator code is in place; running with `GG_VALIDATE_RESOURCE_READS=<log_path>` surfaces per-class counts to a file. Sweep-of-record (1056 fixtures, 2026-05-05):
 
   1. **`EnumFieldLoad` shallow copy of resource payload — 12,294 violations.** Today's GIR `EnumFieldLoad` only auto-zeros the source for GorgetString payloads (LIR `is_str_field` path); other resource-typed payloads (Vector, Dict, Set, Box, Callable, user structs with resource fields) silently shallow-copy. Top types: IoError (2944), Vector__int64_t (2810), TypedColumn__double (1360), TypedColumn__int64_t (1360), Vector__uint8_t (788), Box__SpannedExpr (499), HttpRequest (492). The Box-in-enum cluster is precisely the latent class the `option_box_enum.gg` leak workaround documents. Lowering migration: extend `EnumFieldLoad`'s LIR auto-zero to cover all resource payloads (not just `is_str_field`), or emit explicit `MoveZero` / clone at the GIR layer for resource extracts. Estimated 1-2 days; risk medium because it touches Option/Result match-arm payloads, the Phase D4 hot path.
