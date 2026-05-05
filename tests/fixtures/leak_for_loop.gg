@@ -1,7 +1,8 @@
 # Leak test: for-loop iteration over collections with primitive elements.
-# NOTE: for-loop over Vector[String] and nested Vector[Vector[int]] have
-# known leaks — gorget_array_clone does shallow copy, so element drops on
-# the clone would corrupt the original. Tracked in TODO.md.
+# Vector[String] and nested Vector[Vector[int]] for-loop shapes are
+# covered by leak_known_patterns.gg P3/P4 — `gorget_array_clone` is
+# now a deep-clone via per-element `elem_clone` hooks, so iterating
+# resource-typed collections doesn't leak.
 from std.os import mem_live
 from std.collections import Vector
 
