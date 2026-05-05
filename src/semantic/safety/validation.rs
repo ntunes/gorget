@@ -158,6 +158,144 @@ pub(super) fn check_private_in_public(
 }
 
 /// Recursively check items, descending into `Item::Module` wrappers.
+// ─── Phase 4: Type-position usage walker for unused-import check ──────
+
+/// Walk every `Type` annotation reachable from the module's items and
+/// register the resolved DefId of each `Type::Named` into `out`. The resolver
+/// only inserts into `resolution_map` for expression-position uses
+/// (`Expr::Identifier`, `Expr::Path`, etc.); type annotations never enter
+/// the map. Without this walk, an import used ONLY as a type annotation
+/// would falsely warn as unused — snag #7 (2026-05-05).
+///
+/// Conservative: any module-scope-resolvable name in any reachable type
+/// position counts as a use. Walks via the shared `ExprVisitor` framework
+/// for stmt/expr recursion (so new Stmt/Expr variants are caught at compile
+/// time), with explicit type-position recursion for the type AST.
+pub(super) fn collect_used_type_def_ids(
+    items: &[Spanned<Item>],
+    scopes: &ScopeTable,
+    out: &mut rustc_hash::FxHashSet<DefId>,
+) {
+    use crate::parser::visitor::ExprVisitor;
+
+    struct TypeWalker<'a> {
+        scopes: &'a ScopeTable,
+        out: &'a mut rustc_hash::FxHashSet<DefId>,
+    }
+
+    impl<'a> TypeWalker<'a> {
+        fn walk_type(&mut self, ty: &Type) {
+            match ty {
+                Type::Named { name, generic_args } => {
+                    if let Some(def_id) = self.scopes.lookup(&name.node) {
+                        self.out.insert(def_id);
+                    }
+                    for arg in generic_args { self.walk_type(&arg.node); }
+                }
+                Type::Tuple(elems) => for e in elems { self.walk_type(&e.node); },
+                Type::Function { params, return_type, .. } => {
+                    for p in params { self.walk_type(&p.node); }
+                    self.walk_type(&return_type.node);
+                }
+                Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
+                    self.walk_type(&inner.node);
+                }
+                Type::Slice { element } => self.walk_type(&element.node),
+                Type::Array { element, .. } => self.walk_type(&element.node),
+                // Primitives, SelfType, Inferred — no named def to resolve.
+                Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
+            }
+        }
+    }
+
+    impl<'a> ExprVisitor for TypeWalker<'a> {
+        fn visit_stmt(&mut self, stmt: &Spanned<Stmt>) {
+            // Hook every type annotation reachable through statement-level syntax.
+            if let Stmt::VarDecl { type_, .. } = &stmt.node {
+                self.walk_type(&type_.node);
+            }
+            crate::parser::visitor::walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            match &expr.node {
+                Expr::Closure { params, .. } => {
+                    for p in params {
+                        if let Some(ty) = &p.node.type_ {
+                            self.walk_type(&ty.node);
+                        }
+                    }
+                }
+                Expr::Rethrow { error_binding: Some((ty, _)), .. } => {
+                    self.walk_type(&ty.node);
+                }
+                _ => {}
+            }
+            crate::parser::visitor::walk_expr(self, expr);
+        }
+    }
+
+    let mut walker = TypeWalker { scopes, out };
+
+    fn walk_func(walker: &mut TypeWalker, func: &FunctionDef) {
+        for p in &func.params { walker.walk_type(&p.node.type_.node); }
+        walker.walk_type(&func.return_type.node);
+        if let Some(throws) = &func.throws { walker.walk_type(&throws.node); }
+        match &func.body {
+            FunctionBody::Block(b) => walker.visit_block(b),
+            FunctionBody::Expression(e) => walker.visit_expr(e),
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+    }
+
+    fn walk_item(walker: &mut TypeWalker, item: &Item) {
+        match item {
+            Item::Function(func) => walk_func(walker, func),
+            Item::Struct(s) => for f in &s.fields { walker.walk_type(&f.node.type_.node); },
+            Item::Enum(e) => for v in &e.variants {
+                if let VariantFields::Tuple(fields) = &v.node.fields {
+                    for f in fields { walker.walk_type(&f.node); }
+                }
+            },
+            Item::TypeAlias(a) => walker.walk_type(&a.type_.node),
+            Item::Newtype(n) => walker.walk_type(&n.inner_type.node),
+            Item::ConstDecl(c) => {
+                walker.walk_type(&c.type_.node);
+                walker.visit_expr(&c.value);
+            }
+            Item::StaticDecl(s) => {
+                walker.walk_type(&s.type_.node);
+                walker.visit_expr(&s.value);
+            }
+            Item::Equip(eq) => {
+                walker.walk_type(&eq.type_.node);
+                if let Some(t) = &eq.trait_ { walker.walk_type(&t.trait_name.node); }
+                for m in &eq.items { walk_func(walker, &m.node); }
+            }
+            Item::Trait(t) => {
+                for ti in &t.items {
+                    if let TraitItem::Method(m) = &ti.node { walk_func(walker, m); }
+                }
+            }
+            Item::ExternBlock(eb) => {
+                for f in &eb.items { walk_func(walker, &f.node); }
+            }
+            Item::Test(t) => walker.visit_block(&t.body),
+            Item::Bench(b) => walker.visit_block(&b.body),
+            Item::SuiteSetup(s) => walker.visit_block(&s.body),
+            Item::SuiteTeardown(s) => walker.visit_block(&s.body),
+            Item::Module { items: inner, .. } => {
+                for sub in inner { walk_item(walker, &sub.node); }
+            }
+            _ => {}
+        }
+    }
+
+    for item in items {
+        walk_item(&mut walker, &item.node);
+    }
+}
+
 // ─── Phase 4: Unused Import Collection ──────────────────────
 
 /// Collect DefIds for imported names (non-recursive — only top-level imports,

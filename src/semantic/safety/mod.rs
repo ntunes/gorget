@@ -581,8 +581,16 @@ pub fn check_module(
     }
 
     // Phase 4: Unused import detection
-    // Collect imported DefIds from the AST, then check if they appear in resolution_map values.
-    let used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
+    // Collect imported DefIds from the AST, then check if they appear as
+    // either a value in `resolution_map` (expression-position uses — Identifier,
+    // Path, etc.) or as the resolved def of a Type annotation (function param
+    // types, variable type annotations, return types, struct/enum field types,
+    // generic args, etc.). The resolver only walks expressions; type annotations
+    // never insert into `resolution_map`. Without the type-walk, an import used
+    // ONLY as a type annotation would falsely warn — snag #7 from the
+    // JS-interpreter porting feedback (2026-05-05).
+    let mut used_def_ids: FxHashSet<DefId> = resolution_map.values().copied().collect();
+    collect_used_type_def_ids(&module.items, scopes, &mut used_def_ids);
     let mut imported_defs: Vec<(DefId, String, Span)> = Vec::new();
     collect_imported_defs(&module.items, scopes, &mut imported_defs);
     for (def_id, name, span) in &imported_defs {
@@ -685,7 +693,7 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
 }
 
 mod validation;
-use validation::{check_private_in_public, collect_imported_defs, infer_purity};
+use validation::{check_private_in_public, collect_imported_defs, collect_used_type_def_ids, infer_purity};
 
 #[cfg(test)]
 mod tests;
