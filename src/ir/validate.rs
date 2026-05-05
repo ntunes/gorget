@@ -919,10 +919,11 @@ pub enum ResourceMoveWarningKind {
         dst: LocalId,
         field_type_name: String,
     },
-    /// `IndexLoad { dst, base, index, borrow: false }` where the
-    /// element type is resource: produces a shallow alias of a
-    /// collection element. Phase C: must use `borrow: true` (LIR will
-    /// emit a borrow), or the upstream lowering must clone explicitly.
+    /// `IndexLoad { read: !Borrow }` where the element type is resource:
+    /// produces a shallow alias of a collection element. Phase C: must
+    /// use `read: ReadMode::Borrow` (LIR will emit a zero-copy view) or
+    /// the upstream lowering must explicitly request `ReadMode::Clone`
+    /// against an element-clone fn.
     ShallowReadOfResourceElement {
         dst: LocalId,
         elem_type_name: String,
@@ -1272,8 +1273,11 @@ fn check_index_load_reads(
 ) {
     for (b, bb) in func.blocks.iter().enumerate() {
         for (i, inst) in bb.instructions.iter().enumerate() {
-            let Instruction::IndexLoad { dst, base: _, index: _, borrow } = inst else { continue };
-            if *borrow { continue; }
+            let Instruction::IndexLoad { dst, base: _, index: _, read } = inst else { continue };
+            // Phase D5: ReadMode::Borrow == legacy `borrow: true` (zero-copy view);
+            // any other mode (Clone today; Copy/Move reserved) is value-shaped and
+            // therefore the shallow-read class.
+            if matches!(read, ReadMode::Borrow) { continue; }
             let dst_idx = dst.0 as usize;
             if dst_idx >= func.locals.len() { continue; }
             let dst_ty = func.locals[dst_idx].type_id;

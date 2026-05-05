@@ -139,9 +139,15 @@ pub enum Instruction {
         dst: LocalId,
         base: Place,
         index: Operand,
-        /// When true, the LIR emits a borrow (view) instead of a deep clone
-        /// for string elements. Used by for-loop iteration.
-        borrow: bool,
+        /// How the element flows out of the collection. Typed view of
+        /// [`ReadMode`] (Phase D5 / unified-resource-model.md §6.4):
+        /// * `Borrow` — zero-copy view (e.g. `gorget_string_borrow`),
+        ///   used by for-loop iteration over string-typed elements.
+        /// * `Clone` — deep clone via the element type's clone fn
+        ///   (the default). Used everywhere else.
+        /// Other variants (`Copy`, `Move`) are reserved; the LIR
+        /// currently only routes Borrow vs Clone for collection reads.
+        read: ReadMode,
     },
 
     /// Load a value by dereferencing a Ptr-typed local.

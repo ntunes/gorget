@@ -840,7 +840,7 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
-            Instruction::IndexLoad { dst, base, index, borrow } => {
+            Instruction::IndexLoad { dst, base, index, read } => {
                 // Determine base type name and index type to dispatch appropriately.
                 let base_type = self.effective_place_type(base);
                 let base_type_name = self.resolve_type_name(base_type);
@@ -1010,8 +1010,10 @@ impl<'a> FuncLowering<'a> {
                     let clone_fn = clone_fn_for_collection_element(elem_type_name, self.gir_types);
 
                     if let Some(clone_fn_name) = clone_fn {
-                        // Borrow mode: zero-copy view instead of clone for strings
-                        let actual_fn = if *borrow && clone_fn_name == "gorget_string_clone_to_owned" {
+                        // Borrow mode: zero-copy view instead of clone for strings.
+                        // ReadMode::Borrow at this site == legacy `borrow: true`.
+                        let is_borrow = matches!(read, crate::ir::instructions::ReadMode::Borrow);
+                        let actual_fn = if is_borrow && clone_fn_name == "gorget_string_clone_to_owned" {
                             "gorget_string_borrow".to_string()
                         } else {
                             clone_fn_name

@@ -229,11 +229,15 @@ impl FunctionBuilder {
     }
 
     pub fn index_load(&mut self, base: Place, index: Operand, type_id: TypeId) -> LocalId {
-        self.emit_with_temp(type_id, |dst| Instruction::IndexLoad { dst, base, index, borrow: false })
+        self.emit_with_temp(type_id, |dst| Instruction::IndexLoad {
+            dst, base, index, read: ReadMode::Clone,
+        })
     }
 
     pub fn index_load_borrow(&mut self, base: Place, index: Operand, type_id: TypeId) -> LocalId {
-        self.emit_with_temp(type_id, |dst| Instruction::IndexLoad { dst, base, index, borrow: true })
+        self.emit_with_temp(type_id, |dst| Instruction::IndexLoad {
+            dst, base, index, read: ReadMode::Borrow,
+        })
     }
 
     pub fn load_ref(&mut self, src: Place, type_id: TypeId) -> LocalId {
