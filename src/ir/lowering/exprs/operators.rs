@@ -172,12 +172,12 @@ pub(super) fn lower_binary_op(
             FunctionBuilder::copy(dst)
         }
 
-        // String concatenation: use gorget_str_cat (returns GorgetString, not Str)
+        // String concatenation: use gorget_str_cat (returns GorgetString, not Str).
+        // `call_extern_tracked` already tags the result as fresh via the typed
+        // `RuntimeSig.returns_fresh` flag on `RuntimeFn::StrCat`.
         AstOp::Add if is_string => {
             let owned_type = ctx.type_mapper.owned_string_type;
             let dst = ctx.call_extern_tracked(builder, "gorget_str_cat", vec![lhs, rhs], owned_type);
-            // gorget_str_cat always allocates a fresh buffer.
-            ctx.func_state.fresh_string_locals.insert(dst);
             FunctionBuilder::copy(dst)
         }
 
