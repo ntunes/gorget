@@ -206,9 +206,6 @@ pub struct FunctionState {
     /// True when the current method has `!self` (consuming self). Field loads
     /// from self use MoveZeroSource for resource fields instead of Ptr borrows.
     pub consuming_self: bool,
-    /// TupleInit element origins: tuple_local → Vec<element_local_ids>.
-    /// Used by the return path to MoveZero element locals when returning a tuple.
-    pub tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>,
     /// CoW borrow provenance: maps a CowBorrow local to the collection it
     /// borrows from. Propagated through .get() → Option → .unwrap() chain.
     /// Used by VarDecl to set CollectionRef with the correct source.

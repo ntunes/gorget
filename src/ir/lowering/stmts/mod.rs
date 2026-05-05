@@ -1335,20 +1335,15 @@ fn lower_return(
                         // the element locals, both the return tuple and the locals
                         // own the same heap data → double-free at scope exit.
                         //
-                        // Phase D migration: union the typed walk over
-                        // `LocalOwnership::Borrowed { TupleElement { tuple, .. } }`
-                        // with the legacy sidecar. The typed side covers anonymous
-                        // temps tagged at TupleInit; the sidecar still covers named
-                        // locals that retained their pre-existing ownership state.
-                        let mut elem_locals: Vec<LocalId> =
+                        // Phase D §6.3: typed walk over
+                        // `Borrowed { TupleElement { tuple, .. } }`. The
+                        // sidecar `tuple_element_locals` is retired; the
+                        // writer at `Inst::TupleInit` perf-gates on
+                        // `needs_drop(elem_ty)` so this walk only finds
+                        // droppable element sources (which is exactly
+                        // what the MoveZero loop below filters for).
+                        let elem_locals: Vec<LocalId> =
                             ctx.tuple_element_sources(place.local);
-                        if let Some(side) = ctx.func_state.tuple_element_locals.get(&place.local) {
-                            for &el in side {
-                                if !elem_locals.contains(&el) {
-                                    elem_locals.push(el);
-                                }
-                            }
-                        }
                         for elem_local in elem_locals {
                             if elem_local != LocalId(0)
                                 && !ctx.drops.is_moved(elem_local)
