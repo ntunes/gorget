@@ -347,14 +347,13 @@ pub enum LocalOwnership {
     /// Value-aliasing shallow copy: the local IS its own owned slot at
     /// runtime (32-byte GorgetString struct, NOT a Ptr) but its heap
     /// data is shared with `source` (`String b = a` shape). Flushes to
-    /// the same slot kind as Owned (so SlotKind/ABI routing keeps the
-    /// value layout intact); however the local participates in
-    /// `views_of_source(source)` queries so source mutation triggers
-    /// materialization (clone the shared heap into a fresh buffer) —
-    /// exactly like a View, but without changing the runtime shape.
-    /// Phase D4 retirement attempt #2 (additive, 2026-05-05): kept
-    /// alongside the legacy `string_borrow_sources` sidecar to allow
-    /// progressive migration without destabilising self_host_bootstrap.
+    /// the same slot kind as Owned so SlotKind/ABI routing keeps the
+    /// value layout intact; the local participates in
+    /// `shared_heap_aliases_of_source(source)` so source mutation can
+    /// invalidate the tag, and in `has_string_borrowers(source)` so
+    /// return paths know to clone. Sole source of truth for the
+    /// `String b = a` shape — the legacy `string_borrow_sources` sidecar
+    /// was retired 2026-05-05 (Phase D4 attempt #3 Phase 3).
     SharedHeap { source: LocalId },
     /// Started borrowed, may have been materialized on some paths.
     /// Conditional drop guard via the existing memcmp-zero mechanism.

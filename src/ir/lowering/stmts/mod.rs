@@ -542,17 +542,13 @@ fn lower_var_decl(
                         && ctx.is_named_local(place.local)
                     {
                         ctx.drops.unregister(place.local);
-                        // Phase D4 additive (2026-05-05): tag target as a
-                        // value-aliasing shallow copy AND mark the source in
-                        // the legacy sidecar. SharedHeap flushes to a
-                        // Value-typed slot (same as Owned) so SlotKind/ABI
-                        // routing keeps the 32-byte struct layout intact;
-                        // the sidecar still drives `has_string_borrowers`.
-                        // Both shapes coexist during the migration so any
-                        // downstream regression bisects to whichever read is
-                        // load-bearing rather than the writer change.
+                        // Phase D4 (2026-05-05): tag target as a
+                        // value-aliasing shallow copy. SharedHeap flushes
+                        // to a Value-typed slot (same as Owned) so
+                        // SlotKind/ABI routing keeps the 32-byte struct
+                        // layout intact; `has_string_borrowers` reads
+                        // SharedHeap typed state directly.
                         ctx.set_shared_heap(local_id, place.local);
-                        ctx.mark_string_borrow_source(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
                     // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
