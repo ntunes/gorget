@@ -235,6 +235,31 @@ pub struct FunctionState {
     /// NOT set for struct inits, field loads, or pattern extracts (these may share
     /// string data with the source). Used by the return path to skip redundant clones.
     pub fresh_string_locals: rustc_hash::FxHashSet<LocalId>,
+    /// Locals that have been borrowed-from via the string Borrow assignment
+    /// path (`String b = a` unregisters `a`, shallow-copies to `b`).
+    /// A local in this set has at least one other local sharing its heap data.
+    /// Used by the return path: if the returned named local is NOT in this set,
+    /// its string data is not shared → safe to move without cloning.
+    ///
+    /// **Phase D4 retirement attempt (2026-05-04, reverted).** The doc maps this
+    /// sidecar to `LocalOwnershipState::ViewOf { source }`. Probe outcome:
+    /// genuine gating — ViewOf flushes to `OwnershipState::MaybeBorrowed`,
+    /// which the LIR backend's `lower_place_addr` treats as a Ptr ABI
+    /// (`SlotLoad → void*` instead of `SlotAddr → Str*`). Tagging Branch A's
+    /// value-type LHS (a 32-byte GorgetString slot holding a shallow copy of
+    /// the source's `{data, cap, len, alloc}`) as ViewOf produces a slot/local
+    /// type mismatch in C codegen ("incompatible types when assigning to type
+    /// 'void *' from type 'Str'"). The structural difference: ViewOf models
+    /// cap=0 byte-slice views (a Str whose data field points into another
+    /// buffer), whereas this sidecar tracks value-aliasing — a full struct
+    /// copy that shares the heap region with the source. Both answer "if I
+    /// return X, must I clone?" but model different invariants. Retirement
+    /// requires either: (a) `flush_ownership_to_locals` leaving ViewOf as
+    /// Owned for value-typed Str locals, or (b) a separate
+    /// `LocalOwnershipState::SharedHeap { other }` variant that flushes to
+    /// Owned but propagates the same return-path signal. See TODO entry on
+    /// CoW materialization for related work.
+    pub string_borrow_sources: rustc_hash::FxHashSet<LocalId>,
     /// When true, pattern extraction of string fields skips cloning because
     /// the scrutinee is dead and BOTH the scrutinee copy AND the original
     /// variable will be MoveZeroed after extraction. Set by lower_match_stmt.
@@ -1810,17 +1835,15 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local has been borrowed-from via string Borrow assignment.
     /// If true, another local shares its heap data → clone needed on return.
-    /// Phase D4: reads typed state — any local tagged
-    /// `LocalOwnership::View { RuntimeView(local) }` or
-    /// `LocalOwnership::SharedHeap { source: local }` counts as a
-    /// borrower. Replaces the `string_borrow_sources` sidecar.
     pub fn has_string_borrowers(&self, local: LocalId) -> bool {
-        use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.values().any(|state| match state {
-            LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } => *s == local,
-            LocalOwnership::SharedHeap { source } => *source == local,
-            _ => false,
-        })
+        self.func_state.string_borrow_sources.contains(&local)
+    }
+
+    /// Mark a local as the source of a string Borrow assignment (`String b = a`).
+    /// The target shares the source's heap data, so subsequent uses of the
+    /// source — particularly `return source` — must clone.
+    pub fn mark_string_borrow_source(&mut self, local: LocalId) {
+        self.func_state.string_borrow_sources.insert(local);
     }
 
     /// Reset all callable-return-type tracking. Called at function-boundary
@@ -1993,33 +2016,16 @@ impl<'a> LoweringContext<'a> {
         );
     }
 
-    /// Mark a local as a value-aliasing shallow copy of `source` (the
-    /// `String b = a` shape). The local IS its own owned slot at runtime
-    /// — same shape as Owned for SlotKind / ABI / drop routing — but its
-    /// heap data is shared with `source`. Source mutation triggers
-    /// materialization through the same `views_of_source` path that
-    /// cap=0 byte-slice views use.
-    pub fn set_shared_heap(&mut self, local: LocalId, source: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::SharedHeap { source }
-        );
-    }
-
-    /// Find all locals that share heap data with `source`. Phase D:
-    /// returns both `View { RuntimeView(source) }` (cap=0 byte-slice
-    /// views, structurally Ptr) and `SharedHeap { source }` (shallow
-    /// shadow copies, structurally Owned). Both invalidate on source
-    /// mutation; the materialize path clones their heap into a fresh
-    /// owned buffer.
+    /// Find all locals that are views of `source`. Phase D: reads v2.
     pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
         self.func_state.local_ownership.iter()
-            .filter_map(|(local, state)| match state {
-                LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source
-                    => Some(*local),
-                LocalOwnership::SharedHeap { source: s } if *s == source
-                    => Some(*local),
-                _ => None,
+            .filter_map(|(local, state)| {
+                if matches!(state, LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source) {
+                    Some(*local)
+                } else {
+                    None
+                }
             })
             .collect()
     }
