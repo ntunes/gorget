@@ -13873,12 +13873,12 @@ true
 10
 42
 10
-1
-0
-0
-1
-0
-1
+true
+false
+false
+true
+false
+true
 0:10
 1:20
 2:30
@@ -14857,8 +14857,8 @@ fn test_higher_order_named_fn() {
 4
 10
 10
-1
-0
+true
+false
 1
 2
 3
@@ -15129,13 +15129,13 @@ HELLO
 apple
 banana
 cherry
-1
-0
+true
+false
 true
 0
 true
-0
-1
+false
+true
 0
 42
 true
@@ -15165,21 +15165,14 @@ true
 }
 
 #[test]
-#[ignore]
 fn vector_any_all_bool() {
-    // Pre-existing codegen bug noted in test_vector_edge_cases.gg's
-    // header: .any() / .all() return int (printing 1/0) instead of
-    // bool (true/false). The original fixture documents the bug but
-    // deliberately doesn't exercise either method.
-    //
-    // Root cause: src/ir/lowering/builtins.rs declares Vector.any /
+    // Regression test for the .any() / .all() int-vs-bool bug.
+    // Root cause: src/ir/lowering/builtins.rs declared Vector.any /
     // Vector.all (and the Dict / Set equivalents) with
     // `return_type: ret_int`, shadowing the user-space trait method
-    // `bool any[F]` / `bool all[F]` in lib/std/iter.gg.
-    //
-    // Marked #[ignore] so the suite stays green; remove when codegen
-    // is fixed. Run with:
-    //   cargo test --test integration -- --ignored vector_any_all_bool
+    // `bool any[F]` / `bool all[F]` in lib/std/iter.gg, so f-string
+    // interpolation printed `1`/`0` instead of `true`/`false`.
+    // Fixed by swapping to `ret_bool` at six call sites.
     run_gg(
         "vector_any_all_bool.gg",
         "\
@@ -15373,10 +15366,10 @@ fn test_vector_float_higher_order() {
 2.720000
 6.280000
 2.820000
-1
-1
-0
-0
+true
+true
+false
+false
 7.270000
 0.500000
 1.410000
@@ -15524,10 +15517,10 @@ WORLD
 HI
 GORGET
 helloworldhigorget
-1
-1
-0
-0
+true
+true
+false
+false
 gorget
 hello
 hi
@@ -15552,10 +15545,10 @@ true
 true
 1
 false
-1
-0
-1
-1
+true
+false
+true
+true
 true
 3
 true
@@ -15565,8 +15558,8 @@ false
 true
 0
 true
-0
-1
+false
+true
 true
 false
 true

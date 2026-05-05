@@ -52,18 +52,16 @@ void main():
     vb.push(true)
     vb.push(false)
     vb.push(true)
-    # BUG: any/all on Vector[bool] returns int (prints 1/0 not true/false)
-    print(vb.any((b): b))                   # 1
-    print(vb.all((b): b))                   # 0
+    print(vb.any((b): b))                   # true
+    print(vb.all((b): b))                   # false
     print(vb.contains(false))               # true
 
     # === Empty vector operations ===
     Vector[int] empty = Vector[int]()
     print(empty.len())                      # 0
     print(empty.is_empty())                 # true
-    # BUG: any/all returns int not bool
-    print(empty.any((x): x > 0))            # 0
-    print(empty.all((x): x > 0))            # 1
+    print(empty.any((x): x > 0))            # false
+    print(empty.all((x): x > 0))            # true
 
     Vector[int] ef = empty.filter((x): x > 0)
     print(ef.len())                         # 0

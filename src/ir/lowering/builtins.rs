@@ -278,8 +278,8 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "enumerate", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_int },
         BuiltinMethodDecl { name: "reduce", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
-        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
-        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
+        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
+        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         // `each` migrated to user-space `equip [T] Vector[T]: void each[F]
         // (&self, F f): self.iter().for_each[F](f)` — see lib/std/iter.gg.
         // The BIR HofOp::Each variant stays for Dict.each / Set.each.
@@ -351,8 +351,8 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.key, a.val], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_int },
-        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_int },
+        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_bool },
+        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "update", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
         // Note: Dict.map was never implemented in any backend (stub read
         // "TODO not yet implemented"); no fixture or stdlib caller
@@ -412,8 +412,8 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.elem], return_type: ret_int },
         BuiltinMethodDecl { name: "each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
-        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
-        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
+        BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
+        BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         // Note: Set.map was never implemented (TODO stub); see comment
         // on Dict.map above for rationale.
     ],
