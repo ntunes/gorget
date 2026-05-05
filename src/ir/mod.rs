@@ -344,6 +344,15 @@ pub enum LocalOwnership {
     /// materialized (cloned to owned). Source mutation triggers the
     /// materialize.
     View { source: BorrowOrigin },
+    /// Value-aliasing shallow copy: the local IS its own owned slot at
+    /// runtime (32-byte GorgetString struct, NOT a Ptr) but its heap
+    /// data is shared with `source` (`String b = a` shape). Flushes to
+    /// `Owned` so SlotKind/ABI routing keeps the value layout intact;
+    /// however the local participates in `views_of_source(source)`
+    /// queries so source mutation triggers materialization (clone the
+    /// shared heap into a fresh buffer) — exactly like a View, but
+    /// without changing the runtime shape.
+    SharedHeap { source: LocalId },
     /// Started borrowed, may have been materialized on some paths.
     /// Conditional drop guard via the existing memcmp-zero mechanism.
     /// Today's `OwnershipState::MaybeBorrowed` — kept until Phase C
@@ -355,8 +364,10 @@ impl LocalOwnership {
     /// Whether this state represents a borrowed Ptr reference (not owned).
     /// Used by LIR-level SlotLoad routing: anything not Owned is a Ptr at
     /// runtime. Returns true for Borrowed, View, and MaybeOwned.
+    /// SharedHeap returns false: it IS owned at runtime (32-byte value
+    /// struct in its own slot) — only the heap data behind it is shared.
     pub fn is_ref(&self) -> bool {
-        !matches!(self, LocalOwnership::Owned)
+        !matches!(self, LocalOwnership::Owned | LocalOwnership::SharedHeap { .. })
     }
 
     /// Whether this is a "pure" borrow with no chance of being materialized.
