@@ -1,6 +1,5 @@
 # Vector edge cases: different elem types, empty collections, boundaries, chaining
-# Remaining known bugs:
-#   - any/all returns int not bool (prints 1/0 instead of true/false)
+# Companion fixture vector_any_all_bool.gg covers .any()/.all() return-type bug.
 
 void main():
     # === Vector[String] ===

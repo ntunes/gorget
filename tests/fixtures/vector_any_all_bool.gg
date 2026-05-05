@@ -1,0 +1,26 @@
+# Regression: Vector.any() / Vector.all() return int instead of bool.
+#
+# Documented (but never exercised) in test_vector_edge_cases.gg's header.
+# The GIR builtin decls for Vector.any / Vector.all in
+# src/ir/lowering/builtins.rs use `return_type: ret_int`, which shadows
+# the user-space trait method `bool any[F]` / `bool all[F]` declared in
+# lib/std/iter.gg. F-string interpolation distinguishes bool from int:
+# bool prints as "true"/"false"; int prints as "1"/"0".
+#
+# Wired #[ignore]d in tests/integration.rs (vector_any_all_bool); the
+# expected output below is what the language SHOULD print once the
+# builtin return_type is fixed to bool.
+
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+
+    print(f"any_even: {v.any((x): x % 2 == 0)}")
+    print(f"all_pos:  {v.all((x): x > 0)}")
+    print(f"any_neg:  {v.any((x): x < 0)}")
+    print(f"all_even: {v.all((x): x % 2 == 0)}")
+
+    Vector[String] vs = ["foo", "bar", "baz"]
+    print(f"any_long: {vs.any((s): s.len() > 3)}")
+    print(f"all_long: {vs.all((s): s.len() == 3)}")
+
+    print("done")

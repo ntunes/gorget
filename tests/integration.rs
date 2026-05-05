@@ -15165,6 +15165,35 @@ true
 }
 
 #[test]
+#[ignore]
+fn vector_any_all_bool() {
+    // Pre-existing codegen bug noted in test_vector_edge_cases.gg's
+    // header: .any() / .all() return int (printing 1/0) instead of
+    // bool (true/false). The original fixture documents the bug but
+    // deliberately doesn't exercise either method.
+    //
+    // Root cause: src/ir/lowering/builtins.rs declares Vector.any /
+    // Vector.all (and the Dict / Set equivalents) with
+    // `return_type: ret_int`, shadowing the user-space trait method
+    // `bool any[F]` / `bool all[F]` in lib/std/iter.gg.
+    //
+    // Marked #[ignore] so the suite stays green; remove when codegen
+    // is fixed. Run with:
+    //   cargo test --test integration -- --ignored vector_any_all_bool
+    run_gg(
+        "vector_any_all_bool.gg",
+        "\
+any_even: true
+all_pos:  true
+any_neg:  false
+all_even: false
+any_long: false
+all_long: true
+done",
+    );
+}
+
+#[test]
 fn test_vector_of_structs() {
     run_gg(
         "test_vector_of_structs.gg",
