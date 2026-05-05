@@ -74,21 +74,47 @@ pub enum Constant {
     GlobalRefPtr(String),
 }
 
-/// How an assignment transfers ownership.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AssignMode {
+/// How a value is read at a use site (the *unified* read-mode discipline,
+/// per `docs/internals/unified-resource-model.md` §6.4).
+///
+/// Replaces the four previously-parallel per-instruction read mode enums
+/// (`AssignMode`, `FieldLoadMode`, `IndexLoad.borrow: bool`, `ArgOwnership`)
+/// with a single canonical vocabulary. Existing instructions keep their
+/// shape — typed views (e.g. `AssignMode = ReadMode`, `IndexLoad.read`)
+/// alias into this enum so the validator and the readers share one rule.
+///
+/// The four cases are mechanical:
+/// * `Copy` — bitwise copy. Validator: source must be a trivial type.
+/// * `Move` — consume the source (last-use, source becomes dead after).
+/// * `Clone` — deep clone via the type's clone fn (Phase A metadata).
+/// * `Borrow` — destination is a reference / view; source stays live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadMode {
     /// Bitwise copy — trivial types (int, bool, float, simple structs).
+    /// Validator: source type MUST have `CopySemantics::Trivial`.
     Copy,
     /// Transfer ownership — source is consumed (zeroed after copy).
     /// Used for temp→variable assignments where the temp is no longer needed.
+    /// Validator: source must own AND be at last use.
     Move,
     /// Deep clone — creates an independent copy of resource-type data.
     /// Used for variable→variable assignments where both must remain valid.
+    /// Validator: source's type must expose a clone fn (Phase A metadata).
     Clone,
-    /// Borrow as Ptr — source stays alive, destination is a reference.
-    /// Used when a Ptr(T) value is assigned without dereferencing.
+    /// Borrow / view — source stays alive, destination is a reference.
+    /// Used when a Ptr(T) value is assigned without dereferencing, when an
+    /// `IndexLoad` returns a zero-copy view, etc.
     Borrow,
 }
+
+/// Typed view of [`ReadMode`] for the `Assign` instruction (`dst = mode value`).
+///
+/// Kept as a type alias rather than a wrapper struct because every existing
+/// emission and consumer site already uses `AssignMode::{Copy,Move,Clone,Borrow}`
+/// with no behaviour distinct from the unified vocabulary; the alias preserves
+/// the migration-friendly name while folding the semantics into one source of
+/// truth. See `docs/internals/unified-resource-model.md` §6.4.
+pub type AssignMode = ReadMode;
 
 /// Instructions that don't transfer control flow.
 #[derive(Debug, Clone, PartialEq)]
