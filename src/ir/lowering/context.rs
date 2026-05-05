@@ -2047,19 +2047,39 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Find all locals that are views of `source`. Phase D: reads v2.
-    /// Phase D4 additive (2026-05-05): SharedHeap targets are NOT
-    /// included here — value-aliasing shadow copies are independent
-    /// 32-byte slots that don't need materialisation when the source
-    /// mutates (their heap is already deep-cloned at the
-    /// `gorget_string_copy_cow` boundary). Including them would force
-    /// extra clones at every source mutation site and break the
-    /// downstream slot-allocation expectations that the legacy
-    /// `string_borrow_sources` sidecar implicitly relied on.
+    /// View-only — SharedHeap targets use `shared_heap_aliases_of_source`.
+    /// View entries materialise via `cow_materialize_view` (cap=0 byte
+    /// slice → cloned to owned buffer). SharedHeap entries are
+    /// independent 32-byte slots whose heap was already deep-cloned at
+    /// the `gorget_string_copy_cow` boundary; running them through
+    /// `cow_materialize_view` would emit a redundant clone-to-owned and
+    /// shift slot indices in self-host driver compilation.
     pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
         self.func_state.local_ownership.iter()
             .filter_map(|(local, state)| {
                 if matches!(state, LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source) {
+                    Some(*local)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Find all locals that are SharedHeap value-aliases of `source`.
+    /// Sibling to `views_of_source` but for the value-aliasing shape
+    /// (`String b = a` → `b` is a 32-byte struct copy whose heap data
+    /// the runtime CoW path shares with `a`). Source-mutation
+    /// invalidation drops the SharedHeap tag (downgrades to plain
+    /// drop-tracking via `unset_ownership`) — it does NOT call
+    /// `cow_materialize_view`, because the heap is already deep-owned
+    /// at the slot.
+    pub fn shared_heap_aliases_of_source(&self, source: LocalId) -> Vec<LocalId> {
+        use crate::ir::LocalOwnership;
+        self.func_state.local_ownership.iter()
+            .filter_map(|(local, state)| {
+                if matches!(state, LocalOwnership::SharedHeap { source: s } if *s == source) {
                     Some(*local)
                 } else {
                     None
@@ -2317,6 +2337,17 @@ impl<'a> LoweringContext<'a> {
             self.unset_ownership(view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
+
+        // Case 5: local has SharedHeap value-aliases → drop their tag.
+        // The aliases are independent 32-byte struct slots whose heap
+        // was already deep-cloned at the `gorget_string_copy_cow`
+        // boundary, so no IR-level materialise is needed — only the
+        // typed-state invalidation so source-mutation isn't blocked by
+        // a stale alias tag pointing at a re-used slot.
+        let shared_aliases = self.shared_heap_aliases_of_source(local);
+        for alias_local in shared_aliases {
+            self.unset_ownership(alias_local);
+        }
     }
 
     /// Before mutating a field-accessed collection (e.g., `self.data.push(x)`),
@@ -2364,6 +2395,12 @@ impl<'a> LoweringContext<'a> {
         for view_local in views {
             self.unset_ownership(view_local);
             self.cow_materialize_view(builder, view_local, span);
+        }
+        // Drop SharedHeap value-aliases — heap already deep-cloned at the
+        // shallow-copy boundary; no IR-level materialise needed.
+        let shared_aliases = self.shared_heap_aliases_of_source(source_local);
+        for alias_local in shared_aliases {
+            self.unset_ownership(alias_local);
         }
     }
 
