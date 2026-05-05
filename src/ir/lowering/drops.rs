@@ -266,6 +266,54 @@ impl DropElaborator {
         }
     }
 
+    /// Snapshot all `maybe_moved` flags across every live scope.
+    ///
+    /// Used by branch lowerings (`lower_if`, `lower_match`, etc.) to restore the
+    /// pre-branch view of which locals have been moved before lowering each
+    /// alternative branch — without this, a `mark_moved(_6)` in the then-branch
+    /// pollutes the elif-branch's view (`is_moved(_6) == true`), causing the
+    /// elif-branch's `f.b = items` field-store to skip the required
+    /// `move_zero _6` and leak the heap allocation through to scope-exit drop.
+    /// See snag #8 (2026-05-05).
+    pub fn snapshot_moved(&self) -> Vec<(usize, usize, bool)> {
+        let mut out = Vec::new();
+        for (sidx, scope) in self.scopes.iter().enumerate() {
+            for (eidx, entry) in scope.entries.iter().enumerate() {
+                out.push((sidx, eidx, entry.maybe_moved));
+            }
+        }
+        out
+    }
+
+    /// Restore `maybe_moved` flags from a snapshot. Entries added since the
+    /// snapshot keep their current `maybe_moved` (they're newer than the
+    /// snapshot frame). Use after a branch finishes to drop branch-local
+    /// move tracking before the next alternative branch.
+    pub fn restore_moved(&mut self, snapshot: &[(usize, usize, bool)]) {
+        for &(sidx, eidx, was_moved) in snapshot {
+            if let Some(scope) = self.scopes.get_mut(sidx) {
+                if let Some(entry) = scope.entries.get_mut(eidx) {
+                    entry.maybe_moved = was_moved;
+                }
+            }
+        }
+    }
+
+    /// Union the `maybe_moved` flags from a post-branch snapshot into the
+    /// current state. Conservative join: if any branch moved a local, the
+    /// post-join state treats it as maybe-moved (drops use DropIfAlive). Use
+    /// after restoring + lowering each branch to merge their move sets.
+    pub fn union_moved(&mut self, branch_snapshot: &[(usize, usize, bool)]) {
+        for &(sidx, eidx, branch_moved) in branch_snapshot {
+            if !branch_moved { continue; }
+            if let Some(scope) = self.scopes.get_mut(sidx) {
+                if let Some(entry) = scope.entries.get_mut(eidx) {
+                    entry.maybe_moved = true;
+                }
+            }
+        }
+    }
+
     /// Update the recorded type for a local after type re-inference.
     ///
     /// Called in VarDecl when `auto` or closure types are re-inferred after lowering

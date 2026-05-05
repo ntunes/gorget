@@ -134,6 +134,16 @@ pub(super) fn lower_match_stmt(
 
     let merge_bb = builder.new_block();
 
+    // Snapshot the pre-branch `maybe_moved` flags so each arm sees the same
+    // starting view — match arms are mutually exclusive at the language level,
+    // so a `mark_moved(_x)` in one arm must not leak into the next arm's
+    // lowering. Mirrors `lower_if`'s fix for snag #8 (2026-05-05). Without
+    // this, a sequence of arms that each move the same local into a different
+    // field would only emit `move_zero` on the first arm — leaving the
+    // others with a heap double-drop at scope exit.
+    let pre_branch_moved = ctx.drops.snapshot_moved();
+    let mut post_branch_snapshots: Vec<Vec<(usize, usize, bool)>> = Vec::new();
+
     // Process each arm as a test-body chain (MetaFor items are always expanded before lowering)
     let concrete_arms: Vec<&ast::MatchArm> = arms.iter().filter_map(|i| i.arm()).collect();
     for (i, arm) in concrete_arms.iter().enumerate() {
@@ -200,6 +210,9 @@ pub(super) fn lower_match_stmt(
             ctx.restore_locals(builder, saved_arm);
         }
 
+        post_branch_snapshots.push(ctx.drops.snapshot_moved());
+        ctx.drops.restore_moved(&pre_branch_moved);
+
         builder.switch_to(next_test_bb);
     }
 
@@ -215,6 +228,13 @@ pub(super) fn lower_match_stmt(
             builder.jump(merge_bb);
         }
         ctx.restore_locals(builder, saved_else);
+        post_branch_snapshots.push(ctx.drops.snapshot_moved());
+        ctx.drops.restore_moved(&pre_branch_moved);
+    }
+
+    // Conservative join: union each arm's moves into the post-match state.
+    for snap in &post_branch_snapshots {
+        ctx.drops.union_moved(snap);
     }
 
     builder.switch_to(merge_bb);

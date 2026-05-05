@@ -1474,6 +1474,17 @@ fn lower_if(
 
     builder.branch(cond, then_bb, first_else_bb);
 
+    // Snapshot the pre-branch `maybe_moved` flags so each alternative branch
+    // sees the same starting view of which locals have been moved. Without
+    // this, `mark_moved` calls in the then-branch leak into the elif/else
+    // lowering and cause the elif's field-store/move logic to skip the
+    // required move_zero — leading to a heap double-drop at scope exit (snag #8,
+    // 2026-05-05). After all branches finish we union their post-branch
+    // snapshots into the current state — conservative join, matching the
+    // borrow-checker's branch-merging semantics.
+    let pre_branch_moved = ctx.drops.snapshot_moved();
+    let mut post_branch_snapshots: Vec<Vec<(usize, usize, bool)>> = Vec::new();
+
     // Then branch
     builder.switch_to(then_bb);
     let saved_then = ctx.save_locals(builder);
@@ -1489,6 +1500,8 @@ fn lower_if(
         builder.jump(merge_bb);
     }
     ctx.restore_locals(builder, saved_then);
+    post_branch_snapshots.push(ctx.drops.snapshot_moved());
+    ctx.drops.restore_moved(&pre_branch_moved);
 
     // Elif branches
     let mut current_else_bb = first_else_bb;
@@ -1517,6 +1530,8 @@ fn lower_if(
             builder.jump(merge_bb);
         }
         ctx.restore_locals(builder, saved_elif);
+        post_branch_snapshots.push(ctx.drops.snapshot_moved());
+        ctx.drops.restore_moved(&pre_branch_moved);
 
         current_else_bb = next_else_bb;
     }
@@ -1534,6 +1549,13 @@ fn lower_if(
             builder.jump(merge_bb);
         }
         ctx.restore_locals(builder, saved_else);
+        post_branch_snapshots.push(ctx.drops.snapshot_moved());
+        ctx.drops.restore_moved(&pre_branch_moved);
+    }
+
+    // Conservative join: union each branch's moves into the post-if state.
+    for snap in &post_branch_snapshots {
+        ctx.drops.union_moved(snap);
     }
 
     builder.switch_to(merge_bb);
