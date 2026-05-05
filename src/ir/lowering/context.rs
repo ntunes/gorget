@@ -1843,6 +1843,19 @@ impl<'a> LoweringContext<'a> {
         self.func_state.string_borrow_sources.insert(local);
     }
 
+    /// Mark a local as a value-aliasing shallow copy of `source` (the
+    /// `String b = a` shape). Phase D4 additive: typed companion to
+    /// `mark_string_borrow_source(source)` — both are populated in
+    /// transition. SharedHeap flushes to a Value-typed slot (same as
+    /// Owned) but participates in `views_of_source(source)` so source
+    /// mutation triggers materialisation through the same path that
+    /// cap=0 byte-slice views use.
+    pub fn set_shared_heap(&mut self, local: LocalId, source: LocalId) {
+        self.func_state.local_ownership.insert(local,
+            crate::ir::LocalOwnership::SharedHeap { source }
+        );
+    }
+
     /// Reset all callable-return-type tracking. Called at function-boundary
     /// entry; per-function transient state.
     pub fn callable_return_types_clear(&mut self) {
@@ -2034,6 +2047,14 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Find all locals that are views of `source`. Phase D: reads v2.
+    /// Phase D4 additive (2026-05-05): SharedHeap targets are NOT
+    /// included here — value-aliasing shadow copies are independent
+    /// 32-byte slots that don't need materialisation when the source
+    /// mutates (their heap is already deep-cloned at the
+    /// `gorget_string_copy_cow` boundary). Including them would force
+    /// extra clones at every source mutation site and break the
+    /// downstream slot-allocation expectations that the legacy
+    /// `string_borrow_sources` sidecar implicitly relied on.
     pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
         self.func_state.local_ownership.iter()

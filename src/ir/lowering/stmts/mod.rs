@@ -542,21 +542,16 @@ fn lower_var_decl(
                         && ctx.is_named_local(place.local)
                     {
                         ctx.drops.unregister(place.local);
-                        // Track that the source has been borrowed-from.
-                        // If we later `return source`, the clone is needed because
-                        // the target shares the source's heap data.
-                        //
-                        // Cannot use the typed `set_view_of(local_id, place.local)`
-                        // channel here: ViewOf flushes to OwnershipState::MaybeBorrowed
-                        // which the LIR backend treats as Ptr ABI (SlotLoad → void*).
-                        // The LHS here is a value-type GorgetString slot (32-byte
-                        // shallow copy that aliases source's heap data) — NOT a Ptr.
-                        // Tagging it ViewOf produces a slot/local-type mismatch in
-                        // C codegen ("incompatible types when assigning to type
-                        // 'void *' from type 'Str'"). ViewOf models cap=0 string
-                        // views (true byte-pointer slices into another buffer),
-                        // which are a different structural shape than this
-                        // value-aliasing case.
+                        // Phase D4 additive (2026-05-05): tag target as a
+                        // value-aliasing shallow copy AND mark the source in
+                        // the legacy sidecar. SharedHeap flushes to a
+                        // Value-typed slot (same as Owned) so SlotKind/ABI
+                        // routing keeps the 32-byte struct layout intact;
+                        // the sidecar still drives `has_string_borrowers`.
+                        // Both shapes coexist during the migration so any
+                        // downstream regression bisects to whichever read is
+                        // load-bearing rather than the writer change.
+                        ctx.set_shared_heap(local_id, place.local);
                         ctx.mark_string_borrow_source(place.local);
                         assign_mode = AssignMode::Borrow;
                     }
@@ -753,8 +748,16 @@ fn lower_var_decl(
 
             // Propagate ownership: if RHS local owned its data (call result),
             // the new local also owns the data (via move or clone).
+            // Skip if target is already SharedHeap (Branch A's value-aliasing
+            // shape carries source provenance — Owned would erase it and
+            // break has_string_borrowers / views_of_source queries).
             if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if ctx.is_owned_local(p.local) {
+                if ctx.is_owned_local(p.local)
+                    && !matches!(
+                        ctx.func_state.local_ownership.get(&local_id),
+                        Some(crate::ir::LocalOwnership::SharedHeap { .. })
+                    )
+                {
                     ctx.set_owned(local_id);
                 }
             }
