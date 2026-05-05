@@ -1360,6 +1360,8 @@ fn lower_return(
         }
         // For move-overridden generic params: zero the source through the pointer
         // to transfer ownership to the caller and prevent double-free.
+        // Phase D4: typed LocalId-keyed set replaces the legacy
+        // name-based HashSet<String>.
         if !ctx.func_state.move_override_params.is_empty() {
             if let Expr::Identifier(name) = &expr.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name.as_str()) {

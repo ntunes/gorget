@@ -197,10 +197,11 @@ pub struct FunctionState {
     /// Accumulated `assert return` postcondition expressions.
     /// Checked at every `return` site before the value is returned.
     pub postconditions: Vec<(crate::span::Spanned<crate::parser::ast::Expr>, Option<crate::span::Spanned<crate::parser::ast::Expr>>)>,
-    /// Locals corresponding to params upgraded from Borrow to Move in generic
-    /// functions that return them directly. The return path zeroes the source
-    /// through the pointer to prevent caller double-free.
-    pub move_override_params: rustc_hash::FxHashSet<LocalId>,
+    /// Parameters upgraded from Borrow to Move in generic functions that return them directly.
+    /// The return path must zero the source through the pointer to prevent caller double-free.
+    /// Phase D4: keyed by `LocalId` (typed) — replaces the legacy `HashSet<String>`
+    /// name-based shape. See `docs/internals/unified-resource-model.md` §6.6.
+    pub move_override_params: FxHashSet<LocalId>,
     /// Name of the function currently being lowered (for tracking consumed params).
     pub current_fn_name: String,
     /// True when the current method has `!self` (consuming self). Field loads

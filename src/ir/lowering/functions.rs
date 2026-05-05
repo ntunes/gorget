@@ -1219,6 +1219,12 @@ pub fn lower_generic_function(
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
             ctx.set_callable_return_type(local_id, ret_type);
         }
+        // Phase D4: store move-override flag as a typed LocalId set so the
+        // return path can zero the source through the pointer without a
+        // name lookup. Replaces the legacy `HashSet<String>` sidecar.
+        if move_override_params.contains(&p.node.name.node) {
+            ctx.func_state.move_override_params.insert(local_id);
+        }
     }
 
     // P2.6: Push Function drop scope
