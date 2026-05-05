@@ -86,8 +86,10 @@ pub(super) fn set_elem_type_from_monomorphized(name: &str) -> Option<String> {
 /// BuiltinTypeProtocol. Box[T] needs an override (the registered metadata
 /// is `Trivial("free")` historical convention; the per-type
 /// `Box__T__drop` wrapper is what actually frees inner resources).
-/// Callable types still don't have TypeDef registration; that arm stays
-/// until they do.
+/// Callable types now register via `c_runtime_alias = "GorgetClosure"` (Phase
+/// A residual #1, sub-TODOs 1a + 1b closed 2026-05-05); the LIR-side
+/// `c_runtime_alias` lookup remains as defensive backup for any path the
+/// eager registration hasn't reached.
 ///
 /// Returns None for trivially-droppable types (int, float, bool, ptr).
 pub(super) fn elem_drop_fn_for_type(elem_type: &str, gir_types: &TypeRegistry) -> Option<String> {
