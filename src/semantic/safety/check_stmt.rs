@@ -1317,8 +1317,16 @@ impl<'a> BorrowChecker<'a> {
 
     /// Find the DefId for a variable name by looking it up in the scope table.
 
-    pub(super) fn check_function(&mut self, func: &FunctionDef) {
-        // Reset state for each function
+    /// Reset all per-function state shared between `check_function` and the
+    /// per-Item entry points (`Item::Test` / `Bench` / `SuiteSetup` /
+    /// `SuiteTeardown`). Function-specific bits (the async / throws flags,
+    /// param def-ids) are set by the caller after this returns.
+    ///
+    /// Forgetting to reset `diverged` here used to make the FIRST statement
+    /// of every test body look unreachable when the previous module item
+    /// was a function ending with `return` — cosmetic warning regression
+    /// reported 2026-05-05 in the JS-interpreter porting feedback.
+    pub(super) fn reset_per_function_state(&mut self) {
         self.var_states.clear();
         self.loop_depth = 0;
         self.loop_local_defs.clear();
@@ -1327,15 +1335,20 @@ impl<'a> BorrowChecker<'a> {
         self.diverged = false;
         self.var_origins.clear();
         self.invalidated_origins.clear();
-        self.current_param_def_ids.clear();
-        self.current_function_is_async = func.qualifiers.is_async;
-        self.current_function_throws = func.throws.is_some();
         self.await_invalidated.clear();
-        self.shared_derived.clear();
-        self.stale_shared_derived.clear();
         self.closure_capture_sets.clear();
         self.vars_containing_closures.clear();
         self.pending_capture_set = None;
+    }
+
+    pub(super) fn check_function(&mut self, func: &FunctionDef) {
+        // Reset state for each function
+        self.reset_per_function_state();
+        self.current_param_def_ids.clear();
+        self.current_function_is_async = func.qualifiers.is_async;
+        self.current_function_throws = func.throws.is_some();
+        self.shared_derived.clear();
+        self.stale_shared_derived.clear();
         self.mut_captured_vars.clear();
         self.mut_capture_owners.clear();
         self.with_guarded_conditions.clear();

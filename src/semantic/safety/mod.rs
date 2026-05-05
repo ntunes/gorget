@@ -632,59 +632,19 @@ fn check_items_recursive(checker: &mut BorrowChecker, items: &[Spanned<Item>]) {
                 }
             }
             Item::Test(t) => {
-                checker.var_states.clear();
-                checker.loop_depth = 0;
-                checker.loop_local_defs.clear();
-                checker.arena_depth = 0;
-                checker.arena_scoped_vars.clear();
-                checker.var_origins.clear();
-                checker.invalidated_origins.clear();
-                checker.await_invalidated.clear();
-                checker.closure_capture_sets.clear();
-                checker.vars_containing_closures.clear();
-                checker.pending_capture_set = None;
+                checker.reset_per_function_state();
                 checker.check_block(&t.body);
             }
             Item::Bench(b) => {
-                checker.var_states.clear();
-                checker.loop_depth = 0;
-                checker.loop_local_defs.clear();
-                checker.arena_depth = 0;
-                checker.arena_scoped_vars.clear();
-                checker.var_origins.clear();
-                checker.invalidated_origins.clear();
-                checker.await_invalidated.clear();
-                checker.closure_capture_sets.clear();
-                checker.vars_containing_closures.clear();
-                checker.pending_capture_set = None;
+                checker.reset_per_function_state();
                 checker.check_block(&b.body);
             }
             Item::SuiteSetup(s) => {
-                checker.var_states.clear();
-                checker.loop_depth = 0;
-                checker.loop_local_defs.clear();
-                checker.arena_depth = 0;
-                checker.arena_scoped_vars.clear();
-                checker.var_origins.clear();
-                checker.invalidated_origins.clear();
-                checker.await_invalidated.clear();
-                checker.closure_capture_sets.clear();
-                checker.vars_containing_closures.clear();
-                checker.pending_capture_set = None;
+                checker.reset_per_function_state();
                 checker.check_block(&s.body);
             }
             Item::SuiteTeardown(s) => {
-                checker.var_states.clear();
-                checker.loop_depth = 0;
-                checker.loop_local_defs.clear();
-                checker.arena_depth = 0;
-                checker.arena_scoped_vars.clear();
-                checker.var_origins.clear();
-                checker.invalidated_origins.clear();
-                checker.await_invalidated.clear();
-                checker.closure_capture_sets.clear();
-                checker.vars_containing_closures.clear();
-                checker.pending_capture_set = None;
+                checker.reset_per_function_state();
                 checker.check_block(&s.body);
             }
             _ => {}

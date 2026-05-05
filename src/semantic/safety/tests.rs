@@ -3207,6 +3207,31 @@ void main():
         );
     }
 
+    #[test]
+    fn no_unreachable_in_test_after_function_with_return() {
+        // Regression for the cosmetic bug reported 2026-05-05: `Item::Test` /
+        // `Item::Bench` / `Item::SuiteSetup` / `Item::SuiteTeardown` reset
+        // most BorrowChecker fields between items but forgot `diverged`. After
+        // a previous function ended with `return`, the test body's first
+        // statement was flagged unreachable. Fix in `mod.rs` routes the
+        // resets through `reset_per_function_state` which clears `diverged`.
+        let source = "\
+int compute(): 42
+
+test \"non-diverging\":
+    int x = compute()
+    assert x == 42
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::UnreachableCode
+            )),
+            "expected no UnreachableCode for the test body's first stmt, got: {:?}",
+            warnings
+        );
+    }
+
     // ─── Phase 3: Unused Variable Tests ──────────────────────
 
     #[test]
