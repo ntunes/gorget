@@ -691,6 +691,43 @@ pub(super) fn register_collection_alias(
         };
         registry.add_type_def(type_def);
     }
+
+    // Phase A residual #1, sub-TODO 1b: eagerly register Callable / MutCallable /
+    // ConsumeCallable inner-type aliases when surfaced as collection element /
+    // dict value types. Without this, the only path that registers the inner
+    // Callable's TypeDef is `resolve_inner_type` (via .get / .clone / etc.
+    // method-call lowering). Fixtures like httpserver_methods.gg never invoke
+    // those methods on the closure-valued cells, so the Callable name only
+    // appears inside the mangled `Vector__Callable__GorgetClosure__new` runtime
+    // helper — and consumer sites (clone_fn_for_collection_element, etc.) rely
+    // on a TypeDef sidecar fallback through LIR StructDef.c_runtime_alias.
+    for arg in _type_args {
+        register_callable_inner_if_any(mapper, registry, &arg.node);
+    }
+}
+
+/// Register Callable family Named TypeDefs that arise as inner type arguments
+/// of a collection. The local-form `Callable[T(P)]` lowers to `GirType::FnPtr`
+/// at parameters/locals; the Named form (`Callable__GorgetClosure`) is what
+/// gets used inside collections via mangling. This helper materializes the
+/// TypeDef so consumers can read drop / clone / `c_runtime_alias` uniformly.
+fn register_callable_inner_if_any(
+    mapper: &mut TypeMapper,
+    registry: &mut TypeRegistry,
+    ty: &Type,
+) {
+    if let Type::Named { name, generic_args } = ty {
+        let base = name.node.as_str();
+        if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
+            let mangled = mangle_generic_name(base, generic_args);
+            register_callable_alias(mapper, registry, &mangled);
+        }
+        // Recurse into generic args so `Vector[Vector[Callable[T(P)]]]` and
+        // `Dict[K, Box[Callable[T(P)]]]` reach the inner Callable too.
+        for arg in generic_args {
+            register_callable_inner_if_any(mapper, registry, &arg.node);
+        }
+    }
 }
 
 /// Register a Callable / MutCallable / ConsumeCallable / GorgetClosure Named
