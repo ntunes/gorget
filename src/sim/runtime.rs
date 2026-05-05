@@ -703,6 +703,39 @@ pub fn call_extern(
             Ok(Value::Unit)
         }
 
+        // CoW materialization primitives. The native runtime distinguishes
+        // view (cap=0) vs owned (cap>0) — sim values are always owned-shaped
+        // (Rust String/Vec), so these collapse to "produce an independent
+        // owned String from the source bytes". The compiler inserts these
+        // calls at boundary materialization sites (struct/enum init, field
+        // store, return, etc.) — see `docs/internals/copy-on-write.md`.
+        "gorget_string_clone_to_owned"
+        | "gorget_string_copy_cow"
+        | "gorget_string_borrow"
+        | "gorget_string_materialize_inplace"
+        | "gorget_string_clone_inplace" => {
+            let s = args.first()
+                .and_then(Value::try_to_sim_str)
+                .map(|s| s.as_str().to_string())
+                .unwrap_or_default();
+            Ok(Value::String(SimString::from_string(s)))
+        }
+
+        // Assert-failure diagnostic formatter. Native panics with both sides
+        // formatted; sim returns an `unwrap on None/Err`-style error so the
+        // outer test harness picks it up uniformly with the assertion site.
+        "gorget_assert_fail_values" => {
+            let op = args.get(0).and_then(Value::try_to_sim_str)
+                .map(|s| s.as_str().to_string()).unwrap_or_else(|| "?".into());
+            let left = args.get(1).and_then(Value::try_to_sim_str)
+                .map(|s| s.as_str().to_string()).unwrap_or_default();
+            let right = args.get(2).and_then(Value::try_to_sim_str)
+                .map(|s| s.as_str().to_string()).unwrap_or_default();
+            Err(super::error::SimError::Panic(format!(
+                "assertion failed: left {op} right\n  left:  {left}\n  right: {right}"
+            )))
+        }
+
         // ── String operations ──────────────────────────────────────────────────
         "gorget_str_eq" => {
             let a_s = args.get(0).map(Value::try_to_sim_str).and_then(|v| v).unwrap_or_else(|| SimStr::from_str(""));
