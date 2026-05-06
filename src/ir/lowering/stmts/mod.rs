@@ -781,11 +781,17 @@ fn lower_var_decl_assign_mode(
             ctx, builder, operand, rhs_type, actual_var_type,
         );
     }
-    // Branch C — named resource source, CoW-safe. Create a Ptr
-    // alias instead of cloning. `is_named_local` is genuine gating
-    // (probe regressed 50+ fixtures: unnamed temp dies at end of
-    // stmt → dangling Ptr alias → SIGSEGV).
-    else if source_is_named
+    // Branch C — live resource source, CoW-safe. Create a Ptr
+    // alias instead of cloning. Migrated 2026-05-06: legacy
+    // `is_named_local` proxy replaced with `source_live`. Probe
+    // history (2026-05-04) regressed 50+ fixtures with naive
+    // `is_named_local` removal — root cause: unnamed temps die at
+    // end-of-stmt → dangling Ptr alias → SIGSEGV. The typed
+    // predicate excludes them (`source_live = false` for unnamed
+    // temps). Note: source need NOT be Owned — transitive alias
+    // chains (`String b = a` where `a` is itself a Borrowed CoW
+    // alias) must also propagate through this branch.
+    else if source_live
         && ctx.type_registry.is_resource_type(rhs_type)
         && !ctx.is_cow_unsafe_at(name, stmt_span.start)
         && !builder
