@@ -7,6 +7,7 @@ Contributor-facing documentation for the Gorget compiler implementation.
 | Document | Covers | Key Files |
 |----------|--------|-----------|
 | [Layering Discipline](layering-discipline.md) | Cross-layer rules: lossless on invariants, typed metadata, single source of truth | All IR layers |
+| [Structural Guards](structural-guards.md) | How soundness invariants become writer-side validators; the migration framework; Tier 1/2/3 backlog | `src/ir/validate.rs`, `src/ir/lowering/mod.rs`, `src/semantic/cycle_check.rs` |
 | [Unified Resource Model + LIR Roadmap](unified-resource-model.md) | Phases A/B/C/D (type-axis + local-axis ownership consolidation) + Tier E (LIR/SSA hygiene) + sequencing alongside self-host | `src/ir/`, `src/lir/`, runtime |
 | [Safety Checker](safety-checker.md) | Ownership, lifetimes, concurrency checks (Pass 5) | `src/semantic/safety/` |
 | [Ownership IR](ownership-ir.md) | GIR ownership semantics: AssignMode, FieldLoadMode, ArgOwnership | `src/ir/instructions.rs`, `src/ir/lowering/` |
