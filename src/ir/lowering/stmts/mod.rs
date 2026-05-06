@@ -753,12 +753,17 @@ fn lower_var_decl_assign_mode(
         ctx.set_shared_heap(builder, local_id, source_place.local);
         assign_mode = AssignMode::Borrow;
     }
-    // Branch B — named non-resource source with cross-type clone_fn
-    // (e.g. Str → GorgetString). `is_named_local` retained as
-    // genuine gating: unnamed Result/Option temps with recursive
-    // drop have a `clone_fn` set on them too, and would be wrongly
-    // routed here instead of through Branch F's Move path.
-    else if source_is_named
+    // Branch B — Owned + live source, non-resource type, cross-type
+    // clone_fn (e.g. Str → GorgetString). Migrated 2026-05-06: the
+    // legacy `is_named_local` proxy was replaced with the typed
+    // `source_live && source_own.is_owned()` predicate. Probe history
+    // (2026-05-04) regressed 16 fixtures because unnamed
+    // Result/Option temps with recursive drop have
+    // `clone_fn_for_ptr.is_some()` true and were wrongly routed
+    // here; the typed predicate excludes them (`source_live = false`)
+    // and they correctly fall through to F's Move path.
+    else if source_live
+        && source_own.as_ref().map_or(false, |s| s.is_owned())
         && !ctx.type_registry.is_resource_type(rhs_type)
         && ctx.clone_fn_for_ptr(rhs_type).is_some()
     {
