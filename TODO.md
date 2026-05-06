@@ -101,10 +101,6 @@
 
   Cross-check guard already wired: any setter that forgets to write through `Local.ownership` will trip `debug_assert_eq!` at `flush_ownership_to_locals` next time the function exits (debug builds). 100+ debug-mode integration tests pass without tripping. [partial: 2026-05-06]
 
-- **Phase A residuals — 1 of 7 items left.** Closed 2026-05-05/06/07: residual #1 (Callable TypeDef registration), sub-TODOs 1a + 1b (`Callable_` name-match retired; latent `map_type_with_subs` bug + eager registration enabled), `elem_drop_fn_for_c_type` (StructDef typed-metadata cache, was originally numbered residual #3), `map_*_type` family audit (no latent bugs found beyond 1b's), `shared_callable.gg` fixture (closure-into-Shared blocker shipped). Open:
-
-  1. **`collection_runtime_type` migration (lir/lower/mod.rs:1085) — was originally numbered residual #2.** 6 call sites all in mod.rs where `self.gir.type_registry` is reachable. Become `runtime_struct_for_collection_kind(metadata.collection_kind)` plus a Callable arm (unblocked by the closed residual #1's `c_runtime_alias` foundation; now also unblocked by the closed `elem_drop_fn_for_c_type` work's StructDef metadata cache). Clean and contained.
-
 - **Deferred String materialization — language-wide redesign** [HIGH-PRIORITY OPTIMIZATION] (filed 2026-05-04 after CoW chain fix #45 landed; partial probe 2026-05-05). The current Gorget design eagerly clones at every `String x = ptr_typed_source` boundary (auto-deref path at `stmts/mod.rs:463`) and now also at chain-trim sites (#45 fix). Both are wasteful when the source's container isn't mutated within x's lifetime. The right design is deferred: keep x as a view, track views into source containers via existing `views_of_source` / `cow_before_mutation` machinery, materialize JIT only on container mutation.
 
   **Status update from 2026-05-05 investigation (probe-by-probe per CLAUDE.md):**
