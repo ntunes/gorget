@@ -3,7 +3,7 @@
 from std.collections import Vector
 
 extern "C":
-    extern void exit(int code) = "gorget_exit"
+    extern noreturn void exit(int code) = "gorget_exit"
     extern cstr getenv(cstr name) = "gorget_getenv"
     extern void setenv(cstr name, cstr value) = "gorget_setenv"
     extern cstr getcwd() = "gorget_getcwd"

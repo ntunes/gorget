@@ -1594,6 +1594,8 @@ impl Parser {
                 qualifiers.is_unsafe = true;
             } else if self.match_keyword(Keyword::Blocking) {
                 qualifiers.is_blocking = true;
+            } else if self.match_keyword(Keyword::Noreturn) {
+                qualifiers.is_noreturn = true;
             } else {
                 break;
             }

@@ -3511,8 +3511,12 @@ equip Parser:
                 # a bare identifier, so skip it explicitly. Same shape as
                 # `parse_extern_block` (line ~3654). Without this, the
                 # blocking ident is parsed as the return type and the
-                # method signature comes out garbled.
+                # method signature comes out garbled. `noreturn` (e.g.
+                # `extern noreturn void exit(int)` in std.os) takes the
+                # same form.
                 if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                    self.advance()
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
                     self.advance()
             # Skip 'async' modifier before method def
             if self.check_kw(KW_ASYNC):
@@ -3687,10 +3691,12 @@ equip Parser:
                 # return type, matching what parse_function_def expects.
                 if self.check_kw(KW_EXTERN):
                     self.advance()
-                # Skip optional `blocking` / `async` modifiers before the
-                # return type. `blocking` is a bare identifier in the self-
-                # host lexer (not a keyword).
+                # Skip optional `blocking` / `noreturn` / `async` modifiers
+                # before the return type. `blocking` and `noreturn` are bare
+                # identifiers in the self-host lexer (not keywords).
                 if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "blocking":
+                    self.advance()
+                if self.check_tok(TOK_IDENT) and token_ident(self.peek().lex_token) == "noreturn":
                     self.advance()
                 if self.check_kw(KW_ASYNC):
                     self.advance()

@@ -296,6 +296,11 @@ pub struct LoweringContext<'a> {
     pub fn_extern_abi_kinds: FxHashMap<String, Vec<crate::ir::abi::AbiKind>>,
     /// Functions that are yield points (async or blocking qualifiers).
     pub yield_point_fns: rustc_hash::FxHashSet<String>,
+    /// Functions declared `noreturn` (extern functions like `exit`/`abort`).
+    /// Lowered by emitting `unreachable` after the call so the basic block
+    /// terminates correctly; this lets divergent match-expression arms
+    /// compose with the surrounding result type.
+    pub noreturn_fns: rustc_hash::FxHashSet<String>,
     /// Per-function return ABI kind.
     pub fn_return_abis: rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
     /// Module-level global variable names (from StaticDecl items).
@@ -386,6 +391,7 @@ impl<'a> LoweringContext<'a> {
             fn_param_abis: FxHashMap::default(),
             fn_extern_abi_kinds: FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
+            noreturn_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),

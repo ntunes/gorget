@@ -659,6 +659,16 @@ pub fn lower_module(
                 }
             }
 
+            // Track noreturn functions — IR must terminate the basic block
+            // with `unreachable` after the call so divergent match arms
+            // compose correctly with the surrounding result type.
+            if func.qualifiers.is_noreturn {
+                ctx.noreturn_fns.insert(name.clone());
+                if let FunctionBody::Extern(c_symbol) = &func.body {
+                    ctx.noreturn_fns.insert(c_symbol.clone());
+                }
+            }
+
             // Record extern binding: Gorget name → C symbol (takes priority over mangling).
             // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
@@ -760,6 +770,18 @@ pub fn lower_module(
                     ctx.yield_point_fns.insert(name.clone());
                     if let FunctionBody::Extern(c_symbol) = &func.body {
                         ctx.yield_point_fns.insert(c_symbol.clone());
+                    }
+                }
+
+                // Track noreturn extern functions (exit, abort, …) so the IR
+                // can emit `unreachable` after the call. Without this the
+                // basic block doesn't terminate and divergent uses (e.g.
+                // an Error-arm `exit(2)` in a `T x = match …` expression)
+                // fall through to a bogus arm-value assign.
+                if func.qualifiers.is_noreturn {
+                    ctx.noreturn_fns.insert(name.clone());
+                    if let FunctionBody::Extern(c_symbol) = &func.body {
+                        ctx.noreturn_fns.insert(c_symbol.clone());
                     }
                 }
 

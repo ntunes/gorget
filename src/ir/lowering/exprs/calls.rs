@@ -1105,6 +1105,15 @@ pub(super) fn lower_call(
             ctx.drops.mark_moved(local);
         }
 
+        // `noreturn` extern calls (exit, abort, …) never return to the caller.
+        // Terminate the basic block with `unreachable` so divergent uses
+        // (e.g. an Error-arm `exit(2)` in a `T x = match …` expression) compose
+        // with the surrounding result type — the match-expr lowerer's
+        // `is_terminated()` check then correctly skips the arm-value assign.
+        if ctx.noreturn_fns.contains(call_name.as_str()) {
+            builder.unreachable();
+        }
+
         result
     } else if let Expr::Closure { params, body, is_move, .. } = &callee.node {
         // IIFE: ((int x): x * x)(5) — inline closure called immediately

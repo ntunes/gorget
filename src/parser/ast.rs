@@ -146,6 +146,10 @@ pub struct FunctionQualifiers {
     /// True for `blocking` extern functions — the call may block the thread.
     /// Used by the shared_async transform to release/reacquire locks.
     pub is_blocking: bool,
+    /// True for `noreturn` extern functions — the call never returns control
+    /// (e.g., `exit`, `abort`). Type system treats the call as `Never`; the IR
+    /// terminates the basic block with `unreachable` after the call.
+    pub is_noreturn: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -304,6 +304,10 @@ pub enum Keyword {
     // Safety
     Unsafe,
     Extern,
+    /// `noreturn` — extern function never returns control to caller (calls like
+    /// `_Noreturn` C functions: `exit`, `abort`). Lets the typechecker treat
+    /// such calls as Never-typed and the IR terminate the basic block.
+    Noreturn,
 
     // Self
     SelfLower,
@@ -431,6 +435,7 @@ impl Keyword {
             Keyword::Shared => "shared",
             Keyword::Unsafe => "unsafe",
             Keyword::Extern => "extern",
+            Keyword::Noreturn => "noreturn",
             Keyword::SelfLower => "self",
             Keyword::SelfUpper => "Self",
             Keyword::Catch => "catch",
@@ -520,6 +525,7 @@ impl Keyword {
             "shared" => Some(Keyword::Shared),
             "unsafe" => Some(Keyword::Unsafe),
             "extern" => Some(Keyword::Extern),
+            "noreturn" => Some(Keyword::Noreturn),
             "self" => Some(Keyword::SelfLower),
             "Self" => Some(Keyword::SelfUpper),
             "catch" => Some(Keyword::Catch),

@@ -44,6 +44,9 @@ pub struct FunctionInfo {
     pub throws: bool,
     pub is_async: bool,
     pub is_blocking: bool,
+    /// `noreturn` extern functions — call never returns; type system treats
+    /// the call as `Never` and the IR terminates the basic block after it.
+    pub is_noreturn: bool,
     pub scope_id: super::ids::ScopeId,
     /// Names of generic type parameters, in declaration order.
     pub generic_param_names: Vec<String>,
@@ -331,6 +334,7 @@ fn collect_item(
                             throws: f.throws.is_some(),
                             is_async: f.qualifiers.is_async,
                             is_blocking: f.qualifiers.is_blocking,
+                            is_noreturn: f.qualifiers.is_noreturn,
                             scope_id: scopes.current_scope(),
                             generic_param_names,
                             trait_bounds,
@@ -520,6 +524,7 @@ fn collect_item(
                                 throws: f.throws.is_some(),
                                 is_async: f.qualifiers.is_async,
                                 is_blocking: f.qualifiers.is_blocking,
+                            is_noreturn: f.qualifiers.is_noreturn,
                                 scope_id: scopes.current_scope(),
                                 generic_param_names,
                                 trait_bounds,
@@ -579,6 +584,7 @@ fn collect_item(
                             throws: func.node.throws.is_some(),
                             is_async: func.node.qualifiers.is_async,
                             is_blocking: func.node.qualifiers.is_blocking,
+                            is_noreturn: func.node.qualifiers.is_noreturn,
                             scope_id: scopes.current_scope(),
                             generic_param_names,
                             trait_bounds: Vec::new(),
