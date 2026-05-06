@@ -2,7 +2,33 @@
 
 ## High
 
-- **Self-host typechecker doesn't model `Expr::Block` Never-tail rule + closure return inference** (added 2026-05-06 alongside snag #11 — match-as-expression with block arms).
+- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06]. User-reported via JS-interpreter porting. Recursive AST walker pattern (`match d.init: case Some(box): walk(*box)`) crashes with double-free / SIGSEGV; isolated minimal repro shows the underlying leak.
+
+  **Root cause (single-layer view).** `lir/lower/mod.rs:412-423` skips Option/Result struct fields when populating `recursive_drop_structs`. Comment explains the skip was load-bearing for the self-host resolver's `v.get(i).unwrap()` shallow-copy pattern: dropping `Option[SpannedExpr]` there would double-free with the alias source. So the writer side picks "leak instead of double-free" as the conservative default. Same family as the Phase C "EnumFieldLoad shallow copy of resource payload — 12,294 violations" entry.
+
+  **What I tried during 2026-05-06 investigation:**
+
+  1. **Remove the Option/Result skip + re-run `upgrade_types_from_fields`** so `Option__Box__T` gets `DropStrategy::Recursive` based on the upgraded payload. Fix verified to populate `Decl__drop` with the `init` field correctly. **Blocked by Phase C validator**: `validate_resource_moves` is fatal in default builds, and an existing match-scrutinee shape (`_34 = copy _33` where `_33 = field_load _25.*, 1` reads the Option field through a `*Decl` borrow) is now a "shallow copy of resource" violation. Many fixtures would regress; the violation count for FieldLoad is 2,568 per the Phase C TODO sweep. Not safe to ship without first migrating the FieldLoad/EnumFieldLoad shallow-copy lowering sites to emit Borrow rather than Copy when the source is a borrowed parent.
+
+  2. **Inline the Option drop in the parent struct's `__drop` without upgrading the Option type's `drop_strategy`.** Encoded as `__option_inline_drop:<clone_fn>;<tag>,<field>,<drop>;…` marker on the field-drop entry. The C emitter recognises the marker and writes a tag-switch:
+     ```c
+     static inline void Decl__drop(void* __p) {
+         __gg_Decl* self = (__gg_Decl*)__p;
+         gorget_string_free(&self->name);
+         switch (self->init.tag) {
+             case 0: Box__Spanned__drop((void*)&self->init.Some_0); break;
+         }
+     }
+     ```
+     Phase C stays happy (Option type itself is still non-resource at the GIR level — match-scrutinee shallow-copy is sound as a borrow alias). **Fixed the leak** but exposed a deeper latent issue: `Node.VarDecl(decls)` shallow-copies the Vector handle into `root.node.VarDecl_0` (no clone-on-consume, no move-zero). With drops now actually firing on init, both `decls` and `root.node.VarDecl_0` race to free the same heap allocation at termination → use-after-free. The skip was masking this CoW gap.
+
+  **Both halves needed.** The proper fix is: (a) implement the inline-drop scheme from #2, AND (b) close the CoW gap so enum constructors clone Vector / Box args when the source is live past the call (CoW's stated rule: "owned AND live past this call → clone before call"). The IR currently emits `copy _3` instead of cloning at `enum_init Node::VarDecl { copy _3 }` even when `_3 = decls` is read at scope exit.
+
+  **Diff for the inline-drop prototype** is recoverable from the 2026-05-06 conversation history (or re-derivable from the description above). The marker design extends `__clone_only:` / `__drop_then_clone:` already in place at `lir/lower/mod.rs` and `backend/c_lir/emit_types.rs`.
+
+  **Workaround the user has shipped:** abandoned the post-parse AST walker; folded the static-semantics checks inline into the parser. Ugly but unblocks them. The natural recursive-walk shape can come back once this lands.
+
+
 
   After the round-5 fix, the Rust typechecker treats `Expr::Block` whose last statement is divergent (return / throw / break / continue) as type `Never`, and the closure return-type inference falls back to `closure_ret_var` when `body_type == Never` (so the parser's destructure-desugar `Block { ..., Return(expr) }` doesn't mis-specialize tuple-destructured closures as `Closure[Never(...)]`). The self-host typechecker has no analogous rules — its parser stores match arm bodies as `Vector[Stmt]` directly (no `Expr::Block` wrapper to special-case), and walks them through normal statement-checking where `Stmt::Return` doesn't carry an upward "this block diverges" signal.
 
