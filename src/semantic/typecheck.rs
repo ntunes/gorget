@@ -1358,7 +1358,14 @@ impl<'a> TypeChecker<'a> {
                                 }
                             }
                         }
-                        return_type
+                        // `noreturn` extern functions never return — the call's
+                        // type is `Never`, so it composes with any expected
+                        // type via `unify` (e.g., as a divergent match arm).
+                        if func_info.map_or(false, |fi| fi.is_noreturn) {
+                            self.types.never_id
+                        } else {
+                            return_type
+                        }
                     }
                     ResolvedType::CallableTrait(inner)
                     | ResolvedType::MutCallableTrait(inner)
@@ -5333,6 +5340,11 @@ fn register_signatures_recursive(checker: &mut TypeChecker, items: &[Spanned<Ite
             }
             Item::Function(f) => {
                 checker.register_function_signature(f);
+            }
+            Item::ExternBlock(ext) => {
+                for func in &ext.items {
+                    checker.register_function_signature(&func.node);
+                }
             }
             Item::Equip(impl_block) => {
                 let has_generics = impl_block.generic_params.is_some();
