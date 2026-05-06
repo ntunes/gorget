@@ -923,12 +923,9 @@ impl<'a> LoweringContext<'a> {
         if !place.projections.is_empty() { return None; }
         let local_idx = place.local.0 as usize;
         if local_idx >= builder.locals.len() { return None; }
-        // Prefer the live func_state map (lowering-time canonical state)
-        // over builder.locals[].ownership which only reflects flushed
-        // post-lowering state.
-        if let Some(o) = self.func_state.local_ownership.get(&place.local) {
-            return Some(o.clone());
-        }
+        // Phase D4.5 step 5b.4: read directly from `Local.ownership` —
+        // setters dual-write the typed field at every call site, so
+        // it's the canonical lowering-time state.
         Some(builder.locals[local_idx].ownership.clone())
     }
 
@@ -2439,13 +2436,18 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Case 1: local is an alias of something else → clone source into local.
-        // Phase D: read alias source from v2 (Borrowed { Alias(s), .. } with
-        // s != local — self-loops are set_ref placeholders, not real aliases).
+        // Phase D4.5 step 5b.4: read alias source from `Local.ownership`
+        // (Borrowed { Alias(s), .. } with s != local — self-loops are
+        // set_ref placeholders, not real aliases).
         let alias_source: Option<LocalId> = {
             use crate::ir::{LocalOwnership, BorrowOrigin};
-            match self.func_state.local_ownership.get(&local) {
-                Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. }) if *s != local => Some(*s),
-                _ => None,
+            let idx = local.0 as usize;
+            if idx >= builder.locals.len() { None }
+            else {
+                match &builder.locals[idx].ownership {
+                    LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. } if *s != local => Some(*s),
+                    _ => None,
+                }
             }
         };
         if let Some(source) = alias_source {

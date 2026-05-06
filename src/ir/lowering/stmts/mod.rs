@@ -790,11 +790,13 @@ fn lower_var_decl(
             // shape carries source provenance — Owned would erase it and
             // break has_string_borrowers / views_of_source queries).
             if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if ctx.is_owned_local(builder, p.local)
-                    && !matches!(
-                        ctx.func_state.local_ownership.get(&local_id),
-                        Some(crate::ir::LocalOwnership::SharedHeap { .. })
-                    )
+                let local_idx = local_id.0 as usize;
+                let is_shared_heap = local_idx < builder.locals.len()
+                    && matches!(
+                        &builder.locals[local_idx].ownership,
+                        crate::ir::LocalOwnership::SharedHeap { .. }
+                    );
+                if ctx.is_owned_local(builder, p.local) && !is_shared_heap
                 {
                     ctx.set_owned(builder, local_id);
                 }
