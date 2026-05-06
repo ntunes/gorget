@@ -1797,7 +1797,10 @@ fn lower_field_access(
             // If the local is a raw pointer (e.g., self in equip methods), dereference it
             // to get the underlying struct type for field access.
             // Box[T] types use explicit `*box` dereference in Gorget, handled by Expr::Deref.
-            let (effective_type_id, base_place, base_is_ptr) =
+            // `base_is_ptr` was historically read at the resource-field Ptr-wrap predicate,
+            // retired by the Phase C FieldLoad migration (2026-05-06): owned-base resource
+            // user-struct fields ALSO need Ptr-wrapping to prevent shallow-copy double-free.
+            let (effective_type_id, base_place, _base_is_ptr) =
                 if let Some(pointee) = ctx.pointee_type(local_type_id) {
                     // Pointer type: add Deref projection → (*_N).field
                     let mut deref_place = place.clone();
@@ -1850,12 +1853,20 @@ fn lower_field_access(
                     // a shallow copy. Prevents shared heap buffer double-free.
                     // Auto-clone fires when assigned to an explicit-type variable
                     // or passed to a function that takes ownership.
-                    // When the base is a Ptr (borrowed), also wrap enum/struct fields
-                    // with resource-type variants (e.g., Expr with Box/Vector payloads)
-                    // — shallow copy would share Box pointers, and drop frees the original.
+                    //
+                    // Phase C FieldLoad migration (2026-05-06): drop the
+                    // `base_is_ptr &&` guard — owned-base struct field reads of
+                    // resource user-structs (PeerId, UdpAddr, Token, Expr,
+                    // etc.) also need Ptr-wrapping, otherwise the load is a
+                    // shallow alias of the field's heap data and a drop of
+                    // either side double-frees. `is_resource_type` already
+                    // covers GorgetString and collections, but the explicit
+                    // `is_collection_type` / `owned_string_type` cases stay
+                    // for self-documentation and to keep the predicate stable
+                    // if `is_resource_type` ever narrows.
                     let result_type = if ctx.type_registry.is_collection_type(field_type)
                         || field_type == ctx.type_mapper.owned_string_type
-                        || (base_is_ptr && ctx.type_registry.is_resource_type(field_type))
+                        || ctx.type_registry.is_resource_type(field_type)
                     {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
@@ -1896,9 +1907,10 @@ fn lower_field_access(
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                         return FunctionBuilder::copy(dst);
                     }
+                    // Same FieldLoad migration as above — drop `base_is_ptr &&`.
                     let result_type = if ctx.type_registry.is_collection_type(field_type)
                         || field_type == ctx.type_mapper.owned_string_type
-                        || (base_is_ptr && ctx.type_registry.is_resource_type(field_type))
+                        || ctx.type_registry.is_resource_type(field_type)
                     {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
