@@ -1,0 +1,67 @@
+# `case _:` — wildcard pattern as a top-level match arm.
+#
+# `else:` is the canonical default-arm idiom (see language-reference.md);
+# `case _:` is supported because `_` is a regular Pattern::Wildcard, not
+# special match-arm syntax. This fixture pins the redundant-but-supported
+# form so it can't silently break.
+
+# Wildcard catching the int default.
+String grade(int score):
+    match score:
+        case 100:
+            return "perfect"
+        case 90:
+            return "A"
+        case _:
+            return "other"
+
+# Wildcard catching None (and any future Option variant).
+String describe(Option[int] x):
+    match x:
+        case Some(n):
+            return f"some {n}"
+        case _:
+            return "none"
+
+# Wildcard with a guard — should match anything passing the guard.
+String classify(int n):
+    match n:
+        case x if x < 0:
+            return "negative"
+        case 0:
+            return "zero"
+        case _:
+            return "positive"
+
+# Wildcard mixed with an enum default — shouldn't fall through to a
+# missing `else:` clause.
+enum Color:
+    Red
+    Green
+    Blue
+    Custom(int, int, int)
+
+String name(Color c):
+    match c:
+        case Color.Red():
+            return "red"
+        case Color.Custom(_, _, _):
+            return "custom"
+        case _:
+            return "other primary"
+
+void main():
+    print(grade(100))
+    print(grade(90))
+    print(grade(50))
+    print("---")
+    print(describe(Some(7)))
+    print(describe(None()))
+    print("---")
+    print(classify(-3))
+    print(classify(0))
+    print(classify(42))
+    print("---")
+    print(name(Color.Red()))
+    print(name(Color.Green()))
+    print(name(Color.Custom(10, 20, 30)))

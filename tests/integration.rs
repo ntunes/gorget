@@ -16681,6 +16681,31 @@ fn match_int_ranges() {
     );
 }
 
+#[test]
+fn match_wildcard_arm() {
+    // `case _:` as a top-level match arm — redundant idiom (else: is
+    // canonical) but supported because `_` is a regular Pattern::Wildcard.
+    // Pins the form against silent breakage.
+    run_gg(
+        "match_wildcard_arm.gg",
+        "\
+perfect
+A
+other
+---
+some 7
+none
+---
+negative
+zero
+positive
+---
+red
+other primary
+custom",
+    );
+}
+
 // ── Borrow edge cases ──
 
 #[test]
