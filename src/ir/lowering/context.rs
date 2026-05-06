@@ -1209,7 +1209,7 @@ impl<'a> LoweringContext<'a> {
     /// Other ownership states (Owned, Ref, Alias, BareParam, ViewOf) are kept
     /// — they're either pure metadata or reference aliasing that's already
     /// severed by runtime CoW on mutation of the aliased source.
-    pub fn restore_locals(&mut self, builder: &crate::ir::builder::FunctionBuilder, saved: SavedScope) {
+    pub fn restore_locals(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, saved: SavedScope) {
         self.func_state.locals = saved.locals;
         let boundary = saved.local_id_boundary;
         let saved_types = &saved.local_types_at_save;
@@ -1245,6 +1245,20 @@ impl<'a> LoweringContext<'a> {
             .collect();
         for lid in flipped {
             restored.remove(&lid);
+        }
+        // Phase D4.5 step 3: also write through to Local.ownership so the
+        // typed field stays in sync with the FxHashMap after restore.
+        // Locals not in `restored` (either pre-existing untracked, or the
+        // post-save born locals we filtered out) get reset to default Owned.
+        // Locals in `restored` get the saved-then-merged value.
+        let mut touched: rustc_hash::FxHashSet<LocalId> = self.func_state.local_ownership.keys().copied().collect();
+        touched.extend(restored.keys().copied());
+        for lid in touched {
+            let idx = lid.0 as usize;
+            if idx >= builder.locals.len() { continue; }
+            builder.locals[idx].ownership = restored.get(&lid)
+                .cloned()
+                .unwrap_or_else(crate::ir::LocalOwnership::default);
         }
         self.func_state.local_ownership = restored;
     }
