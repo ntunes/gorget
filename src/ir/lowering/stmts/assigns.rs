@@ -351,7 +351,7 @@ pub(super) fn lower_assign(
                     // Propagate ownership: if RHS local owned its data (call result),
                     // the target local now owns the data after move/clone.
                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                        if ctx.is_owned_local(p.local) {
+                        if ctx.is_owned_local(builder, p.local) {
                             ctx.set_owned(builder, local_id);
                         }
                     }

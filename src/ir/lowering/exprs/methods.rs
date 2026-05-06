@@ -253,7 +253,7 @@ pub(super) fn lower_method_call(
     // Auto-deref would copy the struct, and mutations to the copy wouldn't propagate back.
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.is_ref_local(local_id)
+            if ctx.is_ref_local(builder, local_id)
                 || ctx.is_param_borrow_unique(local_id)
             {
                 Some(local_id)
@@ -1851,7 +1851,7 @@ pub(super) fn lower_method_call(
                     if !ctx.drops.is_registered(local_id) { return None; }
                     // Skip bare params / ref locals / CoW borrows (same reasoning).
                     if ctx.is_bare_param(local_id) { return None; }
-                    if ctx.is_ref_local(local_id) { return None; }
+                    if ctx.is_ref_local(builder, local_id) { return None; }
                     if ctx.is_cow_borrow(local_id) { return None; }
                     // Skip non-named locals (should be rare — falls through via temp path).
                     // Reviewed 2026-05-04 (Phase D4): structurally defensive. The

@@ -48,7 +48,7 @@ pub fn stage_match_scrutinee(
     let mode = if !ctx.type_registry.is_resource_type(scrut_type) {
         AssignMode::Copy
     } else if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
-        if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+        if p.projections.is_empty() && ctx.is_owned_local(builder, p.local) {
             AssignMode::Move
         } else {
             AssignMode::Borrow
@@ -59,7 +59,7 @@ pub fn stage_match_scrutinee(
     builder.assign_mode(mode, Place::local(scrut_local), scrut_op.clone());
 
     if let Operand::Copy(place) | Operand::Move(place) = scrut_op {
-        if place.projections.is_empty() && ctx.is_owned_local(place.local) {
+        if place.projections.is_empty() && ctx.is_owned_local(builder, place.local) {
             ctx.set_owned(builder, scrut_local);
             let src_type = builder.local_type(place.local);
             if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
@@ -69,7 +69,7 @@ pub fn stage_match_scrutinee(
             }
         }
         // Ref propagation: see comment in lower_match_stmt below.
-        if !place.projections.is_empty() && ctx.is_ref_local(place.local) {
+        if !place.projections.is_empty() && ctx.is_ref_local(builder, place.local) {
             ctx.set_ref(builder, scrut_local);
         }
     }
@@ -532,7 +532,7 @@ pub fn emit_pattern_bindings(
             let scrut_is_ptr = matches!(
                 ctx.type_registry.get(scrut_type),
                 Some(GirType::Ptr(_) | GirType::MutPtr(_))
-            ) || ctx.is_ref_local(scrut_local);
+            ) || ctx.is_ref_local(builder, scrut_local);
 
             for (i, field_pat) in fields.iter().enumerate() {
                 // Determine the field type from the enum variant definition
@@ -627,7 +627,7 @@ pub fn emit_pattern_bindings(
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                             ctx.set_owned(builder, dst);
                         }
-                    } else if ctx.is_owned_local(scrut_local)
+                    } else if ctx.is_owned_local(builder, scrut_local)
                         && ctx.func_state.scrutinee_clone_elision
                     {
                         // Clone elision (scrutinee is last-use): take ownership
@@ -705,7 +705,7 @@ pub fn emit_pattern_bindings(
             let scrut_is_ptr = matches!(
                 ctx.type_registry.get(scrut_type),
                 Some(GirType::Ptr(_) | GirType::MutPtr(_))
-            ) || ctx.is_ref_local(scrut_local);
+            ) || ctx.is_ref_local(builder, scrut_local);
 
             for (i, field_pat) in fields.iter().enumerate() {
                 let mut field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {

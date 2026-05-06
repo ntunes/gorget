@@ -1155,12 +1155,12 @@ impl<'a> LoweringContext<'a> {
 
                     if self.type_registry.is_resource_type(local_type) {
                         // Already owned — skip
-                        if self.is_owned_local(local) && !self.is_named_local(local) {
+                        if self.is_owned_local(builder, local) && !self.is_named_local(local) {
                             continue;
                         }
                         // Non-owned string views — always clone
                         let is_non_owned_string = self.is_string_type(local_type)
-                            && !self.is_owned_local(local);
+                            && !self.is_owned_local(builder, local);
                         // Borrow params — always clone
                         let is_borrow_param = self.is_bare_param(local);
                         if is_non_owned_string || is_borrow_param {
@@ -1633,7 +1633,7 @@ impl<'a> LoweringContext<'a> {
         // explicit bare_param + cow_borrow checks since both are still
         // semantically meaningful at this site (they fire even for
         // shapes is_ref_local might miss in legacy edge cases).
-        let is_borrow = self.is_ref_local(local)
+        let is_borrow = self.is_ref_local(builder, local)
             || self.is_bare_param(local)
             || self.is_cow_borrow(local);
         if !is_borrow {
@@ -1644,7 +1644,7 @@ impl<'a> LoweringContext<'a> {
         // Only safe for bare params (not ref-locals or CoW borrows, which
         // may genuinely alias another live variable).
         if self.is_bare_param(local)
-            && !self.is_ref_local(local)
+            && !self.is_ref_local(builder, local)
             && !self.is_cow_borrow(local)
             && self.drops.is_registered(local)
         {
@@ -1730,7 +1730,7 @@ impl<'a> LoweringContext<'a> {
             if self.is_named_local(local) {
                 let is_borrow = !self.drops.is_registered(local)
                     || self.is_bare_param(local)
-                    || self.is_ref_local(local)
+                    || self.is_ref_local(builder, local)
                     || self.is_cow_borrow(local);
                 is_borrow || !self.is_last_use_at(name, arg_expr.span)
             } else {
@@ -1746,7 +1746,7 @@ impl<'a> LoweringContext<'a> {
                     if self.type_registry.is_resource_type(inner) {
                         let is_borrow = !self.drops.is_registered(src_local)
                             || self.is_bare_param(src_local)
-                            || self.is_ref_local(src_local)
+                            || self.is_ref_local(builder, src_local)
                             || self.is_cow_borrow(src_local);
                         is_borrow || !self.is_last_use_at(name, arg_expr.span)
                     } else { false }
@@ -1826,18 +1826,24 @@ impl<'a> LoweringContext<'a> {
     // ── Unified ownership state helpers ──────────────────────────────
 
     /// Check if a local is tracked as a borrowed Ptr reference.
-    /// Phase D: reads `local_ownership`. Returns true iff the local has
-    /// a v2 entry that isn't `Owned`.
-    pub fn is_ref_local(&self, local: LocalId) -> bool {
-        self.func_state.local_ownership.get(&local).map_or(false, |s| s.is_ref())
+    /// Phase D4.5 step 5b: reads `Local.ownership` (the typed field on
+    /// the GIR `Local`). `Untracked` returns `false`, mirroring the
+    /// legacy FxHashMap-absent semantic.
+    pub fn is_ref_local(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        builder.locals[idx].ownership.is_ref()
     }
 
     /// Check if a local is tracked as definitely owning its data.
-    /// Phase D: reads `local_ownership`. Both `Owned` and `FreshOwned`
-    /// own their data — fresh is the strictly-stronger sub-axis.
-    pub fn is_owned_local(&self, local: LocalId) -> bool {
-        self.func_state.local_ownership.get(&local)
-            .map_or(false, |s| s.is_owned())
+    /// Phase D4.5 step 5b: reads `Local.ownership`. Both `Owned` and
+    /// `FreshOwned` own their data — fresh is the strictly-stronger
+    /// sub-axis. `Untracked` returns `false`, mirroring the legacy
+    /// FxHashMap-absent semantic.
+    pub fn is_owned_local(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        builder.locals[idx].ownership.is_owned()
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
@@ -2441,7 +2447,7 @@ impl<'a> LoweringContext<'a> {
         if !refs.is_empty() {
             for ref_local in refs {
                 // Only sever if the ref is still live (not already moved/reassigned)
-                if self.is_ref_local(ref_local) {
+                if self.is_ref_local(builder, ref_local) {
                     self.cow_materialize_collection_ref(builder, ref_local, span);
                 }
             }
@@ -2510,7 +2516,7 @@ impl<'a> LoweringContext<'a> {
         let target = CollectionId::FieldPath(field_path.to_string());
         let refs = self.cow_collection_refs_for_id(&target);
         for ref_local in refs {
-            if self.is_ref_local(ref_local) {
+            if self.is_ref_local(builder, ref_local) {
                 self.cow_materialize_collection_ref(builder, ref_local, span);
             }
         }

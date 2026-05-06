@@ -67,7 +67,7 @@ pub(super) fn lower_array_literal(
             match op {
                 Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
                     let src_ty = builder.local_type(p.local);
-                    if ctx.is_owned_local(p.local)
+                    if ctx.is_owned_local(builder, p.local)
                         || (!ctx.is_named_local(p.local)
                             && (ctx.type_registry.needs_drop(src_ty)
                                 || ctx.type_registry.is_resource_type(src_ty)))

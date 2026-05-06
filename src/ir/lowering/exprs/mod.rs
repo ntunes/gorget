@@ -113,7 +113,7 @@ fn lower_expr_inner(
                     let tmp = builder.add_local(value_type, None);
                     // ! params (owned): use Move to transfer ownership (memcpy, no clone).
                     // & params (mutable borrow): use Copy (clone to prevent aliasing).
-                    let is_move_param = ctx.is_owned_local(local_id);
+                    let is_move_param = ctx.is_owned_local(builder, local_id);
                     if is_move_param {
                         builder.assign_mode(
                             crate::ir::instructions::AssignMode::Move,
@@ -299,7 +299,7 @@ fn lower_expr_inner(
             // Skip the auto-deref that Identifier normally does — just forward the pointer.
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.is_ref_local(local_id)
+                    if ctx.is_ref_local(builder, local_id)
                         || ctx.is_param_borrow_unique(local_id)
                     {
                         return FunctionBuilder::copy(local_id);
@@ -625,7 +625,7 @@ fn lower_expr_inner(
                 if !ctx.type_registry.is_resource_type(scrut_type) {
                     AssignMode::Copy
                 } else if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
-                    if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+                    if p.projections.is_empty() && ctx.is_owned_local(builder, p.local) {
                         AssignMode::Move
                     } else {
                         AssignMode::Borrow
@@ -2886,12 +2886,12 @@ fn clone_multi_use_resource_args(
 
                 if is_resource_type_local(local, builder, &ctx.type_registry) {
                     // Already owned (call results, cloned temps) — skip
-                    if ctx.is_owned_local(local) && !ctx.is_named_local(local) {
+                    if ctx.is_owned_local(builder, local) && !ctx.is_named_local(local) {
                         continue;
                     }
                     // String views (non-owned) ALWAYS need clone for struct/enum storage.
                     let is_non_owned_string = ctx.is_string_type(local_type)
-                        && !ctx.is_owned_local(local);
+                        && !ctx.is_owned_local(builder, local);
                     // Must clone if: bare borrow param, multi-use named local,
                     // field access on a struct, or non-owned string view.
                     let is_borrow_param = ctx.is_bare_param(local);

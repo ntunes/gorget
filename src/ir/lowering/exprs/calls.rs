@@ -64,7 +64,7 @@ pub(super) fn lower_call_arg(
                         Some(GirType::MutPtr(_)) | Some(GirType::Ptr(_))
                     )
                 };
-                if ctx.is_ref_local(local_id)
+                if ctx.is_ref_local(builder, local_id)
                     || ctx.is_param_borrow_unique(local_id)
                     || is_already_ptr
                 {
@@ -1426,7 +1426,7 @@ pub(super) fn lower_interp_segment(
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
         // If this is a pointer param, deref to get the value for formatting.
         // Covers &/! params (Borrowed/Unique) and borrowed resource params (ref_locals).
-        let ptr_value_type = if ctx.is_param_borrow_unique(local_id) || ctx.is_ref_local(local_id) {
+        let ptr_value_type = if ctx.is_param_borrow_unique(local_id) || ctx.is_ref_local(builder, local_id) {
             ctx.pointee_type(builder.local_type(local_id))
         } else {
             None

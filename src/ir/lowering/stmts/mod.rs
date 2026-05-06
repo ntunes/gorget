@@ -790,7 +790,7 @@ fn lower_var_decl(
             // shape carries source provenance — Owned would erase it and
             // break has_string_borrowers / views_of_source queries).
             if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                if ctx.is_owned_local(p.local)
+                if ctx.is_owned_local(builder, p.local)
                     && !matches!(
                         ctx.func_state.local_ownership.get(&local_id),
                         Some(crate::ir::LocalOwnership::SharedHeap { .. })
@@ -829,7 +829,7 @@ fn lower_var_decl(
                 if !ctx.type_registry.is_resource_type(tuple_type) {
                     AssignMode::Copy
                 } else if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                    if p.projections.is_empty() && ctx.is_owned_local(p.local) {
+                    if p.projections.is_empty() && ctx.is_owned_local(builder, p.local) {
                         AssignMode::Move
                     } else {
                         AssignMode::Copy
@@ -1181,7 +1181,7 @@ fn lower_return(
                         } else if ctx.type_registry.needs_drop(src_type) {
                             // Owned resource — clone if borrowed/shared
                             let can_skip_clone = ctx.is_fresh_string(place.local)
-                                || (ctx.is_owned_local(place.local)
+                                || (ctx.is_owned_local(builder, place.local)
                                     && !ctx.has_string_borrowers(place.local));
                             if !can_skip_clone {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
@@ -1222,7 +1222,7 @@ fn lower_return(
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
                         let can_skip_clone = ctx.is_fresh_string(place.local)
-                            || (ctx.is_owned_local(place.local)
+                            || (ctx.is_owned_local(builder, place.local)
                                 && ctx.is_named_local(place.local)
                                 && !ctx.has_string_borrowers(place.local));
                         if rhs_type == ctx.type_mapper.owned_string_type
