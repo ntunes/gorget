@@ -1120,6 +1120,29 @@ pub fn validate_resource_call_args(module: &Module) -> Vec<ResourceMoveWarning> 
     warnings
 }
 
+/// Just the IndexLoad class — promoted to fatal at the
+/// `validate_resource_moves` site after the 2026-05-06 sweep showed
+/// 0 violations across 1066 fixtures. The CoW lowering already routes
+/// resource-typed elements through `Ptr(T)` (zero-copy borrow shape) at
+/// the resource-element index_access path; for-loop iteration emits
+/// `index_load_borrow` for resource elements; the remaining `index_load`
+/// (Clone) callers either operate on non-resource elements or wrap with
+/// proper element-clone routing in the LIR. Splitting this out lets it
+/// run unconditionally alongside the call-arg fatal while the remaining
+/// two classes (field, enum) still surface warnings only.
+pub fn validate_resource_index_reads(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        for_each_read_site(func, module, |site| {
+            if !matches!(site.class, ReadSiteClass::IndexLoad { .. }) { return; }
+            if let Some(w) = validate_read(site, &module.type_registry) {
+                warnings.push(w);
+            }
+        });
+    }
+    warnings
+}
+
 /// A typed read-site descriptor: enough to (a) route through the unified
 /// validator and (b) build the per-class warning when a violation fires.
 ///

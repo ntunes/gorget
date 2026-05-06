@@ -1537,14 +1537,35 @@ pub fn lower_module(
         }
     }
 
+    // Phase C extension promoted: `IndexLoad` of resource element.
+    // 2026-05-06 sweep: 0 violations across 1066 fixtures, so the
+    // class is fatal. The CoW lowering already routes resource-typed
+    // index reads through `Ptr(T)` (zero-copy borrow) and for-loops
+    // through `index_load_borrow`; the remaining `index_load` callers
+    // hit non-resource element types or wrap with proper LIR clone
+    // routing. Any future lowering that emits an `IndexLoad { read:
+    // Clone | Copy }` of a resource element through a non-Ptr dst
+    // halts the build instead of leaking past the validator.
+    {
+        let index_warnings = crate::ir::validate::validate_resource_index_reads(&module);
+        if !index_warnings.is_empty() {
+            eprintln!("[resource-index-reads] {} violation(s):", index_warnings.len());
+            for w in &index_warnings {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed resource index-read validation ({} violation(s))", index_warnings.len());
+        }
+    }
+
     // Phase C extension: remaining read-site validators (FieldLoad,
-    // IndexLoad, EnumFieldLoad). Stage 1 — gated behind
+    // EnumFieldLoad). Stage 1 — gated behind
     // `GG_VALIDATE_RESOURCE_READS`, prints per-class counts to a log
     // file (path is the env var value) without panicking. The
-    // 2026-05-04 sweep counts: field=2568, index=2556, enum=12294. Each
-    // class needs its own lowering migration before promotion. Output
-    // goes to a file (not stderr) because `cargo test` captures
-    // subprocess stderr and only surfaces it on failure.
+    // 2026-05-06 sweep counts: field=2584, enum=12191 (index=0, arg=0
+    // both promoted to fatal above). Each class needs its own lowering
+    // migration before promotion. Output goes to a file (not stderr)
+    // because `cargo test` captures subprocess stderr and only surfaces
+    // it on failure.
     if let Ok(log_path) = std::env::var("GG_VALIDATE_RESOURCE_READS") {
         if !log_path.is_empty() {
             let reads = crate::ir::validate::validate_resource_reads(&module);
