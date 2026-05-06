@@ -1290,7 +1290,23 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                 Instruction::FieldLoad { dst, base, field } => {
                     let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
                     // Ptr-typed dst at LIR level is borrow-shaped (field address, not value).
-                    let mode = if type_is_ptr(dst_ty, registry) { ReadMode::Borrow } else { ReadMode::Copy };
+                    // FieldLoad-followed-by-MoveZero on the same source field is the
+                    // !self consuming-self idiom (and the closure-env-by-value capture
+                    // load via field_load + move_zero in StructInit move pending list):
+                    // the GIR contract is Move, but FieldLoad has no mode field. The
+                    // peek-next-inst lookahead encodes that idiom so the validator
+                    // doesn't flag it as shallow-copy. Phase C FieldLoad migration
+                    // 2026-05-06: every other FieldLoad of a resource field flows
+                    // through the Ptr(T) borrow path (lower_field_access), so this
+                    // peek is the only remaining shape that legitimately produces a
+                    // value-typed FieldLoad of a resource field.
+                    let mode = if type_is_ptr(dst_ty, registry) {
+                        ReadMode::Borrow
+                    } else if next_inst_zeroes_field(&bb.instructions, i, base, *field) {
+                        ReadMode::Move
+                    } else {
+                        ReadMode::Copy
+                    };
                     let Some(base_ty) = resolve_place_type(base, func, registry) else { continue };
                     let Some(field_ty) = resolve_field_type_id(base_ty, *field, registry) else { continue };
                     // Cross-type assigns (`dst:Vector = field of unrelated`) are
@@ -1508,6 +1524,23 @@ fn resolve_enum_field_type_id(
 /// than a value copy.
 fn type_is_ptr(ty: TypeId, registry: &TypeRegistry) -> bool {
     matches!(registry.get(ty), Some(GirType::Ptr(_) | GirType::MutPtr(_)))
+}
+
+/// Peek the instruction at `i + 1`: does it `MoveZero` the source field of
+/// the FieldLoad at index `i`? This is the !self consuming-self idiom emitted
+/// by `lower_field_access` (and the closure-env-StructInit move-pending list):
+/// the GIR shape is `_dst = field_load _base.<base_proj>.field; move_zero
+/// _base.<base_proj>.field`. Together they encode a Move semantic that
+/// FieldLoad's instruction shape can't otherwise express. Returns false at
+/// the end of the block — the idiom always emits MoveZero in the same bb.
+fn next_inst_zeroes_field(insts: &[Instruction], i: usize, base: &Place, field: u32) -> bool {
+    let Some(next) = insts.get(i + 1) else { return false };
+    let Instruction::MoveZero { place: zp } = next else { return false };
+    if zp.local != base.local { return false; }
+    // The MoveZero place is `base.projections + Field(field)`.
+    if zp.projections.len() != base.projections.len() + 1 { return false; }
+    if zp.projections[..base.projections.len()] != base.projections[..] { return false; }
+    matches!(zp.projections.last(), Some(Projection::Field(f)) if *f == field)
 }
 
 #[cfg(test)]
