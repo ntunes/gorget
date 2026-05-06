@@ -1294,9 +1294,17 @@ impl<'a> FuncLowering<'a> {
                     self.store_to_local(*dst, fptr, bb);
                 } else {
                     let field_ty = self.resolve_enum_field_type(gir_type_id, variant, *field);
-                    // Check BEFORE field_ty is moved into the EnumExtract instruction.
-                    let is_str_field = matches!(&field_ty, LirType::Struct(sid) if
-                        self.module_structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString"));
+                    // Check BEFORE field_ty is moved into the EnumExtract
+                    // instruction. Any payload type whose drop frees shared
+                    // bytes (string / collection thin pointers, recursive
+                    // structs/enums with custom drop) needs the source field
+                    // zeroed after extraction to prevent shallow-copy
+                    // double-free — see `Instruction::EnumFieldLoad`'s contract
+                    // on the GIR side. Was previously gated to GorgetString
+                    // only ("is_str_field"); 2026-05-06 widening makes this
+                    // unconditional for all resource payloads, dropping the
+                    // ShallowCopyOfEnumPayload validator class to zero.
+                    let payload_is_resource = self.payload_needs_post_extract_zero(&field_ty);
                     // Canonical `Inst::EnumExtract` — carries the struct_id +
                     // payload_field + declared field type explicitly. BIR
                     // expands to `FieldPtr + Load` (same as before).
@@ -1309,11 +1317,14 @@ impl<'a> FuncLowering<'a> {
                         ty: field_ty,
                     });
                     self.store_to_local(*dst, result, bb);
-                    // Thin-pointer String: zero the source field after extraction
-                    // to prevent double-free. With char* thin pointers, extraction
-                    // copies the pointer — both source and dest point to the same
-                    // header+data. Zeroing the source transfers ownership.
-                    if is_str_field {
+                    // Resource payload: zero the source field after extraction
+                    // to prevent double-free. Extraction copies the thin
+                    // pointer / handle bytes — both source and dest now alias
+                    // the same heap allocation. The Store of NullPtr through
+                    // a FieldPtr lowers to `memset(fptr, 0, sizeof(field_ty))`
+                    // in c_lir (FieldPtr's ptr_pointee is the field type), so
+                    // the whole struct payload is zeroed regardless of size.
+                    if payload_is_resource {
                         let fptr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                             dst: fptr,

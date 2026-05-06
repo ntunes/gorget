@@ -1309,10 +1309,16 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                     }
                     let Some(base_ty) = resolve_place_type(base, func, registry) else { continue };
                     let Some(payload_ty) = resolve_enum_field_type_id(base_ty, variant, *field, registry) else { continue };
-                    // GorgetString payloads are auto-zeroed by the LIR lowering
-                    // (see lir/lower/insts.rs is_str_field path) — that's a Move
-                    // semantic at LIR even though the GIR shape is identical.
-                    let mode = if registry.type_name(payload_ty).as_deref() == Some("GorgetString") {
+                    // Resource payloads are auto-zeroed by the LIR lowering
+                    // (see lir/lower/insts.rs `payload_is_resource` path) —
+                    // the GIR shape is identical (`EnumFieldLoad` with no mode
+                    // field) but the lowering emits a post-extract field zero
+                    // for every resource type, so the read is Move-semantic at
+                    // LIR. Non-resource payloads are bytes-copy and sound. The
+                    // 2026-05-06 widening covered all resource types (was
+                    // previously gated to GorgetString); validator mode mirrors
+                    // the lowering's predicate.
+                    let mode = if registry.is_resource_type(payload_ty) {
                         ReadMode::Move
                     } else {
                         ReadMode::Copy

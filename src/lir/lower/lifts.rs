@@ -775,6 +775,16 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// Does this payload type need post-extract zeroing of its source slot to
+    /// prevent shallow-copy double-free? Same predicate as
+    /// `resource_clone_fn_for_payload` (read-mode, non-consuming) — any struct
+    /// type that owns shared bytes through a thin pointer / handle. Used by
+    /// `EnumFieldLoad`'s LIR auto-zero so the read site behaves as a Move at
+    /// the value layer (the contract on `Instruction::EnumFieldLoad`).
+    pub(super) fn payload_needs_post_extract_zero(&self, payload_ty: &LirType) -> bool {
+        self.resource_clone_fn_for_payload(payload_ty, false).is_some()
+    }
+
     /// Store a value into a struct field pointer, handling aggregate types correctly.
     /// For aggregates with known size > 0, stores to a temp slot then memcpy.
     /// For scalars or zero-size aggregates (opaque types), uses direct Store.
