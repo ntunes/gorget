@@ -1867,7 +1867,8 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Drop ownership tracking for a local. Phase D4.5: also resets
-    /// `builder.locals[id].ownership` to the default (`Owned`).
+    /// `builder.locals[id].ownership` to the default (`Untracked`),
+    /// preserving the legacy FxHashMap "absence == no entry" semantic.
     pub fn unset_ownership(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
         self.func_state.local_ownership.remove(&local);
         let idx = local.0 as usize;

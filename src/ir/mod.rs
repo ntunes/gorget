@@ -330,13 +330,29 @@ pub struct InnerSharedSpawn {
 /// Single typed ownership state for a local. Carries borrow provenance
 /// (via [`BorrowOrigin`]) and mutability inline rather than scattering
 /// them across sidecar maps. Source of truth at the GIR/LIR boundary.
+///
+/// **Variant ordering note (Phase D4.5 step 5a):** `Untracked` is the
+/// `#[default]` so newly-allocated `Local`s start as "no ownership
+/// decision yet recorded". This preserves the legacy FxHashMap absence
+/// semantics — readers like `is_owned_local` only return `true` when a
+/// setter explicitly wrote `Owned`/`FreshOwned`/`SharedHeap`. Without
+/// this distinction, retiring `func_state.local_ownership` would flip
+/// every untracked local to `Owned` (the previous default), silently
+/// registering drops on non-resource and not-yet-decided values.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum LocalOwnership {
+    /// No ownership decision recorded yet. Equivalent to absence from
+    /// the legacy `func_state.local_ownership: FxHashMap` — readers
+    /// must NOT treat this as `Owned`. Set as the `#[default]` so new
+    /// `Local`s start untracked; setters move the local to a concrete
+    /// state (`Owned`, `Borrowed { .. }`, `View { .. }`, etc.) when
+    /// the lowering point has enough info to decide.
+    #[default]
+    Untracked,
     /// Owns its data. Registered for drop at scope exit. Heap data may be
     /// shared with another local (e.g., via Move from a non-fresh source,
     /// via value-aliasing). For the strictly stronger "no aliasing" case
     /// see `FreshOwned`.
-    #[default]
     Owned,
     /// Owns its data AND the heap allocation is provably fresh — no other
     /// local shares the same buffer. Sibling of `Owned`; strictly stronger.
@@ -379,9 +395,12 @@ impl LocalOwnership {
     /// runtime. Returns true for Borrowed, View, and MaybeOwned.
     /// SharedHeap returns false: it IS owned at runtime (32-byte value
     /// struct in its own slot) — only the heap data behind it is shared.
+    /// `Untracked` returns false (legacy FxHashMap-absence semantic:
+    /// `local_ownership.get(id).map_or(false, ..)`).
     pub fn is_ref(&self) -> bool {
         !matches!(self,
-            LocalOwnership::Owned
+            LocalOwnership::Untracked
+            | LocalOwnership::Owned
             | LocalOwnership::FreshOwned
             | LocalOwnership::SharedHeap { .. }
         )
