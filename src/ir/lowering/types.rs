@@ -235,6 +235,29 @@ impl TypeMapper {
                             elem
                         };
 
+                        // Phase A residual #1, sub-TODO 1b extension
+                        // (2026-05-05): the Callable family at the LOCAL form
+                        // returns FnPtr without inserting a Named TypeDef
+                        // (lines 219-225 above). When a Callable surfaces as
+                        // an inner type-arg of a smart pointer / collection
+                        // (`Shared[Callable[int()]]`, `Box[Callable[T(P)]]`,
+                        // `Vector[Callable[…]]`, …), the C backend later needs
+                        // a typedef for `Callable__GorgetClosure` so that
+                        // `Shared__Callable__GorgetClosure__new(Callable__GorgetClosure)`
+                        // resolves. `register_collection_alias` walks args
+                        // and calls `register_callable_inner_if_any` for the
+                        // Vector/Dict/Box cases handled there; but `Shared`,
+                        // `Weak`, `Mutex`, `Channel`, `RWLock`, etc. flow
+                        // through the protocol-table branch directly and
+                        // bypass that walk. Mirror the same eager-register
+                        // here so every smart-pointer / opaque-handle path
+                        // that wraps a Callable surfaces the inner Named
+                        // TypeDef. Idempotent: `register_callable_alias`
+                        // checks `named_types.contains` before inserting.
+                        for arg in generic_args {
+                            register_callable_inner_if_any(self, registry, &arg.node);
+                        }
+
                         // Drop strategy: protocol provides the free function, but some
                         // types use per-monomorphization drop wrappers.
                         let drop_strat = match base {

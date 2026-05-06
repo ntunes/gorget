@@ -9626,6 +9626,23 @@ fn shared_basic() {
     run_gg("shared_basic.gg", "42\n10\n5000\n42");
 }
 
+// `Shared[Callable[T]]` for shared mutable captures across owners — see
+// docs/book/16-smart-pointers.md. Currently blocked by a closure-into-Shared
+// constructor lowering bug (Phase A residual #2 sub-TODO 1b extension): the
+// fixture's outer typedef wiring is now correct (eager Callable inner-type
+// registration extended to Shared/Weak/Mutex/RWLock/Channel paths in
+// types.rs:257), but Shared.new(closure) / Shared[Callable[T]](closure) needs
+// the same `inner_c.starts_with("__Closure_")` shortcut that `Box.new` has at
+// `src/ir/lowering/exprs/methods.rs:78-84` — without it, the closure env
+// struct gets passed where the constructor expects a GorgetClosure. Tracked
+// in TODO under "shared_callable.gg fixture". Re-enable once Shared/Weak/etc.
+// constructors gain the closure-passthrough special case.
+#[test]
+#[ignore]
+fn shared_callable() {
+    run_gg("shared_callable.gg", "1\n1");
+}
+
 #[test]
 fn shared_refcount() {
     run_gg("shared_refcount.gg", "1\n3\n3\n100");

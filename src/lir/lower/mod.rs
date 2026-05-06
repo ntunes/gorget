@@ -696,19 +696,45 @@ impl<'a> LoweringContext<'a> {
             }
 
             // Map collection instantiations to their runtime struct.
-            // e.g., Vector__Str → GorgetArray, Dict__Str__int64_t → GorgetMap
-            if let Some(runtime_name) = collection_runtime_type(&def.name, &self.gir.type_registry) {
-                if let Some(runtime_sid) = self.struct_reg.lookup(runtime_name) {
-                    self.struct_reg.register(&def.name, runtime_sid);
-                    // Phase A residual #2: record the alias on the LirModule
-                    // so c_lir's `struct_def_by_name` can resolve the mangled
-                    // collection name (`Vector__int64_t`, `Dict__K__V`, …) to
-                    // the runtime StructDef without re-deriving the mapping
-                    // from name prefixes. The runtime singleton's StructDef
-                    // already carries `elem_drop_fn` / `elem_clone_fn` /
-                    // `materialize_fn`, so the consumer reads typed metadata.
-                    self.module.struct_aliases.insert(def.name.clone(), runtime_sid);
-                    continue;
+            // e.g., Vector__Str → GorgetArray, Dict__Str__int64_t → GorgetMap.
+            //
+            // Two cases distinguished by whether the GIR TypeDef carries a
+            // `c_runtime_alias`:
+            //   1. Plain collection alias (Vector/Dict/Set/HashSet/HashMap):
+            //      no `c_runtime_alias`. Register name→sid only; no separate
+            //      StructDef. The C backend never sees the alias name as a
+            //      type — runtime methods reroute via mangling.
+            //   2. `c_runtime_alias`-tagged (Callable family): the C backend
+            //      emits the alias name as a real C type (because user code
+            //      can have `Shared[Callable[…]]` whose mangled wrapper
+            //      references the alias name directly in
+            //      `Shared__Callable__GorgetClosure__new(Callable__GorgetClosure)`).
+            //      Skip the shortcut and fall through to the
+            //      c_runtime_alias-tagged synthesis below at line 814 so a
+            //      proper StructDef gets registered with `c_runtime_alias`
+            //      set; that triggers the typedef emission in c_lir's
+            //      struct loop. Phase A residual #2 (sub-TODO 1b extension):
+            //      this gap surfaced when shared_callable.gg's
+            //      `Shared[Callable[int()]]` shape didn't emit
+            //      `typedef GorgetClosure Callable__GorgetClosure;`.
+            let has_c_runtime_alias = self.gir.type_registry
+                .get_type_def(&def.name)
+                .and_then(|td| td.metadata.c_runtime_alias.as_ref())
+                .is_some();
+            if !has_c_runtime_alias {
+                if let Some(runtime_name) = collection_runtime_type(&def.name, &self.gir.type_registry) {
+                    if let Some(runtime_sid) = self.struct_reg.lookup(runtime_name) {
+                        self.struct_reg.register(&def.name, runtime_sid);
+                        // Phase A residual #2: record the alias on the LirModule
+                        // so c_lir's `struct_def_by_name` can resolve the mangled
+                        // collection name (`Vector__int64_t`, `Dict__K__V`, …) to
+                        // the runtime StructDef without re-deriving the mapping
+                        // from name prefixes. The runtime singleton's StructDef
+                        // already carries `elem_drop_fn` / `elem_clone_fn` /
+                        // `materialize_fn`, so the consumer reads typed metadata.
+                        self.module.struct_aliases.insert(def.name.clone(), runtime_sid);
+                        continue;
+                    }
                 }
             }
 

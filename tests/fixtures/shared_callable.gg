@@ -1,0 +1,25 @@
+# `Shared[Callable[T]]` for shared mutable captures across owners.
+#
+# Plain `Callable.clone()` produces an INDEPENDENT deep copy — each clone owns
+# its own captured environment. To share captured state across multiple owners,
+# wrap the closure in `Shared[Callable[T]]`: cloning bumps refcount, all owners
+# observe the same captured shared state.
+#
+# Here the closure captures a `Shared[int]` counter; cloning the
+# `Shared[Callable[…]]` produces additional owners of the SAME closure
+# (refcount bumped), so every call to a clone reads the same heap counter.
+#
+# See docs/book/16-smart-pointers.md.
+
+void main():
+    Shared[int] counter = Shared[int](0)
+
+    Shared[Callable[int()]] tick = Shared[Callable[int()]]((): counter.get() + 1)
+
+    # Two owners share the same captured `counter`:
+    Shared[Callable[int()]] a = tick.clone()
+    Shared[Callable[int()]] b = tick.clone()
+    int va = a.get()()
+    int vb = b.get()()
+    print(va)
+    print(vb)
