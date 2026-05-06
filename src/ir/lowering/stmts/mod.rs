@@ -662,23 +662,22 @@ fn lower_var_decl(
 /// - `source_live`: is the source's underlying local live AFTER `stmt_span`?
 /// - `source_own`: the source local's typed `LocalOwnership`, if any.
 ///
-/// The seven branches map to typed arms:
-/// - **A** (named GorgetString → GorgetString, value-aliasing) →
-///   `Borrow` + `set_shared_heap`. `is_named_local` retained as
-///   genuine gating (probe regressed 10 fixtures, see TODO).
-/// - **B** (named non-resource source with `clone_fn`, e.g.
-///   Str → GorgetString) → emit clone, `Move`. `is_named_local`
-///   retained as genuine gating (probe regressed 16 fixtures).
-/// - **C** (named resource, CoW-safe) → CoW alias via `Borrow` +
-///   Ptr retype + `set_ref`. `is_named_local` retained as genuine
-///   gating (probe regressed 50+ fixtures).
-/// - **D** (named resource, CoW-unsafe) → emit clone, `Move`.
-///   Bundled with C's gating.
+/// The seven branches now read typed predicates (six fully migrated
+/// 2026-05-06; D still gated on `is_named_local`, see comments):
+/// - **A** (Owned + live GorgetString same-type, value-aliasing
+///   `String b = a`) → `Borrow` + `set_shared_heap`.
+/// - **B** (Owned + live non-resource source with cross-type
+///   `clone_fn`, e.g. Str → GorgetString) → emit clone, `Move`.
+/// - **C** (live resource source, CoW-safe; transitive aliases
+///   permitted) → CoW alias via `Borrow` + Ptr retype + `set_ref`.
+/// - **D** (named resource source, CoW-unsafe) → emit clone,
+///   `Move`. `is_named_local` retained — see branch comment for
+///   the probe regression and the architectural blockers.
 /// - **E** (View source, GorgetString same-type) → emit
-///   clone-to-owned, `Move`. Fully typed via `LocalOwnership::View`.
-/// - **F** (Owned + dead, droppable target) → `Move`. Typed
-///   predicate strictly extends the legacy `drops.is_registered`
-///   sidecar to cover Option/Result wrapper types.
+///   clone-to-owned, `Move`. Typed via `LocalOwnership::View`.
+/// - **F** (unnamed droppable temp OR Owned + dead with droppable
+///   target) → `Move`. Typed; the legacy `drops.is_registered`
+///   sidecar was retired this session as fully subsumed.
 /// - **G** (safety net: target_resource fell through to Copy) →
 ///   `Move`.
 fn lower_var_decl_assign_mode(
