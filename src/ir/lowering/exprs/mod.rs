@@ -1638,14 +1638,26 @@ fn lower_struct_literal(
         // the pointee value and store that into the field. Skip the clone
         // — the source's MoveZero (already scheduled by `Expr::Move`)
         // ensures no double-drop.
+        //
+        // ONLY safe when the source genuinely owns its pointee. The shape
+        // we accept here is `is_owning_param` (a `!`-sigil resource param,
+        // whose `Expr::Move` lowering MoveZero's the param slot — making
+        // the recipient's shallow copy the sole owner). For non-owning
+        // borrows (Field, regular bare param, CowBorrow), the post-move
+        // zero only blanks the 8-byte Ptr local — the source struct
+        // field / collection element / parameter cell still owns the
+        // bytes, so a `load_ref` here would alias them and double-free
+        // at scope exit. Fall through to `ensure_owned_at_boundary`,
+        // which clones the pointee into a fresh owned value.
         if matches!(args.get(i).map(|a| &a.node), Some(Expr::Move { .. })) {
             let move_info = match &*op {
                 Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                     let local_type = builder.local_type(place.local);
+                    let lidx = place.local.0 as usize;
+                    let source_owns = lidx < builder.locals.len() && builder.locals[lidx].is_owning_param;
                     match ctx.type_registry.get(local_type) {
-                        Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner)) => {
-                            Some((place.clone(), *inner))
-                        }
+                        Some(crate::ir::types::GirType::Ptr(inner)) | Some(crate::ir::types::GirType::MutPtr(inner))
+                            if source_owns => Some((place.clone(), *inner)),
                         _ => None,
                     }
                 }
