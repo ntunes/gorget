@@ -436,9 +436,23 @@ pub(super) fn lower_closure_spawn(
     // Extract capture field values from the closure struct using actual field indices.
     // The field_index is the position in the struct (which may differ from the
     // position in this captures list when ByMutRef captures are filtered out).
+    //
+    // Phase C FieldLoad migration (2026-05-06): the spawned task takes
+    // ownership of the captures (the closure_local is dead at this site —
+    // last use, immediately consumed by the spawn). For resource-typed
+    // captures, emit a `field_load + move_zero` pair so the GIR-level
+    // Move semantic is explicit (the validator's next-inst peek
+    // recognises this pattern and skips the shallow-copy warning).
+    // Non-resource captures (primitives) bit-copy is sound.
     let mut spawn_args: Vec<Operand> = Vec::new();
     for (_, cap_type, field_index) in captures {
         let field_val = builder.field_load(Place::local(closure_local), *field_index, *cap_type);
+        if ctx.type_registry.is_resource_type(*cap_type) {
+            builder.move_zero(Place {
+                local: closure_local,
+                projections: vec![Projection::Field(*field_index)],
+            });
+        }
         spawn_args.push(FunctionBuilder::copy(field_val));
     }
 
