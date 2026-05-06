@@ -35,11 +35,13 @@ jobs:
       - name: Integration tests
         run: cargo test --test integration -- --test-threads=1
         env:
+          GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
 
       - name: Security tests (ASan + UBSan)
         run: cargo test --test security -- --test-threads=1
         env:
+          GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
 
   llvm-backend:
@@ -79,6 +81,7 @@ jobs:
         run: cargo test --test integration --release -- --test-threads=4
         env:
           GG_BACKEND: llvm
+          GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
 
       # Sanitize-build the security fixtures through `--backend=llvm` so an
@@ -91,4 +94,5 @@ jobs:
         run: cargo test --test security --release -- --test-threads=1
         env:
           GG_BACKEND: llvm
+          GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
