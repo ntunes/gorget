@@ -737,9 +737,24 @@ impl<'a> FuncLowering<'a> {
         if consuming { return None; }
         match payload_ty {
             LirType::Struct(sid) => {
-                let name = self.module_structs.get(sid.0 as usize)
-                    .map(|s| s.name.as_str()).unwrap_or("");
-                match name {
+                let sd = match self.module_structs.get(sid.0 as usize) {
+                    Some(s) => s,
+                    None => return None,
+                };
+                let name = sd.name.as_str();
+                // Phase A residual #2 (2026-05-05): the previous shape
+                // matched only on the runtime singleton's name (`GorgetClosure`,
+                // `GorgetArray`, …) — load-bearing because, before residual #2,
+                // mangled aliases like `Callable__GorgetClosure` and
+                // `Vector__int64_t` shared the runtime's StructId so the name
+                // came out as the runtime singleton's name. After residual #2,
+                // `c_runtime_alias`-tagged aliases (Callable family) get their
+                // OWN StructDef, so the name comes out as `Callable__GorgetClosure`
+                // and the literal-name match misses. Read `c_runtime_alias`
+                // first, falling back to the literal name match — this is the
+                // typed-metadata-resolves-via-alias-chain shape.
+                let resolved_name = sd.c_runtime_alias.as_deref().unwrap_or(name);
+                match resolved_name {
                     "GorgetArray" => Some("gorget_array_clone".into()),
                     "GorgetMap" => Some("gorget_map_clone".into()),
                     "GorgetSet" => Some("gorget_set_clone".into()),
