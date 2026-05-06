@@ -466,6 +466,35 @@ impl TypeRegistry {
         self.name_to_def.keys()
     }
 
+    /// Wider counterpart of `is_resource_type`: returns true iff the type's
+    /// drop is non-trivial (i.e. the type owns heap, OR transitively contains
+    /// a type that does — `Option[String]`, `Result[Vector, _]`, struct/enum
+    /// containing resource fields). Equivalent to `needs_drop(type_id)`;
+    /// exposed as a separate accessor so migration sites read the intent
+    /// ("this gate should fire for any non-trivial-drop type") rather than
+    /// the mechanism ("does this need a drop registered?").
+    ///
+    /// **Phase 1 audit (2026-05-05).** The narrow `is_resource_type` and the
+    /// wider `needs_drop` answer different questions:
+    /// - `is_resource_type(t)`: "does `t` directly own heap?" → used for
+    ///   Ptr-wrapping decisions, Move-vs-Copy assign mode, MoveZero
+    ///   emission. Most callsites (~125 of ~134) want this narrow shape;
+    ///   widening regresses 112 fixtures because clone-fn lookup, struct
+    ///   field clone routing, and pattern Ptr-wrap depend on direct shape.
+    /// - `needs_drop(t)` / `is_resource_or_contains_resource(t)`: "does
+    ///   any drop logic fire for `t`?" → used for drop registration,
+    ///   ownership-transfer correctness on enum wrappers, Phase C
+    ///   validators that need to recognize Option/Result-with-resource
+    ///   payloads. About 3-5 callsites should migrate to this predicate;
+    ///   tracked in TODO.md "is_resource_type widening" Phase 2 plan.
+    ///
+    /// Implementation is a thin alias over `needs_drop`. Calling this
+    /// vs. `needs_drop` is purely a readability choice for the call site:
+    /// pick whichever name makes the intent clear.
+    pub fn is_resource_or_contains_resource(&self, type_id: TypeId) -> bool {
+        self.needs_drop(type_id)
+    }
+
     /// Check whether a type has Resource copy semantics (owns heap-allocated buffers).
     /// This covers both types with explicit Resource metadata in their TypeDef,
     /// and collection types whose TypeDef may lack correct metadata due to
