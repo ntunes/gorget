@@ -127,7 +127,6 @@
 
   [added: 2026-05-04, partial probe + severance shipped: 2026-05-05]
 
-- **Phase D4: `fresh_string_locals: FxHashSet<LocalId>` — sidecar storage kept; name-matching predicate retired (typed `RuntimeSig.returns_fresh` + `BuiltinMethodDecl.returns_fresh` shipped).** Update 2026-05-05: writers (`call_tracked`, `call_extern_tracked`) now consult `RuntimeFn::from_c_name(name).map(|f| f.signature().returns_fresh)` via the new `runtime_returns_fresh` helper instead of the retired `is_fresh_allocating_extern` name list. The sidecar field itself stays — the `+`-string concat operator (`exprs/operators.rs`, redundant write removed since `gorget_str_cat` now flows through the typed registry) and `gorget_string_format` f-strings (`exprs/mod.rs:2736`, kept as direct write — format is not in `RuntimeFn` since it's a variadic-shaped formatter) still need a place to record fresh-tagged LocalIds. Full structural retirement requires extending `LocalOwnership::Owned` with a `fresh: bool` discriminator (the bit is finer-grained than today's `Owned` — strictly stronger because Owned can include moved-in values that share heap data with their source). That's a deeper change to a critical enum than fits a single session; the typed-source-of-truth refactor that closes the other two items has shipped. [revised: 2026-05-05]
 
 
 
