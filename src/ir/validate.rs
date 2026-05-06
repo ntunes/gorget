@@ -1143,6 +1143,32 @@ pub fn validate_resource_index_reads(module: &Module) -> Vec<ResourceMoveWarning
     warnings
 }
 
+/// Just the EnumFieldLoad class — promoted to fatal at the
+/// `validate_resource_moves` site after the 2026-05-06 LIR-side migration
+/// (lir/lower/insts.rs `payload_is_resource` widening) drove the count
+/// from 3750 to 0 across 1068 fixtures. Auto-zero of the source field
+/// after extraction is now unconditional for all resource payloads
+/// (was previously gated to GorgetString only); the validator's
+/// `for_each_read_site` walker now reports Move for every resource
+/// payload to mirror the lowering. Any future lowering that emits
+/// `EnumFieldLoad` of a resource payload through a non-Ptr dst without
+/// the LIR auto-zero halts the build instead of leaking past the
+/// validator. Splitting this out lets it run unconditionally alongside
+/// the call-arg + index-read fatals while the remaining FieldLoad class
+/// still surfaces warnings only.
+pub fn validate_resource_enum_reads(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        for_each_read_site(func, module, |site| {
+            if !matches!(site.class, ReadSiteClass::EnumFieldLoad { .. }) { return; }
+            if let Some(w) = validate_read(site, &module.type_registry) {
+                warnings.push(w);
+            }
+        });
+    }
+    warnings
+}
+
 /// A typed read-site descriptor: enough to (a) route through the unified
 /// validator and (b) build the per-class warning when a violation fires.
 ///

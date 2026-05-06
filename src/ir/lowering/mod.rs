@@ -1557,15 +1557,38 @@ pub fn lower_module(
         }
     }
 
-    // Phase C extension: remaining read-site validators (FieldLoad,
-    // EnumFieldLoad). Stage 1 — gated behind
-    // `GG_VALIDATE_RESOURCE_READS`, prints per-class counts to a log
-    // file (path is the env var value) without panicking. The
-    // 2026-05-06 sweep counts: field=2584, enum=12191 (index=0, arg=0
-    // both promoted to fatal above). Each class needs its own lowering
-    // migration before promotion. Output goes to a file (not stderr)
-    // because `cargo test` captures subprocess stderr and only surfaces
-    // it on failure.
+    // Phase C extension promoted: `EnumFieldLoad` of resource payload.
+    // 2026-05-06 LIR-side migration (lir/lower/insts.rs
+    // `payload_is_resource` widening, was `is_str_field`): the
+    // post-extract field zero now fires for every resource payload
+    // (Vector / Dict / Set / GorgetString / GorgetClosure / Box[T] /
+    // recursive-drop user enums), not just GorgetString. The
+    // validator's `for_each_read_site` walker mirrors the predicate by
+    // reporting `ReadMode::Move` for every resource payload. The full
+    // sweep dropped ShallowCopyOfEnumPayload from 3750 to 0 across 1068
+    // fixtures, so the class is fatal. Any future lowering that emits
+    // an `EnumFieldLoad` of a resource payload through a non-Ptr dst
+    // without the LIR auto-zero halts the build instead of leaking past
+    // the validator.
+    {
+        let enum_warnings = crate::ir::validate::validate_resource_enum_reads(&module);
+        if !enum_warnings.is_empty() {
+            eprintln!("[resource-enum-reads] {} violation(s):", enum_warnings.len());
+            for w in &enum_warnings {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed resource enum-read validation ({} violation(s))", enum_warnings.len());
+        }
+    }
+
+    // Phase C extension: remaining read-site validator (FieldLoad).
+    // Stage 1 — gated behind `GG_VALIDATE_RESOURCE_READS`, prints
+    // per-class counts to a log file (path is the env var value)
+    // without panicking. The 2026-05-06 post-EnumFieldLoad-migration
+    // counts: field=1380 (index=0, arg=0, enum=0 all promoted to fatal
+    // above). FieldLoad needs its own lowering migration before
+    // promotion. Output goes to a file (not stderr) because `cargo
+    // test` captures subprocess stderr and only surfaces it on failure.
     if let Ok(log_path) = std::env::var("GG_VALIDATE_RESOURCE_READS") {
         if !log_path.is_empty() {
             let reads = crate::ir::validate::validate_resource_reads(&module);
