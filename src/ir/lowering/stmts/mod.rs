@@ -744,11 +744,20 @@ fn lower_var_decl_assign_mode(
     let same_type_string =
         rhs_type == owned_string && actual_var_type == owned_string;
 
-    // Branch A — named GorgetString same-type (value-aliasing
-    // `String b = a` shape). `is_named_local` is genuine gating —
+    // Branch A — Owned + live GorgetString same-type (value-aliasing
+    // `String b = a` shape). Migrated 2026-05-06: legacy
+    // `is_named_local` proxy replaced with the typed
+    // `source_live && source_own.is_owned()` predicate. Probe history
+    // (2026-05-04) had regressed 10 fixtures across leak_*,
+    // stress_alloc_strings/closures, string_builder*. Root cause:
     // unnamed function-call temps own GorgetString data; treating
-    // them as borrow sources leaks the heap allocation.
-    if same_type_string && source_is_named {
+    // them as borrow sources leaked the allocation. The typed
+    // predicate excludes them (source_live=false for unnamed temps),
+    // routing them to F's Move path.
+    if same_type_string
+        && source_live
+        && source_own.as_ref().map_or(false, |s| s.is_owned())
+    {
         ctx.drops.unregister(source_place.local);
         ctx.set_shared_heap(builder, local_id, source_place.local);
         assign_mode = AssignMode::Borrow;
