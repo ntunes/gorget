@@ -160,6 +160,19 @@ If the metadata genuinely doesn't exist yet, **add it** rather than fishing for 
 
 **Litmus test:** if a downstream pass reconstructs information from names, sentinel values, or shape heuristics, the boundary upstream was drawn wrong. The fix is always upstream — add the field, write it at the source, read it at the consumer. Cite the doc in PRs that touch IR layer boundaries.
 
+**Debugging heuristic — fix complexity as a signal of wrong layer.** When you've localized a bug and the fix you're sketching is *intrinsically complex* — save/restore state around branches, phi insertion at merges, scope-tracking name maps, manual SSA repair, ad-hoc invalidation, "rebind correctly across CF merges" — stop. That complexity is almost always a tell that you're patching a *symptom*, not the cause. Real bugs in well-layered compilers are usually one-line oversights at a **write** site, not multi-case rules at the **read** site. Before committing to the complex fix:
+
+1. Trace the data the buggy site is reading. *Where was it last written?*
+2. Look at the writer. *Did it respect all the typed metadata available at that point?* Or did it default / hardcode / collapse cases that the upstream had distinguished?
+3. If yes (writer was lossy), the bug lives there — fix it at the source. The downstream "complex fix" usually evaporates because the wrong assumption never gets propagated.
+4. If no (writer was faithful), then trace one more layer up. Repeat.
+
+Rule of thumb: every layer hop you climb without finding the bug should make you *more* suspicious of your initial diagnosis, not less. A multi-line fix at the symptom layer that requires you to reason about every interleaving of branches is the universe trying to tell you the bug is elsewhere.
+
+Worked examples:
+- Snag #17 (chained `text.substring(...)` corrupting later `parse_float(text)`): symptom was `cow_materialize_alias` rebinding a variable name across CF merges. Fix candidates at that layer: don't rebind / save-restore / phi insertion — all 50+ lines, all with judgment-call tradeoffs. Real bug: `resolve_builtin_method_return_type` always wrote `MutPtr(self_type)` to `fn_sigs` regardless of the protocol's `self_conv` flag, so `lower_method_call`'s `needs_mut` check fired on non-mutating methods, *triggering* the materialization that then exposed the rebind. Fix at the writer: 5 lines dispatching on `self_conv`. The rebind path is now correctly never-taken; the SSA-correctness question evaporates.
+- Snag #13 (Box-recursive enum returned by value links to undefined `__gorget_box_alloc_<T>`): symptom was missing helper declarations. Tempting fix: scan recursive-drop tables for `Box__X__drop` strings and synthesize helpers — but that's name-matching and adds a parallel inference. Real bug: the LIR `StructDef` for `Box[T]` had typed inner-type info available at registration time but didn't expose it to the C backend. Fix at the writer: add `box_inner_type: Option<String>` to `StructDef`, set at the regular-Box registration site, read at the helper-emitter. Consumer is one `for sd in &module.structs` loop; no name parsing.
+
 ## Don't redesign around compiler gaps
 
 When work hits a compiler bug, the response must be one of:
