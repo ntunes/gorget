@@ -101,31 +101,13 @@
 
   Cross-check guard already wired: any setter that forgets to write through `Local.ownership` will trip `debug_assert_eq!` at `flush_ownership_to_locals` next time the function exits (debug builds). 100+ debug-mode integration tests pass without tripping. [partial: 2026-05-06]
 
-- **Deferred String materialization — language-wide redesign** [HIGH-PRIORITY OPTIMIZATION] (filed 2026-05-04 after CoW chain fix #45 landed; partial probe 2026-05-05). The current Gorget design eagerly clones at every `String x = ptr_typed_source` boundary (auto-deref path at `stmts/mod.rs:463`) and now also at chain-trim sites (#45 fix). Both are wasteful when the source's container isn't mutated within x's lifetime. The right design is deferred: keep x as a view, track views into source containers via existing `views_of_source` / `cow_before_mutation` machinery, materialize JIT only on container mutation.
+- **Deferred String materialization — Sites #2 and #4 remaining** [LOW PRIORITY] (filed 2026-05-04, sites #1 + #3 closed 2026-05-05/06). The auto-deref path at `stmts/mod.rs` (Site #1) now propagates `Borrowed { Field { base, field }, .. }` for typed bindings off struct field-loads (closed 2026-05-06; option (a) shipped via consumer-bug fix at `lower_struct_init` Move-sigil branch). The CoW severance walk for NAMED Field borrows (Site #3) shipped 2026-05-05. Sites #2 and #4 remain:
 
-  **Status update from 2026-05-05 investigation (probe-by-probe per CLAUDE.md):**
+  - **Site 2 (`methods.rs:2197` view propagation through Option-wrapping).** **Theoretical, not currently triggered.** The 6 string methods that return views (`trim`, `substring`, `slice`, `strip`, `str`, `as_str` per `builtins.rs:634-639`) all return `String`-by-value, not `Option[String]`. The `s.find(...)` example in the original TODO returns `Option[int]`, not `Option[StrView]`. No currently-shipped or planned API hits this path. Not a real gap until a future view-of-Option API exists.
 
-  Reading the four cited sites against the post-chain-caveat state of the codebase (commit `22b3e237`) showed a more nuanced picture than the original TODO assumed:
+  - **Site 4 (borrow-checker decidability).** The lifetime question — "can we statically prove `x` doesn't outlive `source`'s last possible mutation?" — needs a separate design pass. Today's heuristic (`is_cow_unsafe_at(name, span)` for reassignment-on-forward-path) catches the common case but isn't lifetime-aware. Defer to a dedicated session.
 
-  - **Site 1 (`stmts/mod.rs:463` auto-deref).** Already largely deferred. The cow_borrow path (line 442–462) propagates `Vector.get(0).unwrap()` style borrows. The bare-param path propagates fn-param borrows. The eager-clone branch (line 463) only fires for **Field-borrow** Ptr sources — typed bindings off struct field-loads — and a small set of Owned-Ptr returns from user fns. Self-host typechecker fires this 13× per build, almost all `String x = struct.field` shapes. ~The realistic optimisation gain is per-`fn` static-string fields (FunctionSig, Module path, etc.) where the source struct is read-only.~ Probe inserted Field-origin propagation at this site (`set_field_borrow` on the typed binding) — regressed self_host_bootstrap to a runtime double-free. Bisected to a downstream consumer issue: NAMED locals with `LirType::Ptr(GorgetString)` + `LocalOwnership::Borrowed { Field, .. }` aren't yet handled correctly by some pass between flush_ownership_to_locals and the C/LIR backend (suspect: f-string deref handling or the `is_pure_borrow_for` predicate that calls Field a "pure" borrow with no materialisation expected). Filed as sub-task — see (a)/(b)/(c) below.
-
-  - **Site 2 (`methods.rs:2197` view propagation through Option-wrapping).** **Theoretical, not currently triggered.** The 6 string methods that return views (`trim`, `substring`, `slice`, `strip`, `str`, `as_str` per `builtins.rs:634-639`) all return `String`-by-value, not `Option[String]`. The `s.find(...)` example in the original TODO returns `Option[int]`, not `Option[StrView]`. No currently-shipped or planned API hits this path. Reclassify: not a real gap until a future view-of-Option API exists.
-
-  - **Site 3 (`cow_before_mutation` transitive walk).** Partially shipped 2026-05-04: `cow_materialize_view` already recurses through transitive views (sub-views of views). What was actually missing was Field-borrow walks. Shipped today: `field_borrows_of(local)` + Case 6 in `cow_before_mutation` + matching loop in `cow_sever_all_aliases_from`, both filtered to NAMED locals (ephemeral field-load temps share the same Field origin tag — materialising them generates duplicate clones of stale Ptr values; verified by initial unfiltered probe regressing self_host_bootstrap). This adds defense-in-depth for pattern-destructuring cases (`patterns.rs:562, 716` already produce NAMED Field-borrowed locals via match) — when the parent struct is reassigned, those bindings now materialize. The full integration sweep stays at 1056/1056.
-
-  - **Site 4 (borrow-checker decidability).** Untouched. The lifetime question — "can we statically prove `x` doesn't outlive `source`'s last possible mutation?" — needs a separate design pass. Today's heuristic (`is_cow_unsafe_at(name, span)` for reassignment-on-forward-path) catches the common case but isn't lifetime-aware. Defer to a dedicated session.
-
-  **Where things stand (2026-05-05):**
-
-  - **Severance shipped** (commit `faa0f3bd`): NAMED Field-borrowed locals are correctly materialized when parent is mutated/reassigned. Useful for pattern-destructuring borrow safety today; foundation for site #1 propagation tomorrow.
-  - **Site #1 propagation deferred** until one of these unblocks:
-    - **(a)** Audit downstream passes (LIR `flush_ownership_to_locals`, C-LIR backend's f-string deref, `is_pure_borrow_for` Field-as-pure semantics) for NAMED Ptr-typed Field-origin locals; fix the consumer that's mishandling them. Same probe-then-diagnose pattern as Phase D4's branch E (which surfaced `cow_materialize_view`'s shallow-copy bug). Likely 1-2 days.
-    - **(b)** Switch site #1's Field branch to emit an explicit `Deref` to a value-typed String (loses the deferred-clone win — equivalent to today's eager clone — but mechanically simple, ships the architectural shape without the optimisation).
-    - **(c)** "Decidable + fall back": at site #1, propagate as Field borrow only when the borrow checker proves the source is never mutated in the scope; otherwise emit eager clone. This needs Site #4's machinery first.
-
-  Best path forward is (a) with a focused probe. The downstream consumer bug is exactly the kind of "the typed-state migration regresses → fix the consumer that's reading typed state wrong" pattern that's recurred 8× in this branch's history (Phase D4 branches E, F, G; cow_materialize_view; etc.).
-
-  [added: 2026-05-04, partial probe + severance shipped: 2026-05-05]
+  [added: 2026-05-04, sites #1 + #3 shipped: 2026-05-05]
 
 
 
