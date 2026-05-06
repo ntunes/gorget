@@ -2191,11 +2191,30 @@ fn lower_match_expr(
             // expression) — Move is the correct mode for resource types so
             // the validator doesn't flag a shallow copy of the arm's owned
             // value into the result slot.
+            //
+            // When the arm's tail is just a drop-registered local (e.g.
+            // `case Ok(ts): ts` where `emit_pattern_bindings` cloned the
+            // payload into `ts`'s slot to give it independent ownership),
+            // Move mode means transfer-of-ownership: the source's drop
+            // registration must be retired and the slot logically dead so
+            // scope-exit drops don't double-free the heap allocation that
+            // now lives in `result_local`. Without this follow-through,
+            // both the pattern binding and the match's result slot end
+            // up holding the same pointer and both fire at scope exit.
+            let move_source: Option<LocalId> = match &arm_val {
+                Operand::Copy(p) | Operand::Move(p)
+                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
+                    Some(p.local),
+                _ => None,
+            };
             builder.assign_mode(
                 crate::ir::instructions::AssignMode::Move,
                 Place::local(result_local),
                 arm_val,
             );
+            if let Some(src) = move_source {
+                ctx.move_zero_and_mark(builder, src);
+            }
             builder.jump(merge_bb);
         }
 
@@ -2211,11 +2230,23 @@ fn lower_match_expr(
                 let else_ty = infer_operand_type_full(ctx, &else_val, builder);
                 builder.locals[result_local.0 as usize].type_id = else_ty;
             }
+            // See arm-loop comment above: Move-into-result follow-through
+            // (zero + unregister drop) when the source is a drop-registered
+            // local — keeps the result_local as the sole owner.
+            let else_move_source: Option<LocalId> = match &else_val {
+                Operand::Copy(p) | Operand::Move(p)
+                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
+                    Some(p.local),
+                _ => None,
+            };
             builder.assign_mode(
                 crate::ir::instructions::AssignMode::Move,
                 Place::local(result_local),
                 else_val,
             );
+            if let Some(src) = else_move_source {
+                ctx.move_zero_and_mark(builder, src);
+            }
             builder.jump(merge_bb);
         }
     }
