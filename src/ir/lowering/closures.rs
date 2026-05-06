@@ -346,13 +346,31 @@ pub fn emit_closure_call_function(
     for (i, cap) in closure.captures.iter().enumerate() {
         match cap.mode {
             CaptureMode::ByValue => {
-                // Load field from env struct → local
-                let dst = builder.field_load(
-                    Place::local(env_local),
-                    i as u32,
-                    cap.type_id,
-                );
-                ctx.register_local(&cap.name, dst, cap.type_id);
+                // Phase C FieldLoad migration (2026-05-06): resource-typed
+                // ByValue captures load as Ptr(cap.type_id) — a borrow into
+                // the env's storage. The env owns the data across calls; the
+                // closure body reads through the borrow. Auto-clone fires at
+                // ownership boundaries (call args via auto_clone_if_ptr,
+                // VarDecl Ptr→T via clone_fn_for_ptr, etc.). Mirrors the
+                // owned-base lower_field_access path. Non-resource captures
+                // (primitives) stay value-typed (bit-copy is correct).
+                if ctx.type_registry.is_resource_type(cap.type_id) {
+                    let ptr_type = ctx.type_registry.insert(GirType::Ptr(cap.type_id));
+                    let dst = builder.field_load(
+                        Place::local(env_local),
+                        i as u32,
+                        ptr_type,
+                    );
+                    ctx.register_local(&cap.name, dst, ptr_type);
+                    ctx.set_field_borrow(&mut builder, dst, env_local, i as u32);
+                } else {
+                    let dst = builder.field_load(
+                        Place::local(env_local),
+                        i as u32,
+                        cap.type_id,
+                    );
+                    ctx.register_local(&cap.name, dst, cap.type_id);
+                }
             }
             CaptureMode::ByMutRef => {
                 // Load pointer field from env struct
