@@ -2040,6 +2040,19 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// If `local` is a `Borrowed { origin: Field { base, field }, .. }`,
+    /// return its `(base, field)` tuple. Used at the VarDecl boundary
+    /// (Site #1) to propagate Field origin onto typed bindings.
+    pub fn field_borrow_origin(&self, local: LocalId) -> Option<(LocalId, u32)> {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        match self.func_state.local_ownership.get(&local) {
+            Some(LocalOwnership::Borrowed {
+                origin: BorrowOrigin::Field { base, field }, ..
+            }) => Some((*base, *field)),
+            _ => None,
+        }
+    }
+
     /// Tag `local` as the source for element `index` of tuple temp `tuple`.
     /// Recorded at `Inst::TupleInit` emission so the return path can
     /// MoveZero element sources when the tuple is returned. Replaces the

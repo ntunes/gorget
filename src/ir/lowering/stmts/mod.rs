@@ -424,14 +424,14 @@ fn lower_var_decl(
                         // - CowBorrow with provenance: borrows from a collection via
                         //   .get().unwrap(). Tracked as CollectionRef so
                         //   cow_before_mutation materializes when the collection is mutated.
-                        let (source_is_bare_param, source_is_cow_borrow) = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                        let (source_is_bare_param, source_is_cow_borrow, source_field_origin) = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
                                 let cow = ctx.is_cow_borrow(p.local) && ctx.cow_borrow_source(p.local).is_some();
-                                (ctx.is_bare_param(p.local), cow)
+                                (ctx.is_bare_param(p.local), cow, ctx.field_borrow_origin(p.local))
                             } else {
-                                (false, false)
+                                (false, false, None)
                             }
-                        } else { (false, false) };
+                        } else { (false, false, None) };
 
                         let in_loop = ctx.current_loop().is_some();
                         // Allow borrow propagation in loops when the variable is
@@ -465,6 +465,26 @@ fn lower_var_decl(
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                             ctx.set_collection_ref(builder, local_id, collection);
+                            ctx.drops.unregister(local_id);
+                        } else if let Some((base, field)) = source_field_origin
+                            .filter(|_| !in_loop || safe_in_loop)
+                            .filter(|_| ctx.type_registry.is_resource_type(_inner))
+                        {
+                            // PROBE (Site #1 Field-borrow propagation): the
+                            // source is a Ptr-typed field-load (e.g.
+                            // `String x = obj.field`). Instead of eagerly
+                            // cloning the field's data (the legacy branch
+                            // below), propagate the Field origin onto the
+                            // typed binding so cow_before_mutation severs
+                            // when the parent struct is mutated. Mirrors
+                            // the bare-param / cow-borrow propagations
+                            // above. CoW severance walks NAMED Field
+                            // borrows (commit 86d4fef7) handle the
+                            // materialisation side.
+                            builder.locals[local_id.0 as usize].type_id = inferred;
+                            ctx.register_local(name, local_id, inferred);
+                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
+                            ctx.set_field_borrow(builder, local_id, base, field);
                             ctx.drops.unregister(local_id);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(_inner) {
                             // Owned Ptr source (function return, etc.) → auto-clone
