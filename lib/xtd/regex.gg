@@ -17,8 +17,15 @@ extern "C":
 
     # Convenience _pat functions (compile + operate + free in one call)
     extern bool regex_is_match(cstr pattern, cstr subject) = "gorget_regex_is_match_pat"
-    extern Result[Match, String] regex_find(cstr pattern, cstr subject) = "gorget_regex_find_pat"
+    extern Match _regex_find_pat_raw(cstr pattern, cstr subject) = "gorget_regex_find_pat"
     extern String regex_replace(cstr pattern, cstr subject, cstr replacement) = "gorget_regex_replace_pat"
+
+# Convenience: sentinel → Option conversion mirroring `Regex.find()`.
+Option[Match] regex_find(String pattern, String subject):
+    Match m = _regex_find_pat_raw(pattern, subject)
+    if m.start() < 0:
+        return None
+    return Some(m)
 
 # ── Gorget wrappers ──────────────────────────────────────────
 
