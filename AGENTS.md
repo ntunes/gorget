@@ -160,6 +160,24 @@ If the metadata genuinely doesn't exist yet, **add it** rather than fishing for 
 
 **Litmus test:** if a downstream pass reconstructs information from names, sentinel values, or shape heuristics, the boundary upstream was drawn wrong. The fix is always upstream — add the field, write it at the source, read it at the consumer. Cite the doc in PRs that touch IR layer boundaries.
 
+## Don't redesign around compiler gaps
+
+When work hits a compiler bug, the response must be one of:
+
+1. **Fix the gap.** Default move when scope allows.
+2. **Write a fixture that exposes the gap + a sharp TODO entry citing it.** Wire as `#[ignore]` if leaving it failing would block other work — but the fixture's expected output must reflect what the language *should* do, not what it currently does.
+
+Forbidden: reshaping the surrounding code (tests, fixtures, examples, even production code) to avoid the gap. Even when commented, this buries the bug. The wired-in expected output (or the surviving workaround idiom) becomes the load-bearing artifact, and "passing" tests lock in buggy behavior as canonical.
+
+Worked examples from this codebase:
+- The Tier E §8.1 drop-flag agent hit the universal `!`-param drop-at-exit leak, redesigned the canonical `drop_flag_param_seed.gg` fixture around it (using locals instead of `!` params), and wired it in with `consume ck\nck-done` and no `drop ck` between them as expected output. The bug stayed hidden for a day until a deliberate scope-correction reproduced it; three masked-leak tests needed expected-output updates when the bug was fixed.
+- The `Dict.len()` codegen bug had `scores.keys().len()` documented as a workaround in a fixture comment for ~8 weeks; the bug was silently fixed, but the workaround idiom survived. Same shape: the redesign acquires inertia long after its justification disappears.
+- The Phase A `collection_runtime_type` migration TODO was filed 2026-05-02; the work shipped naturally as a side-effect of foundation commits over the next 3 days, but nobody updated the TODO. The right move when the agent saw it was to refuse to manufacture migration work to fit the stale entry — recursive instance of this rule.
+
+**Litmus test:** if a fixture uses a more complex shape than seems necessary, OR a workaround comment cites a bug, ask why. Patterns like "uses locals instead of `!` params" or "passes an extra explicit arg the language should default" are smells — likely a gap was dodged. Verify the bug still exists before treating the workaround as canonical.
+
+Stronger than "never silently work around a bug" — the workaround need not be silent to harm. Commented redesigns harm too, because the wired-in expected output is the load-bearing artifact, not the comment.
+
 ## Task Continuity
 
 Maintain `TODO.md` and `DONE.md` at the project root to track work across plans and conversations.
