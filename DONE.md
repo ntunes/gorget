@@ -54,6 +54,31 @@
 
   Closes the option-(a) sub-bullet of the partial-probe entry filed 2026-05-05. Pattern: probe-then-diagnose recurs for the 9th time on this branch — typed-state migration regresses → fix the consumer reading typed state wrong. Sites #2 and #4 of the redesign remain (see TODO).
 
+- [2026-05-07] **Phase C FieldLoad migration: ShallowCopyOfResourceField promoted to fatal.** Drove the integration sweep's FieldLoad violation count from 1381 to 0, then promoted the `validate_resource_field_reads` validator from `GG_VALIDATE_RESOURCE_READS`-gated warning to unconditional fatal panic — mirroring the IndexLoad promotion (commit ee161175) and the Call/CallExtern args promotion (commit c6fedd4c).
+
+  **Lowering migrations** (one commit per site so bisect is precise):
+
+  - **`lower_field_access` (`src/ir/lowering/exprs/mod.rs`)** — drop the `base_is_ptr &&` guard at both the struct_fields-cache emission and the TypeDef-fallback emission. Owned-base resource user-struct fields (PeerId / UdpAddr / Token / Expr / etc.) now return `Ptr(field_type)` borrows tagged via `set_field_borrow`. Auto-clone (`auto_clone_if_ptr`, `ensure_owned_at_boundary`, `clone_fn_for_ptr` at VarDecl) materialises ownership at boundaries. Cleared 1381 → ~30 violations. Commit `e3c3b9d7`.
+
+  - **Closure ByValue capture loads (`src/ir/lowering/closures.rs`)** — at `__Closure_N__call` entry, resource-typed captures load as `Ptr(cap_type)` instead of `cap_type`. The env owns the data across calls; the closure body reads through the borrow. Mirrors the named-field shape. Non-resource captures bit-copy. Commit `c64bd49d`.
+
+  - **Spawn closure-arg extraction (`src/ir/lowering/exprs/spawn.rs`)** — when the closure_local feeds `__gorget_spawn_*`, emit `field_load + move_zero` for resource captures (the spawned task takes ownership). Commit `03498a28`.
+
+  - **`Pattern::Tuple` destructure** (`src/ir/lowering/stmts/{mod,patterns}.rs`) **+ `Expr::TupleFieldAccess`** (`src/ir/lowering/exprs/mod.rs`) — two shapes: (a) owned tuple (Move-mode in var-decl, `scrutinee_clone_elision` in match arms) emits `field_load + move_zero` for resource elements; (b) borrowed tuple (default — for-loop iteration via `index_load_borrow`, non-last-use match scrutinee) wraps each resource element as `Ptr(elem_type)` tagged via `set_field_borrow`. `TupleFieldAccess` mirrors the named-field-access path. Commit `b965d5a2`.
+
+  **Validator extension** (`src/ir/validate.rs`) — added `next_inst_zeroes_field` peek at the FieldLoad extractor: if the immediate next instruction is `MoveZero { place }` whose place equals the FieldLoad's base extended with `Field(field)`, treat the read as `ReadMode::Move` (sound). This recognises the !self consuming-self idiom (emitted by `lower_field_access`'s `is_consuming_self_access` arm and the closure-env-StructInit `pending_move_zero` deferred-zero list) without requiring a typed `FieldLoadMode` field on the instruction. Commit `c4e30b82`.
+
+  **Promotion** — `validate_resource_field_reads` and the fatal panic block in `lowering/mod.rs`. Mirrors the IndexLoad promotion shape exactly. Commit `91c976e1`.
+
+  **Test results:**
+  - Unit: 1010/1010 pass.
+  - Integration sweep: 1063/1066 pass (3 pre-existing flakes from parallel cargo rebuild races on the shared host: `c_emit_comparison`, `lowerer_comparison`, `self_host_e2e` — failure mode is `No such file or directory` on the compiled binary, not a real regression. Confirmed unchanged at baseline pre-migration.)
+  - `self_host_bootstrap` + `self_host_bootstrap_fixed_point` canaries green in 230-262s across three runs (pre-tuple, post-tuple, post-promotion).
+
+  **Files touched:** `src/ir/lowering/exprs/mod.rs`, `src/ir/lowering/exprs/spawn.rs`, `src/ir/lowering/closures.rs`, `src/ir/lowering/stmts/mod.rs`, `src/ir/lowering/stmts/patterns.rs`, `src/ir/validate.rs`, `src/ir/lowering/mod.rs`. Net: ~210 lines added / ~14 lines removed across 7 files.
+
+  **Phase C is now load-bearing for all 4 read-site classes** — CallArg, IndexLoad, EnumFieldLoad (commit 9c23e7d0), FieldLoad (commit 87033468) — each with its violation count provably zero on the integration sweep, each promoted to unconditional fatal panic.
+
 - [2026-05-06] **JS-interpreter porting feedback round 6: snag #12 + latent extern-signature bug.** Reporter's snag was "match-as-expression breaks codegen when the value type is a struct with resource fields and one arm diverges via `exit(...)`". Two-layer root cause + fix:
 
   **Layer 1 — extern function signatures weren't registered with the typechecker.** `register_signatures_recursive` in `typecheck.rs` only walked `Item::Function` and `Item::Equip`; `Item::ExternBlock` items had FunctionInfo built in `resolve.rs` but their `def.type_id` was never set to a `ResolvedType::Function`. `Expr::Identifier("exit")` returned `def.type_id` → `None` → `error_id`; the Call-resolution branch then fell into `ResolvedType::Error`, returning `error_id` as the call's result type. `error_id` unifies with anything (`unify`'s "Error type unifies with anything" early return), so void-vs-Big arm-type mismatches in match-as-expression silently slipped through to the IR layer, where the lowerer trusted the type and emitted a struct-init from an int slot. One-line fix: add an `Item::ExternBlock` arm to `register_signatures_recursive` that calls `register_function_signature` per inner function. Net surface: 5 lines. **Latent fixture exposed:** `regex_basic.gg` declared `Option[Match] conv_m = regex_find(...)` but the extern was `extern Result[Match, String] regex_find(...)`. The runtime `gorget_regex_find_pat` actually returns a plain `Match` with `.start = -1` as the no-match sentinel — Option semantics. The Result extern was a misdeclaration; pre-fix the type mismatch was silently swallowed because `regex_find`'s declared signature itself never reached the typechecker (extern signatures unregistered). Restructured `lib/xtd/regex.gg`: extern is now `extern Match _regex_find_pat_raw(...)`, and a Gorget wrapper `Option[Match] regex_find(String pattern, String subject)` mirrors `Regex.find()`'s sentinel→Option conversion.
