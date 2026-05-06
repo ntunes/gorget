@@ -101,10 +101,32 @@ pub(super) fn lower_method_call(
                     &args[0].node.value,
                     crate::ir::ImplicitCloneReason::ConsumingArg,
                 );
-                if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
-                    if place.projections.is_empty() {
-                        ctx.drops.unregister(place.local);
-                    }
+                // Box takes ownership: after the alloc shallow-copies the
+                // value into the heap, the source slot still holds the
+                // same interior pointers (Box children, String data,
+                // Vector handles). `unregister` alone only removes the
+                // scope-exit drop entry — an INSTRUCTION-LEVEL pre-rebind
+                // drop (the `drop x` that lower_assign emits when `x` is
+                // being reassigned to a resource type) still fires on the
+                // just-consumed slot and frees the box's interior.
+                //
+                // Repro: snag #23 follow-up segfault at iteration 3 of
+                //   while … : lhs = Node.Op(…, Box.new(!lhs), Box.new(!rhs))
+                // Iteration 1 free is harmless (lhs is a Lit with no
+                // interior). Iteration 2 free of lhs (now a Node.Op
+                // holding two Boxes) cuts off iteration 1's box-tree.
+                // Iteration 3 reads dangling pointers → SEGV.
+                //
+                // The fix mirrors the bare-name `Box(value)` ctor in
+                // `src/ir/lowering/exprs/calls.rs`: zero the source slot
+                // and mark it moved so both scope-exit AND pre-rebind
+                // drops see it as already-dead.
+                let consumed_source: Option<LocalId> = match &val {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                    _ => None,
+                };
+                if let Some(src) = consumed_source {
+                    ctx.drops.unregister(src);
                 }
 
                 let box_type_name = format!("Box__{inner_c}");
@@ -119,6 +141,9 @@ pub(super) fn lower_method_call(
                 };
                 let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
                 let dst = builder.call(alloc_fn, vec![val], box_type);
+                if let Some(src) = consumed_source {
+                    ctx.move_zero_and_mark(builder, src);
+                }
                 return FunctionBuilder::copy(dst);
             }
 

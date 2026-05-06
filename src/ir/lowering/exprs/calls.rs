@@ -510,13 +510,35 @@ pub(super) fn lower_call(
                 &args[0].node.value,
                 crate::ir::ImplicitCloneReason::ConsumingArg,
             );
-            // Unregister source — Box takes ownership, source must not be dropped.
-            if let Operand::Copy(ref place) | Operand::Move(ref place) = val_op {
-                if place.projections.is_empty() {
-                    ctx.drops.unregister(place.local);
-                }
+            // Box takes ownership: after the alloc shallow-copies the value
+            // into the heap, the source's slot still holds the same interior
+            // pointers (Box children, String data, Vector handles). If we
+            // only `unregister` from the drop tracker, the slot stays alive
+            // for any subsequent INSTRUCTION-LEVEL drop — notably the
+            // pre-rebind `drop x` that `lower_assign` emits when the
+            // assignment target itself owns a resource. That drop frees
+            // the interior pointers the new Box now owns, leaving the
+            // freshly-allocated Box with dangling children. Zero the source
+            // slot and mark it moved so both scope-exit drops AND
+            // pre-rebind drops see it as already-dead.
+            //
+            // This matters specifically for the left-fold-into-self pattern
+            //   `lhs = Node.Op(..., Box.new(!lhs), Box.new(!rhs))`
+            // where `lhs` is being read for the `Box.new` AND rebound by the
+            // surrounding assignment. Without the zero+mark, iteration 2's
+            // pre-rebind drop frees iteration 1's heap-copied interior, and
+            // iteration 3 segfaults reading dangling pointers from the box.
+            let consumed_source: Option<LocalId> = match &val_op {
+                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                _ => None,
+            };
+            if let Some(src) = consumed_source {
+                ctx.drops.unregister(src);
             }
             let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
+            if let Some(src) = consumed_source {
+                ctx.move_zero_and_mark(builder, src);
+            }
             return FunctionBuilder::copy(dst);
         }
 
