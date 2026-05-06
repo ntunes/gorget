@@ -1128,8 +1128,7 @@ pub fn validate_resource_call_args(module: &Module) -> Vec<ResourceMoveWarning> 
 /// `index_load_borrow` for resource elements; the remaining `index_load`
 /// (Clone) callers either operate on non-resource elements or wrap with
 /// proper element-clone routing in the LIR. Splitting this out lets it
-/// run unconditionally alongside the call-arg fatal while the remaining
-/// two classes (field, enum) still surface warnings only.
+/// run unconditionally alongside the call-arg fatal.
 pub fn validate_resource_index_reads(module: &Module) -> Vec<ResourceMoveWarning> {
     let mut warnings = Vec::new();
     for func in &module.functions {
@@ -1153,14 +1152,35 @@ pub fn validate_resource_index_reads(module: &Module) -> Vec<ResourceMoveWarning
 /// payload to mirror the lowering. Any future lowering that emits
 /// `EnumFieldLoad` of a resource payload through a non-Ptr dst without
 /// the LIR auto-zero halts the build instead of leaking past the
-/// validator. Splitting this out lets it run unconditionally alongside
-/// the call-arg + index-read fatals while the remaining FieldLoad class
-/// still surfaces warnings only.
+/// validator.
 pub fn validate_resource_enum_reads(module: &Module) -> Vec<ResourceMoveWarning> {
     let mut warnings = Vec::new();
     for func in &module.functions {
         for_each_read_site(func, module, |site| {
             if !matches!(site.class, ReadSiteClass::EnumFieldLoad { .. }) { return; }
+            if let Some(w) = validate_read(site, &module.type_registry) {
+                warnings.push(w);
+            }
+        });
+    }
+    warnings
+}
+
+/// Just the FieldLoad class — promoted to fatal at the
+/// `validate_resource_moves` site after the 2026-05-06 FieldLoad
+/// migration drove the integration sweep to 0 violations. Migration
+/// covered: `lower_field_access` (drop the `base_is_ptr &&` guard);
+/// closure ByValue capture loads (`Ptr(cap_type)` shape); spawn
+/// closure-arg extraction (`field_load + move_zero` across the spawn
+/// boundary); `Pattern::Tuple` destructure (move-out vs Ptr-wrap by
+/// ownership); `Expr::TupleFieldAccess` (same Ptr-wrap shape); plus
+/// the validator's FieldLoad-then-MoveZero peek encoding the `!self`
+/// consuming-self idiom.
+pub fn validate_resource_field_reads(module: &Module) -> Vec<ResourceMoveWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        for_each_read_site(func, module, |site| {
+            if !matches!(site.class, ReadSiteClass::FieldLoad { .. }) { return; }
             if let Some(w) = validate_read(site, &module.type_registry) {
                 warnings.push(w);
             }

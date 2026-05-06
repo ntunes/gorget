@@ -1538,14 +1538,6 @@ pub fn lower_module(
     }
 
     // Phase C extension promoted: `IndexLoad` of resource element.
-    // 2026-05-06 sweep: 0 violations across 1066 fixtures, so the
-    // class is fatal. The CoW lowering already routes resource-typed
-    // index reads through `Ptr(T)` (zero-copy borrow) and for-loops
-    // through `index_load_borrow`; the remaining `index_load` callers
-    // hit non-resource element types or wrap with proper LIR clone
-    // routing. Any future lowering that emits an `IndexLoad { read:
-    // Clone | Copy }` of a resource element through a non-Ptr dst
-    // halts the build instead of leaking past the validator.
     {
         let index_warnings = crate::ir::validate::validate_resource_index_reads(&module);
         if !index_warnings.is_empty() {
@@ -1558,18 +1550,6 @@ pub fn lower_module(
     }
 
     // Phase C extension promoted: `EnumFieldLoad` of resource payload.
-    // 2026-05-06 LIR-side migration (lir/lower/insts.rs
-    // `payload_is_resource` widening, was `is_str_field`): the
-    // post-extract field zero now fires for every resource payload
-    // (Vector / Dict / Set / GorgetString / GorgetClosure / Box[T] /
-    // recursive-drop user enums), not just GorgetString. The
-    // validator's `for_each_read_site` walker mirrors the predicate by
-    // reporting `ReadMode::Move` for every resource payload. The full
-    // sweep dropped ShallowCopyOfEnumPayload from 3750 to 0 across 1068
-    // fixtures, so the class is fatal. Any future lowering that emits
-    // an `EnumFieldLoad` of a resource payload through a non-Ptr dst
-    // without the LIR auto-zero halts the build instead of leaking past
-    // the validator.
     {
         let enum_warnings = crate::ir::validate::validate_resource_enum_reads(&module);
         if !enum_warnings.is_empty() {
@@ -1581,14 +1561,29 @@ pub fn lower_module(
         }
     }
 
-    // Phase C extension: remaining read-site validator (FieldLoad).
-    // Stage 1 — gated behind `GG_VALIDATE_RESOURCE_READS`, prints
-    // per-class counts to a log file (path is the env var value)
-    // without panicking. The 2026-05-06 post-EnumFieldLoad-migration
-    // counts: field=1380 (index=0, arg=0, enum=0 all promoted to fatal
-    // above). FieldLoad needs its own lowering migration before
-    // promotion. Output goes to a file (not stderr) because `cargo
-    // test` captures subprocess stderr and only surfaces it on failure.
+    // Phase C extension promoted: `FieldLoad` of resource field.
+    // 2026-05-06 sweep: 0 violations across 1066 fixtures after the
+    // FieldLoad migration covering lower_field_access (drop the
+    // `base_is_ptr &&` guard), closure ByValue capture loads, spawn
+    // closure-arg extraction, Pattern::Tuple destructure (owned vs
+    // borrowed), Expr::TupleFieldAccess, and the validator's
+    // FieldLoad-then-MoveZero peek for the !self consuming-self idiom.
+    {
+        let field_warnings = crate::ir::validate::validate_resource_field_reads(&module);
+        if !field_warnings.is_empty() {
+            eprintln!("[resource-field-reads] {} violation(s):", field_warnings.len());
+            for w in &field_warnings {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed resource field-read validation ({} violation(s))", field_warnings.len());
+        }
+    }
+
+    // Phase C extension: opt-in residual logger.
+    // All four read-site classes (Call/CallExtern args, IndexLoad,
+    // EnumFieldLoad, FieldLoad) are now promoted to fatal above. This
+    // GG_VALIDATE_RESOURCE_READS-gated path remains as diagnostic
+    // scaffolding for any new read-site class added in the future.
     if let Ok(log_path) = std::env::var("GG_VALIDATE_RESOURCE_READS") {
         if !log_path.is_empty() {
             let reads = crate::ir::validate::validate_resource_reads(&module);
