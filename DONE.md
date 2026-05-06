@@ -1,5 +1,13 @@
 # DONE
 
+- [2026-05-07] **Phase C extension: `IndexLoad` resource-element read-site validator promoted to fatal.** Sweep of record (1066 fixtures): 0 violations across the `ShallowReadOfResourceElement` class. The TODO entry estimated 2,556 violations from a 2026-05-05 sweep, but D5's read-mode collapse + the CoW lowering at `lower_index_access` (returns `Ptr(elem_type)` for resource elements — validator sees `Borrow`) + for-loop iteration's `index_load_borrow` already drove the count to zero before this session opened.
+
+  **Migration shape:** none required. The four `index_load` (Clone) call sites in lowering (`stmts/assigns.rs:1142`, `stmts/assigns.rs:1178`, `exprs/collections.rs:355`, `exprs/methods.rs:2704`) all hit non-resource-element paths or wrap with proper LIR clone routing under a `Ptr(T)` dst. The three `index_load_borrow` sites (`stmts/for_loops.rs:368`, `stmts/for_loops.rs:483`, plus the `lower_index_access` path that emits Ptr-typed resource element reads) handle the resource-element cases.
+
+  **Validator promotion:** added `validate_resource_index_reads(module)` in `src/ir/validate.rs:1124-1145` mirroring the Call/CallExtern split. Wired into `src/ir/lowering/mod.rs:1540-1556` as a fatal invariant alongside `validate_resource_call_args` (the existing fatal). Runs unconditionally on every build; any future lowering that emits `IndexLoad { read: Clone | Copy }` of a resource element through a non-Ptr dst halts the build instead of leaking past the validator.
+
+  **Sweeps:** `cargo test --test integration --release -- --test-threads=4` 1066/1066 passed in 560s. self_host_bootstrap + self_host_bootstrap_fixed_point both green. With `GG_VALIDATE_RESOURCE_READS=<log>` set, post-promotion sweep counts: `field=2584 index=0 enum=12191 arg=0`.
+
 - [2026-05-07] **Phase D4 — `lower_var_decl` decision tree refactor (6/7 branches migrated to typed predicates).** Extracted the 7-branch decision tree from `lower_var_decl` into a dedicated helper `lower_var_decl_assign_mode` shaped as a typed match on `(target_resource, source_live, source_own)` per `docs/internals/unified-resource-model.md` §6.7. Branches A, B, C, F migrated to typed predicates; E and G were already typed; D retains `is_named_local` documented as genuine gating.
 
   **Migrations (each one a separate commit, full integration sweep 1067/1067 verified after each):**
