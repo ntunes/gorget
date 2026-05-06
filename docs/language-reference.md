@@ -134,7 +134,7 @@ async  await  spawn  shared
 **Safety keywords:**
 
 ```
-unsafe  extern
+unsafe  extern  noreturn
 ```
 
 **Self keywords:**
@@ -956,6 +956,29 @@ Inline single-function form:
 extern "C" int exec(String cmd) = "gorget_exec"
 extern "Gorget" int _map_iter_cap[K, V](Dict[K, V] &m) = "gorget_map_iter_cap"
 ```
+
+#### `noreturn` qualifier
+
+Mark an extern function whose underlying C symbol never returns
+(`_Noreturn` C functions like `exit`, `abort`, `_Exit`). The
+typechecker treats calls to such functions as having type `Never`,
+and the IR terminates the basic block with `unreachable` after the
+call. This lets divergent calls be used as the value of a match
+arm without breaking the surrounding type:
+
+```gorget
+extern "C":
+    extern noreturn void exit(int code) = "gorget_exit"
+
+void main():
+    int code = match parse(input):
+        case Ok(n): n
+        case Error(_): exit(1)   # Never composes with int
+    print(f"code={code}")
+```
+
+Without `noreturn` the compiler types the call as `void` and
+rejects the match-expression with "expected int, found void".
 
 Equip methods may carry `extern` bodies too:
 
