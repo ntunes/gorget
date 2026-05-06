@@ -2185,7 +2185,24 @@ impl<'a> LoweringContext<'a> {
     /// `LocalOwnership` directly — no collapse to a 3-variant shape.
     /// LIR consumers read the typed enum (origin, mutability, view source)
     /// for drop, SlotLoad routing, and CoW materialisation decisions.
+    ///
+    /// Phase D4.5 step 1: setters dual-write to `builder.locals[id].ownership`
+    /// so the FxHashMap and Local.ownership stay in sync during lowering.
+    /// This pass is now an idempotent re-copy + slot_kind derivation. In
+    /// debug builds we cross-check the two stores before flushing — any drift
+    /// is a setter bug.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
+        #[cfg(debug_assertions)]
+        for (&local_id, state) in &self.func_state.local_ownership {
+            let idx = local_id.0 as usize;
+            if idx >= builder.locals.len() { continue; }
+            debug_assert_eq!(
+                &builder.locals[idx].ownership,
+                state,
+                "D4.5 dual-write drift at local _{}: FxHashMap={:?}, Local.ownership={:?}",
+                local_id.0, state, builder.locals[idx].ownership
+            );
+        }
         for (&local_id, state) in &self.func_state.local_ownership {
             let idx = local_id.0 as usize;
             if idx >= builder.locals.len() { continue; }
