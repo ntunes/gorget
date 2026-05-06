@@ -810,15 +810,19 @@ fn lower_var_decl_assign_mode(
             ctx, builder, operand, rhs_type, rhs_type,
         );
     }
-    // Branch F — drop-registered temp OR `Owned` + dead source +
-    // droppable target → Move. The legacy `drops.is_registered`
-    // predicate doubles as a liveness proxy; the typed clause
-    // `(source_own.is_owned() && !source_live && needs_drop(target))`
-    // strictly extends it to Option/Result wrapper types where
-    // `is_resource_type` returns false but the variant payload still
-    // requires ownership transfer.
-    else if ctx.drops.is_registered(source_place.local)
-        || (!source_is_named && ctx.type_registry.needs_drop(rhs_type))
+    // Branch F — Owned + dead source + droppable target → Move.
+    // Two typed clauses (probed 2026-05-06, retired the legacy
+    // `drops.is_registered(source_place.local)` proxy as fully
+    // subsumed by the second clause):
+    // - **unnamed-droppable-temp**: `!source_is_named` proxies for
+    //   "source dies at end-of-stmt" and `needs_drop(rhs_type)` is
+    //   the broader (resource OR enum-with-resource-payload) test.
+    // - **typed**: `source_own.is_owned() && !source_live` is the
+    //   principled liveness query; `needs_drop(actual_var_type)`
+    //   covers Option/Result wrapper types where
+    //   `is_resource_type` returns false but the variant payload
+    //   still requires ownership transfer.
+    else if (!source_is_named && ctx.type_registry.needs_drop(rhs_type))
         || (source_own.as_ref().map_or(false, |s| s.is_owned())
             && !source_live
             && ctx.type_registry.needs_drop(actual_var_type))
