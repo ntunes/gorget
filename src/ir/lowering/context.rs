@@ -342,15 +342,24 @@ pub struct LoweringContext<'a> {
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
-/// Carries BOTH the name→local map and local_ownership so that CoW materialization
-/// that runs inside one branch (rebinding a name, removing an ownership flag)
-/// does not leak into sibling branches or post-join code.
+/// Carries the name→local map and a per-local ownership snapshot so that
+/// CoW materialization that runs inside one branch (rebinding a name,
+/// removing an ownership flag) does not leak into sibling branches or
+/// post-join code.
 ///
 /// `local_id_boundary`: any local whose ID is ≥ this was created after the snapshot
-/// — its ownership state is kept as-is on restore (branch-local locals survive).
+/// — its ownership state is kept as-is on restore (branch-local locals survive,
+/// modulo the CollectionElement/FieldPath/View filter applied in restore_locals).
 ///
-/// `local_types_at_save`: map of LocalId → declared type at save time. On restore,
-/// if a local's `builder.locals[i].type_id` has been CHANGED during the scope
+/// `pre_save_ownership[i]`: ownership state of local `i` at save time, for
+/// `i in 0..local_id_boundary`. Phase D4.5 step 5c: replaces the legacy
+/// `FxHashMap<LocalId, LocalOwnership>` snapshot with a dense `Vec` —
+/// `Local.ownership` is now the live source of truth, so a positional
+/// snapshot mirrors it perfectly.
+///
+/// `local_types_at_save`: per-local declared type at save time, parallel
+/// to `pre_save_ownership`. On restore, if a local's
+/// `builder.locals[i].type_id` has been CHANGED during the scope
 /// (e.g. `assigns.rs`'s in-place CoW upgrade flipping Ptr(T)→T), that local is
 /// treated as permanently upgraded — its ownership state is *not* reverted.
 /// This prevents inconsistent (ownership=CollectionRef, type=T) states that
@@ -358,9 +367,9 @@ pub struct LoweringContext<'a> {
 #[derive(Clone)]
 pub struct SavedScope {
     locals: FxHashMap<String, (LocalId, TypeId)>,
-    local_ownership: FxHashMap<LocalId, crate::ir::LocalOwnership>,
+    pre_save_ownership: Vec<crate::ir::LocalOwnership>,
+    pre_save_types: Vec<TypeId>,
     local_id_boundary: u32,
-    local_types_at_save: FxHashMap<LocalId, TypeId>,
 }
 
 
@@ -1194,23 +1203,23 @@ impl<'a> LoweringContext<'a> {
         self.shared.locals.clear();
     }
 
-    /// Clone the name→local map AND local_ownership for save/restore around nested
-    /// scopes (if, while, for, match, etc.). See `SavedScope` for semantics.
+    /// Clone the name→local map AND ownership snapshot for save/restore around
+    /// nested scopes (if, while, for, match, etc.). See `SavedScope` for semantics.
+    /// Phase D4.5 step 5c: snapshot is a dense `Vec` over `builder.locals`,
+    /// not a sparse FxHashMap — `Local.ownership` is the live source of truth.
     pub fn save_locals(&self, builder: &crate::ir::builder::FunctionBuilder) -> SavedScope {
-        // Snapshot per-local declared types so restore can detect in-place type
-        // flips (e.g. assigns.rs's CoW upgrade Ptr(T)→T) and skip reverting
-        // ownership for those locals.
-        let local_types_at_save: FxHashMap<LocalId, TypeId> = self.func_state.local_ownership
-            .keys()
-            .chain(self.func_state.locals.values().map(|(l, _)| l))
-            .copied()
-            .map(|lid| (lid, builder.local_type(lid)))
+        let n = builder.locals.len();
+        let pre_save_ownership: Vec<crate::ir::LocalOwnership> = builder.locals.iter()
+            .map(|l| l.ownership.clone())
+            .collect();
+        let pre_save_types: Vec<TypeId> = builder.locals.iter()
+            .map(|l| l.type_id)
             .collect();
         SavedScope {
             locals: self.func_state.locals.clone(),
-            local_ownership: self.func_state.local_ownership.clone(),
-            local_id_boundary: builder.locals.len() as u32,
-            local_types_at_save,
+            pre_save_ownership,
+            pre_save_types,
+            local_id_boundary: n as u32,
         }
     }
 
@@ -1232,21 +1241,28 @@ impl<'a> LoweringContext<'a> {
     /// Other ownership states (Owned, Ref, Alias, BareParam, ViewOf) are kept
     /// — they're either pure metadata or reference aliasing that's already
     /// severed by runtime CoW on mutation of the aliased source.
+    ///
+    /// Phase D4.5 step 5c: writes through `builder.locals[i].ownership` —
+    /// the FxHashMap snapshot is gone; the typed field IS the live store.
     pub fn restore_locals(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, saved: SavedScope) {
         self.func_state.locals = saved.locals;
-        let boundary = saved.local_id_boundary;
-        let saved_types = &saved.local_types_at_save;
-        let mut restored = saved.local_ownership.clone();
-        for (lid, state) in &self.func_state.local_ownership {
-            let post_save = lid.0 >= boundary;
-            let type_flipped = saved_types.get(lid)
-                .map_or(false, |orig| *orig != builder.local_type(*lid));
-            if post_save {
-                // Branch-local collection-element / view borrows: drop at
-                // scope exit so cow_before_field_mutation doesn't issue a
-                // materialise-read on a dead slot. (Equivalent to the
-                // pre-D3-full filter that dropped CollectionRef/CowBorrow.)
-                let keep = !matches!(state,
+        let boundary = saved.local_id_boundary as usize;
+        for idx in 0..builder.locals.len() {
+            if idx < boundary {
+                // Pre-existing local. If type flipped during the scope,
+                // keep the current ownership (the in-place type flip
+                // implies the ownership was deliberately upgraded);
+                // otherwise revert to the saved snapshot.
+                let type_flipped = builder.locals[idx].type_id != saved.pre_save_types[idx];
+                if !type_flipped {
+                    builder.locals[idx].ownership = saved.pre_save_ownership[idx].clone();
+                }
+            } else {
+                // Post-save (branch-local). Drop CollectionElement /
+                // FieldPath / CowBorrowPending / View states so
+                // cow_before_field_mutation doesn't issue a materialise-read
+                // on a dead slot once we leave the scope.
+                let drop_state = matches!(&builder.locals[idx].ownership,
                     crate::ir::LocalOwnership::Borrowed {
                         origin: crate::ir::BorrowOrigin::CollectionElement(_)
                               | crate::ir::BorrowOrigin::FieldPath(_)
@@ -1254,36 +1270,20 @@ impl<'a> LoweringContext<'a> {
                         ..
                     } | crate::ir::LocalOwnership::View { .. }
                 );
-                if keep {
-                    restored.insert(*lid, state.clone());
+                if drop_state {
+                    builder.locals[idx].ownership = crate::ir::LocalOwnership::default();
                 }
-            } else if type_flipped {
-                restored.insert(*lid, state.clone());
             }
         }
-        let flipped: Vec<LocalId> = saved_types.iter()
-            .filter(|(lid, orig)| lid.0 < boundary && **orig != builder.local_type(**lid))
-            .filter(|(lid, _)| !self.func_state.local_ownership.contains_key(lid))
-            .map(|(lid, _)| *lid)
-            .collect();
-        for lid in flipped {
-            restored.remove(&lid);
+        // FxHashMap dual-write: keep the legacy store in lockstep with the
+        // typed field until step 5d retires the FxHashMap entirely. Once
+        // the field is deleted, this whole block goes away.
+        self.func_state.local_ownership.clear();
+        for (idx, l) in builder.locals.iter().enumerate() {
+            if !matches!(l.ownership, crate::ir::LocalOwnership::Untracked) {
+                self.func_state.local_ownership.insert(LocalId(idx as u32), l.ownership.clone());
+            }
         }
-        // Phase D4.5 step 3: also write through to Local.ownership so the
-        // typed field stays in sync with the FxHashMap after restore.
-        // Locals not in `restored` (either pre-existing untracked, or the
-        // post-save born locals we filtered out) get reset to default Owned.
-        // Locals in `restored` get the saved-then-merged value.
-        let mut touched: rustc_hash::FxHashSet<LocalId> = self.func_state.local_ownership.keys().copied().collect();
-        touched.extend(restored.keys().copied());
-        for lid in touched {
-            let idx = lid.0 as usize;
-            if idx >= builder.locals.len() { continue; }
-            builder.locals[idx].ownership = restored.get(&lid)
-                .cloned()
-                .unwrap_or_else(crate::ir::LocalOwnership::default);
-        }
-        self.func_state.local_ownership = restored;
     }
 
     /// Iterate over all locals (for type inference).
