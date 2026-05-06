@@ -1404,16 +1404,24 @@ pub struct StructDef {
     /// emission and at struct-name-resolution sites that previously
     /// name-matched on `Callable__`.
     pub c_runtime_alias: Option<String>,
+    /// Set when this struct is a `Box[Inner]` heap-pointer alias. The value
+    /// is the LIR name of the inner type (e.g. `"Node"` for `Box__Node`).
+    /// The C backend reads this to emit the matching
+    /// `__gorget_box_alloc_<inner>` / `_free_<inner>` helpers and the
+    /// `Box__<inner>__drop` wrapper without re-deriving the inner from the
+    /// `Box__` name prefix. None for non-Box structs and for trait-object
+    /// boxes (those use the `{Inner}_TraitObj` 16-byte layout instead).
+    pub box_inner_type: Option<String>,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {

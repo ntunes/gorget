@@ -1489,6 +1489,18 @@ pub(super) fn emit_box_drop_wrappers(out: &mut String, module: &LirModule) {
             }
         }
     }
+    // Read the typed `StructDef.box_inner_type` so the per-type
+    // `Box__<inner>__drop` wrapper is emitted for every registered
+    // Box[T] alias, including those reached only through generated
+    // recursive-clone/drop helper text (no direct
+    // `__gorget_box_alloc_T` Inst).
+    for sd in &module.structs {
+        if let Some(inner) = &sd.box_inner_type {
+            if seen.insert(inner.clone()) {
+                box_inners.push(inner.clone());
+            }
+        }
+    }
     if box_inners.is_empty() {
         return;
     }
@@ -1989,7 +2001,25 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     // types with Vector[T] fields emit clone/drop code that references
     // gorget_array_clone / gorget_array_free without ever showing up as
     // a CallExtern.
-    let vector_struct_present = module.structs.iter().any(|s| s.name.contains("Vector__"));
+    // User structs/enums with collection fields emit
+    // `gorget_array_clone` / `gorget_map_clone` / `gorget_set_clone`
+    // text in their generated clone/drop helpers without ever surfacing
+    // as a direct extern call. The recursive-drop tables hold the
+    // resolved drop-fn name from `DropStrategy::Trivial(...)` — which
+    // IS the runtime contract — so it's the right thing to check at
+    // the C-emit boundary. (Box__<inner> goes through
+    // `StructDef.box_inner_type` typed metadata; Vector/Map/Set drop
+    // fns are stable runtime symbols, OK to spell at the boundary.)
+    let recursive_drop_fn_used = |runtime_drop_fn: &str| {
+        module.recursive_drop_structs.values().any(|fields| {
+            fields.iter().any(|(_f, drop, _ty)| drop == runtime_drop_fn)
+        }) || module.recursive_drop_enums.values().any(|variants| {
+            variants.iter().any(|(_i, _v, _f, drop, _ty)| drop == runtime_drop_fn)
+        })
+    };
+    let vector_struct_present = module.structs.iter().any(|s|
+            s.elem_drop_fn.as_deref() == Some("gorget_array_free"))
+        || recursive_drop_fn_used("gorget_array_free");
     if vector_struct_present
         || has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__"))
     {
@@ -2005,13 +2035,23 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
     }
 
     // Collections: Map (depends on Array for keys/values/items)
-    if has(&|n| n.starts_with("gorget_map_") || n.starts_with("gorget_dict_")
-        || n.starts_with("Dict__") || n.starts_with("HashMap__")) {
+    let map_struct_present = module.structs.iter().any(|s|
+            s.elem_drop_fn.as_deref() == Some("gorget_map_free"))
+        || recursive_drop_fn_used("gorget_map_free");
+    if map_struct_present
+        || has(&|n| n.starts_with("gorget_map_") || n.starts_with("gorget_dict_")
+            || n.starts_with("Dict__") || n.starts_with("HashMap__"))
+    {
         ensure_map!(out, emitted_array, emitted_map);
     }
 
     // Collections: Set (depends on Map)
-    if has(&|n| n.starts_with("gorget_set_") || n.starts_with("Set__") || n.starts_with("HashSet__")) {
+    let set_struct_present = module.structs.iter().any(|s|
+            s.elem_drop_fn.as_deref() == Some("gorget_set_free"))
+        || recursive_drop_fn_used("gorget_set_free");
+    if set_struct_present
+        || has(&|n| n.starts_with("gorget_set_") || n.starts_with("Set__") || n.starts_with("HashSet__"))
+    {
         ensure_map!(out, emitted_array, emitted_map);
         out.push_str(crate::backend::c::c_runtime::RUNTIME_SET);
     }
@@ -2440,14 +2480,14 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
 pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_names: &HashMap<u32, String>) {
     // Generate __gorget_box_alloc_* helper functions.
     // These are monomorphized box allocators: malloc + store + return pointer.
-    let mut box_allocs: Vec<(&str, String)> = Vec::new();
+    let mut box_allocs: Vec<(String, String)> = Vec::new();
     for ext in &module.externs {
         if ext.name.starts_with("__gorget_box_alloc_") && ext.params.len() == 1 {
             // Derive the C type from the function name suffix, not from the LIR param type,
             // because LIR represents Str as Ptr (void*) but the C box alloc needs the real type.
             let suffix = &ext.name["__gorget_box_alloc_".len()..];
             let param_ty = box_alloc_inner_c_type(suffix, &ext.params[0], struct_names);
-            box_allocs.push((&ext.name, param_ty));
+            box_allocs.push((ext.name.clone(), param_ty));
         }
     }
     // Also scan CallExtern instructions for box allocs not in externs list.
@@ -2456,13 +2496,42 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             for inst in &block.insts {
                 if let Inst::CallExtern { name, args, .. } = inst {
                     if name.starts_with("__gorget_box_alloc_") && args.len() == 1 {
-                        if !box_allocs.iter().any(|(n, _)| *n == name.as_str()) {
+                        if !box_allocs.iter().any(|(n, _)| n == name) {
                             let suffix = &name["__gorget_box_alloc_".len()..];
                             let param_ty = box_alloc_suffix_to_c_type(suffix);
-                            box_allocs.push((name.as_str(), param_ty));
+                            box_allocs.push((name.clone(), param_ty));
                         }
                     }
                 }
+            }
+        }
+    }
+    // Box[T] alias structs carry typed inner-type metadata
+    // (`StructDef.box_inner_type`) populated at LIR lowering. Read it here
+    // so the matching `__gorget_box_alloc_<inner>` / `_free_<inner>`
+    // helpers get emitted whenever the program registers a Box[T] type —
+    // even when the only reference is from a generated clone/drop helper
+    // text (e.g. `Node__clone` calling `__gorget_box_alloc_Node` for a
+    // `Node1(Box[Node])` enum variant). Resolve the param's C type
+    // through `struct_names` (rather than the bare LIR name) so the
+    // generated `Box__T__drop` body and the allocator agree on the
+    // mangled struct name.
+    let resolve_inner_c_ty = |inner: &str| -> String {
+        if let Some((sid, _)) = module.structs.iter().enumerate()
+            .find(|(_, s)| s.name == inner)
+        {
+            if let Some(cn) = struct_names.get(&(sid as u32)) {
+                return cn.clone();
+            }
+        }
+        box_alloc_suffix_to_c_type(inner)
+    };
+    for sd in &module.structs {
+        if let Some(inner) = &sd.box_inner_type {
+            let alloc_name = format!("__gorget_box_alloc_{inner}");
+            if !box_allocs.iter().any(|(n, _)| n == &alloc_name) {
+                let param_ty = resolve_inner_c_ty(inner);
+                box_allocs.push((alloc_name, param_ty));
             }
         }
     }

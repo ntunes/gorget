@@ -683,7 +683,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -776,7 +776,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -794,6 +794,10 @@ impl<'a> LoweringContext<'a> {
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            // Typed Box-inner metadata: the C backend reads this to emit
+            // `__gorget_box_alloc_<inner>` / `_free_<inner>` and the per-type
+            // `Box__<inner>__drop` wrapper without name-prefix matching.
+            box_inner_type: Some(inner_name.to_string()),
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -811,7 +815,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -851,6 +855,7 @@ impl<'a> LoweringContext<'a> {
                                 elem_clone_fn: rt_def.elem_clone_fn.clone(),
                                 materialize_fn: rt_def.materialize_fn.clone(),
                                 c_runtime_alias: Some(rt.clone()),
+                                box_inner_type: rt_def.box_inner_type.clone(),
                             });
                             self.struct_reg.register(&def.name, sid);
                             // Skip deferred Pass-2: the GIR TypeDef has no
@@ -873,6 +878,7 @@ impl<'a> LoweringContext<'a> {
             elem_clone_fn: def.metadata.clone_inplace_fn.clone(),
             materialize_fn: def.metadata.materialize_fn.clone(),
             c_runtime_alias: def.metadata.c_runtime_alias.clone(),
+            box_inner_type: None,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -1005,7 +1011,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1029,7 +1035,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1045,7 +1051,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
                               });
                 self.struct_reg.register(name, sid);
             }
