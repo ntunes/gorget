@@ -2194,17 +2194,21 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Persist per-local ownership onto the GIR `Local` structs at the
-    /// GIR/LIR boundary. D6: `Local.ownership` carries the rich
-    /// `LocalOwnership` directly — no collapse to a 3-variant shape.
-    /// LIR consumers read the typed enum (origin, mutability, view source)
-    /// for drop, SlotLoad routing, and CoW materialisation decisions.
+    /// Derive `slot_kind` for every local at the GIR/LIR boundary.
+    /// `Local.ownership` is kept in sync with `func_state.local_ownership`
+    /// during lowering by every setter and by `restore_locals` (Phase D4.5
+    /// steps 1+3), so the typed field is already current — no copy needed.
     ///
-    /// Phase D4.5 step 1: setters dual-write to `builder.locals[id].ownership`
-    /// so the FxHashMap and Local.ownership stay in sync during lowering.
-    /// This pass is now an idempotent re-copy + slot_kind derivation. In
-    /// debug builds we cross-check the two stores before flushing — any drift
-    /// is a setter bug.
+    /// This pass:
+    /// 1. (debug only) cross-checks every FxHashMap entry against the
+    ///    matching `Local.ownership` value. Any drift is a setter bug.
+    /// 2. (always) derives `slot_kind` per (type, ownership). The empirical
+    ///    audit showed zero "non-Ptr type with borrow ownership" combos,
+    ///    so the mapping is total over the three cases.
+    ///
+    /// Historical name: `flush_ownership_to_locals`. The "flush" is now
+    /// purely a `slot_kind` derivation; the ownership half is already
+    /// flushed at every setter call site.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
         #[cfg(debug_assertions)]
         for (&local_id, state) in &self.func_state.local_ownership {
@@ -2216,11 +2220,6 @@ impl<'a> LoweringContext<'a> {
                 "D4.5 dual-write drift at local _{}: FxHashMap={:?}, Local.ownership={:?}",
                 local_id.0, state, builder.locals[idx].ownership
             );
-        }
-        for (&local_id, state) in &self.func_state.local_ownership {
-            let idx = local_id.0 as usize;
-            if idx >= builder.locals.len() { continue; }
-            builder.locals[idx].ownership = state.clone();
         }
         // §6.8 Stage 3: derive `slot_kind` from (type, ownership) for
         // every local. Walk all locals (not just the ones with explicit
