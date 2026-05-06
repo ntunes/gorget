@@ -468,6 +468,13 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn check_move(&mut self, def_id: DefId, span: Span) {
         let name = self.scopes.get_def(def_id).name.clone();
 
+        // A move IS a use — mark the variable as used so the
+        // unused-variable warning doesn't false-fire on bindings whose
+        // sole use is `!x` (e.g. `Node rhs = ...; lhs = f(!x, !rhs)`).
+        if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
+            entry.2 = true;
+        }
+
         // Check if already moved
         if let Some(VarState::Moved { moved_at }) = self.var_states.get(&def_id) {
             self.error(

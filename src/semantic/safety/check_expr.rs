@@ -86,7 +86,9 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::Move { expr: inner } => {
-                // The `!` operator: move the value
+                // The `!` operator: move the value. `check_move` itself
+                // marks the variable as used (a move IS a use), so no extra
+                // bookkeeping needed here.
                 if let Expr::Identifier(_) = &inner.node {
                     if let Some(&def_id) = self.resolution_map.get(&inner.span.start) {
                         let kind = self.scopes.get_def(def_id).kind;
