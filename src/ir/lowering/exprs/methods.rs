@@ -586,7 +586,7 @@ pub(super) fn lower_method_call(
                     // Uses insert to override Owned from call_extern_tracked.
                     // Propagate collection provenance from the Option local.
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
-                        ctx.set_cow_borrow(dst);
+                        ctx.set_cow_borrow(builder, dst);
                         if let Some(collection) = ctx.cow_borrow_source(place.local).cloned() {
                             ctx.set_cow_borrow_source(dst, collection);
                         }
@@ -1957,7 +1957,7 @@ pub(super) fn lower_method_call(
                     let cloned = builder.call(&clone_fn,
                         vec![FunctionBuilder::copy(ptr_local)], inner_type);
                     ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
-                    ctx.set_owned(cloned);
+                    ctx.set_owned(builder, cloned);
                     consuming_clone_temps.push(cloned);
                     let ptr_type = ctx.register_ptr_type(inner_type);
                     let ptr = builder.add_local(ptr_type, None);
@@ -2048,7 +2048,7 @@ pub(super) fn lower_method_call(
             if ctx.type_registry.needs_drop(ret_type) {
                 ctx.drops.register_local(result_id, ret_type, &ctx.type_registry);
             }
-            ctx.set_owned(result_id);
+            ctx.set_owned(builder, result_id);
 
             // Track collection provenance for Option__Ref_ results.
             // Case A: named-local receiver → `Local(recv)`.
@@ -2101,7 +2101,7 @@ pub(super) fn lower_method_call(
             // downstream cow_before_mutation routing because the temp carries
             // no live notion of the collection's identity.
             if ctx.trivial_getter_methods.contains(sig_name.as_str()) {
-                ctx.set_cow_borrow(dst);
+                ctx.set_cow_borrow(builder, dst);
                 if let Some(recv_local) = recv_local_for_move_zero {
                     if ctx.is_named_local(recv_local) {
                         ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
@@ -2222,7 +2222,7 @@ pub(super) fn lower_method_call(
                     // cow_materialize_view by switching to AssignMode::Move
                     // (matches its sibling cow_materialize_alias).
                     if let Some(recv_local) = recv_local_for_move_zero {
-                        ctx.set_view_of(result_local, recv_local);
+                        ctx.set_view_of(builder, result_local, recv_local);
                     }
                     ctx.func_state.has_string_borrows = true;
                 }
@@ -2593,7 +2593,7 @@ fn try_lower_option_result_combinator(
         || ctx.type_registry.is_resource_type(result_type) {
         ctx.drops.register_local(result_local, result_type, &ctx.type_registry);
     }
-    ctx.set_owned(result_local);
+    ctx.set_owned(builder, result_local);
 
     Some(FunctionBuilder::copy(result_local))
 }
@@ -2710,7 +2710,7 @@ pub(super) fn lower_index_access(
             let collection_id = extract_field_path_string(&object.node)
                 .map(CollectionId::FieldPath)
                 .unwrap_or_else(|| CollectionId::Local(place.local));
-            ctx.set_collection_ref(dst, collection_id);
+            ctx.set_collection_ref(builder, dst, collection_id);
         }
         return FunctionBuilder::copy(dst);
     }

@@ -202,14 +202,14 @@ fn lower_for_string(
         if let Operand::Copy(p) | Operand::Move(p) = &iter_op {
             builder.emit_borrow(local, p.clone());
         }
-        ctx.set_ref(local);
+        ctx.set_ref(builder, local);
         local
     } else if source_is_ptr_typed {
         // Source is already a pointer to String; copy the pointer value.
         let ptr_type = ctx.register_ptr_type(owned_string_type);
         let local = builder.add_local(ptr_type, None);
         builder.assign(Place::local(local), iter_op);
-        ctx.set_ref(local);
+        ctx.set_ref(builder, local);
         local
     } else {
         let local = builder.add_local(owned_string_type, None);

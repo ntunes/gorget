@@ -73,7 +73,7 @@ pub(super) fn lower_assign(
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
                 if ctx.cow_is_alias(local_id) {
-                    ctx.unset_ownership(local_id);
+                    ctx.unset_ownership(builder, local_id);
                 }
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.
@@ -102,7 +102,7 @@ pub(super) fn lower_assign(
                                 builder.locals[local_id.0 as usize].type_id = inner;
                                 ctx.register_local(name, local_id, inner);
                                 ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
-                                ctx.set_owned(local_id);
+                                ctx.set_owned(builder, local_id);
                             }
                         }
                     }
@@ -172,7 +172,7 @@ pub(super) fn lower_assign(
                                 owned,
                             );
                             ctx.drops.register_local(cloned, owned, &ctx.type_registry);
-                            ctx.set_owned(cloned);
+                            ctx.set_owned(builder, cloned);
                             operand = FunctionBuilder::copy(cloned);
                         }
                     }
@@ -278,7 +278,7 @@ pub(super) fn lower_assign(
                                 // produce an owned T from a view/borrow
                                 // shape distinct from the RHS type.
                                 let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], type_id);
-                                ctx.set_owned(cloned);
+                                ctx.set_owned(builder, cloned);
                                 operand = FunctionBuilder::copy(cloned);
                                 assign_mode = AssignMode::Move;
                             } else if ctx.is_named_local(place.local) {
@@ -299,7 +299,7 @@ pub(super) fn lower_assign(
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());
                                     let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                                    ctx.set_owned(cloned);
+                                    ctx.set_owned(builder, cloned);
                                     operand = FunctionBuilder::copy(cloned);
                                     assign_mode = AssignMode::Move;
                                 }
@@ -352,7 +352,7 @@ pub(super) fn lower_assign(
                     // the target local now owns the data after move/clone.
                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                         if ctx.is_owned_local(p.local) {
-                            ctx.set_owned(local_id);
+                            ctx.set_owned(builder, local_id);
                         }
                     }
                 }

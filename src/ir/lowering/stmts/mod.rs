@@ -444,7 +444,7 @@ fn lower_var_decl(
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                            ctx.set_bare_param(local_id);
+                            ctx.set_bare_param(builder, local_id);
                         } else if source_is_cow_borrow && (!in_loop || safe_in_loop)
                             && ctx.type_registry.is_resource_type(_inner)
                         {
@@ -464,7 +464,7 @@ fn lower_var_decl(
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                            ctx.set_collection_ref(local_id, collection);
+                            ctx.set_collection_ref(builder, local_id, collection);
                             ctx.drops.unregister(local_id);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(_inner) {
                             // Owned Ptr source (function return, etc.) → auto-clone
@@ -492,7 +492,7 @@ fn lower_var_decl(
                             builder.locals[local_id.0 as usize].type_id = inferred;
                             ctx.register_local(name, local_id, inferred);
                             ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                            ctx.set_ref(local_id);
+                            ctx.set_ref(builder, local_id);
                         }
                     }
                 }
@@ -510,14 +510,14 @@ fn lower_var_decl(
                         let propagated = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
                                 if let Some(collection) = ctx.collection_ref_source(p.local) {
-                                    ctx.set_collection_ref(local_id, collection);
+                                    ctx.set_collection_ref(builder, local_id, collection);
                                     ctx.drops.unregister(local_id);
                                     true
                                 } else { false }
                             } else { false }
                         } else { false };
                         if !propagated {
-                            ctx.set_ref(local_id);
+                            ctx.set_ref(builder, local_id);
                         }
                     }
                 }
@@ -570,7 +570,7 @@ fn lower_var_decl(
                         // SlotKind/ABI routing keeps the 32-byte struct
                         // layout intact; `has_string_borrowers` reads
                         // SharedHeap typed state directly.
-                        ctx.set_shared_heap(local_id, place.local);
+                        ctx.set_shared_heap(builder, local_id, place.local);
                         assign_mode = AssignMode::Borrow;
                     }
                     // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
@@ -606,7 +606,7 @@ fn lower_var_decl(
                         // different (owned) type than the source (view) type.
                         let clone_ret_type = actual_var_type;
                         let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], clone_ret_type);
-                        ctx.set_owned(cloned); // clone result owns its data
+                        ctx.set_owned(builder, cloned); // clone result owns its data
                         operand = FunctionBuilder::copy(cloned);
                         assign_mode = AssignMode::Move;
                     }
@@ -642,9 +642,9 @@ fn lower_var_decl(
                         // Create Ptr(T) alias instead of cloning
                         let ptr_type = ctx.register_ptr_type(rhs_type);
                         builder.locals[local_id.0 as usize].type_id = ptr_type;
-                        ctx.set_ref(local_id);
+                        ctx.set_ref(builder, local_id);
                         builder.emit_borrow(local_id, place.clone());
-                        ctx.cow_register_alias(local_id, place.local);
+                        ctx.cow_register_alias(builder, local_id, place.local);
                         // Ptr doesn't own data — don't register for drop.
                         // Unregister if already registered (from line 226).
                         ctx.drops.unregister(local_id);
@@ -684,7 +684,7 @@ fn lower_var_decl(
                             let ptr_local = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr_local, place.clone());
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                            ctx.set_owned(cloned); // clone result owns its data
+                            ctx.set_owned(builder, cloned); // clone result owns its data
                             operand = FunctionBuilder::copy(cloned);
                             assign_mode = AssignMode::Move;
                         }
@@ -715,7 +715,7 @@ fn lower_var_decl(
                             let ptr_local = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr_local, place.clone());
                             let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                            ctx.set_owned(cloned);
+                            ctx.set_owned(builder, cloned);
                             operand = FunctionBuilder::copy(cloned);
                             assign_mode = AssignMode::Move;
                         }
@@ -776,7 +776,7 @@ fn lower_var_decl(
                         Some(crate::ir::LocalOwnership::SharedHeap { .. })
                     )
                 {
-                    ctx.set_owned(local_id);
+                    ctx.set_owned(builder, local_id);
                 }
             }
 
@@ -1259,7 +1259,7 @@ fn lower_return(
                                         // Resource without clone fn — fall back to Ptr propagation
                                         builder.locals[0].type_id = src_type;
                                         builder.return_type = src_type;
-                                        ctx.set_ref(LocalId(0));
+                                        ctx.set_ref(builder, LocalId(0));
                                     }
                                 }
                             }

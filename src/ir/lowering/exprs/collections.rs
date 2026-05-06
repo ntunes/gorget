@@ -234,7 +234,7 @@ pub(super) fn lower_list_comprehension(
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
             array_type,
         );
-        ctx.set_owned(acc_local);
+        ctx.set_owned(builder, acc_local);
         ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
 
         // Create loop variable
@@ -316,7 +316,7 @@ pub(super) fn lower_list_comprehension(
             vec![Operand::Constant(Constant::SizeOf(elem_type))],
             array_type,
         );
-        ctx.set_owned(acc_local);
+        ctx.set_owned(builder, acc_local);
         ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
 
         // idx = 0
@@ -486,7 +486,7 @@ pub(super) fn lower_set_comprehension(
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
             set_type,
         );
-        ctx.set_owned(acc_local);
+        ctx.set_owned(builder, acc_local);
         ctx.drops.register_local(acc_local, set_type, &ctx.type_registry);
 
         let var_name = &variable.node;

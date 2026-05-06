@@ -600,11 +600,11 @@ pub fn lower_function(
         ctx.register_local(&p.node.name.node, local_id, gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
             // Bare-borrow resource param: Ptr, no auto-deref, clone-on-mutation
-            ctx.set_bare_param(local_id);
+            ctx.set_bare_param(&mut builder, local_id);
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // ! resource params and & trivial params: MutPtr, auto-deref + write-through.
             // Per §6.2: typed shape is Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(local_id);
+            ctx.set_param_borrow_unique(&mut builder, local_id);
             // `!` resource params: callee owns the pointee. Tag the Local so
             // the LIR drop lowering knows to dereference through the pointer
             // for the exit drop. Distinct from `&` (MutableBorrow) which
@@ -620,7 +620,7 @@ pub fn lower_function(
         if ctx.type_mapper.is_string_type(base_type)
             && matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
         {
-            ctx.set_owned(local_id);
+            ctx.set_owned(&mut builder, local_id);
         }
         // Track callable parameter return types
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
@@ -894,7 +894,7 @@ pub fn lower_equip_method(
         ctx.register_local("self", LocalId(1), spt);
         // Mark immutable self as BareParam so CoW materializes on mutation.
         if !self_is_consuming && matches!(ctx.type_registry.get(spt), Some(GirType::Ptr(_))) {
-            ctx.set_bare_param(LocalId(1));
+            ctx.set_bare_param(&mut builder, LocalId(1));
         }
         2u32
     } else {
@@ -910,10 +910,10 @@ pub fn lower_equip_method(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.set_bare_param(LocalId(param_idx));
+            ctx.set_bare_param(&mut builder, LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(LocalId(param_idx));
+            ctx.set_param_borrow_unique(&mut builder, LocalId(param_idx));
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
                 && ctx.type_registry.is_resource_type(base_type)
             {
@@ -1205,10 +1205,10 @@ pub fn lower_generic_function(
             ctx.func_state.move_override_params.insert(local_id);
         }
         if ctx.is_ref_param(base_type, ownership) {
-            ctx.set_bare_param(local_id);
+            ctx.set_bare_param(&mut builder, local_id);
         } else if ctx.is_mut_ref_param(base_type, ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(local_id);
+            ctx.set_param_borrow_unique(&mut builder, local_id);
             if matches!(ownership, Ownership::Move)
                 && ctx.type_registry.is_resource_type(base_type)
             {
@@ -1593,10 +1593,10 @@ fn lower_equip_method_with_subs(
         let gir_type = ctx.resolve_param_type(base_type, p.node.ownership);
         ctx.register_local(&p.node.name.node, LocalId(param_idx), gir_type);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.set_bare_param(LocalId(param_idx));
+            ctx.set_bare_param(&mut builder, LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(LocalId(param_idx));
+            ctx.set_param_borrow_unique(&mut builder, LocalId(param_idx));
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
                 && ctx.type_registry.is_resource_type(base_type)
             {

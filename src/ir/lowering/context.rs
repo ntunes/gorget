@@ -1000,7 +1000,7 @@ impl<'a> LoweringContext<'a> {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
         // Function call results own their data — safe to Move on return.
-        self.set_owned(local);
+        self.set_owned(builder, local);
         // Mark as fresh for user-defined function calls (not in fn_sigs — these
         // have the return clone path ensuring independence) AND for builtin method
         // calls whose runtime callee provably allocates fresh buffers (replace,
@@ -1011,7 +1011,7 @@ impl<'a> LoweringContext<'a> {
             let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
                 .map_or(false, |rt| runtime_returns_fresh(rt));
             if is_user_fn || is_fresh_builtin {
-                self.set_owned_fresh(local);
+                self.set_owned_fresh(builder, local);
             }
         }
         local
@@ -1030,7 +1030,7 @@ impl<'a> LoweringContext<'a> {
         if self.type_registry.needs_drop(return_type) {
             self.drops.register_local(local, return_type, &self.type_registry);
         }
-        self.set_owned(local);
+        self.set_owned(builder, local);
         // Mark fresh for extern string functions that provably allocate new buffers.
         // Most runtime string functions return views (Str), but these return owned
         // GorgetString with independent heap data. Driven by the typed
@@ -1040,7 +1040,7 @@ impl<'a> LoweringContext<'a> {
         if return_type == self.type_mapper.owned_string_type
             && runtime_returns_fresh(&func_name)
         {
-            self.set_owned_fresh(local);
+            self.set_owned_fresh(builder, local);
         }
         local
     }
@@ -1068,7 +1068,7 @@ impl<'a> LoweringContext<'a> {
         // Clone resource args that can't be moved into the enum variant.
         self.clone_resource_args_for_init(builder, &mut args, None);
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
-        self.set_owned(dst);
+        self.set_owned(builder, dst);
 
         // Transfer ownership: consumed args must not be double-freed at scope exit.
         // - Cloned args: the clone temp is consumed; unregister it. The original
@@ -1568,7 +1568,7 @@ impl<'a> LoweringContext<'a> {
                     inner,
                 );
                 self.drops.register_local(cloned, inner, &self.type_registry);
-                self.set_owned(cloned);
+                self.set_owned(builder, cloned);
                 return crate::ir::builder::FunctionBuilder::copy(cloned);
             }
             return operand;
@@ -1625,7 +1625,7 @@ impl<'a> LoweringContext<'a> {
                 local_type,
             );
             self.drops.register_local(cloned, local_type, &self.type_registry);
-            self.set_owned(cloned);
+            self.set_owned(builder, cloned);
             return crate::ir::builder::FunctionBuilder::copy(cloned);
         }
         operand
@@ -1757,7 +1757,7 @@ impl<'a> LoweringContext<'a> {
                             inner,
                         );
                         self.drops.register_local(cloned, inner, &self.type_registry);
-                        self.set_owned(cloned);
+                        self.set_owned(builder, cloned);
                         return crate::ir::builder::FunctionBuilder::copy(cloned);
                     }
                     // Ptr to a non-resource, non-string value type — e.g. reading a
@@ -1801,20 +1801,39 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
-    pub fn set_owned(&mut self, local: LocalId) {
+    ///
+    /// Phase D4.5: dual-write — writes through to `builder.locals[id].ownership`
+    /// so `Local.ownership` stays in sync with `func_state.local_ownership`
+    /// during lowering. The FxHashMap's "tracked vs untracked" presence-check
+    /// is preserved (it's the trip wire for `is_owned_local`); the typed
+    /// field on `Local` is the canonical state for downstream LIR/borrow-check.
+    pub fn set_owned(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
         self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::Owned);
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Owned;
+        }
     }
 
     /// Mark a local as owning a freshly-allocated buffer (no aliasing).
     /// Strictly stronger than `set_owned`. The return-clone elision and
     /// self-referential reassign guard rely on this stronger fact.
-    pub fn set_owned_fresh(&mut self, local: LocalId) {
+    pub fn set_owned_fresh(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
         self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::FreshOwned);
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::FreshOwned;
+        }
     }
 
-    /// Drop ownership tracking for a local.
-    pub fn unset_ownership(&mut self, local: LocalId) {
+    /// Drop ownership tracking for a local. Phase D4.5: also resets
+    /// `builder.locals[id].ownership` to the default (`Owned`).
+    pub fn unset_ownership(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
         self.func_state.local_ownership.remove(&local);
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::default();
+        }
     }
 
     /// Check if a local's string data is a fresh allocation not shared with any
@@ -1846,10 +1865,13 @@ impl<'a> LoweringContext<'a> {
     /// `shared_heap_aliases_of_source(source)` so source mutation can
     /// invalidate the alias tag, and in `has_string_borrowers(source)`
     /// so return paths know to clone.
-    pub fn set_shared_heap(&mut self, local: LocalId, source: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::SharedHeap { source }
-        );
+    pub fn set_shared_heap(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, source: LocalId) {
+        let v = crate::ir::LocalOwnership::SharedHeap { source };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Reset all callable-return-type tracking. Called at function-boundary
@@ -1876,13 +1898,17 @@ impl<'a> LoweringContext<'a> {
     /// The Alias(self) placeholder marks "borrowed but origin unknown to this
     /// layer" — the legacy fallback case from field loads / pattern extracts
     /// that don't have a more specific setter.
-    pub fn set_ref(&mut self, local: LocalId) {
-        self.func_state.local_ownership.entry(local).or_insert(
+    pub fn set_ref(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
+        let inserted = self.func_state.local_ownership.entry(local).or_insert(
             crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::Alias(local),
                 mutability: crate::ir::Mutability::Shared,
             }
-        );
+        ).clone();
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = inserted;
+        }
     }
 
     /// Check if a local is a bare Ptr param borrowing from the caller.
@@ -1899,25 +1925,31 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as a bare Ptr param borrowing from the caller.
-    pub fn set_bare_param(&mut self, local: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Param(local),
-                mutability: crate::ir::Mutability::Shared,
-            }
-        );
+    pub fn set_bare_param(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Param(local),
+            mutability: crate::ir::Mutability::Shared,
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// A `&` (MutableBorrow) param on a resource type. Origin is the
     /// param itself; mutability is Unique. Replaces a generic `set_ref`
     /// call for this specific class.
-    pub fn set_param_borrow_unique(&mut self, local: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Param(local),
-                mutability: crate::ir::Mutability::Unique,
-            }
-        );
+    pub fn set_param_borrow_unique(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Param(local),
+            mutability: crate::ir::Mutability::Unique,
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Tag a `!`-sigil resource parameter so the LIR drop lowering knows the
@@ -1956,26 +1988,32 @@ impl<'a> LoweringContext<'a> {
     /// A Ptr-typed local that's a borrow of a struct field (or enum
     /// variant payload field). `base` is the struct/scrutinee local;
     /// `field` is the field/variant-payload index.
-    pub fn set_field_borrow(&mut self, local: LocalId, base: LocalId, field: u32) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Field { base, field },
-                mutability: crate::ir::Mutability::Shared,
-            }
-        );
+    pub fn set_field_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, base: LocalId, field: u32) {
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Field { base, field },
+            mutability: crate::ir::Mutability::Shared,
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Tag `local` as the source for element `index` of tuple temp `tuple`.
     /// Recorded at `Inst::TupleInit` emission so the return path can
     /// MoveZero element sources when the tuple is returned. Replaces the
     /// `tuple_element_locals` sidecar — see unified-resource-model.md §6.3.
-    pub fn set_tuple_element_borrow(&mut self, local: LocalId, tuple: LocalId, index: u32) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
-                mutability: crate::ir::Mutability::Shared,
-            }
-        );
+    pub fn set_tuple_element_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, tuple: LocalId, index: u32) {
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
+            mutability: crate::ir::Mutability::Shared,
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Walk `func.locals` and yield each local tagged as a TupleElement of
@@ -2000,13 +2038,16 @@ impl<'a> LoweringContext<'a> {
     /// `set_ref`'s `Alias(self)` so `is_cow_borrow` can match. A
     /// subsequent `set_cow_borrow_source` upgrades to CollectionElement
     /// / FieldPath origin once the source collection is known.
-    pub fn set_cow_borrow(&mut self, local: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::CowBorrowPending,
-                mutability: crate::ir::Mutability::Shared,
-            }
-        );
+    pub fn set_cow_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::CowBorrowPending,
+            mutability: crate::ir::Mutability::Shared,
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Check if a local is a CoW borrow (deferred clone).
@@ -2034,12 +2075,15 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as a string view borrowing from `source`'s buffer.
-    pub fn set_view_of(&mut self, local: LocalId, source: LocalId) {
-        self.func_state.local_ownership.insert(local,
-            crate::ir::LocalOwnership::View {
-                source: crate::ir::BorrowOrigin::RuntimeView(source),
-            }
-        );
+    pub fn set_view_of(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, source: LocalId) {
+        let v = crate::ir::LocalOwnership::View {
+            source: crate::ir::BorrowOrigin::RuntimeView(source),
+        };
+        self.func_state.local_ownership.insert(local, v.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Find all locals that are views of `source`. Phase D: reads v2.
@@ -2118,7 +2162,7 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as a collection element reference.
-    pub fn set_collection_ref(&mut self, local: LocalId, collection: CollectionId) {
+    pub fn set_collection_ref(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, collection: CollectionId) {
         let v2 = match collection {
             CollectionId::Local(coll_local) => crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::CollectionElement(coll_local),
@@ -2129,7 +2173,11 @@ impl<'a> LoweringContext<'a> {
                 mutability: crate::ir::Mutability::Shared,
             },
         };
-        self.func_state.local_ownership.insert(local, v2);
+        self.func_state.local_ownership.insert(local, v2.clone());
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v2;
+        }
     }
 
     /// Persist per-local ownership onto the GIR `Local` structs at the
@@ -2176,14 +2224,17 @@ impl<'a> LoweringContext<'a> {
 
     /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.
     /// Resolves transitively: if source is itself an alias, points to the root.
-    pub fn cow_register_alias(&mut self, alias_local: LocalId, source_local: LocalId) {
+    pub fn cow_register_alias(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, alias_local: LocalId, source_local: LocalId) {
         let root = self.cow_resolve_root(source_local);
-        self.func_state.local_ownership.insert(alias_local,
-            crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::Alias(root),
-                mutability: crate::ir::Mutability::Shared,
-            }
-        );
+        let v = crate::ir::LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Alias(root),
+            mutability: crate::ir::Mutability::Shared,
+        };
+        self.func_state.local_ownership.insert(alias_local, v.clone());
+        let idx = alias_local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = v;
+        }
     }
 
     /// Resolve a local to its root source (follow alias chain).
@@ -2287,7 +2338,7 @@ impl<'a> LoweringContext<'a> {
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
         if self.is_bare_param(local) {
-            self.unset_ownership(local);
+            self.unset_ownership(builder, local);
             self.cow_materialize_alias(builder, local, local, span);
         }
 
@@ -2302,7 +2353,7 @@ impl<'a> LoweringContext<'a> {
             }
         };
         if let Some(source) = alias_source {
-            self.unset_ownership(local);
+            self.unset_ownership(builder, local);
             self.cow_materialize_alias(builder, local, source, span);
         }
 
@@ -2310,7 +2361,7 @@ impl<'a> LoweringContext<'a> {
         let aliases = self.cow_aliases_of(local);
         if !aliases.is_empty() {
             for alias in aliases {
-                self.unset_ownership(alias);
+                self.unset_ownership(builder, alias);
                 self.cow_materialize_alias(builder, alias, local, span);
             }
         }
@@ -2330,7 +2381,7 @@ impl<'a> LoweringContext<'a> {
         // before the source is mutated (push/append/clear/reassign).
         let views = self.views_of_source(local);
         for view_local in views {
-            self.unset_ownership(view_local);
+            self.unset_ownership(builder, view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
 
@@ -2342,7 +2393,7 @@ impl<'a> LoweringContext<'a> {
         // a stale alias tag pointing at a re-used slot.
         let shared_aliases = self.shared_heap_aliases_of_source(local);
         for alias_local in shared_aliases {
-            self.unset_ownership(alias_local);
+            self.unset_ownership(builder, alias_local);
         }
 
         // Case 6: local is a struct with live NAMED field borrows pointing into it →
@@ -2359,7 +2410,7 @@ impl<'a> LoweringContext<'a> {
         let field_borrows = self.field_borrows_of(local);
         for fb_local in field_borrows {
             if !self.is_named_local(fb_local) { continue; }
-            self.unset_ownership(fb_local);
+            self.unset_ownership(builder, fb_local);
             self.cow_materialize_alias(builder, fb_local, local, span);
         }
     }
@@ -2405,30 +2456,30 @@ impl<'a> LoweringContext<'a> {
     ) {
         let aliases = self.cow_aliases_of(source_local);
         for alias in aliases {
-            self.unset_ownership(alias);
+            self.unset_ownership(builder, alias);
             self.cow_materialize_alias(builder, alias, source_local, span);
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
         if self.is_bare_param(source_local) {
-            self.unset_ownership(source_local);
+            self.unset_ownership(builder, source_local);
         }
         // Remove collection refs pointing to this source
         let refs = self.cow_collection_refs_for(source_local);
         for r in refs {
-            self.unset_ownership(r);
+            self.unset_ownership(builder, r);
         }
         // Materialize string views borrowing from this source
         let views = self.views_of_source(source_local);
         for view_local in views {
-            self.unset_ownership(view_local);
+            self.unset_ownership(builder, view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
         // Drop SharedHeap value-aliases — heap already deep-cloned at the
         // shallow-copy boundary; no IR-level materialise needed.
         let shared_aliases = self.shared_heap_aliases_of_source(source_local);
         for alias_local in shared_aliases {
-            self.unset_ownership(alias_local);
+            self.unset_ownership(builder, alias_local);
         }
 
         // Materialize field borrows pointing at this source (deferred-string
@@ -2439,7 +2490,7 @@ impl<'a> LoweringContext<'a> {
         let fbs = self.field_borrows_of(source_local);
         for fb in fbs {
             if !self.is_named_local(fb) { continue; }
-            self.unset_ownership(fb);
+            self.unset_ownership(builder, fb);
             self.cow_materialize_alias(builder, fb, source_local, span);
         }
     }
@@ -2457,7 +2508,7 @@ impl<'a> LoweringContext<'a> {
         // First, materialize any transitive views (views of THIS view)
         let sub_views = self.views_of_source(view_local);
         for sub in sub_views {
-            self.unset_ownership(sub);
+            self.unset_ownership(builder, sub);
             self.cow_materialize_view(builder, sub, span);
         }
 
@@ -2478,7 +2529,7 @@ impl<'a> LoweringContext<'a> {
                 crate::ir::builder::FunctionBuilder::copy(cloned),
             );
             self.drops.register_local(owned_local, view_type, &self.type_registry);
-            self.set_owned(owned_local);
+            self.set_owned(builder, owned_local);
             if let Some(ref hint) = builder.local_name(view_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, view_type);
@@ -2515,7 +2566,7 @@ impl<'a> LoweringContext<'a> {
                 crate::ir::builder::FunctionBuilder::copy(cloned),
             );
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
-            self.set_owned(owned_local);
+            self.set_owned(builder, owned_local);
             if let Some(ref hint) = builder.local_name(alias_local).map(|s| s.to_string()) {
                 let name = hint.clone();
                 self.register_local(&name, owned_local, inner_type);
@@ -2554,7 +2605,7 @@ impl<'a> LoweringContext<'a> {
                 crate::ir::builder::FunctionBuilder::copy(cloned),
             );
             self.drops.register_local(owned_local, inner_type, &self.type_registry);
-            self.set_owned(owned_local);
+            self.set_owned(builder, owned_local);
         } else {
             // Deref the Ref pointer to load the pointee value.
             builder.assign(
@@ -2564,7 +2615,7 @@ impl<'a> LoweringContext<'a> {
                     projections: vec![crate::ir::instructions::Projection::Deref],
                 }),
             );
-            self.set_owned(owned_local);
+            self.set_owned(builder, owned_local);
         }
         if let Some(ref hint) = builder.local_name(ref_local).map(|s| s.to_string()) {
             let name = hint.clone();
@@ -2572,7 +2623,7 @@ impl<'a> LoweringContext<'a> {
             self.func_state.named_locals.insert(owned_local);
         }
         // The old ref_local is now dead
-        self.unset_ownership(ref_local);
+        self.unset_ownership(builder, ref_local);
     }
 
     /// Populate the struct_fields cache from the TypeRegistry.

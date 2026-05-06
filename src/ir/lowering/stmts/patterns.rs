@@ -60,7 +60,7 @@ pub fn stage_match_scrutinee(
 
     if let Operand::Copy(place) | Operand::Move(place) = scrut_op {
         if place.projections.is_empty() && ctx.is_owned_local(place.local) {
-            ctx.set_owned(scrut_local);
+            ctx.set_owned(builder, scrut_local);
             let src_type = builder.local_type(place.local);
             if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
                 ctx.drops.unregister(place.local);
@@ -70,7 +70,7 @@ pub fn stage_match_scrutinee(
         }
         // Ref propagation: see comment in lower_match_stmt below.
         if !place.projections.is_empty() && ctx.is_ref_local(place.local) {
-            ctx.set_ref(scrut_local);
+            ctx.set_ref(builder, scrut_local);
         }
     }
     scrut_local
@@ -579,7 +579,7 @@ pub fn emit_pattern_bindings(
                 // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop).
                 // Phase D: origin is Field { base: scrut_local, field: i }.
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
-                    ctx.set_field_borrow(dst, scrut_local, i as u32);
+                    ctx.set_field_borrow(builder, dst, scrut_local, i as u32);
                 }
                 // Value scrutinee + droppable field (string, collection, user
                 // struct with resource fields): register for drop at scope exit.
@@ -604,7 +604,7 @@ pub fn emit_pattern_bindings(
                         // registers directly; otherwise clone for independence.
                         if ctx.func_state.scrutinee_clone_elision {
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
-                            ctx.set_owned(dst);
+                            ctx.set_owned(builder, dst);
                         } else if let Some(clone_fn) = ctx.clone_fn_for_ptr(field_type) {
                             ctx.warn_implicit_clone(pattern.span, field_type, crate::ir::ImplicitCloneReason::PatternExtraction);
                             let ptr_type = ctx.register_ptr_type(field_type);
@@ -625,7 +625,7 @@ pub fn emit_pattern_bindings(
                                 FunctionBuilder::copy(cloned),
                             );
                             ctx.drops.register_local(dst, field_type, &ctx.type_registry);
-                            ctx.set_owned(dst);
+                            ctx.set_owned(builder, dst);
                         }
                     } else if ctx.is_owned_local(scrut_local)
                         && ctx.func_state.scrutinee_clone_elision
@@ -634,7 +634,7 @@ pub fn emit_pattern_bindings(
                         // directly.  Both the scrutinee copy AND the original
                         // will be MoveZero'd — the extracted field owns the data.
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
-                        ctx.set_owned(dst);
+                        ctx.set_owned(builder, dst);
                     }
                     // Non-last-use: extracted field is a VIEW into the scrutinee
                     // copy (no registration, no drop).  The copy is dropped at
@@ -733,7 +733,7 @@ pub fn emit_pattern_bindings(
 
                 // Phase D: origin is Field { base: scrut_local, field: i }.
                 if matches!(ctx.type_registry.get(field_type), Some(GirType::Ptr(_))) {
-                    ctx.set_field_borrow(dst, scrut_local, i as u32);
+                    ctx.set_field_borrow(builder, dst, scrut_local, i as u32);
                 }
 
                 emit_pattern_bindings(ctx, builder, field_pat, dst, field_type);

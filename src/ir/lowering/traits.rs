@@ -885,7 +885,7 @@ fn lower_trait_method_body(
     ctx.register_local("self", self_cast, cast_type);
     // Mark immutable self as BareParam so CoW materializes on mutation.
     if !vtable_method.self_is_mutable {
-        ctx.set_bare_param(self_cast);
+        ctx.set_bare_param(&mut builder, self_cast);
     }
 
     // Register other params using vtable types (must match wrapper signature)
@@ -901,7 +901,7 @@ fn lower_trait_method_body(
         // If this param is passed by pointer (base is resource type, vtable type is MutPtr),
         // mark as Borrowed { Param(self), Unique } so nested calls don't double-wrap.
         if vtable_type != base_type {
-            ctx.set_param_borrow_unique(LocalId(param_idx));
+            ctx.set_param_borrow_unique(&mut builder, LocalId(param_idx));
             // `!` resource params: callee owns the pointee. Tag the local so the
             // LIR drop lowering uses the deref-aware path.
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
@@ -1468,10 +1468,10 @@ fn lower_static_trait_method(
         ctx.register_local(&p.node.name.node, LocalId(param_idx), *gir_type);
         let base_type = ctx.type_mapper.map_ast_type(&p.node.type_.node);
         if ctx.is_ref_param(base_type, p.node.ownership) {
-            ctx.set_bare_param(LocalId(param_idx));
+            ctx.set_bare_param(&mut builder, LocalId(param_idx));
         } else if ctx.is_mut_ref_param(base_type, p.node.ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(LocalId(param_idx));
+            ctx.set_param_borrow_unique(&mut builder, LocalId(param_idx));
             if matches!(p.node.ownership, crate::parser::ast::Ownership::Move)
                 && ctx.type_registry.is_resource_type(base_type)
             {

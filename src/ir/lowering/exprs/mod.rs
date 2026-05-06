@@ -120,7 +120,7 @@ fn lower_expr_inner(
                             Place::local(tmp),
                             Operand::Move(deref_place),
                         );
-                        ctx.set_owned(tmp);
+                        ctx.set_owned(builder, tmp);
                     } else {
                         builder.assign(Place::local(tmp), Operand::Copy(deref_place));
                     }
@@ -274,7 +274,7 @@ fn lower_expr_inner(
                 // Remove any collection refs keyed on this local (now zeroed/stale)
                 let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
                 for r in stale_refs {
-                    ctx.unset_ownership(r);
+                    ctx.unset_ownership(builder, r);
                 }
                 // Owning-`!`-param transferred via explicit `!x`: invalidate the
                 // original param slot too. The Identifier-Move-Deref path above
@@ -476,7 +476,7 @@ fn lower_expr_inner(
             for (index, &elem_local) in elem_locals.iter().enumerate() {
                 let elem_ty = builder.local_type(elem_local);
                 if ctx.type_registry.needs_drop(elem_ty) {
-                    ctx.set_tuple_element_borrow(elem_local, dst, index as u32);
+                    ctx.set_tuple_element_borrow(builder, elem_local, dst, index as u32);
                 }
             }
             FunctionBuilder::copy(dst)
@@ -575,7 +575,7 @@ fn lower_expr_inner(
                             FunctionBuilder::copy(cloned),
                         );
                         ctx.drops.register_local(dst, deref_type, &ctx.type_registry);
-                        ctx.set_owned(dst);
+                        ctx.set_owned(builder, dst);
                         return FunctionBuilder::copy(dst);
                     }
                 }
@@ -1284,7 +1284,7 @@ fn resolve_option_result_variant(
                 return None;
             };
             let dst = builder.enum_init(&type_name, "None", type_id, vec![]);
-            ctx.set_owned(dst);
+            ctx.set_owned(builder, dst);
             Some(FunctionBuilder::copy(dst))
         }
         "Ok" if args.len() == 1 => {
@@ -1667,7 +1667,7 @@ fn lower_struct_literal(
 
     let type_id = ctx.type_mapper.lookup_named(&effective_name).unwrap_or(UNIT_TYPE);
     let dst = builder.struct_init(&effective_name, type_id, field_operands.clone());
-    ctx.set_owned(dst);
+    ctx.set_owned(builder, dst);
 
     // MoveZero owned single-use/temp sources AFTER struct init so they don't
     // double-free on scope exit (the struct now owns the data).
@@ -1747,7 +1747,7 @@ fn lower_field_access(
                             let base_local = deref_place.local;
                             let dst = builder.field_load(deref_place, field_idx, result_type);
                             if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                ctx.set_field_borrow(dst, base_local, field_idx);
+                                ctx.set_field_borrow(builder, dst, base_local, field_idx);
                             }
                             return FunctionBuilder::copy(dst);
                         }
@@ -1766,7 +1766,7 @@ fn lower_field_access(
                                         let base_local = deref_place.local;
                                         let dst = builder.field_load(deref_place, i as u32, result_type);
                                         if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                                            ctx.set_field_borrow(dst, base_local, i as u32);
+                                            ctx.set_field_borrow(builder, dst, base_local, i as u32);
                                         }
                                         return FunctionBuilder::copy(dst);
                                     }
@@ -1825,7 +1825,7 @@ fn lower_field_access(
                                 p
                             },
                         });
-                        ctx.set_owned(dst);
+                        ctx.set_owned(builder, dst);
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                         return FunctionBuilder::copy(dst);
                     }
@@ -1847,7 +1847,7 @@ fn lower_field_access(
                     let base_local = base_place.local;
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                        ctx.set_field_borrow(dst, base_local, field_idx);
+                        ctx.set_field_borrow(builder, dst, base_local, field_idx);
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -1875,7 +1875,7 @@ fn lower_field_access(
                                 p
                             },
                         });
-                        ctx.set_owned(dst);
+                        ctx.set_owned(builder, dst);
                         ctx.drops.register_local(dst, field_type, &ctx.type_registry);
                         return FunctionBuilder::copy(dst);
                     }
@@ -1890,7 +1890,7 @@ fn lower_field_access(
                     let base_local = base_place.local;
                     let dst = builder.field_load(base_place.clone(), field_idx, result_type);
                     if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
-                        ctx.set_field_borrow(dst, base_local, field_idx);
+                        ctx.set_field_borrow(builder, dst, base_local, field_idx);
                     }
                     return FunctionBuilder::copy(dst);
                 }
@@ -2807,7 +2807,7 @@ fn lower_string_interpolation(
     // gorget_string_format always allocates a fresh buffer — mark as fresh so
     // the self-referential clone guard in assigns.rs skips the redundant clone.
     // Phase D4: typed-only signal — sidecar writer retired.
-    ctx.set_owned_fresh(dst);
+    ctx.set_owned_fresh(builder, dst);
     FunctionBuilder::copy(dst)
 }
 

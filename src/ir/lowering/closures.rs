@@ -365,7 +365,7 @@ pub fn emit_closure_call_function(
                 // Register with pointer type; reads/writes in the body will
                 // go through Deref projections (checked via is_param_borrow_unique).
                 ctx.register_local(&cap.name, ptr_local, ptr_type);
-                ctx.set_param_borrow_unique(ptr_local);
+                ctx.set_param_borrow_unique(&mut builder, ptr_local);
             }
         }
     }
@@ -381,10 +381,10 @@ pub fn emit_closure_call_function(
         let resolved = ctx.resolve_param_type(*type_id, ownership);
         ctx.register_local(name, local_id, resolved);
         if ctx.is_ref_param(*type_id, ownership) {
-            ctx.set_bare_param(local_id);
+            ctx.set_bare_param(&mut builder, local_id);
         } else if ctx.is_mut_ref_param(*type_id, ownership) {
             // & or ! MutPtr param. Per §6.2: typed shape Borrowed { Param(self), Unique }.
-            ctx.set_param_borrow_unique(local_id);
+            ctx.set_param_borrow_unique(&mut builder, local_id);
             if matches!(ownership, Ownership::Move)
                 && ctx.type_registry.is_resource_type(*type_id)
             {
