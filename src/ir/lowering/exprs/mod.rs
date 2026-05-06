@@ -605,7 +605,21 @@ fn lower_expr_inner(
                 } else {
                     I64_TYPE
                 };
-                let dst = builder.field_load(place.clone(), *index as u32, elem_type);
+                // Phase C FieldLoad migration (2026-05-06): mirror the
+                // lower_field_access path — resource-typed tuple elements
+                // load as Ptr(elem_type) (a borrow into the tuple's
+                // storage). Auto-clone fires at ownership boundaries when
+                // the dst must own.
+                let result_type = if ctx.type_registry.is_resource_type(elem_type) {
+                    ctx.type_registry.insert(GirType::Ptr(elem_type))
+                } else {
+                    elem_type
+                };
+                let base_local = place.local;
+                let dst = builder.field_load(place.clone(), *index as u32, result_type);
+                if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                    ctx.set_field_borrow(builder, dst, base_local, *index as u32);
+                }
                 return FunctionBuilder::copy(dst);
             }
             Operand::Constant(Constant::Unit)

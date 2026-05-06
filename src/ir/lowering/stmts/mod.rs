@@ -633,10 +633,34 @@ fn lower_var_decl(
             };
             builder.assign_mode(tuple_assign_mode, Place::local(tuple_local), operand);
 
-            // Extract each field and bind it to the corresponding pattern variable
+            // Extract each field and bind it to the corresponding pattern variable.
+            //
+            // Phase C FieldLoad migration (2026-05-06): when the tuple was
+            // moved into the temp (Move mode), the temp is dead at this site
+            // and resource-typed fields must be moved out — emit `field_load
+            // + move_zero` so the temp's drop doesn't free buffers the new
+            // bindings now own. The validator's next-inst peek encodes this
+            // as ReadMode::Move (sound).
+            //
+            // For Copy-mode tuples (named-local source / primitive tuple)
+            // resource fields stay shallow-copy because the source is still
+            // alive; that's the same shape the lower_field_access path
+            // handles. Today no fixture exercises tuple-destructure of a
+            // borrowed tuple with resource fields — if one appears, the
+            // validator will flag it for migration.
+            let move_resource_fields = matches!(
+                tuple_assign_mode,
+                crate::ir::instructions::AssignMode::Move
+            );
             for (i, part) in parts.iter().enumerate() {
                 let field_type = super::exprs::resolve_tuple_field_type(ctx, tuple_type, i);
                 let field_local = builder.field_load(Place::local(tuple_local), i as u32, field_type);
+                if move_resource_fields && ctx.type_registry.is_resource_type(field_type) {
+                    builder.move_zero(Place {
+                        local: tuple_local,
+                        projections: vec![Projection::Field(i as u32)],
+                    });
+                }
 
                 if let Pattern::Binding(name) = &part.node {
                     ctx.register_local(name, field_local, field_type);

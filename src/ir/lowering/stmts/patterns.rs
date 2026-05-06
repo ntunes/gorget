@@ -671,10 +671,42 @@ pub fn emit_pattern_bindings(
         }
 
         Pattern::Tuple(elems) => {
+            // Phase C FieldLoad migration (2026-05-06): two shapes for
+            // resource elements:
+            //
+            // (a) scrutinee owns the data (clone elision: scrutinee is
+            //     last-use): emit `field_load + move_zero` so the
+            //     extracted bindings take ownership. The scrutinee's
+            //     drop won't double-free (its slots are zeroed).
+            //
+            // (b) scrutinee borrows (default — for-loop iteration over a
+            //     vector returns a value-typed Tuple that aliases the
+            //     vector's storage; nested-pattern matches against a
+            //     non-last-use scrutinee): wrap the resource field as
+            //     Ptr(elem_type), tag it as a field borrow, and let the
+            //     auto-clone path materialise ownership at boundaries.
+            //
+            // Non-resource fields stay value-typed (bit-copy is sound).
+            let move_resource_fields = ctx.func_state.scrutinee_clone_elision;
             for (i, elem_pat) in elems.iter().enumerate() {
                 let elem_type = super::super::exprs::resolve_tuple_field_type(ctx, scrut_type, i);
-                let dst = builder.field_load(Place::local(scrut_local), i as u32, elem_type);
-                emit_pattern_bindings(ctx, builder, elem_pat, dst, elem_type);
+                let is_resource = ctx.type_registry.is_resource_type(elem_type);
+                let (load_type, wrap_as_borrow) = if is_resource && !move_resource_fields {
+                    (ctx.type_registry.insert(GirType::Ptr(elem_type)), true)
+                } else {
+                    (elem_type, false)
+                };
+                let dst = builder.field_load(Place::local(scrut_local), i as u32, load_type);
+                if move_resource_fields && is_resource {
+                    builder.move_zero(Place {
+                        local: scrut_local,
+                        projections: vec![Projection::Field(i as u32)],
+                    });
+                }
+                if wrap_as_borrow {
+                    ctx.set_field_borrow(builder, dst, scrut_local, i as u32);
+                }
+                emit_pattern_bindings(ctx, builder, elem_pat, dst, load_type);
             }
         }
 
