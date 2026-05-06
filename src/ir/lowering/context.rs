@@ -162,23 +162,6 @@ pub struct FunctionState {
     pub locals: FxHashMap<String, (LocalId, TypeId)>,
     /// Stack of active loops for break/continue targeting.
     pub loop_stack: Vec<LoopInfo>,
-    /// Unified ownership state for tracked locals. Subsumes the legacy
-    /// `ref_locals` / `owned_locals` / `cow_alias_sources` / `cow_alias_targets`
-    /// / `cow_ptr_params` / `cow_collection_refs` sidecars and the 7-variant
-    /// `LocalOwnershipState` enum (all deleted by Phase D4). Most locals are
-    /// untracked (not present in this map); only locals with ownership
-    /// significance carry entries.
-    ///
-    /// **Phase D4.5 follow-up:** this remains a `FxHashMap` parallel to
-    /// `Local.ownership` (see `src/ir/mod.rs`). `flush_ownership_to_locals`
-    /// copies entries onto `Local.ownership` at the GIR/LIR boundary; the
-    /// FxHashMap survives as the active mutable store during lowering. The
-    /// final hop — writing through `&mut FunctionBuilder` so `Local.ownership`
-    /// IS the source of truth during lowering — is tracked separately because
-    /// it touches every setter call site.
-    ///
-    /// See `docs/internals/unified-resource-model.md` §6.6.
-    pub local_ownership: FxHashMap<LocalId, crate::ir::LocalOwnership>,
     /// LocalIds that are named variables (vs anonymous temps from expressions).
     /// Used to distinguish variable-to-variable assignment (needs clone) from
     /// temp-to-variable (needs move-zero).
@@ -1275,15 +1258,6 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
-        // FxHashMap dual-write: keep the legacy store in lockstep with the
-        // typed field until step 5d retires the FxHashMap entirely. Once
-        // the field is deleted, this whole block goes away.
-        self.func_state.local_ownership.clear();
-        for (idx, l) in builder.locals.iter().enumerate() {
-            if !matches!(l.ownership, crate::ir::LocalOwnership::Untracked) {
-                self.func_state.local_ownership.insert(LocalId(idx as u32), l.ownership.clone());
-            }
-        }
     }
 
     /// Iterate over all locals (for type inference).
@@ -1844,14 +1818,10 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as owning its data. Overwrites any previous state.
-    ///
-    /// Phase D4.5: dual-write — writes through to `builder.locals[id].ownership`
-    /// so `Local.ownership` stays in sync with `func_state.local_ownership`
-    /// during lowering. The FxHashMap's "tracked vs untracked" presence-check
-    /// is preserved (it's the trip wire for `is_owned_local`); the typed
-    /// field on `Local` is the canonical state for downstream LIR/borrow-check.
+    /// Phase D4.5 step 5d: writes through to `builder.locals[id].ownership`.
+    /// The legacy `func_state.local_ownership: FxHashMap` was retired —
+    /// the typed field on `Local` is the sole live store.
     pub fn set_owned(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::Owned);
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
             builder.locals[idx].ownership = crate::ir::LocalOwnership::Owned;
@@ -1862,18 +1832,16 @@ impl<'a> LoweringContext<'a> {
     /// Strictly stronger than `set_owned`. The return-clone elision and
     /// self-referential reassign guard rely on this stronger fact.
     pub fn set_owned_fresh(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        self.func_state.local_ownership.insert(local, crate::ir::LocalOwnership::FreshOwned);
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
             builder.locals[idx].ownership = crate::ir::LocalOwnership::FreshOwned;
         }
     }
 
-    /// Drop ownership tracking for a local. Phase D4.5: also resets
-    /// `builder.locals[id].ownership` to the default (`Untracked`),
-    /// preserving the legacy FxHashMap "absence == no entry" semantic.
+    /// Drop ownership tracking for a local. Resets `builder.locals[id].ownership`
+    /// to the default (`Untracked`), preserving the legacy FxHashMap
+    /// "absence == no entry" semantic.
     pub fn unset_ownership(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        self.func_state.local_ownership.remove(&local);
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
             builder.locals[idx].ownership = crate::ir::LocalOwnership::default();
@@ -1911,11 +1879,9 @@ impl<'a> LoweringContext<'a> {
     /// invalidate the alias tag, and in `has_string_borrowers(source)`
     /// so return paths know to clone.
     pub fn set_shared_heap(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, source: LocalId) {
-        let v = crate::ir::LocalOwnership::SharedHeap { source };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::SharedHeap { source };
         }
     }
 
@@ -1944,15 +1910,15 @@ impl<'a> LoweringContext<'a> {
     /// layer" — the legacy fallback case from field loads / pattern extracts
     /// that don't have a more specific setter.
     pub fn set_ref(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        let inserted = self.func_state.local_ownership.entry(local).or_insert(
-            crate::ir::LocalOwnership::Borrowed {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return; }
+        // Only set if currently Untracked (matches the legacy
+        // `entry(local).or_insert(...)` no-op semantic for tracked locals).
+        if matches!(builder.locals[idx].ownership, crate::ir::LocalOwnership::Untracked) {
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
                 origin: crate::ir::BorrowOrigin::Alias(local),
                 mutability: crate::ir::Mutability::Shared,
-            }
-        ).clone();
-        let idx = local.0 as usize;
-        if idx < builder.locals.len() {
-            builder.locals[idx].ownership = inserted;
+            };
         }
     }
 
@@ -1974,14 +1940,12 @@ impl<'a> LoweringContext<'a> {
 
     /// Mark a local as a bare Ptr param borrowing from the caller.
     pub fn set_bare_param(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::Param(local),
-            mutability: crate::ir::Mutability::Shared,
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Param(local),
+                mutability: crate::ir::Mutability::Shared,
+            };
         }
     }
 
@@ -1989,14 +1953,12 @@ impl<'a> LoweringContext<'a> {
     /// param itself; mutability is Unique. Replaces a generic `set_ref`
     /// call for this specific class.
     pub fn set_param_borrow_unique(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::Param(local),
-            mutability: crate::ir::Mutability::Unique,
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Param(local),
+                mutability: crate::ir::Mutability::Unique,
+            };
         }
     }
 
@@ -2040,14 +2002,12 @@ impl<'a> LoweringContext<'a> {
     /// variant payload field). `base` is the struct/scrutinee local;
     /// `field` is the field/variant-payload index.
     pub fn set_field_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, base: LocalId, field: u32) {
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::Field { base, field },
-            mutability: crate::ir::Mutability::Shared,
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Field { base, field },
+                mutability: crate::ir::Mutability::Shared,
+            };
         }
     }
 
@@ -2069,14 +2029,12 @@ impl<'a> LoweringContext<'a> {
     /// MoveZero element sources when the tuple is returned. Replaces the
     /// `tuple_element_locals` sidecar — see unified-resource-model.md §6.3.
     pub fn set_tuple_element_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, tuple: LocalId, index: u32) {
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
-            mutability: crate::ir::Mutability::Shared,
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
+                mutability: crate::ir::Mutability::Shared,
+            };
         }
     }
 
@@ -2103,14 +2061,12 @@ impl<'a> LoweringContext<'a> {
     /// subsequent `set_cow_borrow_source` upgrades to CollectionElement
     /// / FieldPath origin once the source collection is known.
     pub fn set_cow_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId) {
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::CowBorrowPending,
-            mutability: crate::ir::Mutability::Shared,
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::CowBorrowPending,
+                mutability: crate::ir::Mutability::Shared,
+            };
         }
     }
 
@@ -2143,13 +2099,11 @@ impl<'a> LoweringContext<'a> {
 
     /// Mark a local as a string view borrowing from `source`'s buffer.
     pub fn set_view_of(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, source: LocalId) {
-        let v = crate::ir::LocalOwnership::View {
-            source: crate::ir::BorrowOrigin::RuntimeView(source),
-        };
-        self.func_state.local_ownership.insert(local, v.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::View {
+                source: crate::ir::BorrowOrigin::RuntimeView(source),
+            };
         }
     }
 
@@ -2232,50 +2186,32 @@ impl<'a> LoweringContext<'a> {
 
     /// Mark a local as a collection element reference.
     pub fn set_collection_ref(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, collection: CollectionId) {
-        let v2 = match collection {
-            CollectionId::Local(coll_local) => crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::CollectionElement(coll_local),
-                mutability: crate::ir::Mutability::Shared,
-            },
-            CollectionId::FieldPath(path) => crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::FieldPath(path),
-                mutability: crate::ir::Mutability::Shared,
-            },
-        };
-        self.func_state.local_ownership.insert(local, v2.clone());
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v2;
+            builder.locals[idx].ownership = match collection {
+                CollectionId::Local(coll_local) => crate::ir::LocalOwnership::Borrowed {
+                    origin: crate::ir::BorrowOrigin::CollectionElement(coll_local),
+                    mutability: crate::ir::Mutability::Shared,
+                },
+                CollectionId::FieldPath(path) => crate::ir::LocalOwnership::Borrowed {
+                    origin: crate::ir::BorrowOrigin::FieldPath(path),
+                    mutability: crate::ir::Mutability::Shared,
+                },
+            };
         }
     }
 
     /// Derive `slot_kind` for every local at the GIR/LIR boundary.
-    /// `Local.ownership` is kept in sync with `func_state.local_ownership`
-    /// during lowering by every setter and by `restore_locals` (Phase D4.5
-    /// steps 1+3), so the typed field is already current — no copy needed.
-    ///
-    /// This pass:
-    /// 1. (debug only) cross-checks every FxHashMap entry against the
-    ///    matching `Local.ownership` value. Any drift is a setter bug.
-    /// 2. (always) derives `slot_kind` per (type, ownership). The empirical
-    ///    audit showed zero "non-Ptr type with borrow ownership" combos,
-    ///    so the mapping is total over the three cases.
+    /// Phase D4.5 step 5d: `Local.ownership` is the sole live store; the
+    /// legacy `func_state.local_ownership: FxHashMap` was retired. This
+    /// pass derives `slot_kind` per (type, ownership). The empirical
+    /// audit showed zero "non-Ptr type with borrow ownership" combos,
+    /// so the mapping is total over the three cases.
     ///
     /// Historical name: `flush_ownership_to_locals`. The "flush" is now
-    /// purely a `slot_kind` derivation; the ownership half is already
-    /// flushed at every setter call site.
+    /// purely a `slot_kind` derivation; the ownership half is written
+    /// directly at every setter call site.
     pub fn flush_ownership_to_locals(&self, builder: &mut crate::ir::builder::FunctionBuilder) {
-        #[cfg(debug_assertions)]
-        for (&local_id, state) in &self.func_state.local_ownership {
-            let idx = local_id.0 as usize;
-            if idx >= builder.locals.len() { continue; }
-            debug_assert_eq!(
-                &builder.locals[idx].ownership,
-                state,
-                "D4.5 dual-write drift at local _{}: FxHashMap={:?}, Local.ownership={:?}",
-                local_id.0, state, builder.locals[idx].ownership
-            );
-        }
         // §6.8 Stage 3: derive `slot_kind` from (type, ownership) for
         // every local. Walk all locals (not just the ones with explicit
         // ownership entries above) so default-Owned Ptr locals get
@@ -2311,14 +2247,12 @@ impl<'a> LoweringContext<'a> {
     /// Resolves transitively: if source is itself an alias, points to the root.
     pub fn cow_register_alias(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, alias_local: LocalId, source_local: LocalId) {
         let root = self.cow_resolve_root(builder, source_local);
-        let v = crate::ir::LocalOwnership::Borrowed {
-            origin: crate::ir::BorrowOrigin::Alias(root),
-            mutability: crate::ir::Mutability::Shared,
-        };
-        self.func_state.local_ownership.insert(alias_local, v.clone());
         let idx = alias_local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = v;
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Alias(root),
+                mutability: crate::ir::Mutability::Shared,
+            };
         }
     }
 
