@@ -272,7 +272,7 @@ fn lower_expr_inner(
                 // Clean up CoW tracking — moved local's data is zeroed, so
                 // any collection refs keyed on it are stale.
                 // Remove any collection refs keyed on this local (now zeroed/stale)
-                let stale_refs = ctx.cow_collection_refs_for(place_clone.local);
+                let stale_refs = ctx.cow_collection_refs_for(builder, place_clone.local);
                 for r in stale_refs {
                     ctx.unset_ownership(builder, r);
                 }

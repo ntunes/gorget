@@ -67,7 +67,7 @@ pub(super) fn lower_assign(
                 let type_id = _type_id;
                 // CoW: if this local is a source with aliases, sever them first.
                 // Aliases keep the old value; this local gets the new value.
-                if ctx.cow_has_aliases(local_id) {
+                if ctx.cow_has_aliases(builder, local_id) {
                     ctx.cow_sever_all_aliases_from(builder, local_id, target.span);
                 }
                 // CoW: if this local is an alias, just remove from alias maps.
@@ -77,7 +77,7 @@ pub(super) fn lower_assign(
                 }
                 // CoW: if this collection has element refs, clone them out.
                 // Reassignment replaces the buffer; outstanding refs would dangle.
-                if ctx.cow_has_collection_refs(local_id) {
+                if ctx.cow_has_collection_refs(builder, local_id) {
                     ctx.cow_before_mutation(builder, local_id, target.span);
                 }
                 // CoW clone-on-mutate: if LHS is an immutable borrow (Ptr, not MutPtr),

@@ -1895,13 +1895,13 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local has been borrowed-from via the `String b = a`
     /// shallow-copy path. If true, another local shares its heap data
-    /// → clone needed on return. Reads the typed `LocalOwnership::SharedHeap`
-    /// channel — the legacy `string_borrow_sources` sidecar was retired
-    /// 2026-05-05 (Phase D4 attempt #3 Phase 3).
-    pub fn has_string_borrowers(&self, local: LocalId) -> bool {
+    /// → clone needed on return. Phase D4.5 step 5b.3: iterates
+    /// `builder.locals` directly through the typed `Local.ownership`
+    /// field (the legacy FxHashMap was retired in step 5d).
+    pub fn has_string_borrowers(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::LocalOwnership;
-        self.func_state.local_ownership.values().any(|state| matches!(
-            state,
+        builder.locals.iter().any(|l| matches!(
+            &l.ownership,
             LocalOwnership::SharedHeap { source } if *source == local
         ))
     }
@@ -2084,17 +2084,17 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Walk `func.locals` and yield each local tagged as a TupleElement of
-    /// the given `tuple` temp. Replaces the legacy `tuple_element_locals`
-    /// sidecar lookup. Yields the source local id alongside its index;
-    /// callers iterate without ordering guarantees because the return-path
-    /// MoveZero is order-insensitive.
-    pub fn tuple_element_sources(&self, tuple: LocalId) -> Vec<LocalId> {
+    /// the given `tuple` temp. Phase D4.5 step 5b.3: reads the typed
+    /// `Local.ownership` field directly. Yields the source local id;
+    /// callers iterate without ordering guarantees because the
+    /// return-path MoveZero is order-insensitive.
+    pub fn tuple_element_sources(&self, builder: &crate::ir::builder::FunctionBuilder, tuple: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter()
-            .filter_map(|(local, state)| match state {
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| match &l.ownership {
                 LocalOwnership::Borrowed {
                     origin: BorrowOrigin::TupleElement { tuple: t, .. }, ..
-                } if *t == tuple => Some(*local),
+                } if *t == tuple => Some(LocalId(idx as u32)),
                 _ => None,
             })
             .collect()
@@ -2164,12 +2164,12 @@ impl<'a> LoweringContext<'a> {
     /// the `gorget_string_copy_cow` boundary; running them through
     /// `cow_materialize_view` would emit a redundant clone-to-owned and
     /// shift slot indices in self-host driver compilation.
-    pub fn views_of_source(&self, source: LocalId) -> Vec<LocalId> {
+    pub fn views_of_source(&self, builder: &crate::ir::builder::FunctionBuilder, source: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter()
-            .filter_map(|(local, state)| {
-                if matches!(state, LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source) {
-                    Some(*local)
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| {
+                if matches!(&l.ownership, LocalOwnership::View { source: BorrowOrigin::RuntimeView(s) } if *s == source) {
+                    Some(LocalId(idx as u32))
                 } else {
                     None
                 }
@@ -2185,12 +2185,12 @@ impl<'a> LoweringContext<'a> {
     /// drop-tracking via `unset_ownership`) — it does NOT call
     /// `cow_materialize_view`, because the heap is already deep-owned
     /// at the slot.
-    pub fn shared_heap_aliases_of_source(&self, source: LocalId) -> Vec<LocalId> {
+    pub fn shared_heap_aliases_of_source(&self, builder: &crate::ir::builder::FunctionBuilder, source: LocalId) -> Vec<LocalId> {
         use crate::ir::LocalOwnership;
-        self.func_state.local_ownership.iter()
-            .filter_map(|(local, state)| {
-                if matches!(state, LocalOwnership::SharedHeap { source: s } if *s == source) {
-                    Some(*local)
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| {
+                if matches!(&l.ownership, LocalOwnership::SharedHeap { source: s } if *s == source) {
+                    Some(LocalId(idx as u32))
                 } else {
                     None
                 }
@@ -2313,7 +2313,7 @@ impl<'a> LoweringContext<'a> {
     /// Register a CoW alias: `alias_local` is a Ptr(T) borrowing from `source_local`.
     /// Resolves transitively: if source is itself an alias, points to the root.
     pub fn cow_register_alias(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, alias_local: LocalId, source_local: LocalId) {
-        let root = self.cow_resolve_root(source_local);
+        let root = self.cow_resolve_root(builder, source_local);
         let v = crate::ir::LocalOwnership::Borrowed {
             origin: crate::ir::BorrowOrigin::Alias(root),
             mutability: crate::ir::Mutability::Shared,
@@ -2326,18 +2326,23 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Resolve a local to its root source (follow alias chain).
-    /// Phase D: walks v2 `Borrowed { Alias(s), .. }` chain. Self-loops
+    /// Phase D4.5 step 5b.3: walks `Local.ownership` directly. Self-loops
     /// (source == current — produced by set_ref placeholders) terminate
     /// resolution at the local itself, matching the legacy semantics
     /// where set_ref-marked locals weren't real aliases.
-    fn cow_resolve_root(&self, local: LocalId) -> LocalId {
+    fn cow_resolve_root(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> LocalId {
         use crate::ir::{LocalOwnership, BorrowOrigin};
         let mut current = local;
-        while let Some(LocalOwnership::Borrowed {
-            origin: BorrowOrigin::Alias(source), ..
-        }) = self.func_state.local_ownership.get(&current) {
-            if *source == current { break; }
-            current = *source;
+        loop {
+            let idx = current.0 as usize;
+            if idx >= builder.locals.len() { break; }
+            match &builder.locals[idx].ownership {
+                LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(source), .. } => {
+                    if *source == current { break; }
+                    current = *source;
+                }
+                _ => break,
+            }
         }
         current
     }
@@ -2356,48 +2361,48 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local has CoW aliases pointing to it (is a source).
-    /// Phase D: scans v2 for Alias entries pointing at `local`, excluding
-    /// self-loop placeholders.
-    pub fn cow_has_aliases(&self, local: LocalId) -> bool {
+    /// Phase D4.5 step 5b.3: scans `Local.ownership` for Alias entries
+    /// pointing at `local`, excluding self-loop placeholders.
+    pub fn cow_has_aliases(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter().any(|(other, s)|
-            matches!(s, LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(src), .. }
-                       if *src == local && *other != local)
+        builder.locals.iter().enumerate().any(|(idx, l)|
+            matches!(&l.ownership, LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(src), .. }
+                       if *src == local && LocalId(idx as u32) != local)
         )
     }
 
     /// Collect all aliases pointing to `source`. Derived query — O(n) scan.
-    /// Phase D: scans v2, excludes self-loop placeholders.
-    fn cow_aliases_of(&self, source: LocalId) -> Vec<LocalId> {
+    /// Phase D4.5 step 5b.3: scans `Local.ownership` directly.
+    fn cow_aliases_of(&self, builder: &crate::ir::builder::FunctionBuilder, source: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter()
-            .filter_map(|(&id, s)| match s {
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| match &l.ownership {
                 LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(src), .. }
-                    if *src == source && id != source => Some(id),
+                    if *src == source && LocalId(idx as u32) != source => Some(LocalId(idx as u32)),
                 _ => None,
             })
             .collect()
     }
 
     /// Check if a collection has any element refs pointing into it.
-    /// Phase D: scans v2 for Borrowed { CollectionElement(`collection`), .. }.
-    pub fn cow_has_collection_refs(&self, collection: LocalId) -> bool {
+    /// Phase D4.5 step 5b.3: scans `Local.ownership` for Borrowed
+    /// { CollectionElement(`collection`), .. }.
+    pub fn cow_has_collection_refs(&self, builder: &crate::ir::builder::FunctionBuilder, collection: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.values().any(|s|
-            matches!(s, LocalOwnership::Borrowed {
+        builder.locals.iter().any(|l|
+            matches!(&l.ownership, LocalOwnership::Borrowed {
                 origin: BorrowOrigin::CollectionElement(c), ..
             } if *c == collection)
         )
     }
 
     /// Collect all collection refs pointing to a `CollectionId`. Derived query — O(n) scan.
-    /// Phase D: scans v2 for Borrowed { CollectionElement | FieldPath }
-    /// matching the target.
-    fn cow_collection_refs_for_id(&self, target: &CollectionId) -> Vec<LocalId> {
+    /// Phase D4.5 step 5b.3: scans `Local.ownership` directly.
+    fn cow_collection_refs_for_id(&self, builder: &crate::ir::builder::FunctionBuilder, target: &CollectionId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter()
-            .filter_map(|(&id, s)| {
-                let matches = match (s, target) {
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| {
+                let matches = match (&l.ownership, target) {
                     (LocalOwnership::Borrowed {
                         origin: BorrowOrigin::CollectionElement(c), ..
                     }, CollectionId::Local(t)) => *c == *t,
@@ -2406,14 +2411,14 @@ impl<'a> LoweringContext<'a> {
                     }, CollectionId::FieldPath(t)) => p == t,
                     _ => false,
                 };
-                if matches { Some(id) } else { None }
+                if matches { Some(LocalId(idx as u32)) } else { None }
             })
             .collect()
     }
 
     /// Collect all collection refs pointing to a direct local.
-    pub fn cow_collection_refs_for(&self, collection: LocalId) -> Vec<LocalId> {
-        self.cow_collection_refs_for_id(&CollectionId::Local(collection))
+    pub fn cow_collection_refs_for(&self, builder: &crate::ir::builder::FunctionBuilder, collection: LocalId) -> Vec<LocalId> {
+        self.cow_collection_refs_for_id(builder, &CollectionId::Local(collection))
     }
 
     /// Before mutating `local`, sever all CoW alias relationships:
@@ -2449,7 +2454,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Case 2: local is a source with aliases → clone into each alias
-        let aliases = self.cow_aliases_of(local);
+        let aliases = self.cow_aliases_of(builder, local);
         if !aliases.is_empty() {
             for alias in aliases {
                 self.unset_ownership(builder, alias);
@@ -2458,7 +2463,7 @@ impl<'a> LoweringContext<'a> {
         }
 
         // Case 3: local is a collection with refs into it → clone each ref
-        let refs = self.cow_collection_refs_for(local);
+        let refs = self.cow_collection_refs_for(builder, local);
         if !refs.is_empty() {
             for ref_local in refs {
                 // Only sever if the ref is still live (not already moved/reassigned)
@@ -2470,7 +2475,7 @@ impl<'a> LoweringContext<'a> {
 
         // Case 4: local is a string with live views → materialize each view
         // before the source is mutated (push/append/clear/reassign).
-        let views = self.views_of_source(local);
+        let views = self.views_of_source(builder, local);
         for view_local in views {
             self.unset_ownership(builder, view_local);
             self.cow_materialize_view(builder, view_local, span);
@@ -2482,7 +2487,7 @@ impl<'a> LoweringContext<'a> {
         // boundary, so no IR-level materialise is needed — only the
         // typed-state invalidation so source-mutation isn't blocked by
         // a stale alias tag pointing at a re-used slot.
-        let shared_aliases = self.shared_heap_aliases_of_source(local);
+        let shared_aliases = self.shared_heap_aliases_of_source(builder, local);
         for alias_local in shared_aliases {
             self.unset_ownership(builder, alias_local);
         }
@@ -2498,7 +2503,7 @@ impl<'a> LoweringContext<'a> {
         // `f(obj.field, ...)`) carry the same Field origin tag but are
         // dead immediately after the expression finishes. Materialising
         // them produces duplicate clones of stale Ptr values.
-        let field_borrows = self.field_borrows_of(local);
+        let field_borrows = self.field_borrows_of(builder, local);
         for fb_local in field_borrows {
             if !self.is_named_local(fb_local) { continue; }
             self.unset_ownership(builder, fb_local);
@@ -2506,15 +2511,16 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    /// Find every local borrowing some field of `base`. Phase D: scans v2 for
-    /// `Borrowed { Field { base, .. }, .. }` matching the target.
-    fn field_borrows_of(&self, base: LocalId) -> Vec<LocalId> {
+    /// Find every local borrowing some field of `base`. Phase D4.5 step
+    /// 5b.3: scans `Local.ownership` for `Borrowed { Field { base, .. }, .. }`
+    /// matching the target.
+    fn field_borrows_of(&self, builder: &crate::ir::builder::FunctionBuilder, base: LocalId) -> Vec<LocalId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        self.func_state.local_ownership.iter()
-            .filter_map(|(&id, s)| match s {
+        builder.locals.iter().enumerate()
+            .filter_map(|(idx, l)| match &l.ownership {
                 LocalOwnership::Borrowed {
                     origin: BorrowOrigin::Field { base: b, .. }, ..
-                } if *b == base => Some(id),
+                } if *b == base => Some(LocalId(idx as u32)),
                 _ => None,
             })
             .collect()
@@ -2529,7 +2535,7 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
     ) {
         let target = CollectionId::FieldPath(field_path.to_string());
-        let refs = self.cow_collection_refs_for_id(&target);
+        let refs = self.cow_collection_refs_for_id(builder, &target);
         for ref_local in refs {
             if self.is_ref_local(builder, ref_local) {
                 self.cow_materialize_collection_ref(builder, ref_local, span);
@@ -2545,7 +2551,7 @@ impl<'a> LoweringContext<'a> {
         source_local: LocalId,
         span: crate::span::Span,
     ) {
-        let aliases = self.cow_aliases_of(source_local);
+        let aliases = self.cow_aliases_of(builder, source_local);
         for alias in aliases {
             self.unset_ownership(builder, alias);
             self.cow_materialize_alias(builder, alias, source_local, span);
@@ -2556,19 +2562,19 @@ impl<'a> LoweringContext<'a> {
             self.unset_ownership(builder, source_local);
         }
         // Remove collection refs pointing to this source
-        let refs = self.cow_collection_refs_for(source_local);
+        let refs = self.cow_collection_refs_for(builder, source_local);
         for r in refs {
             self.unset_ownership(builder, r);
         }
         // Materialize string views borrowing from this source
-        let views = self.views_of_source(source_local);
+        let views = self.views_of_source(builder, source_local);
         for view_local in views {
             self.unset_ownership(builder, view_local);
             self.cow_materialize_view(builder, view_local, span);
         }
         // Drop SharedHeap value-aliases — heap already deep-cloned at the
         // shallow-copy boundary; no IR-level materialise needed.
-        let shared_aliases = self.shared_heap_aliases_of_source(source_local);
+        let shared_aliases = self.shared_heap_aliases_of_source(builder, source_local);
         for alias_local in shared_aliases {
             self.unset_ownership(builder, alias_local);
         }
@@ -2578,7 +2584,7 @@ impl<'a> LoweringContext<'a> {
         // is propagated as a Field borrow rather than eager-cloned, so source
         // reassignment must clone the bytes back into the borrower).
         // Filter to NAMED locals — see cow_before_mutation Case 6 rationale.
-        let fbs = self.field_borrows_of(source_local);
+        let fbs = self.field_borrows_of(builder, source_local);
         for fb in fbs {
             if !self.is_named_local(fb) { continue; }
             self.unset_ownership(builder, fb);
@@ -2597,7 +2603,7 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
     ) {
         // First, materialize any transitive views (views of THIS view)
-        let sub_views = self.views_of_source(view_local);
+        let sub_views = self.views_of_source(builder, view_local);
         for sub in sub_views {
             self.unset_ownership(builder, sub);
             self.cow_materialize_view(builder, sub, span);

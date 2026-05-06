@@ -1182,7 +1182,7 @@ fn lower_return(
                             // Owned resource — clone if borrowed/shared
                             let can_skip_clone = ctx.is_fresh_string(builder, place.local)
                                 || (ctx.is_owned_local(builder, place.local)
-                                    && !ctx.has_string_borrowers(place.local));
+                                    && !ctx.has_string_borrowers(builder, place.local));
                             if !can_skip_clone {
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(src_type) {
                                     ctx.warn_implicit_clone(expr.span, src_type, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
@@ -1224,7 +1224,7 @@ fn lower_return(
                         let can_skip_clone = ctx.is_fresh_string(builder, place.local)
                             || (ctx.is_owned_local(builder, place.local)
                                 && ctx.is_named_local(place.local)
-                                && !ctx.has_string_borrowers(place.local));
+                                && !ctx.has_string_borrowers(builder, place.local));
                         if rhs_type == ctx.type_mapper.owned_string_type
                             && !can_skip_clone
                         {
@@ -1384,7 +1384,7 @@ fn lower_return(
                         // droppable element sources (which is exactly
                         // what the MoveZero loop below filters for).
                         let elem_locals: Vec<LocalId> =
-                            ctx.tuple_element_sources(place.local);
+                            ctx.tuple_element_sources(builder, place.local);
                         for elem_local in elem_locals {
                             if elem_local != LocalId(0)
                                 && !ctx.drops.is_moved(elem_local)
