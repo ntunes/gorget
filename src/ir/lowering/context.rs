@@ -625,14 +625,34 @@ impl<'a> LoweringContext<'a> {
 
         let ret = (method.return_type)(&type_args, &lookup_ctx);
 
-        // Populate fn_sigs for future lookups
+        // Populate fn_sigs for future lookups. The self-param's pointer
+        // kind reflects the method's `self_conv`: an immutable borrow
+        // (`Borrow`) registers as `Ptr(T)`, a mutable borrow
+        // (`MutBorrow`) as `MutPtr(T)`, by-value (`ByValue`) as the
+        // type itself, and `Static` has no self param. This matters
+        // because `lower_method_call`'s `needs_mut` check reads back the
+        // first-param's pointer kind to decide whether to call
+        // `cow_before_mutation` — which materializes (clones + rebinds
+        // the variable name) the receiver before the call. Treating
+        // every method as MutPtr conservatively triggered that
+        // materialization on non-mutating methods (e.g. `substring`,
+        // `slice`), and the rebind then leaked across control-flow
+        // merges, causing later reads of the same name to come from a
+        // local that was only initialized in one branch.
         let fn_key = format!("{type_name}__{method_name}");
         if !self.fn_sigs.contains_key(&fn_key) {
             let method_params = (method.params)(&type_args);
-            let self_ptr_type = self.type_registry.insert(
-                crate::ir::types::GirType::MutPtr(self_type)
-            );
-            let mut params = vec![self_ptr_type];
+            use crate::ir::lowering::builtins::SelfConvention;
+            let mut params: Vec<TypeId> = match method.self_conv {
+                SelfConvention::Borrow => vec![
+                    self.type_registry.insert(crate::ir::types::GirType::Ptr(self_type)),
+                ],
+                SelfConvention::MutBorrow => vec![
+                    self.type_registry.insert(crate::ir::types::GirType::MutPtr(self_type)),
+                ],
+                SelfConvention::ByValue => vec![self_type],
+                SelfConvention::Static => vec![],
+            };
             params.extend(method_params);
             self.fn_sigs.insert(fn_key.clone(), (params, ret));
         }
