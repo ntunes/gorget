@@ -9627,18 +9627,16 @@ fn shared_basic() {
 }
 
 // `Shared[Callable[T]]` for shared mutable captures across owners — see
-// docs/book/16-smart-pointers.md. Currently blocked by a closure-into-Shared
-// constructor lowering bug (Phase A residual #2 sub-TODO 1b extension): the
-// fixture's outer typedef wiring is now correct (eager Callable inner-type
-// registration extended to Shared/Weak/Mutex/RWLock/Channel paths in
-// types.rs:257), but Shared.new(closure) / Shared[Callable[T]](closure) needs
-// the same `inner_c.starts_with("__Closure_")` shortcut that `Box.new` has at
-// `src/ir/lowering/exprs/methods.rs:78-84` — without it, the closure env
-// struct gets passed where the constructor expects a GorgetClosure. Tracked
-// in TODO under "shared_callable.gg fixture". Re-enable once Shared/Weak/etc.
-// constructors gain the closure-passthrough special case.
+// docs/book/16-smart-pointers.md. Wires through the same closure-pack path
+// that `Box.new` uses, but driven by typed metadata
+// (`c_runtime_alias = "GorgetClosure"`) rather than name-prefix matching.
+// Two parts: (1) `pack_closure_for_smart_ptr_ctor` materialises a
+// Callable-alias-typed temp ahead of `Shared__T__new`/`Mutex__T__new`/
+// `RWLock__T__new` so the LIR's `try_closure_pack` packs the env into a
+// real `GorgetClosure`; (2) the catch-all in `lower_call` dispatches
+// non-Identifier/non-Closure callees (e.g. `tick.get()()`) through
+// `__gorget_closure_call_N`, which the LIR promotes to `CallClosure`.
 #[test]
-#[ignore]
 fn shared_callable() {
     run_gg("shared_callable.gg", "1\n1");
 }

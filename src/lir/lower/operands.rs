@@ -1226,10 +1226,26 @@ impl<'a> FuncLowering<'a> {
         let dst_slot = self.local_to_slot[dst_idx];
         let slot_ty = &self.lir_func.slots[dst_slot.0 as usize].ty;
 
-        // Destination must be GorgetClosure.
+        // Destination must be GorgetClosure (the runtime singleton) or one of
+        // its `c_runtime_alias`-tagged Callable family monomorphizations
+        // (`Callable__GorgetClosure`, `MutCallable__…`, etc.). Phase A
+        // residual #2 (commit 629c13eb) gave the aliases their own StructDefs
+        // with `c_runtime_alias = "GorgetClosure"`; without reading the alias
+        // here, a SlotStore into a `Callable__GorgetClosure`-typed slot
+        // (e.g. the temp materialised by `pack_closure_for_smart_ptr_ctor`
+        // in front of `Shared__T__new`) would fall through to a raw memcpy
+        // of the closure env struct rather than emitting a real ClosurePack
+        // — exactly the bug we'd be trying to fix in the smart-pointer
+        // constructor path. CLAUDE.md "layering discipline §3 (one source
+        // of truth per axis)": resolve through `c_runtime_alias` first,
+        // fall back to the literal name (mirrors the pattern already in
+        // `wrap_single_closure_arg` at line 1413-1421 of this file).
         let is_closure_slot = match slot_ty {
             LirType::Struct(sid) => self.module_structs.get(sid.0 as usize)
-                .map_or(false, |sd| sd.name == "GorgetClosure"),
+                .map_or(false, |sd| {
+                    sd.c_runtime_alias.as_deref() == Some("GorgetClosure")
+                        || sd.name == "GorgetClosure"
+                }),
             _ => false,
         };
         if !is_closure_slot { return false; }

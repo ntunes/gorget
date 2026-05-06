@@ -348,6 +348,61 @@ fn resolve_call_args<'a>(
     slots.into_iter().flatten().collect()
 }
 
+/// Smart-pointer constructors (`Shared[Callable[T]](closure)`,
+/// `Mutex[Callable[T]](closure)`, etc.) lower to a static-inline C wrapper
+/// `XXX__T__new(T val)` that takes the inner type by value. When the inner
+/// is a Callable family alias (`c_runtime_alias = "GorgetClosure"`), the GIR
+/// arg is a `__Closure_N` env struct — but the C wrapper expects a packed
+/// 16-byte `GorgetClosure` (fn_ptr + env_ptr).
+///
+/// The LIR's `try_closure_pack` (in `operands.rs`) already handles the
+/// packing, but it fires only on `Assign` instructions where the destination
+/// slot type is `GorgetClosure`. Direct `Call` arguments bypass it.
+///
+/// This helper bridges the two: it allocates an intermediate local typed as
+/// the Callable alias (which lowers to `Struct(GorgetClosure)`), assigns the
+/// closure into it (triggering `try_closure_pack`), and returns an operand
+/// pointing at the now-packed local. The constructor then sees a proper
+/// `GorgetClosure` value, identical to what `Box.new(closure)` synthesises
+/// via its own special-case path at `methods.rs:78-84`.
+///
+/// Decision driven by typed metadata (`c_runtime_alias`), not by name —
+/// per CLAUDE.md "no name matching" + "layering discipline §3 (one source
+/// of truth per axis)". Same shape as `is_callable_alias_name` in
+/// `methods.rs:2728` and `infer_drop_strategy` in `lir/lower/drops.rs:698`.
+pub(super) fn pack_closure_for_smart_ptr_ctor(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    val_op: Operand,
+    inner_c: &str,
+) -> Operand {
+    // Read the typed signal: is `inner_c` a Callable family alias of
+    // GorgetClosure? `register_callable_alias` and the eager-walk path in
+    // `types.rs:257` install `c_runtime_alias = "GorgetClosure"` on every
+    // such TypeDef.
+    let is_callable_alias = ctx.type_registry.get_type_def(inner_c)
+        .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+        == Some("GorgetClosure");
+    if !is_callable_alias { return val_op; }
+
+    // Look up the alias TypeId. If the alias hasn't been registered yet
+    // (e.g. the smart-pointer path bypassed `register_callable_inner_if_any`),
+    // fall through — the C compile would fail anyway, but better not to
+    // guess at a TypeId out of thin air.
+    let alias_tid = match ctx.type_mapper.lookup_named(inner_c) {
+        Some(tid) => tid,
+        None => return val_op,
+    };
+
+    // Materialise into a typed temp. The slot's LIR type resolves to
+    // `Struct(GorgetClosure)` (via the `c_runtime_alias` path in
+    // `lir/lower/mod.rs:700+`), so the SlotStore here triggers
+    // `try_closure_pack` which packs the env into a real GorgetClosure.
+    let tmp = builder.add_local(alias_tid, None);
+    builder.assign(Place::local(tmp), val_op);
+    FunctionBuilder::copy(tmp)
+}
+
 /// Lower a function call.
 pub(super) fn lower_call(
     ctx: &mut LoweringContext,
@@ -578,6 +633,10 @@ pub(super) fn lower_call(
                     let mangled = ctx.resolve_type_name(&mangled);
                     let vt = val_type;
                     let shared_type = get_or_register_type(ctx, &mangled, Some(&|c| ensure_shared_type_def(c, &mangled, vt)));
+                    // Pack closure → GorgetClosure when the inner is a Callable
+                    // alias. See `pack_closure_for_smart_ptr_ctor` for rationale.
+                    let inner_c = mangled.strip_prefix("Shared__").unwrap_or("");
+                    let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
                     // Shared[T](v) takes ownership of v's data. Mark Move-type locals
@@ -609,6 +668,8 @@ pub(super) fn lower_call(
                     let mangled = ctx.resolve_type_name(&mangled);
                     let vt = val_type;
                     let mutex_type = get_or_register_type(ctx, &mangled, Some(&|c| ensure_mutex_type_def(c, &mangled, vt)));
+                    let inner_c = mangled.strip_prefix("Mutex__").unwrap_or("");
+                    let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], mutex_type);
                     return FunctionBuilder::copy(dst);
@@ -678,6 +739,8 @@ pub(super) fn lower_call(
                     let mangled = ctx.resolve_type_name(&mangled);
                     let rw_type = get_or_register_type(ctx, &mangled, None);
                     let val_op = lower_expr(ctx, builder, &args[0].node.value);
+                    let inner_c = mangled.strip_prefix("RWLock__").unwrap_or("");
+                    let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], rw_type);
                     return FunctionBuilder::copy(dst);
@@ -1158,8 +1221,53 @@ pub(super) fn lower_call(
         // Fallback if closure info not found
         Operand::Constant(Constant::Unit)
     } else {
-        // Non-identifier, non-closure callee — not handled
-        Operand::Constant(Constant::Unit)
+        // Non-identifier, non-closure callee — typically an expression that
+        // produces a `Callable` value (e.g. `shared_callable.get()()`,
+        // `make_adder(3)(5)`, `arr[0](x)`). Lower the callee to a value, then
+        // dispatch via the LIR `__gorget_closure_call_N` shape — `insts.rs`
+        // promotes that name to `Inst::CallClosure` regardless of whether the
+        // GIR type is `FnPtr` or a Callable family alias (typed via
+        // `c_runtime_alias = "GorgetClosure"`).
+        let callee_op = lower_expr(ctx, builder, callee);
+        let callee_local = match &callee_op {
+            Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
+                place.local
+            }
+            _ => {
+                // Materialise into a local so we have a stable ValueId to
+                // pass through __gorget_closure_call_N.
+                let ty = infer_operand_type_full(ctx, &callee_op, builder);
+                let tmp = builder.add_local(ty, None);
+                builder.assign(Place::local(tmp), callee_op);
+                tmp
+            }
+        };
+        let callee_type_id = builder.local_type(callee_local);
+
+        // Resolve the return type. For a `FnPtr` GIR type, pick `return_type`
+        // directly. For a Callable family alias (`Named("Callable__…")`), the
+        // alias TypeDef doesn't carry the function signature, so fall back to
+        // I64 — the C backend honours the call's `ret_ty` from the LIR
+        // instruction, which we reconstruct from `builder.call`'s ret_type
+        // argument. Without a recorded sig we can't be more precise here; the
+        // typical `Callable[int(...)]` case lands on int64_t anyway.
+        let ret_type = match ctx.type_registry.get(callee_type_id).cloned() {
+            Some(GirType::FnPtr { return_type, .. }) => return_type,
+            _ => I64_TYPE,
+        };
+
+        let mut call_args = vec![FunctionBuilder::copy(callee_local)];
+        for arg in args {
+            call_args.push(lower_expr(ctx, builder, &arg.node.value));
+        }
+        let callable_name = format!("__gorget_closure_call_{}", callee_local.0);
+        if ret_type == UNIT_TYPE {
+            builder.call_void(callable_name, call_args);
+            Operand::Constant(Constant::Unit)
+        } else {
+            let dst = builder.call(callable_name, call_args, ret_type);
+            FunctionBuilder::copy(dst)
+        }
     }
 }
 
