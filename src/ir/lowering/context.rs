@@ -702,7 +702,7 @@ impl<'a> LoweringContext<'a> {
         builder: &crate::ir::builder::FunctionBuilder,
         local: LocalId,
     ) {
-        if !self.is_bare_param(local) { return; }
+        if !self.is_bare_param(builder, local) { return; }
         if let Some(name) = builder.local_name(local).map(|s| s.to_string()) {
             let fn_name = self.func_state.current_fn_name.clone();
             if !fn_name.is_empty() {
@@ -1162,7 +1162,7 @@ impl<'a> LoweringContext<'a> {
                         let is_non_owned_string = self.is_string_type(local_type)
                             && !self.is_owned_local(builder, local);
                         // Borrow params — always clone
-                        let is_borrow_param = self.is_bare_param(local);
+                        let is_borrow_param = self.is_bare_param(builder, local);
                         if is_non_owned_string || is_borrow_param {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 if let Some(s) = span {
@@ -1634,8 +1634,8 @@ impl<'a> LoweringContext<'a> {
         // semantically meaningful at this site (they fire even for
         // shapes is_ref_local might miss in legacy edge cases).
         let is_borrow = self.is_ref_local(builder, local)
-            || self.is_bare_param(local)
-            || self.is_cow_borrow(local);
+            || self.is_bare_param(builder, local)
+            || self.is_cow_borrow(builder, local);
         if !is_borrow {
             return operand;
         }
@@ -1643,9 +1643,9 @@ impl<'a> LoweringContext<'a> {
         // Case 2b: last-use bare-param borrow → move instead of clone.
         // Only safe for bare params (not ref-locals or CoW borrows, which
         // may genuinely alias another live variable).
-        if self.is_bare_param(local)
+        if self.is_bare_param(builder, local)
             && !self.is_ref_local(builder, local)
-            && !self.is_cow_borrow(local)
+            && !self.is_cow_borrow(builder, local)
             && self.drops.is_registered(local)
         {
             let param_name = builder.local_name(local).map(|s| s.to_string());
@@ -1729,9 +1729,9 @@ impl<'a> LoweringContext<'a> {
         let needs_clone = if let Expr::Identifier(ref name) = arg_expr.node {
             if self.is_named_local(local) {
                 let is_borrow = !self.drops.is_registered(local)
-                    || self.is_bare_param(local)
+                    || self.is_bare_param(builder, local)
                     || self.is_ref_local(builder, local)
-                    || self.is_cow_borrow(local);
+                    || self.is_cow_borrow(builder, local);
                 is_borrow || !self.is_last_use_at(name, arg_expr.span)
             } else {
                 // Identifier AST but local isn't "named" (e.g., intermediate
@@ -1745,9 +1745,9 @@ impl<'a> LoweringContext<'a> {
                     let inner = self.pointee_type(src_type).unwrap_or(src_type);
                     if self.type_registry.is_resource_type(inner) {
                         let is_borrow = !self.drops.is_registered(src_local)
-                            || self.is_bare_param(src_local)
+                            || self.is_bare_param(builder, src_local)
                             || self.is_ref_local(builder, src_local)
-                            || self.is_cow_borrow(src_local);
+                            || self.is_cow_borrow(builder, src_local);
                         is_borrow || !self.is_last_use_at(name, arg_expr.span)
                     } else { false }
                 } else { false };
@@ -1885,11 +1885,12 @@ impl<'a> LoweringContext<'a> {
 
     /// Check if a local's string data is a fresh allocation not shared with any
     /// other variable. True only for direct function/extern call results that
-    /// return the owned string type. Phase D4: reads the typed `FreshOwned`
-    /// state — the legacy `fresh_string_locals` sidecar has been retired.
-    pub fn is_fresh_string(&self, local: LocalId) -> bool {
-        self.func_state.local_ownership.get(&local)
-            .map_or(false, |s| s.is_fresh())
+    /// return the owned string type. Phase D4.5 step 5b.2: reads
+    /// `Local.ownership.is_fresh()` directly.
+    pub fn is_fresh_string(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        builder.locals[idx].ownership.is_fresh()
     }
 
     /// Check if a local has been borrowed-from via the `String b = a`
@@ -1959,14 +1960,17 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a bare Ptr param borrowing from the caller.
-    /// Phase D: v2 representation is Borrowed { Param(self), Shared } —
-    /// the self-referential Param(local) where local == this is the
-    /// signature set_bare_param writes. Mutability::Unique would mean
+    /// Phase D4.5 step 5b.2: reads `Local.ownership` directly. v2
+    /// representation is Borrowed { Param(self), Shared } — the self-
+    /// referential Param(local) where local == this is the signature
+    /// set_bare_param writes. Mutability::Unique would mean
     /// set_param_borrow_unique (a `&` param), which is not bare.
-    pub fn is_bare_param(&self, local: LocalId) -> bool {
+    pub fn is_bare_param(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin, Mutability};
-        matches!(self.func_state.local_ownership.get(&local),
-            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Shared })
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        matches!(&builder.locals[idx].ownership,
+            LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Shared }
                 if *p == local
         )
     }
@@ -2023,11 +2027,14 @@ impl<'a> LoweringContext<'a> {
     /// `Borrowed { origin: Param(self), mutability: Unique }`.
     /// Set by `set_param_borrow_unique` for `&` and `!` params (and
     /// closure mut-captures, which share the same shape). Read sites
-    /// auto-deref through the MutPtr local.
-    pub fn is_param_borrow_unique(&self, local: LocalId) -> bool {
+    /// auto-deref through the MutPtr local. Phase D4.5 step 5b.2:
+    /// reads `Local.ownership` directly.
+    pub fn is_param_borrow_unique(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin, Mutability};
-        matches!(self.func_state.local_ownership.get(&local),
-            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Unique })
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        matches!(&builder.locals[idx].ownership,
+            LocalOwnership::Borrowed { origin: BorrowOrigin::Param(p), mutability: Mutability::Unique }
                 if *p == local
         )
     }
@@ -2111,7 +2118,8 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a CoW borrow (deferred clone).
-    /// Phase D: matches v2 Borrowed origin variants that all map to legacy
+    /// Phase D4.5 step 5b.2: reads `Local.ownership` directly. Matches
+    /// v2 Borrowed origin variants that all map to legacy
     /// CowBorrow / CollectionRef:
     ///   - CowBorrowPending: set_cow_borrow without source
     ///   - CollectionElement(_): direct collection-local borrow
@@ -2122,15 +2130,17 @@ impl<'a> LoweringContext<'a> {
     /// legacy `is_cow_borrow` returned in practice — callers use it to
     /// gate clone-on-mutation and similar decisions, all of which apply
     /// to set_collection_ref-tagged locals identically.
-    pub fn is_cow_borrow(&self, local: LocalId) -> bool {
+    pub fn is_cow_borrow(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        matches!(self.func_state.local_ownership.get(&local),
-            Some(LocalOwnership::Borrowed {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        matches!(&builder.locals[idx].ownership,
+            LocalOwnership::Borrowed {
                 origin: BorrowOrigin::CowBorrowPending
                       | BorrowOrigin::CollectionElement(_)
                       | BorrowOrigin::FieldPath(_),
                 ..
-            })
+            }
         )
     }
 
@@ -2207,16 +2217,18 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Look up the source collection of a local marked as a CollectionRef.
-    /// Phase D: reads v2 (Borrowed { CollectionElement | FieldPath }).
-    pub fn collection_ref_source(&self, local: LocalId) -> Option<CollectionId> {
+    /// Phase D4.5 step 5b.2: reads `Local.ownership` directly.
+    pub fn collection_ref_source(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> Option<CollectionId> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        match self.func_state.local_ownership.get(&local) {
-            Some(LocalOwnership::Borrowed {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return None; }
+        match &builder.locals[idx].ownership {
+            LocalOwnership::Borrowed {
                 origin: BorrowOrigin::CollectionElement(c), ..
-            }) => Some(CollectionId::Local(*c)),
-            Some(LocalOwnership::Borrowed {
+            } => Some(CollectionId::Local(*c)),
+            LocalOwnership::Borrowed {
                 origin: BorrowOrigin::FieldPath(p), ..
-            }) => Some(CollectionId::FieldPath(p.clone())),
+            } => Some(CollectionId::FieldPath(p.clone())),
             _ => None,
         }
     }
@@ -2331,12 +2343,15 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Check if a local is a CoW alias of something else.
-    /// Phase D: a true alias has v2 = Borrowed { Alias(s), .. } with s != self
+    /// Phase D4.5 step 5b.2: reads `Local.ownership` directly. A true
+    /// alias has v2 = Borrowed { Alias(s), .. } with s != self
     /// (the self-loop form is the set_ref placeholder, not a real alias).
-    pub fn cow_is_alias(&self, local: LocalId) -> bool {
+    pub fn cow_is_alias(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> bool {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        matches!(self.func_state.local_ownership.get(&local),
-            Some(LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. }) if *s != local
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return false; }
+        matches!(&builder.locals[idx].ownership,
+            LocalOwnership::Borrowed { origin: BorrowOrigin::Alias(s), .. } if *s != local
         )
     }
 
@@ -2413,7 +2428,7 @@ impl<'a> LoweringContext<'a> {
         span: crate::span::Span,
     ) {
         // Phase 1c: bare Ptr params — clone to owned before mutation
-        if self.is_bare_param(local) {
+        if self.is_bare_param(builder, local) {
             self.unset_ownership(builder, local);
             self.cow_materialize_alias(builder, local, local, span);
         }
@@ -2537,7 +2552,7 @@ impl<'a> LoweringContext<'a> {
         }
         // Clean up other CoW tracking for the reassigned source — it's about
         // to get a new value, so stale entries would cause incorrect clones.
-        if self.is_bare_param(source_local) {
+        if self.is_bare_param(builder, source_local) {
             self.unset_ownership(builder, source_local);
         }
         // Remove collection refs pointing to this source

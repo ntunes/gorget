@@ -65,7 +65,7 @@ pub(super) fn lower_call_arg(
                     )
                 };
                 if ctx.is_ref_local(builder, local_id)
-                    || ctx.is_param_borrow_unique(local_id)
+                    || ctx.is_param_borrow_unique(builder, local_id)
                     || is_already_ptr
                 {
                     return FunctionBuilder::copy(local_id);
@@ -945,7 +945,7 @@ pub(super) fn lower_call(
                     // (don't auto-deref). The adapter function expects the pointer type.
                     if let Expr::Identifier(arg_name) = &arg.node.value.node {
                         if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
-                            if ctx.is_param_borrow_unique(arg_local) {
+                            if ctx.is_param_borrow_unique(builder, arg_local) {
                                 call_args.push(FunctionBuilder::copy(arg_local));
                                 continue;
                             }
@@ -1426,7 +1426,7 @@ pub(super) fn lower_interp_segment(
     if let Some((local_id, type_id)) = ctx.lookup_local(var_name) {
         // If this is a pointer param, deref to get the value for formatting.
         // Covers &/! params (Borrowed/Unique) and borrowed resource params (ref_locals).
-        let ptr_value_type = if ctx.is_param_borrow_unique(local_id) || ctx.is_ref_local(builder, local_id) {
+        let ptr_value_type = if ctx.is_param_borrow_unique(builder, local_id) || ctx.is_ref_local(builder, local_id) {
             ctx.pointee_type(builder.local_type(local_id))
         } else {
             None

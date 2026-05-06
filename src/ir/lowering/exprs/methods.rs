@@ -254,7 +254,7 @@ pub(super) fn lower_method_call(
     let borrow_param_local = if let Expr::Identifier(name) = &receiver.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_ref_local(builder, local_id)
-                || ctx.is_param_borrow_unique(local_id)
+                || ctx.is_param_borrow_unique(builder, local_id)
             {
                 Some(local_id)
             } else {
@@ -1383,7 +1383,7 @@ pub(super) fn lower_method_call(
                     // `CollectionId::FieldPath` arm is excluded by the
                     // Local match below (only direct-collection sources are
                     // severed at this site).
-                    let source = match ctx.collection_ref_source(place.local) {
+                    let source = match ctx.collection_ref_source(builder, place.local) {
                         Some(CollectionId::Local(src)) => Some(src),
                         _ => ctx.cow_borrow_source(place.local)
                             .and_then(|c| if let CollectionId::Local(src) = c { Some(*src) } else { None }),
@@ -1850,9 +1850,9 @@ pub(super) fn lower_method_call(
                     // pre-call clone section already produced an owned copy for them.
                     if !ctx.drops.is_registered(local_id) { return None; }
                     // Skip bare params / ref locals / CoW borrows (same reasoning).
-                    if ctx.is_bare_param(local_id) { return None; }
+                    if ctx.is_bare_param(builder, local_id) { return None; }
                     if ctx.is_ref_local(builder, local_id) { return None; }
-                    if ctx.is_cow_borrow(local_id) { return None; }
+                    if ctx.is_cow_borrow(builder, local_id) { return None; }
                     // Skip non-named locals (should be rare — falls through via temp path).
                     // Reviewed 2026-05-04 (Phase D4): structurally defensive. The
                     // outer branch is Expr::Identifier resolved through

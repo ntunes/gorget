@@ -426,8 +426,8 @@ fn lower_var_decl(
                         //   cow_before_mutation materializes when the collection is mutated.
                         let (source_is_bare_param, source_is_cow_borrow, source_field_origin) = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
-                                let cow = ctx.is_cow_borrow(p.local) && ctx.cow_borrow_source(p.local).is_some();
-                                (ctx.is_bare_param(p.local), cow, ctx.field_borrow_origin(p.local))
+                                let cow = ctx.is_cow_borrow(builder, p.local) && ctx.cow_borrow_source(p.local).is_some();
+                                (ctx.is_bare_param(builder, p.local), cow, ctx.field_borrow_origin(p.local))
                             } else {
                                 (false, false, None)
                             }
@@ -529,7 +529,7 @@ fn lower_var_decl(
                         // Propagate CollectionRef from the source operand.
                         let propagated = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
-                                if let Some(collection) = ctx.collection_ref_source(p.local) {
+                                if let Some(collection) = ctx.collection_ref_source(builder, p.local) {
                                     ctx.set_collection_ref(builder, local_id, collection);
                                     ctx.drops.unregister(local_id);
                                     true
@@ -1180,7 +1180,7 @@ fn lower_return(
                             }
                         } else if ctx.type_registry.needs_drop(src_type) {
                             // Owned resource — clone if borrowed/shared
-                            let can_skip_clone = ctx.is_fresh_string(place.local)
+                            let can_skip_clone = ctx.is_fresh_string(builder, place.local)
                                 || (ctx.is_owned_local(builder, place.local)
                                     && !ctx.has_string_borrowers(place.local));
                             if !can_skip_clone {
@@ -1221,7 +1221,7 @@ fn lower_return(
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                     if place.projections.is_empty() {
                         let rhs_type = builder.local_type(place.local);
-                        let can_skip_clone = ctx.is_fresh_string(place.local)
+                        let can_skip_clone = ctx.is_fresh_string(builder, place.local)
                             || (ctx.is_owned_local(builder, place.local)
                                 && ctx.is_named_local(place.local)
                                 && !ctx.has_string_borrowers(place.local));

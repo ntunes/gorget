@@ -100,7 +100,7 @@ fn lower_expr_inner(
                 // If this is a &/! param (MutPtr), deref to get the value.
                 // ref_locals (bare-borrow Ptr params) are NOT auto-deref'd —
                 // they stay as Ptr throughout the callee body.
-                let value_type = if ctx.is_param_borrow_unique(local_id) {
+                let value_type = if ctx.is_param_borrow_unique(builder, local_id) {
                     ctx.pointee_type(builder.local_type(local_id))
                 } else {
                     None
@@ -233,7 +233,7 @@ fn lower_expr_inner(
             // (once at exit, once by the recipient's drop).
             let owning_param_source: Option<LocalId> = if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
-                    if ctx.is_bare_param(local_id) {
+                    if ctx.is_bare_param(builder, local_id) {
                         ctx.cow_before_mutation(builder, local_id, inner.span);
                     }
                     let idx = local_id.0 as usize;
@@ -300,7 +300,7 @@ fn lower_expr_inner(
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
                     if ctx.is_ref_local(builder, local_id)
-                        || ctx.is_param_borrow_unique(local_id)
+                        || ctx.is_param_borrow_unique(builder, local_id)
                     {
                         return FunctionBuilder::copy(local_id);
                     }
@@ -1721,7 +1721,7 @@ fn lower_field_access(
     // so field access goes through the pointer (*ptr).field instead of copying
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.is_param_borrow_unique(local_id) {
+            if ctx.is_param_borrow_unique(builder, local_id) {
                 Operand::Copy(Place::local(local_id))
             } else {
                 lower_expr(ctx, builder, object)
@@ -2894,7 +2894,7 @@ fn clone_multi_use_resource_args(
                         && !ctx.is_owned_local(builder, local);
                     // Must clone if: bare borrow param, multi-use named local,
                     // field access on a struct, or non-owned string view.
-                    let is_borrow_param = ctx.is_bare_param(local);
+                    let is_borrow_param = ctx.is_bare_param(builder, local);
                     let is_field_access = ast_args.get(i)
                         .map(|arg| matches!(&arg.node, Expr::FieldAccess { .. }))
                         .unwrap_or(false);

@@ -90,7 +90,7 @@ pub(super) fn lower_match_stmt(
     // detects it and pattern extraction produces borrows, not copies.
     let (scrut_op, scrut_type) = if let Expr::Identifier(name) = &scrutinee.node {
         if let Some((local_id, type_id)) = ctx.lookup_local(name) {
-            if ctx.is_param_borrow_unique(local_id) {
+            if ctx.is_param_borrow_unique(builder, local_id) {
                 // & or ! param — use the MutPtr local directly, skip auto-deref
                 (Operand::Copy(Place::local(local_id)), type_id)
             } else {

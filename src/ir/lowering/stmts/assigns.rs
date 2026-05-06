@@ -72,7 +72,7 @@ pub(super) fn lower_assign(
                 }
                 // CoW: if this local is an alias, just remove from alias maps.
                 // The reassignment naturally replaces the binding value.
-                if ctx.cow_is_alias(local_id) {
+                if ctx.cow_is_alias(builder, local_id) {
                     ctx.unset_ownership(builder, local_id);
                 }
                 // CoW: if this collection has element refs, clone them out.
@@ -85,7 +85,7 @@ pub(super) fn lower_assign(
                 // MutPtr (& params) and unique-borrow locals pass through without cloning.
                 {
                     use crate::ir::types::GirType;
-                    let is_mut = ctx.is_param_borrow_unique(local_id)
+                    let is_mut = ctx.is_param_borrow_unique(builder, local_id)
                         || matches!(ctx.type_registry.get(type_id), Some(GirType::MutPtr(_)));
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
@@ -163,7 +163,7 @@ pub(super) fn lower_assign(
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         let src_type = builder.local_type(place.local);
                         if ctx.type_mapper.is_string_type(src_type)
-                            && !ctx.is_fresh_string(place.local)
+                            && !ctx.is_fresh_string(builder, place.local)
                         {
                             let owned = ctx.type_mapper.owned_string_type;
                             let cloned = builder.call(
@@ -213,7 +213,7 @@ pub(super) fn lower_assign(
                     }
                 }
                 // If this is a mutable capture pointer, write through the pointer
-                if ctx.is_param_borrow_unique(local_id) {
+                if ctx.is_param_borrow_unique(builder, local_id) {
                     let deref_place = Place {
                         local: local_id,
                         projections: vec![Projection::Deref],
@@ -434,7 +434,7 @@ pub(super) fn lower_field_assign(
     // instead of lower_expr which would copy the deref'd value to a temp
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.is_param_borrow_unique(local_id) {
+            if ctx.is_param_borrow_unique(builder, local_id) {
                 // Return the raw pointer local (not deref'd)
                 Operand::Copy(Place::local(local_id))
             } else {
@@ -862,7 +862,7 @@ pub(super) fn lower_compound_assign(
                 }
             }
 
-            let is_mut_capture = ctx.is_param_borrow_unique(local_id);
+            let is_mut_capture = ctx.is_param_borrow_unique(builder, local_id);
             let value_type = if is_mut_capture {
                 // The local's GIR type is MutPtr(T); pointee_type returns T.
                 ctx.pointee_type(builder.local_type(local_id)).unwrap_or(type_id)
