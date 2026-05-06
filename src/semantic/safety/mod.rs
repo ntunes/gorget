@@ -253,6 +253,12 @@ pub(super) struct BorrowChecker<'a> {
     /// and can safely be moved. Only variables from OUTSIDE the innermost
     /// loop are rejected.
     pub(super) loop_local_defs: Vec<FxHashSet<DefId>>,
+    /// While walking the RHS of `x = ...`, this holds `Some(x's DefId)`.
+    /// Lets `check_move` waive the move-in-loop guard for the
+    /// `x = f(!x, …)` left-fold pattern: the move IS followed by an
+    /// immediate rebind of the same name in the same statement, so the
+    /// next iteration sees a fresh value, not a moved one.
+    pub(super) assignment_rebind_target: Option<DefId>,
     /// DefIds of collections currently being iterated over by for-loops.
     /// Mutating these collections inside the loop body is an error (iterator invalidation).
     pub(super) for_loop_iterables: FxHashSet<DefId>,
@@ -440,6 +446,7 @@ impl<'a> BorrowChecker<'a> {
             var_states: FxHashMap::default(),
             loop_depth: 0,
             loop_local_defs: Vec::new(),
+            assignment_rebind_target: None,
             for_loop_iterables: FxHashSet::default(),
             arena_depth: 0,
             arena_scoped_vars: FxHashSet::default(),

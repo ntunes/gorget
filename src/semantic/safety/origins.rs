@@ -481,11 +481,15 @@ impl<'a> BorrowChecker<'a> {
         }
 
         // Check if inside a loop — but allow moves of variables declared within
-        // the innermost loop body (they are re-created each iteration).
+        // the innermost loop body (they are re-created each iteration), AND
+        // allow the `x = f(!x, …)` left-fold pattern where the same statement
+        // immediately rebinds the moved variable (so iteration N+1 starts with
+        // a fresh value).
         if self.loop_depth > 0 {
             let is_loop_local = self.loop_local_defs.last()
                 .map_or(false, |set| set.contains(&def_id));
-            if !is_loop_local {
+            let is_rebound_in_same_stmt = self.assignment_rebind_target == Some(def_id);
+            if !is_loop_local && !is_rebound_in_same_stmt {
                 self.error(SemanticErrorKind::MoveInLoop { name }, span);
                 return;
             }

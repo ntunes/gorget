@@ -387,7 +387,18 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                // Set rebind context: while walking the RHS, `check_move`
+                // treats `!x` where x is the same variable being assigned to
+                // here as safe-in-loop. The next iteration's read of x sees
+                // the value being assigned in this statement.
+                let prev_rebind = self.assignment_rebind_target;
+                if let Expr::Identifier(_) = &target.node {
+                    if let Some(&did) = self.resolution_map.get(&target.span.start) {
+                        self.assignment_rebind_target = Some(did);
+                    }
+                }
                 self.check_expr(value);
+                self.assignment_rebind_target = prev_rebind;
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 // Skip for view-string targets (creating a view from owned is a borrow).
