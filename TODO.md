@@ -101,7 +101,7 @@
 
   Cross-check guard already wired: any setter that forgets to write through `Local.ownership` will trip `debug_assert_eq!` at `flush_ownership_to_locals` next time the function exits (debug builds). 100+ debug-mode integration tests pass without tripping. [partial: 2026-05-06]
 
-- **Phase A residuals — 1 item left (residual #1 + sub-TODOs 1a + 1b + residual #2 + map_*_type audit + shared_callable.gg eager-registration foundation all closed 2026-05-05/06; see DONE).**
+- **Phase A residuals — 1 item left (residual #1 + sub-TODOs 1a + 1b + residual #2 + map_*_type audit + shared_callable.gg fixture all closed 2026-05-05/06/07; see DONE).**
 
   1. **`collection_runtime_type` migration (lir/lower/mod.rs:1085).** 6 call sites all in mod.rs where `self.gir.type_registry` is reachable. Become `runtime_struct_for_collection_kind(metadata.collection_kind)` plus a Callable arm (unblocked by the closed residual #1's `c_runtime_alias` foundation; now also unblocked by residual #2's StructDef-keyed metadata cache). Clean and contained.
 
@@ -169,8 +169,6 @@
 ## Medium
 
 - **Extend `noreturn` qualifier to builtins (`panic`) and other `_Noreturn` C functions.** Round 6 added `noreturn` to the parser/typecheck/IR pipeline and marked `std.os.exit` as `extern noreturn`. `panic` is a hardcoded compiler builtin (treated as void-returning at typecheck via `matches!(cname, "print" | "assert" | "panic")` in `typecheck.rs:1443`, lowered via a hardcoded `call_extern("gorget_panic", …)` in `stmts/mod.rs:1814`), so the noreturn pipeline doesn't reach it — calls to `panic()` in match-as-expression arms still hit the void-vs-T mismatch. Two options: (a) declare `panic` in `lib/std/io.gg` (or wherever) as `extern noreturn void panic(String msg)` and remove the hardcoded path; (b) extend the typecheck builtin special-case to return `never_id` for panic and add `"gorget_panic"` to `LoweringContext.noreturn_fns` at construction. Option (a) is the layering-discipline-correct answer — it removes a name-match in the compiler. Also audit `lib/freestanding/runtime.c` and `c_runtime.rs` for any other `_Noreturn` C functions exposed to Gorget (likely none today). [added: 2026-05-06 from JS-interpreter snag #12 round 6 follow-up]
-
-- **`shared_callable.gg` fixture — closure-into-Shared blocker remaining.** Eager Callable inner-type registration extended to smart-pointer protocols (Shared/Weak/Mutex/RWLock/Channel) on 2026-05-06 via residual #2 follow-on (commit `19d456b4`); fixture wired as `#[ignore]` with the next-step pointer in the test comment. The remaining blocker: `Shared.new(closure)` / `Shared[Callable[T]](closure)` needs the same `inner_c.starts_with("__Closure_")` shortcut that `Box.new` has at `methods.rs:78-84`. Without it, the closure env struct gets passed where the constructor expects a `GorgetClosure`. Fix is mechanical once the right site is identified; estimate 1-2 hours. [revised: 2026-05-06]
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 5 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks). Struct init was already covered. Enum variant init fixed (was missing `clone_multi_use_resource_args` at the `methods.rs` and `calls.rs` call sites — caused double-free on resource-typed fields in loops). [updated: 2026-04-16]
 
