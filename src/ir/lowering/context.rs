@@ -2014,12 +2014,14 @@ impl<'a> LoweringContext<'a> {
     /// If `local` is a `Borrowed { origin: Field { base, field }, .. }`,
     /// return its `(base, field)` tuple. Used at the VarDecl boundary
     /// (Site #1) to propagate Field origin onto typed bindings.
-    pub fn field_borrow_origin(&self, local: LocalId) -> Option<(LocalId, u32)> {
+    pub fn field_borrow_origin(&self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId) -> Option<(LocalId, u32)> {
         use crate::ir::{LocalOwnership, BorrowOrigin};
-        match self.func_state.local_ownership.get(&local) {
-            Some(LocalOwnership::Borrowed {
+        let idx = local.0 as usize;
+        if idx >= builder.locals.len() { return None; }
+        match &builder.locals[idx].ownership {
+            LocalOwnership::Borrowed {
                 origin: BorrowOrigin::Field { base, field }, ..
-            }) => Some((*base, *field)),
+            } => Some((*base, *field)),
             _ => None,
         }
     }

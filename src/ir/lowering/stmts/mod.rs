@@ -427,7 +427,7 @@ fn lower_var_decl(
                         let (source_is_bare_param, source_is_cow_borrow, source_field_origin) = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                             if p.projections.is_empty() {
                                 let cow = ctx.is_cow_borrow(builder, p.local) && ctx.cow_borrow_source(p.local).is_some();
-                                (ctx.is_bare_param(builder, p.local), cow, ctx.field_borrow_origin(p.local))
+                                (ctx.is_bare_param(builder, p.local), cow, ctx.field_borrow_origin(builder, p.local))
                             } else {
                                 (false, false, None)
                             }
