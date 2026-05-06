@@ -652,8 +652,26 @@ fn collect_item(
                 collect_item(&si.node, scopes, types, errors, ctx);
             }
 
-            // Promote non-private names to the enclosing global scope.
-            scopes.export_non_private(&private_names);
+            // Promote non-private names to the enclosing global scope. Cross-module
+            // collisions (two modules both publicly declaring the same name) come back
+            // as `(name, existing_def_id, new_def_id)`. Emit a clear DuplicateDefinition
+            // error citing both spans so users see the conflict at semantic time, instead
+            // of broken C codegen at link time — the type-mangling layer is currently
+            // flat across modules, so two user types named `ParseError` (e.g. one in
+            // `std.conv`, one in the user's `parser.gg`) collapse to a single C symbol
+            // and the linker either picks the wrong layout or fails outright.
+            let collisions = scopes.export_non_private(&private_names);
+            for (name, existing_id, new_id) in collisions {
+                let existing_span = scopes.get_def(existing_id).span;
+                let new_span = scopes.get_def(new_id).span;
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::DuplicateDefinition {
+                        name,
+                        original: existing_span,
+                    },
+                    span: new_span,
+                });
+            }
 
             // Remember private names for post-collection import validation.
             if !private_names.is_empty() {

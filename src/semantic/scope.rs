@@ -534,11 +534,22 @@ impl ScopeTable {
     /// Called after collecting a `FileModule` scope's items to make public items
     /// accessible from the enclosing (global Module) scope. Both namespaces
     /// are exported.
-    pub fn export_non_private(&mut self, private_names: &rustc_hash::FxHashSet<String>) {
+    /// Export non-private definitions from the current FileModule scope to its parent.
+    /// Returns a list of cross-module collisions detected during the export — each entry
+    /// is `(name, existing_def_id, new_def_id)` where both DefIds refer to real (non-Import,
+    /// non-prelude) definitions in different modules. The caller emits these as
+    /// `DuplicateDefinition` errors so users see a clear "X here shadows X from module Y"
+    /// instead of broken C codegen at link time (the type registry is currently flat at
+    /// the C-mangling layer, so two same-named user types from different modules collapse
+    /// to one C struct).
+    pub fn export_non_private(
+        &mut self,
+        private_names: &rustc_hash::FxHashSet<String>,
+    ) -> Vec<(String, DefId, DefId)> {
         let current_idx = self.current.0 as usize;
         let parent_idx = match self.scopes[current_idx].parent {
             Some(p) => p.0 as usize,
-            None => return, // root scope — nothing to export to
+            None => return Vec::new(), // root scope — nothing to export to
         };
 
         // Collect per-namespace so we can export into the matching map.
@@ -555,20 +566,39 @@ impl ScopeTable {
             .map(|(n, d)| (n.clone(), *d))
             .collect();
 
+        let mut collisions: Vec<(String, DefId, DefId)> = Vec::new();
+
         for (name, def_id) in type_entries {
             let existing = self.scopes[parent_idx].types.get(&name).copied();
-            let should_insert = match existing {
-                None => true,
+            let action = match existing {
+                None => Action::Insert,
+                Some(existing_id) if existing_id == def_id => Action::Skip, // same def re-exported
                 Some(existing_id) => {
                     let existing_def = &self.definitions[existing_id.0 as usize];
-                    existing_def.kind == DefKind::Import
+                    if existing_def.kind == DefKind::Import
                         || existing_def.span == crate::span::Span::dummy()
+                    {
+                        Action::Insert
+                    } else {
+                        Action::Collide(existing_id)
+                    }
                 }
             };
-            if should_insert {
-                self.scopes[parent_idx].types.insert(name, def_id);
+            match action {
+                Action::Insert => { self.scopes[parent_idx].types.insert(name, def_id); }
+                Action::Skip => {}
+                Action::Collide(existing_id) => collisions.push((name, existing_id, def_id)),
             }
         }
+        // VALUE namespace: do NOT report collisions here. Multiple stdlib
+        // modules legitimately re-declare the same extern with the same C
+        // symbol (e.g. `__bytes_to_str_raw` lives in both `std.io` and
+        // `std.bytes`, both bound to `gorget_bytes_to_str`). The TYPE-
+        // namespace collision check above is the load-bearing one — that's
+        // where the C struct-layout mismatch happens at link time. Function
+        // collisions don't have the same structural problem because their
+        // call sites resolve through the call site's type, not by name
+        // alone.
         for (name, def_id) in value_entries {
             let existing = self.scopes[parent_idx].values.get(&name).copied();
             let should_insert = match existing {
@@ -583,7 +613,14 @@ impl ScopeTable {
                 self.scopes[parent_idx].values.insert(name, def_id);
             }
         }
+        collisions
     }
+}
+
+enum Action {
+    Insert,
+    Skip,
+    Collide(DefId),
 }
 
 /// Standard Levenshtein edit distance between two strings.
