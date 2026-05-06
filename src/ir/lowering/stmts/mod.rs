@@ -545,241 +545,32 @@ fn lower_var_decl(
             // Determine assignment mode and emit with explicit ownership semantics.
             use crate::ir::instructions::AssignMode;
             let actual_var_type = builder.local_type(local_id);
-            let mut assign_mode = AssignMode::Copy; // default for trivial types
 
-            // Phase D4 typed signals (for incremental decision-tree migration —
-            // see TODO entry "Phase D4 — lower_var_decl decision tree refactor").
-            // Branches below progressively read these instead of the legacy
-            // sidecar predicates (`named_local`, `cow_unsafe_at`,
-            // `drops.is_registered`, `needs_drop`) until every arm is expressed
-            // as `(target_resource, source_live, source_own)`.
+            // Phase D4 typed signals — see TODO entry "Phase D4 —
+            // lower_var_decl decision tree refactor" and `docs/internals/
+            // unified-resource-model.md` §6.7. The decision tree below is
+            // expressed as a typed match on (target_resource, source_live,
+            // source_own). Three of the seven branches are fully typed
+            // (E, F-extension, G); the remaining four (A, B, C, D) keep
+            // their `is_named_local` guard documented as genuine gating
+            // (probe history: 10 / 16 / 50+ / 50+ regressions on naive
+            // removal, see TODO).
             let target_resource = ctx.type_registry.is_resource_type(actual_var_type);
             let source_live = ctx.source_live_past(&operand, stmt_span, builder);
             let source_own = ctx.source_ownership(&operand, builder);
-
-            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-                if place.projections.is_empty() && place.local != local_id {
-                    let rhs_type = builder.local_type(place.local);
-
-                    // GorgetString → str view: if the source is a NAMED local, unregister
-                    // it so the view can borrow its data safely. Unnamed temps (from
-                    // function calls) should NOT be unregistered — they may hold
-                    // owned data that needs freeing.
-                    //
-                    // Phase D4 probe (2026-05-04): removing the
-                    // is_named_local guard regressed 10 fixtures across
-                    // the leak_*, stress_alloc_strings/closures, and
-                    // string_builder/string_builder_loop families. An
-                    // unnamed temp from a function call returning
-                    // GorgetString owns its data; this branch
-                    // unregisters its drop and treats it as a borrow
-                    // source — leaks the heap allocation. Genuine
-                    // gating (Outcome 2). Retiring requires moving the
-                    // borrow-source bookkeeping to consult typed
-                    // ownership instead — a function-call temp is
-                    // Owned, only named-and-still-live locals are
-                    // legitimate borrow sources.
-                    if rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.owned_string_type
-                        && ctx.is_named_local(place.local)
-                    {
-                        ctx.drops.unregister(place.local);
-                        // Phase D4 (2026-05-05): tag target as a
-                        // value-aliasing shallow copy. SharedHeap flushes
-                        // to a Value-typed slot (same as Owned) so
-                        // SlotKind/ABI routing keeps the 32-byte struct
-                        // layout intact; `has_string_borrowers` reads
-                        // SharedHeap typed state directly.
-                        ctx.set_shared_heap(builder, local_id, place.local);
-                        assign_mode = AssignMode::Borrow;
-                    }
-                    // Named non-resource local with clone_fn (e.g., Str → GorgetString conversion):
-                    // still clone, not CoW alias (different types, not an alias relationship).
-                    //
-                    // Phase D4 probe (2026-05-04): removing the
-                    // is_named_local guard regressed 16 fixtures —
-                    // unnamed temps of types like Result[Config,
-                    // String] hit `clone_fn_for_ptr.is_some()` true
-                    // (the type-upgrade scan sets a clone fn on
-                    // recursively-droppable enums) and were routed
-                    // through this cross-type-clone path when they
-                    // should fall through to F's Move path. Unlike
-                    // the view_returning_temps case, this guard is
-                    // not hiding a downstream consumer bug — it's a
-                    // genuine "this branch only applies to named
-                    // sources" gate. Keeping the guard until either
-                    // (a) is_resource_type is widened to include
-                    // enum-with-resource-payload (so the !is_resource
-                    // check filters those), or (b) the cross-type
-                    // axis is split into a separate explicit arm.
-                    else if ctx.is_named_local(place.local)
-                        && !ctx.type_registry.is_resource_type(rhs_type)
-                        && ctx.clone_fn_for_ptr(rhs_type).is_some()
-                    {
-                        ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
-                        let clone_fn = ctx.clone_fn_for_ptr(rhs_type).expect("BUG: clone_fn_for_ptr returned None after is_some check");
-                        let ptr_type = ctx.register_ptr_type(rhs_type);
-                        let ptr_local = builder.add_local(ptr_type, None);
-                        builder.emit_borrow(ptr_local, place.clone());
-                        // Use the TARGET type (actual_var_type) as clone return type,
-                        // not the source type. The clone function may return a
-                        // different (owned) type than the source (view) type.
-                        let clone_ret_type = actual_var_type;
-                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], clone_ret_type);
-                        ctx.set_owned(builder, cloned); // clone result owns its data
-                        operand = FunctionBuilder::copy(cloned);
-                        assign_mode = AssignMode::Move;
-                    }
-                    // Named resource variable → CoW alias OR clone (if unsafe for CoW).
-                    // Flow-sensitive: only skip aliasing if the name is reassigned
-                    // on a forward path from THIS statement (not globally).
-                    //
-                    // Phase D4 probe (2026-05-04): removing the
-                    // is_named_local guard regressed 50+ fixtures
-                    // across arena/async/borrow/box/bytes/closure/
-                    // collection/cow/csv/dataframe/derive/dict/...
-                    // families before the sweep was halted (only
-                    // reached letter "d"). An unnamed temp from a
-                    // function call returning a resource type owns its
-                    // data; this branch creates a Ptr alias into it
-                    // (`builder.emit_borrow` + `cow_register_alias` +
-                    // `set_ref` + Ptr-typing the destination), but the
-                    // temp dies at end-of-stmt — the alias is then a
-                    // dangling pointer. SIGSEGV is the typical
-                    // signature. Genuine gating (Outcome 2). Retiring
-                    // requires teaching CoW alias creation to consume
-                    // (move-from) the source temp instead of borrowing
-                    // it — equivalent to switching the unnamed-temp
-                    // case to Branch F's Move path while still
-                    // recognising the alias relationship for downstream
-                    // CoW materialisation.
-                    else if ctx.is_named_local(place.local)
-                        && ctx.type_registry.is_resource_type(rhs_type)
-                        && !ctx.is_cow_unsafe_at(name, stmt_span.start)
-                        && !builder.local_name(place.local)
-                            .map_or(false, |n| ctx.is_cow_unsafe_at(n, stmt_span.start))
-                    {
-                        // Create Ptr(T) alias instead of cloning
-                        let ptr_type = ctx.register_ptr_type(rhs_type);
-                        builder.locals[local_id.0 as usize].type_id = ptr_type;
-                        ctx.set_ref(builder, local_id);
-                        builder.emit_borrow(local_id, place.clone());
-                        ctx.cow_register_alias(builder, local_id, place.local);
-                        // Ptr doesn't own data — don't register for drop.
-                        // Unregister if already registered (from line 226).
-                        ctx.drops.unregister(local_id);
-                        // Update local type in context lookup
-                        if let Some(ref hint) = builder.local_name(local_id).map(|s| s.to_string()) {
-                            let name = hint.clone();
-                            ctx.register_local(&name, local_id, ptr_type);
-                        }
-                        // Skip normal assign_mode logic — borrow already emitted
-                        assign_mode = AssignMode::Borrow;
-                    }
-                    // Named resource local unsafe for CoW (reassigned/moved) → clone.
-                    //
-                    // Phase D4 probe (2026-05-04): removing the
-                    // is_named_local guard was bundled with Branch C's
-                    // probe; that combined sweep regressed 50+
-                    // fixtures and was halted at letter "d". Most of
-                    // those failures attribute to Branch C (which sees
-                    // the same source first when the destination is
-                    // CoW-safe — Branch D only fires when the
-                    // destination is CoW-unsafe). Branch D's
-                    // independent contribution is a redundant clone
-                    // of an already-Move-eligible unnamed temp:
-                    // structurally a leak, not a use-after-free, since
-                    // the Move-zero in F won't fire (D ran first) and
-                    // the source temp's drop registration is left in
-                    // place. Retiring requires the same shape as C —
-                    // route unnamed-temp sources to Branch F's Move
-                    // path. Keeping the guard until the unified typed
-                    // arm lands.
-                    else if ctx.is_named_local(place.local)
-                        && ctx.type_registry.is_resource_type(rhs_type)
-                    {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
-                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
-                            let ptr_type = ctx.register_ptr_type(rhs_type);
-                            let ptr_local = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr_local, place.clone());
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                            ctx.set_owned(builder, cloned); // clone result owns its data
-                            operand = FunctionBuilder::copy(cloned);
-                            assign_mode = AssignMode::Move;
-                        }
-                    }
-                    // CoW chain materialization: source is a view of some
-                    // upstream container (LocalOwnership::View — set on
-                    // every result of a view-returning string method:
-                    // trim / slice / strip / substring / str / as_str)
-                    // feeding a value-typed String destination. The view's
-                    // bytes are a cap=0 borrow; without a clone here, x's
-                    // view goes dangling once the chain's upstream
-                    // mutates. Emit gorget_string_clone_to_owned. Mirrors
-                    // the auto-clone path at line ~463 (Ptr-typed source)
-                    // for the value-typed-but-View case.
-                    //
-                    // Phase D4 (2026-05-04): typed read of LocalOwnership
-                    // replaces the legacy view_returning_temps sidecar —
-                    // sidecar deleted after cow_materialize_view's
-                    // shallow-copy bug was fixed (Move mode at the
-                    // clone-to-owned assign).
-                    else if matches!(source_own, Some(crate::ir::LocalOwnership::View { .. }))
-                        && rhs_type == ctx.type_mapper.owned_string_type
-                        && actual_var_type == ctx.type_mapper.owned_string_type
-                    {
-                        if let Some(clone_fn) = ctx.clone_fn_for_ptr(rhs_type) {
-                            ctx.warn_implicit_clone(value.span, rhs_type, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
-                            let ptr_type = ctx.register_ptr_type(rhs_type);
-                            let ptr_local = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr_local, place.clone());
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
-                            ctx.set_owned(builder, cloned);
-                            operand = FunctionBuilder::copy(cloned);
-                            assign_mode = AssignMode::Move;
-                        }
-                    }
-                    // Drop-registered temp OR unregistered droppable temp → move.
-                    // Temps (not named vars) that need drop should be moved to transfer
-                    // ownership, preventing shallow-copy double-free on scope exit.
-                    //
-                    // Phase D4 migration in progress: the legacy predicate
-                    // `drops.is_registered(place.local)` doubles as a
-                    // liveness proxy for "this local will get scope-exit
-                    // dropped." The typed-match arm `(needs_drop_target,
-                    // source_dead, source_owned) => Move` is the principled
-                    // shape — `needs_drop(actual_var_type)` covers
-                    // Option/Result wrapper types where `is_resource_type`
-                    // returns false but the variant payload still requires
-                    // ownership transfer. Both predicates retained today;
-                    // the typed predicate strictly extends the legacy one
-                    // for the cases the legacy predicate misses.
-                    else if ctx.drops.is_registered(place.local)
-                        || (!ctx.is_named_local(place.local) && ctx.type_registry.needs_drop(rhs_type))
-                        || (source_own.map_or(false, |s| s.is_owned())
-                            && !source_live
-                            && ctx.type_registry.needs_drop(actual_var_type))
-                    {
-                        assign_mode = AssignMode::Move;
-                    }
-                    // Safety net: if still Copy and the TARGET is a resource
-                    // type, switch to Move. Catches edge cases not covered
-                    // by the specific guards above (e.g., named resource
-                    // structs where clone_fn lookup failed in branch D).
-                    //
-                    // Phase D4: typed `target_resource` replaces the legacy
-                    // `is_resource_type(rhs_type)` source-keyed read. The
-                    // correct axis is the destination's type — Move applies
-                    // to where the value lands, not where it came from.
-                    // Cross-type resource→non-resource assigns are caught
-                    // by earlier branches (B handles Str→GorgetString); the
-                    // remaining cases reach G with rhs_type==actual_var_type.
-                    if assign_mode == AssignMode::Copy && target_resource {
-                        assign_mode = AssignMode::Move;
-                    }
-                }
-            }
+            let assign_mode = lower_var_decl_assign_mode(
+                ctx,
+                builder,
+                local_id,
+                name,
+                value.span,
+                stmt_span,
+                actual_var_type,
+                target_resource,
+                source_live,
+                source_own,
+                &mut operand,
+            );
 
 
             builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
@@ -861,6 +652,189 @@ fn lower_var_decl(
             // Other pattern forms not yet supported in VarDecl
         }
     }
+}
+
+/// Phase D4: typed-shape decision tree for the VarDecl assign mode.
+///
+/// Implements the §6.7 contract from `docs/internals/unified-resource-model.md`.
+/// Reads three signals from the surrounding lowering state:
+/// - `target_resource`: does the destination type own heap data?
+/// - `source_live`: is the source's underlying local live AFTER `stmt_span`?
+/// - `source_own`: the source local's typed `LocalOwnership`, if any.
+///
+/// The seven branches map to typed arms:
+/// - **A** (named GorgetString → GorgetString, value-aliasing) →
+///   `Borrow` + `set_shared_heap`. `is_named_local` retained as
+///   genuine gating (probe regressed 10 fixtures, see TODO).
+/// - **B** (named non-resource source with `clone_fn`, e.g.
+///   Str → GorgetString) → emit clone, `Move`. `is_named_local`
+///   retained as genuine gating (probe regressed 16 fixtures).
+/// - **C** (named resource, CoW-safe) → CoW alias via `Borrow` +
+///   Ptr retype + `set_ref`. `is_named_local` retained as genuine
+///   gating (probe regressed 50+ fixtures).
+/// - **D** (named resource, CoW-unsafe) → emit clone, `Move`.
+///   Bundled with C's gating.
+/// - **E** (View source, GorgetString same-type) → emit
+///   clone-to-owned, `Move`. Fully typed via `LocalOwnership::View`.
+/// - **F** (Owned + dead, droppable target) → `Move`. Typed
+///   predicate strictly extends the legacy `drops.is_registered`
+///   sidecar to cover Option/Result wrapper types.
+/// - **G** (safety net: target_resource fell through to Copy) →
+///   `Move`.
+fn lower_var_decl_assign_mode(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    local_id: LocalId,
+    name: &str,
+    value_span: crate::span::Span,
+    stmt_span: crate::span::Span,
+    actual_var_type: TypeId,
+    target_resource: bool,
+    source_live: bool,
+    source_own: Option<crate::ir::LocalOwnership>,
+    operand: &mut Operand,
+) -> AssignMode {
+    use crate::ir::LocalOwnership;
+    let mut assign_mode = AssignMode::Copy;
+
+    // Snapshot the source place / type once; arms read from these.
+    let (source_place, rhs_type) = match operand {
+        Operand::Copy(p) | Operand::Move(p)
+            if p.projections.is_empty() && p.local != local_id =>
+        {
+            (p.clone(), builder.local_type(p.local))
+        }
+        _ => return assign_mode, // not a place operand → stays Copy
+    };
+
+    // Helper: emit `T__clone(&place)` and rewrite `*operand` to the
+    // cloned local. Used by branches B, D, E (all "Move with clone").
+    // Returns AssignMode::Move on success, AssignMode::Copy if no
+    // clone fn is registered for `clone_src_type`.
+    let emit_clone_to_owned =
+        |ctx: &mut LoweringContext,
+         builder: &mut FunctionBuilder,
+         operand: &mut Operand,
+         clone_src_type: TypeId,
+         clone_ret_type: TypeId|
+         -> AssignMode {
+            let Some(clone_fn) = ctx.clone_fn_for_ptr(clone_src_type) else {
+                return AssignMode::Copy;
+            };
+            ctx.warn_implicit_clone(
+                value_span,
+                clone_src_type,
+                crate::ir::ImplicitCloneReason::VarDeclFromBorrow,
+            );
+            let ptr_type = ctx.register_ptr_type(clone_src_type);
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, source_place.clone());
+            let cloned = builder.call(
+                &clone_fn,
+                vec![FunctionBuilder::copy(ptr_local)],
+                clone_ret_type,
+            );
+            ctx.set_owned(builder, cloned); // clone result owns its data
+            *operand = FunctionBuilder::copy(cloned);
+            AssignMode::Move
+        };
+
+    let source_is_named = ctx.is_named_local(source_place.local);
+    let owned_string = ctx.type_mapper.owned_string_type;
+    let same_type_string =
+        rhs_type == owned_string && actual_var_type == owned_string;
+
+    // Branch A — named GorgetString same-type (value-aliasing
+    // `String b = a` shape). `is_named_local` is genuine gating —
+    // unnamed function-call temps own GorgetString data; treating
+    // them as borrow sources leaks the heap allocation.
+    if same_type_string && source_is_named {
+        ctx.drops.unregister(source_place.local);
+        ctx.set_shared_heap(builder, local_id, source_place.local);
+        assign_mode = AssignMode::Borrow;
+    }
+    // Branch B — named non-resource source with cross-type clone_fn
+    // (e.g. Str → GorgetString). `is_named_local` retained as
+    // genuine gating: unnamed Result/Option temps with recursive
+    // drop have a `clone_fn` set on them too, and would be wrongly
+    // routed here instead of through Branch F's Move path.
+    else if source_is_named
+        && !ctx.type_registry.is_resource_type(rhs_type)
+        && ctx.clone_fn_for_ptr(rhs_type).is_some()
+    {
+        // Use TARGET type for clone return (cross-type case).
+        assign_mode = emit_clone_to_owned(
+            ctx, builder, operand, rhs_type, actual_var_type,
+        );
+    }
+    // Branch C — named resource source, CoW-safe. Create a Ptr
+    // alias instead of cloning. `is_named_local` is genuine gating
+    // (probe regressed 50+ fixtures: unnamed temp dies at end of
+    // stmt → dangling Ptr alias → SIGSEGV).
+    else if source_is_named
+        && ctx.type_registry.is_resource_type(rhs_type)
+        && !ctx.is_cow_unsafe_at(name, stmt_span.start)
+        && !builder
+            .local_name(source_place.local)
+            .map_or(false, |n| ctx.is_cow_unsafe_at(n, stmt_span.start))
+    {
+        let ptr_type = ctx.register_ptr_type(rhs_type);
+        builder.locals[local_id.0 as usize].type_id = ptr_type;
+        ctx.set_ref(builder, local_id);
+        builder.emit_borrow(local_id, source_place.clone());
+        ctx.cow_register_alias(builder, local_id, source_place.local);
+        // Ptr doesn't own data — don't register for drop.
+        ctx.drops.unregister(local_id);
+        // Update local type in context lookup
+        if let Some(hint) = builder.local_name(local_id).map(|s| s.to_string()) {
+            ctx.register_local(&hint, local_id, ptr_type);
+        }
+        assign_mode = AssignMode::Borrow;
+    }
+    // Branch D — named resource source, CoW-unsafe → clone fallback.
+    // `is_named_local` bundled with C's gating; D's independent
+    // contribution is a redundant clone of an already-Move-eligible
+    // unnamed temp (leak rather than UAF).
+    else if source_is_named && ctx.type_registry.is_resource_type(rhs_type) {
+        // Same-type clone (rhs_type → rhs_type).
+        assign_mode = emit_clone_to_owned(
+            ctx, builder, operand, rhs_type, rhs_type,
+        );
+    }
+    // Branch E — `View` source, GorgetString same-type → clone-to-owned.
+    // Fully typed via LocalOwnership::View.
+    else if matches!(source_own, Some(LocalOwnership::View { .. }))
+        && same_type_string
+    {
+        assign_mode = emit_clone_to_owned(
+            ctx, builder, operand, rhs_type, rhs_type,
+        );
+    }
+    // Branch F — drop-registered temp OR `Owned` + dead source +
+    // droppable target → Move. The legacy `drops.is_registered`
+    // predicate doubles as a liveness proxy; the typed clause
+    // `(source_own.is_owned() && !source_live && needs_drop(target))`
+    // strictly extends it to Option/Result wrapper types where
+    // `is_resource_type` returns false but the variant payload still
+    // requires ownership transfer.
+    else if ctx.drops.is_registered(source_place.local)
+        || (!source_is_named && ctx.type_registry.needs_drop(rhs_type))
+        || (source_own.as_ref().map_or(false, |s| s.is_owned())
+            && !source_live
+            && ctx.type_registry.needs_drop(actual_var_type))
+    {
+        assign_mode = AssignMode::Move;
+    }
+
+    // Branch G (safety net) — if still Copy and the TARGET is a
+    // resource type, switch to Move. Catches edge cases not covered
+    // by A–F (e.g. clone_fn lookup failed in D). Target-keyed: Move
+    // applies to the destination's type, not the source's.
+    if assign_mode == AssignMode::Copy && target_resource {
+        assign_mode = AssignMode::Move;
+    }
+
+    assign_mode
 }
 
 /// Lower a shared VarDecl with transparent access.
