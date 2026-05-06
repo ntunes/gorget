@@ -1,4 +1,5 @@
 pub mod safety;
+pub mod cycle_check;
 pub mod derive;
 pub mod errors;
 pub mod ids;
@@ -245,6 +246,15 @@ pub fn analyze_with_source_dir(
     // calls slip through silently. See populate_def_field_types
     // header for details.
     populate_def_field_types(module, &mut scopes, &mut types);
+
+    // Pass 3.6: Detect unbounded recursive types BEFORE typecheck. A struct/
+    // enum whose field/variant graph cycles by value (no `Box[T]` /
+    // `Vector[T]` / other heap indirection on any edge of the cycle) has
+    // infinite size. Without this check, codegen recurses unboundedly while
+    // laying the type out and stack-overflows. Run after
+    // `populate_def_field_types` so field/variant TypeIds are available;
+    // run before typecheck so it can rely on bounded types.
+    cycle_check::check_recursive_type_cycles(module, &scopes, &types, &mut errors);
 
     // Pass 4: Type check everything
     let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs) = typecheck::check_module(

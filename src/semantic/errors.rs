@@ -216,6 +216,17 @@ pub enum SemanticErrorKind {
     /// Duplicate trait implementation.
     DuplicateImpl { trait_: String, type_: String },
 
+    /// A user-defined type's field/variant graph forms an unbounded cycle —
+    /// every loop through the cycle stores its members by value (no `Box[T]`,
+    /// `Vector[T]`, or other heap indirection), so the type would have
+    /// infinite size. Without this check, codegen recurses unboundedly while
+    /// laying the type out and stack-overflows.
+    RecursiveTypeNeedsBox {
+        name: String,
+        /// The cycle path as a sequence of type names, e.g. ["Spanned", "Node", "Spanned"].
+        cycle: Vec<String>,
+    },
+
     /// Cyclic trait inheritance (e.g. `trait A extends B` + `trait B extends A`).
     TraitCycle { trait_: String, cycle: String },
 
@@ -524,6 +535,15 @@ impl std::fmt::Display for SemanticError {
                         "duplicate implementation of trait `{trait_}` for type `{type_}`"
                     )
                 }
+            }
+            SemanticErrorKind::RecursiveTypeNeedsBox { name, cycle } => {
+                write!(
+                    f,
+                    "recursive type `{name}` has infinite size: cycle {} \
+                    stores members by value — break it with `Box[T]`, `Vector[T]`, \
+                    or another heap-indirected wrapper",
+                    cycle.join(" → "),
+                )
             }
             SemanticErrorKind::TraitCycle { trait_, cycle } => {
                 write!(f, "trait `{trait_}` has a cyclic inheritance: {cycle}")
