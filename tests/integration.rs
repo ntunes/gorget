@@ -17891,6 +17891,17 @@ errors=[bye]",
 }
 
 #[test]
+fn match_expr_diverging_arm() {
+    run_gg(
+        "match_expr_diverging_arm.gg",
+        "\
+a.is_some=true
+one
+code=1",
+    );
+}
+
+#[test]
 fn consuming_self_loop_error() {
     check_gg_fails("consuming_self_loop_error.gg", "cannot move");
 }

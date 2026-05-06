@@ -1,0 +1,43 @@
+from std.os import exit
+
+# Snag #12 (round 6): match-as-expression where one arm produces a
+# struct value with resource fields and another arm diverges via a
+# `noreturn` call. Pre-fix this generated a type-mismatched
+# arm-value assign in C; post-fix the IR terminates the divergent arm
+# with `unreachable` and the surrounding `unify(Big, Never)` resolves
+# to `Big`.
+
+struct Big:
+    Option[String] x
+
+Result[Big, String] make_ok():
+    return Ok(Big(Some("hi")))
+
+void main():
+    # Diverging Error arm via std.os.exit (declared `extern noreturn`).
+    Big a = match make_ok():
+        case Ok(p):
+            p
+        case Error(_):
+            exit(2)
+    print(f"a.is_some={a.x.is_some()}")
+
+    # Multi-statement arm body alongside a diverging else-arm.
+    int n = 1
+    String tag = match n:
+        case 0:
+            "zero"
+        case 1:
+            String s = "one"
+            s
+        else:
+            exit(3)
+    print(tag.data)
+
+    # Int-typed match value with a diverging else.
+    int code = match n:
+        case 0: 0
+        case 1: 1
+        else:
+            exit(4)
+    print(f"code={code}")
