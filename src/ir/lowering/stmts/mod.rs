@@ -812,9 +812,16 @@ fn lower_var_decl_assign_mode(
         assign_mode = AssignMode::Borrow;
     }
     // Branch D — named resource source, CoW-unsafe → clone fallback.
-    // `is_named_local` bundled with C's gating; D's independent
-    // contribution is a redundant clone of an already-Move-eligible
-    // unnamed temp (leak rather than UAF).
+    // `is_named_local` retained as genuine gating. D-PROBE
+    // (2026-05-06): substituting `source_live` regressed self-host
+    // bootstrap (`is_cstr_returning_call` → "local _19 read after
+    // MoveZero in bb5"). Root cause: when D's `clone_fn_for_ptr`
+    // lookup fails, assign_mode stays Copy; the safety-net G then
+    // emits Move on the SOURCE, zeroing a Borrowed transitive
+    // alias's heap data. Retiring requires either (a) widening
+    // `is_resource_type` to enum-with-resource-payload (so clone_fn
+    // lookup is reliable) or (b) D explicitly bails out on
+    // Borrowed sources rather than falling through to G.
     else if source_is_named && ctx.type_registry.is_resource_type(rhs_type) {
         // Same-type clone (rhs_type → rhs_type).
         assign_mode = emit_clone_to_owned(
