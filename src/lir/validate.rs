@@ -1390,4 +1390,52 @@ mod tests {
         let errors = validate_box_inner_type(&module);
         assert!(errors.is_empty(), "non-Box struct should be ignored: {errors:?}");
     }
+
+    /// Defense-in-depth for the third branch of `validate_box_inner_type`:
+    /// a `Box__`-prefixed StructDef with neither the regular-Box `_0` shape
+    /// nor the trait-box `[data, vtable]` shape is a structural inconsistency
+    /// — the registrar wrote it wrong. The validator flags this with the
+    /// "unexpected field shape" error so the construction-site bug surfaces
+    /// at the LIR exit boundary.
+    #[test]
+    fn box_inner_type_validator_flags_unexpected_field_shape() {
+        let mut module = LirModule::new();
+        // A `Box__`-prefixed struct with two arbitrary fields — neither the
+        // regular-Box single-`_0` nor the trait-box `data`/`vtable` shape.
+        // Reaches this validator only when the registrar's shape decision
+        // missed both legitimate cases.
+        module.add_struct(StructDef {
+            name: "Box__Garbage".into(),
+            fields: vec![("a".into(), LirType::I64), ("b".into(), LirType::I32)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None,
+            elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
+            c_runtime_alias: None,
+            box_inner_type: None,
+        });
+        let errors = validate_box_inner_type(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("unexpected field shape")
+                && errors[0].message.contains("Box__Garbage"),
+            "expected unexpected-field-shape error, got: {errors:?}",
+        );
+    }
+
+    /// Defense-in-depth for the construction-site `box_inner_type` invariant:
+    /// the regular-Box registration site at `src/lir/lower/mod.rs:790-803`
+    /// is the single source of truth. This integration-style test wires a
+    /// well-formed regular-Box StructDef into the otherwise-valid module and
+    /// asserts the validator's full `assert_module_valid` machinery accepts
+    /// it — locking the contract between the registrar and the validator at
+    /// the public API boundary the rest of the LIR pipeline calls into.
+    #[test]
+    fn box_inner_type_validator_runs_under_assert_module_valid() {
+        let mut module = make_valid_module();
+        module.add_struct(make_box_struct("Box__SpannedExpr", Some("SpannedExpr")));
+        // Should not panic — the validator accepts the well-formed Box
+        // alongside the rest of the registered validators.
+        assert_module_valid(&module, "test");
+    }
 }
