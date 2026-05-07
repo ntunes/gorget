@@ -1617,37 +1617,27 @@ pub fn lower_module(
     }
 
     // Tier 1b — Move follow-through validator. See
-    // `docs/internals/structural-guards.md` §Tier 1b. Initially gated:
-    // `GG_VALIDATE_MOVE_FOLLOW_THROUGH=<log-path>` writes per-class
-    // violation counts and per-site detail to <log-path>; build does not
-    // panic. Once the initial sweep is at zero, this block becomes
-    // unconditional fatal (mirroring the Phase C resource-moves block
-    // above). The invariant: `Inst::Assign { mode: Move }` of a
-    // drop-registered source must be followed by a `MoveZero` of the
-    // source in the same basic block before any subsequent `Drop` /
-    // `DropIfAlive` of the source — snag #19 / #23 lock-in.
-    if let Ok(log_path) = std::env::var("GG_VALIDATE_MOVE_FOLLOW_THROUGH") {
-        if !log_path.is_empty() {
-            let mft_warnings = crate::ir::validate::validate_move_follow_through(&module);
-            if !mft_warnings.is_empty() {
-                use crate::ir::validate::MoveFollowThroughWarningKind as K;
-                use std::io::Write;
-                let mut move_without_zero = 0usize;
-                for w in &mft_warnings {
-                    match &w.kind {
-                        K::MoveWithoutZero { .. } => move_without_zero += 1,
-                    }
-                }
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true).append(true).open(&log_path)
-                {
-                    let _ = writeln!(f, "[move-follow-through] module total={} move_without_zero={}",
-                        mft_warnings.len(), move_without_zero);
-                    for w in &mft_warnings {
-                        let _ = writeln!(f, "  {}", w);
-                    }
-                }
+    // `docs/internals/structural-guards.md` §Tier 1b. Promoted from
+    // env-gated diagnostic to unconditional fatal: the f-string interp
+    // segment migration (commit `1d3ccd5b`) closed the dominant
+    // violation class, and the c_emit_comparison full-fixture sweep
+    // (1066 fixtures, every fixture built end-to-end via `gg build
+    // --emit-c-lir`) reports 0 violations across 0 modules — the class
+    // is provably closed. Promoting to fatal mirrors the Phase C
+    // resource-moves block above and locks the invariant for any future
+    // lowering site that emits Move-mode without follow-through.
+    // Invariant: `Inst::Assign { mode: Move }` of a drop-registered
+    // source must be followed by a `MoveZero` of the source in the same
+    // basic block before any subsequent `Drop` / `DropIfAlive` of the
+    // source — snag #19 / #23 lock-in.
+    {
+        let mft_warnings = crate::ir::validate::validate_move_follow_through(&module);
+        if !mft_warnings.is_empty() {
+            eprintln!("[move-follow-through] {} violation(s):", mft_warnings.len());
+            for w in &mft_warnings {
+                eprintln!("  {}", w);
             }
+            panic!("GIR module failed move-follow-through validation ({} violation(s))", mft_warnings.len());
         }
     }
 
