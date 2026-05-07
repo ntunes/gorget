@@ -69,13 +69,18 @@ use crate::ir::types::TypeRegistry;
 ///
 /// Builds the module-wide clone-fn name set once via
 /// [`TypeRegistry::clone_fn_names_set`] and the typed
-/// `RuntimeFn::returns_fresh` predicate for runtime calls. Tags
-/// `Owned` / `FreshOwned` on producer destinations whose ownership is
-/// currently `Untracked`.
+/// `RuntimeFn::returns_fresh` predicate for runtime calls. Also reads
+/// `module.runtime_callees` so per-monomorphization names like
+/// `Dict__GorgetString__GorgetString__new` route to the underlying
+/// `gorget_dict_new` runtime fn for the typed `returns_fresh` lookup.
+///
+/// Tags `Owned` / `FreshOwned` on producer destinations whose ownership
+/// is currently `Untracked`.
 ///
 /// Idempotent: running twice produces the same result.
 pub fn infer_fresh_owned(module: &mut Module) {
     let clone_fns = module.type_registry.clone_fn_names_set();
+    let runtime_callees = module.runtime_callees.clone();
     // Snapshot the registry as `&` so we can mutate `module.functions`
     // without borrow conflicts.
     let registry_ptr: *const TypeRegistry = &module.type_registry;
@@ -86,7 +91,7 @@ pub fn infer_fresh_owned(module: &mut Module) {
         // explicit raw pointer here only because the borrow checker can't
         // reason about disjoint fields through `&mut module`.
         let registry = unsafe { &*registry_ptr };
-        infer_func(func, registry, &clone_fns);
+        infer_func(func, registry, &clone_fns, &runtime_callees);
     }
 }
 
@@ -94,6 +99,7 @@ fn infer_func(
     func: &mut Function,
     registry: &TypeRegistry,
     clone_fns: &FxHashSet<String>,
+    runtime_callees: &rustc_hash::FxHashMap<String, String>,
 ) {
     // Two-phase per function:
     //   Phase 1 (immutable walk): collect ownership decisions as
@@ -134,7 +140,7 @@ fn infer_func(
                     decisions.push((*dst, LocalOwnership::FreshOwned));
                 }
                 Instruction::Call { dst: Some(d), func: callee, .. } => {
-                    if is_clone_or_fresh_call_name(callee, clone_fns) {
+                    if is_clone_or_fresh_call_name(callee, clone_fns, runtime_callees) {
                         decisions.push((*d, LocalOwnership::FreshOwned));
                     } else if call_result_is_owned(func, *d, registry) {
                         // Internal function returning a droppable resource
@@ -146,7 +152,7 @@ fn infer_func(
                     }
                 }
                 Instruction::CallExtern { dst: Some(d), func: callee, .. } => {
-                    if is_clone_or_fresh_call_name(callee, clone_fns) {
+                    if is_clone_or_fresh_call_name(callee, clone_fns, runtime_callees) {
                         decisions.push((*d, LocalOwnership::FreshOwned));
                     }
                     // Non-fresh extern calls: do not tag. Many extern
@@ -310,10 +316,32 @@ fn call_result_is_owned(
 /// `is_clone_or_fresh_call` (both predicates resolve through Phase 2E's
 /// typed `RuntimeFn::returns_fresh` table + the module's
 /// `clone_fn_names_set`).
-fn is_clone_or_fresh_call_name(name: &str, clone_fns: &FxHashSet<String>) -> bool {
+///
+/// Per-monomorphization callees (e.g. `Dict__GorgetString__GorgetString__new`)
+/// route through `runtime_callees` to their underlying runtime symbol
+/// (`gorget_dict_new`) before the typed lookup, so collection / Box-alloc
+/// constructors get tagged FreshOwned identically to direct
+/// `gorget_*_new` calls.
+fn is_clone_or_fresh_call_name(
+    name: &str,
+    clone_fns: &FxHashSet<String>,
+    runtime_callees: &rustc_hash::FxHashMap<String, String>,
+) -> bool {
+    // Direct typed lookup: the callee name IS the runtime symbol.
     if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(name) {
         if rt.signature().returns_fresh {
             return true;
+        }
+    }
+    // Per-mono lookup: per-instantiation symbols (`Dict__K__V__new`,
+    // `Vector__T__new`, …) map through `runtime_callees` to the runtime
+    // family member (`gorget_dict_new`). Rerun the typed predicate on
+    // the resolved name.
+    if let Some(rt_name) = runtime_callees.get(name) {
+        if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(rt_name) {
+            if rt.signature().returns_fresh {
+                return true;
+            }
         }
     }
     clone_fns.contains(name)

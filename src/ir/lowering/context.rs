@@ -1110,6 +1110,13 @@ impl<'a> LoweringContext<'a> {
     /// Clone resource-type args that can't be stored by move into a struct/enum.
     /// Shared by both struct literal init and enum variant init paths.
     /// Clones: Ptr(resource), non-owned string views, borrow param resources.
+    ///
+    /// Tier 2a Phase 2A: every cloned temp is tagged `FreshOwned` — the
+    /// clone's result is a fresh heap allocation that doesn't alias any
+    /// other slot. Without the tag the consume-site validator sees
+    /// `Untracked` even though the lowering correctly produced a clone.
+    /// Mirrors `set_owned_fresh` at every other clone-then-consume site
+    /// (e.g. `lower_var_decl_assign_mode`'s `emit_clone_to_owned`).
     pub fn clone_resource_args_for_init(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -1132,6 +1139,7 @@ impl<'a> LoweringContext<'a> {
                                 let cloned = builder.call(&clone_fn,
                                     vec![crate::ir::builder::FunctionBuilder::copy(local)], inner);
                                 self.drops.register_local(cloned, inner, &self.type_registry);
+                                self.set_owned_fresh(builder, cloned);
                                 *op = crate::ir::builder::FunctionBuilder::copy(cloned);
                             }
                             continue;
@@ -1159,6 +1167,7 @@ impl<'a> LoweringContext<'a> {
                                 let cloned = builder.call(&clone_fn,
                                     vec![crate::ir::builder::FunctionBuilder::copy(ptr)], local_type);
                                 self.drops.register_local(cloned, local_type, &self.type_registry);
+                                self.set_owned_fresh(builder, cloned);
                                 *op = crate::ir::builder::FunctionBuilder::copy(cloned);
                             }
                         }

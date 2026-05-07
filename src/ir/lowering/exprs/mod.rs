@@ -1422,6 +1422,14 @@ fn lower_struct_literal(
         // Emit: __gorget_box_alloc_T(value) → T* with heap alloc
         let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
         let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
+        // Tier 2a Phase 2A: Box allocation returns a fresh heap
+        // allocation. Tag FreshOwned so the consume-site validator
+        // sees a sound `(FreshOwned, dead, _)` tuple at downstream
+        // consumers (EnumInit / StructInit / Call args).
+        if !ctx.drops.is_registered(dst) {
+            ctx.drops.register_local(dst, box_type, &ctx.type_registry);
+        }
+        ctx.set_owned_fresh(builder, dst);
         return FunctionBuilder::copy(dst);
     }
 

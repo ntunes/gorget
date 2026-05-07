@@ -536,6 +536,16 @@ pub(super) fn lower_call(
                 ctx.drops.unregister(src);
             }
             let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
+            // Tier 2a Phase 2A: Box allocation returns a fresh heap
+            // allocation that doesn't alias any other slot. Tag the
+            // result FreshOwned so the consume-site validator sees a
+            // sound `(FreshOwned, dead, _)` tuple at the EnumInit /
+            // StructInit consumer instead of `Untracked`. Mirrors
+            // `call_extern_tracked` for the Box-alloc shape.
+            if !ctx.drops.is_registered(dst) {
+                ctx.drops.register_local(dst, box_type, &ctx.type_registry);
+            }
+            ctx.set_owned_fresh(builder, dst);
             if let Some(src) = consumed_source {
                 ctx.move_zero_and_mark(builder, src);
             }
