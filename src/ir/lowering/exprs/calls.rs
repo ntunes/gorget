@@ -1514,7 +1514,25 @@ pub(super) fn lower_interp_segment(
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
         let mode = interp_temp_mode(ctx, &val, type_id);
+        // Tier 1b Move follow-through: when the temp is staged with Move,
+        // the source's ownership transfers to the temp. If the source is
+        // a drop-registered bare local, retire its drop registration with
+        // `move_zero_and_mark` so the scope-exit drop doesn't double-free
+        // the heap allocation that `tmp` (and the `format_for_printf`
+        // expansion) now owns. Mirrors the snag #19 / #23 fixes
+        // (commits `952b403f`, `4ebefe44`).
+        let move_source: Option<LocalId> = if mode == AssignMode::Move {
+            match &val {
+                Operand::Copy(p) | Operand::Move(p)
+                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
+                    Some(p.local),
+                _ => None,
+            }
+        } else { None };
         builder.assign_mode(mode, Place::local(tmp), val);
+        if let Some(src) = move_source {
+            ctx.move_zero_and_mark(builder, src);
+        }
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
@@ -1530,7 +1548,19 @@ pub(super) fn lower_interp_segment(
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
         let mode = interp_temp_mode(ctx, &val, type_id);
+        // Tier 1b Move follow-through: see branch (2) above.
+        let move_source: Option<LocalId> = if mode == AssignMode::Move {
+            match &val {
+                Operand::Copy(p) | Operand::Move(p)
+                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
+                    Some(p.local),
+                _ => None,
+            }
+        } else { None };
         builder.assign_mode(mode, Place::local(tmp), val);
+        if let Some(src) = move_source {
+            ctx.move_zero_and_mark(builder, src);
+        }
         let (spec, args) = format_for_printf(ctx, builder, type_id, FunctionBuilder::copy(tmp), fmt_spec);
         format_str.push_str(&spec);
         printf_args.extend(args);
