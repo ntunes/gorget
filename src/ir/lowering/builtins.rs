@@ -45,8 +45,6 @@ pub struct BuiltinTypeArgs {
 pub struct LookupCtx<'a> {
     pub lookup_type_by_name: &'a dyn Fn(&str) -> Option<TypeId>,
     pub owned_string_type: TypeId,
-    /// Check if a TypeId is a resource type (owns heap allocations).
-    pub is_resource: &'a dyn Fn(TypeId) -> bool,
     /// Ensure an Option[T] type is registered, returning its TypeId.
     pub ensure_option: &'a dyn Fn(&str, TypeId) -> TypeId,
     /// Mangled name fragment for the elem type (e.g., "int64_t", "GorgetString", "uint8_t").

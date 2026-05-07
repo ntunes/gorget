@@ -478,11 +478,9 @@ impl<'a> LoweringContext<'a> {
                 self_name: mangled_name.clone(),
             };
 
-            let type_registry = &self.type_registry;
             let lookup_ctx = LookupCtx {
                 lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
                 owned_string_type: self.type_mapper.owned_string_type,
-                is_resource: &|tid| type_registry.is_resource_type(tid),
                 ensure_option: &|name: &str, _inner: TypeId| {
                     // At startup, Options should already be registered; just look up.
                     self.type_mapper.lookup_named(name).unwrap_or(I64_TYPE)
@@ -595,12 +593,10 @@ impl<'a> LoweringContext<'a> {
             self_name: type_name.to_string(),
         };
 
-        let type_registry = &self.type_registry;
         let type_mapper = &self.type_mapper;
         let lookup_ctx = LookupCtx {
             lookup_type_by_name: &|name: &str| self.type_mapper.lookup_named(name),
             owned_string_type: self.type_mapper.owned_string_type,
-            is_resource: &|tid| type_registry.is_resource_type(tid),
             ensure_option: &|name: &str, _inner: TypeId| {
                 // On-the-fly: look up or register the Option type
                 if let Some(tid) = type_mapper.lookup_named(name) {
