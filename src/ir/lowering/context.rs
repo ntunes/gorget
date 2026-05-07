@@ -1443,39 +1443,17 @@ impl<'a> LoweringContext<'a> {
     /// Return the clone function name for deep-cloning a resource type.
     /// Used for Ptr(T) → T auto-clone and named-variable clone.
     /// Returns None for trivial types.
+    ///
+    /// Thin wrapper over [`TypeRegistry::clone_fn_name_for_def`]: that
+    /// method is the single source of truth for the resolver shape (see
+    /// the doc-comment there). Hosting it on the registry lets the
+    /// validator (`preceded_by_clone`) reach the same answer without
+    /// pulling in `LoweringContext`.
     pub fn clone_fn_for_ptr(&self, inner_type: TypeId) -> Option<String> {
-        use crate::ir::types::{GirType, DropStrategy};
+        use crate::ir::types::GirType;
         if let Some(GirType::Named(name)) = self.type_registry.get(inner_type) {
-            // Metadata-based: clone_fn populated at registration from
-            // BuiltinTypeProtocol (or hand-set for the runtime-named singletons
-            // GorgetString / GorgetArray / GorgetMap / GorgetSet). Covers
-            // every Vector/Deque/Dict/HashMap/Set/HashSet instantiation,
-            // GorgetString, the runtime-named collection types, and (after
-            // Phase A residual #1) Callable / MutCallable / ConsumeCallable /
-            // GorgetClosure via the c_runtime_alias-tagged TypeDef.
-            if let Some(type_def) = self.type_registry.get_type_def(name) {
-                if let Some(ref clone_fn) = type_def.metadata.clone_fn {
-                    return Some(clone_fn.clone());
-                }
-            }
-
-            // User structs with Recursive or Custom drop → generated {Name}__clone.
-            if let Some(type_def) = self.type_registry.get_type_def(name) {
-                if matches!(type_def.metadata.drop_strategy,
-                    DropStrategy::Recursive | DropStrategy::Custom(_))
-                {
-                    return Some(format!("{name}__clone"));
-                }
-                // Enums with cloneable variant payloads → generated {Name}__clone.
-                // Includes Option/Result with resource payloads (e.g., Option[String]).
-                if let crate::ir::types::TypeDefKind::Enum(ref edef) = type_def.kind {
-                    let has_cloneable_payload = edef.variants.iter().any(|v| {
-                        v.fields.iter().any(|f| self.type_registry.is_resource_type(f.type_id))
-                    });
-                    if has_cloneable_payload {
-                        return Some(format!("{name}__clone"));
-                    }
-                }
+            if let Some(td) = self.type_registry.get_type_def(name) {
+                return self.type_registry.clone_fn_name_for_def(td);
             }
         }
         None

@@ -600,6 +600,69 @@ impl TypeRegistry {
             .and_then(|td| td.metadata.enum_category)
             .is_some()
     }
+
+    /// Resolve the deep-clone function name for a TypeDef, mirroring the
+    /// logic in `LoweringContext::clone_fn_for_ptr`. This is the structural
+    /// truth: for every named resource type, `T__clone` is generated when
+    /// a clone is requested at lowering time, even though the generated
+    /// function name isn't always written back into `metadata.clone_fn`
+    /// (which is reserved for protocol-driven runtime fns).
+    ///
+    /// The two layers — `LoweringContext` (which decides emission) and
+    /// `TypeRegistry` (which is shared by the validator) — agree by sharing
+    /// this single resolver. Validators read it via `clone_fn_names_set`
+    /// to recognise calls to user `T__clone` without name pattern matching.
+    ///
+    /// Returns `None` for trivial / non-droppable types.
+    pub fn clone_fn_name_for_def(&self, td: &TypeDef) -> Option<String> {
+        // Metadata-based: clone_fn populated at registration from
+        // BuiltinTypeProtocol (covers every Vector/Deque/Dict/HashMap/
+        // Set/HashSet instantiation, GorgetString, the runtime-named
+        // collection types, and Callable / MutCallable / ConsumeCallable /
+        // GorgetClosure via the c_runtime_alias-tagged TypeDef).
+        if let Some(ref cf) = td.metadata.clone_fn {
+            return Some(cf.clone());
+        }
+        // User structs with Recursive or Custom drop → generated
+        // `{Name}__clone`. Mirrors `LoweringContext::clone_fn_for_ptr`.
+        if matches!(
+            td.metadata.drop_strategy,
+            DropStrategy::Recursive | DropStrategy::Custom(_)
+        ) {
+            return Some(format!("{}__clone", td.name));
+        }
+        // Enums with cloneable variant payloads → generated
+        // `{Name}__clone`. Includes Option/Result with resource payloads.
+        if let TypeDefKind::Enum(ref edef) = td.kind {
+            let has_cloneable_payload = edef.variants.iter().any(|v| {
+                v.fields.iter().any(|f| self.is_resource_type(f.type_id))
+            });
+            if has_cloneable_payload {
+                return Some(format!("{}__clone", td.name));
+            }
+        }
+        None
+    }
+
+    /// Build the set of all clone fn names this module's types could call.
+    /// Used by validators (`preceded_by_clone`) to recognise a producer
+    /// instruction's callee as a clone fn via typed metadata, not by
+    /// matching the `__clone` suffix.
+    ///
+    /// Iterates every registered TypeDef and collects
+    /// `clone_fn_name_for_def(td)` results. Inserts both the protocol-set
+    /// `metadata.clone_fn` value and the generated `{name}__clone` for
+    /// user structs / cloneable enums — exactly the names that
+    /// `LoweringContext::clone_fn_for_ptr` would emit.
+    pub fn clone_fn_names_set(&self) -> rustc_hash::FxHashSet<String> {
+        let mut set = rustc_hash::FxHashSet::default();
+        for td in self.type_defs() {
+            if let Some(cf) = self.clone_fn_name_for_def(td) {
+                set.insert(cf);
+            }
+        }
+        set
+    }
 }
 
 /// Format a TypeId as a mangle-safe string fragment (for tuple/generic type names).

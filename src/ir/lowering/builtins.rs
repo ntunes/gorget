@@ -256,7 +256,7 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "index_of", runtime_callee: Some("gorget_array_index_of"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: |_, ctx| (ctx.lookup_type_by_name)("Option__int64_t").unwrap_or(I64_TYPE) },
         BuiltinMethodDecl { name: "binary_search", runtime_callee: Some("gorget_array_binary_search"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
         // Clone / copy
-        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_array_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
+        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_array_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: true, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "sorted", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
         BuiltinMethodDecl { name: "sorted_by", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
         BuiltinMethodDecl { name: "sorted_by_key", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_self },
@@ -357,7 +357,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
                 .or_else(|| (ctx.lookup_type_by_name)("GorgetArray"))
                 .unwrap_or(UNIT_TYPE)
         }},
-        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_map_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
+        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_map_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: true, params: no_params, return_type: ret_self },
         // Higher-order (inline codegen)
         BuiltinMethodDecl { name: "filter", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_self },
         BuiltinMethodDecl { name: "fold", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: |a| vec![I64_TYPE, a.key, a.val], return_type: ret_int },
@@ -403,7 +403,7 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_set_len"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_int },
         BuiltinMethodDecl { name: "is_empty", runtime_callee: Some("gorget_set_is_empty"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_bool },
         BuiltinMethodDecl { name: "clear", runtime_callee: Some("gorget_set_clear"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_set_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_self },
+        BuiltinMethodDecl { name: "clone", runtime_callee: Some("gorget_set_clone"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: true, params: no_params, return_type: ret_self },
         // items() → Vector[T] — materializes the set into an ordered array.
         // Used by `set_iter` (std.iter) to hand callers a VectorIter[T]
         // over the materialized elements.

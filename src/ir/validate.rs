@@ -1888,11 +1888,17 @@ impl std::fmt::Display for ConsumeSiteWarning {
 ///
 /// Phase 1 is purely additive — no migration is performed. The
 /// `GG_VALIDATE_CONSUME_SITES` env gate is the only consumer today.
+///
+/// Builds the module-wide clone-fn name set once via
+/// [`TypeRegistry::clone_fn_names_set`] (Phase 2E migration); the
+/// per-callee membership check in [`preceded_by_clone`] is a typed
+/// O(1) lookup, never a `__clone` suffix match.
 pub fn validate_consume_sites(module: &Module) -> Vec<ConsumeSiteWarning> {
     let mut warnings = Vec::new();
+    let clone_fns = module.type_registry.clone_fn_names_set();
     for func in &module.functions {
         let liveness = Liveness::compute(func);
-        for_each_consume_site(func, module, &liveness, |w| warnings.push(w));
+        for_each_consume_site(func, module, &liveness, &clone_fns, |w| warnings.push(w));
     }
     warnings
 }
@@ -1901,10 +1907,16 @@ pub fn validate_consume_sites(module: &Module) -> Vec<ConsumeSiteWarning> {
 /// [`validate_consume`]. The walker is shape-driven on Instruction
 /// variants; ABI-based dispatch reads the typed `module.fn_param_abis`
 /// (internal calls) and `extern_decl.param_abis` (extern calls).
+///
+/// `clone_fns` is the module-wide set of recognised clone fn names
+/// (built once via [`TypeRegistry::clone_fn_names_set`]); threaded
+/// through so [`preceded_by_clone`] can match producers without
+/// inspecting the callee string.
 fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
     func: &Function,
     module: &Module,
     liveness: &Liveness,
+    clone_fns: &rustc_hash::FxHashSet<String>,
     mut emit: F,
 ) {
     let registry = &module.type_registry;
@@ -1918,7 +1930,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             arg_index: idx,
                         };
                         if let Some(w) = validate_consume(
-                            func, registry, liveness, op, &bb.instructions, b, i,
+                            func, registry, liveness, clone_fns, op, &bb.instructions, b, i,
                             class
                         ) {
                             emit(w);
@@ -1932,7 +1944,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             arg_index: idx,
                         };
                         if let Some(w) = validate_consume(
-                            func, registry, liveness, op, &bb.instructions, b, i,
+                            func, registry, liveness, clone_fns, op, &bb.instructions, b, i,
                             class
                         ) {
                             emit(w);
@@ -1950,7 +1962,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             arg_index: idx,
                         };
                         if let Some(w) = validate_consume(
-                            func, registry, liveness, op, &bb.instructions, b, i,
+                            func, registry, liveness, clone_fns, op, &bb.instructions, b, i,
                             class
                         ) {
                             emit(w);
@@ -1987,7 +1999,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             }
                         };
                         if let Some(w) = validate_consume(
-                            func, registry, liveness, op, &bb.instructions, b, i,
+                            func, registry, liveness, clone_fns, op, &bb.instructions, b, i,
                             class
                         ) {
                             emit(w);
@@ -2024,7 +2036,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                             }
                         };
                         if let Some(w) = validate_consume(
-                            func, registry, liveness, op, &bb.instructions, b, i,
+                            func, registry, liveness, clone_fns, op, &bb.instructions, b, i,
                             class
                         ) {
                             emit(w);
@@ -2062,6 +2074,7 @@ fn validate_consume(
     func: &Function,
     registry: &TypeRegistry,
     liveness: &Liveness,
+    clone_fns: &rustc_hash::FxHashSet<String>,
     operand: &Operand,
     insts: &[Instruction],
     block: usize,
@@ -2111,19 +2124,19 @@ fn validate_consume(
             // `Borrowed { Param(self), .. }` and the lowering
             // intentionally consumes them (after a clone) — recognise
             // the "preceded by clone" shape to avoid double-counting.
-            if preceded_by_clone(insts, inst_index, place.local) {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
                 return None;
             }
             ConsumeSiteViolation::BorrowedSourceConsumed
         }
         (MaybeOwned, _, _) => {
-            if preceded_by_clone(insts, inst_index, place.local) {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
                 return None;
             }
             ConsumeSiteViolation::MaybeOwnedSourceConsumed
         }
         (Untracked, _, _) => {
-            if preceded_by_clone(insts, inst_index, place.local) {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
                 return None;
             }
             ConsumeSiteViolation::UntrackedSourceConsumed
@@ -2157,16 +2170,23 @@ fn validate_consume(
 ///
 /// 1. Find the most recent instruction in this block that defines `local`.
 /// 2. Check if that instruction is a `Call` / `CallExtern` whose callee
-///    name follows the clone/fresh-alloc convention used by the lowering
-///    layer (suffix `__clone`, prefix `gorget_*_clone`, or one of the
-///    known fresh-allocating runtime helpers).
+///    is recognised as a clone or fresh-allocator via [`is_clone_or_fresh_call`].
 ///
-/// We tolerate the name-based recognition here because the runtime-symbol
-/// boundary is the *one* place the layering-discipline doc explicitly
-/// allows it — see CLAUDE.md "No name matching" carve-out for runtime
-/// symbols. Long-term, the right answer is to tag the producer instruction
-/// with a typed `is_fresh: bool` sidecar; that's a Phase 2 follow-on.
-fn preceded_by_clone(insts: &[Instruction], inst_index: usize, local: LocalId) -> bool {
+/// **Phase 2E (2026-05-07):** the recognition is fully typed — runtime
+/// fns route through `RuntimeFn::from_c_name(...).signature().returns_fresh`
+/// (single source of truth for "this runtime call returns an
+/// independent heap buffer"); user-defined `T__clone` stubs are matched
+/// via the module's `clone_fns` set built once at the validator entry by
+/// [`TypeRegistry::clone_fn_names_set`]. No string-suffix or
+/// runtime-symbol pattern matching survives in this predicate. The two
+/// tables (`RuntimeSig.returns_fresh` and `TypeMetadata.clone_fn`) are
+/// the load-bearing facts; we read them, never re-derive from names.
+fn preceded_by_clone(
+    insts: &[Instruction],
+    inst_index: usize,
+    local: LocalId,
+    clone_fns: &rustc_hash::FxHashSet<String>,
+) -> bool {
     // Walk backward from inst_index-1 looking for the most recent def of `local`.
     for k in (0..inst_index).rev() {
         let inst = &insts[k];
@@ -2199,43 +2219,52 @@ fn preceded_by_clone(insts: &[Instruction], inst_index: usize, local: LocalId) -
         if let Some(w) = writes_local {
             if w == local {
                 // Found the producer. Now check shape.
-                return is_clone_or_fresh_call(inst);
+                return is_clone_or_fresh_call(inst, clone_fns);
             }
         }
     }
     false
 }
 
-/// Does this instruction's callee match the "clone or fresh allocation"
-/// shape? See [`preceded_by_clone`] for the exception this name-match
-/// is allowed under.
-fn is_clone_or_fresh_call(inst: &Instruction) -> bool {
+/// Does this instruction's callee return a fresh heap allocation OR is
+/// it a known clone fn? Typed-only:
+///
+/// * Runtime fns: `RuntimeFn::from_c_name(name).signature().returns_fresh`
+///   reads the const-buildable [`crate::lir::runtime::RuntimeSig`] table
+///   — the single source of truth for which runtime calls produce
+///   independent heap buffers (no aliasing into inputs). Replaces the
+///   prior name-list of `gorget_*_clone`, `gorget_str_cat`, etc.
+/// * User-defined / builtin clone fns: membership in the
+///   pre-computed `clone_fns` set (built from
+///   `TypeRegistry::clone_fn_names_set`). Each entry is the typed
+///   `clone_fn_name_for_def(td)` value — the same name
+///   `LoweringContext::clone_fn_for_ptr` would emit. No `__clone`
+///   suffix recognition.
+///
+/// Per CLAUDE.md "No name matching": both branches read typed metadata
+/// at the source of truth (RuntimeSig / TypeMetadata) and answer
+/// without inspecting the callee identifier shape. The metadata is
+/// load-bearing; the names are not.
+fn is_clone_or_fresh_call(
+    inst: &Instruction,
+    clone_fns: &rustc_hash::FxHashSet<String>,
+) -> bool {
     let name = match inst {
         Instruction::Call { func, .. } => func.as_str(),
         Instruction::CallExtern { func, .. } => func.as_str(),
         _ => return false,
     };
-    // Internal-call clone family: `T__clone` for any registered T.
-    if name.ends_with("__clone") { return true; }
-    // Runtime clone family: `gorget_string_clone`, `gorget_array_clone`,
-    // `gorget_map_clone`, `gorget_set_clone`, `gorget_string_copy_cow`, etc.
-    if name.starts_with("gorget_") && name.contains("_clone") { return true; }
-    if name == "gorget_string_copy_cow" { return true; }
-    // Runtime fresh-allocators that the lowering treats as
-    // `FreshOwned` producers (str_cat, str_format, str_to_upper/lower,
-    // collection-new functions): same effective semantic — the result
-    // doesn't alias any input at the heap level.
-    matches!(name,
-        "gorget_str_cat" | "gorget_str_concat" | "gorget_string_format"
-        | "gorget_str_format" | "gorget_str_to_upper" | "gorget_str_to_lower"
-        | "gorget_str_repeat" | "gorget_str_replace" | "gorget_str_replacen"
-        | "gorget_str_trim" | "gorget_str_strip" | "gorget_str_substring"
-        | "gorget_str_slice" | "gorget_str_byte_slice" | "gorget_str_char_at"
-        | "gorget_array_new" | "gorget_array_with_capacity"
-        | "gorget_map_new" | "gorget_set_new"
-        | "gorget_int_to_str" | "gorget_float_to_str" | "gorget_bool_to_str"
-        | "gorget_str_from_literal" | "gorget_str_from_cstr"
-    )
+    // Runtime fresh: typed `RuntimeSig.returns_fresh` lookup.
+    if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(name) {
+        if rt.signature().returns_fresh {
+            return true;
+        }
+    }
+    // User-defined / collection / builtin clone fns: typed
+    // `TypeMetadata.clone_fn` membership (or generated `T__clone` for
+    // user structs / cloneable enums — same resolver as
+    // `LoweringContext::clone_fn_for_ptr`).
+    clone_fns.contains(name)
 }
 
 /// Is this callee one of the runtime collection mutators where the

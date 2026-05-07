@@ -372,7 +372,9 @@ runtime_table! {
     ArrayBinarySearch  => "gorget_array_binary_search", sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::I64, F::ReadOnly);
     ArrayCapacity      => "gorget_array_capacity",      sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
     ArrayClear         => "gorget_array_clear",         sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
-    ArrayClone         => "gorget_array_clone",         sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
+    // gorget_array_clone: deep clone of every element into a fresh GorgetArray.
+    // Tagged `sig_fresh` for the consume-site validator (Phase 2E).
+    ArrayClone         => "gorget_array_clone",         sig_fresh(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
     ArrayContains      => "gorget_array_contains",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::I64, A::Scalar)], T::Bool, F::ReadOnly);
     ArrayDedup         => "gorget_array_dedup",         sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
     ArrayExtend        => "gorget_array_extend",        sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::Ptr)], T::Void, F::Mutates);
@@ -385,7 +387,11 @@ runtime_table! {
     ArrayIsEmpty       => "gorget_array_is_empty",      sig(&[(T::Ptr, A::Ptr)], T::Bool, F::ReadOnly);
     ArrayLast          => "gorget_array_last",          sig(&[(T::Ptr, A::Ptr)], T::Ptr, F::ReadOnly);
     ArrayLen           => "gorget_array_len",           sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
-    ArrayNew           => "gorget_array_new",           sig(&[(T::I64, A::Scalar)], T::Array, F::Allocates);
+    // gorget_array_new / gorget_array_with_capacity: brand-new empty
+    // GorgetArray on the heap. Phase 2E: `sig_fresh` so the consume-site
+    // validator routes results identically with the rest of the
+    // collection-allocator family.
+    ArrayNew           => "gorget_array_new",           sig_fresh(&[(T::I64, A::Scalar)], T::Array, F::Allocates);
     ArrayPop           => "gorget_array_pop",           sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Ptr, F::Mutates);
     ArrayPush          => "gorget_array_push",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     ArrayRemove        => "gorget_array_remove",        sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
@@ -398,13 +404,16 @@ runtime_table! {
     ArraySlice         => "gorget_array_slice",         sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Array, F::Allocates);
     ArraySwap          => "gorget_array_swap",          sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar), (T::I64, A::Scalar)], T::Void, F::Mutates);
     ArraySwapRemove    => "gorget_array_swap_remove",   sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
-    ArrayWithCapacity  => "gorget_array_with_capacity", sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Array, F::Allocates);
+    ArrayWithCapacity  => "gorget_array_with_capacity", sig_fresh(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Array, F::Allocates);
 
     // ── Map / Dict ────────────────────────────────────────────────────────
-    DictNew         => "gorget_dict_new",         sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Map, F::Allocates);
-    DictNewStr      => "gorget_dict_new_str",     sig(&[(T::I64, A::Scalar)], T::Map, F::Allocates);
+    // gorget_{dict,map}_new[_str|_like] / gorget_map_clone: fresh-allocator
+    // / deep-clone family. Phase 2E typed signal for the consume-site
+    // validator.
+    DictNew         => "gorget_dict_new",         sig_fresh(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Map, F::Allocates);
+    DictNewStr      => "gorget_dict_new_str",     sig_fresh(&[(T::I64, A::Scalar)], T::Map, F::Allocates);
     MapClear        => "gorget_map_clear",        sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
-    MapClone        => "gorget_map_clone",        sig(&[(T::Ptr, A::Ptr)], T::Map, F::Allocates);
+    MapClone        => "gorget_map_clone",        sig_fresh(&[(T::Ptr, A::Ptr)], T::Map, F::Allocates);
     MapContains     => "gorget_map_contains",     sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::ReadOnly);
     MapFree         => "gorget_map_free",         sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
     MapGet          => "gorget_map_get",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Ptr, F::ReadOnly);
@@ -412,9 +421,9 @@ runtime_table! {
     MapItems        => "gorget_map_items",        sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
     MapKeys         => "gorget_map_keys",         sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
     MapLen          => "gorget_map_len",          sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
-    MapNew          => "gorget_map_new",          sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Map, F::Allocates);
-    MapNewLike      => "gorget_map_new_like",     sig(&[(T::Ptr, A::Ptr)], T::Map, F::Allocates);
-    MapNewStr       => "gorget_map_new_str",      sig(&[(T::I64, A::Scalar)], T::Map, F::Allocates);
+    MapNew          => "gorget_map_new",          sig_fresh(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::Map, F::Allocates);
+    MapNewLike      => "gorget_map_new_like",     sig_fresh(&[(T::Ptr, A::Ptr)], T::Map, F::Allocates);
+    MapNewStr       => "gorget_map_new_str",      sig_fresh(&[(T::I64, A::Scalar)], T::Map, F::Allocates);
     MapPut          => "gorget_map_put",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     MapPutCloned    => "gorget_map_put_cloned",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     MapRemove       => "gorget_map_remove",       sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
@@ -423,18 +432,21 @@ runtime_table! {
     MapValues       => "gorget_map_values",       sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
 
     // ── Set ───────────────────────────────────────────────────────────────
-    OrderedSetNew    => "gorget_ordered_set_new",     sig(&[(T::I64, A::Scalar)], T::Set, F::Allocates);
-    OrderedSetNewStr => "gorget_ordered_set_new_str", sig(&[], T::Set, F::Allocates);
+    // gorget_{set,ordered_set}_{new,new_str,new_like} / gorget_set_clone:
+    // fresh-allocator / deep-clone family for set collections. Phase 2E
+    // typed signal for the consume-site validator.
+    OrderedSetNew    => "gorget_ordered_set_new",     sig_fresh(&[(T::I64, A::Scalar)], T::Set, F::Allocates);
+    OrderedSetNewStr => "gorget_ordered_set_new_str", sig_fresh(&[], T::Set, F::Allocates);
     SetAdd           => "gorget_set_add",             sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     SetClear         => "gorget_set_clear",           sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
-    SetClone         => "gorget_set_clone",           sig(&[(T::Ptr, A::Ptr)], T::Set, F::Allocates);
+    SetClone         => "gorget_set_clone",           sig_fresh(&[(T::Ptr, A::Ptr)], T::Set, F::Allocates);
     SetContains      => "gorget_set_contains",        sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::ReadOnly);
     SetFree          => "gorget_set_free",            sig(&[(T::Ptr, A::Ptr)], T::Void, F::Mutates);
     SetIsEmpty       => "gorget_set_is_empty",        sig(&[(T::Ptr, A::Ptr)], T::Bool, F::ReadOnly);
     SetLen           => "gorget_set_len",             sig(&[(T::Ptr, A::Ptr)], T::I64, F::ReadOnly);
-    SetNew           => "gorget_set_new",             sig(&[(T::I64, A::Scalar)], T::Set, F::Allocates);
-    SetNewLike       => "gorget_set_new_like",        sig(&[(T::Ptr, A::Ptr)], T::Set, F::Allocates);
-    SetNewStr        => "gorget_set_new_str",         sig(&[], T::Set, F::Allocates);
+    SetNew           => "gorget_set_new",             sig_fresh(&[(T::I64, A::Scalar)], T::Set, F::Allocates);
+    SetNewLike       => "gorget_set_new_like",        sig_fresh(&[(T::Ptr, A::Ptr)], T::Set, F::Allocates);
+    SetNewStr        => "gorget_set_new_str",         sig_fresh(&[], T::Set, F::Allocates);
     SetRemove        => "gorget_set_remove",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
     SetReserve       => "gorget_set_reserve",         sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     SetToArray       => "gorget_set_to_array",        sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
