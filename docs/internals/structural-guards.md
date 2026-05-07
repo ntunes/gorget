@@ -95,6 +95,8 @@ These structural guards exist today and are load-bearing:
 | Cross-module type collision (snag #20) | Two modules publish same TypeDef name | `src/semantic/scope.rs` | Fatal |
 | GIR module validation | Generic LIR-shape soundness | `src/ir/lowering/mod.rs:1505` | Fatal |
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
+| `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
+| `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
@@ -123,15 +125,9 @@ Tiered by maturity. Tier 1 = invariants we know are violated today, with concret
 
 **Estimate.** 1-2 sessions for the validator, ~3-5 sessions for the migration.
 
-#### 1b. Move follow-through *(addresses snag #19, #23 segfault)*
+#### 1b. Move follow-through *(SHIPPED 2026-05-07; commit `3e49a03a`)*
 
-**Invariant.** Every `Inst::Assign { mode: Move }` whose source is a drop-registered place must be followed by a `MoveZero` of the source AND a `drops.unregister` (or equivalently, the source is marked moved before any later drop emission). Move means transfer-of-ownership — declaring it without doing it is the snag #19 / #23 bug shape.
-
-**Validator sketch.** For each `Assign { mode: Move, value: Copy(p) | Move(p) }` where p is drop-registered, verify the next `MoveZero(p)` appears in the same basic block before any other drop site sees `p`.
-
-**Why it matters.** Phase C catches the Copy direction (shallow-copy of resource); the Move direction is symmetric — declaring Move but not zeroing the source produces the same use-after-free shape, just with an extra step. Snag #19's match-expr fix and snag #23's Box.new fix shipped one-off; the invariant locks the class.
-
-**Burn-down.** Likely few violations after rounds 8-10. Probably one session: validator + sweep + promote.
+Validator at `src/ir/validate.rs:1642` (`validate_move_follow_through`); fatal panic block at `src/ir/lowering/mod.rs:1619`. The dominant violation class — f-string interp segment temps emitting `Move`-mode assigns of drop-registered sources without follow-through — was closed in commit `1d3ccd5b` at `src/ir/lowering/exprs/calls.rs:1517` and `:1533`. Sweep of record (`c_emit_comparison`, 1066 fixtures): 0 violations. See DONE.md for the full chain.
 
 #### 1c. Type-metadata coherence at registration
 
@@ -149,15 +145,9 @@ Tiered by maturity. Tier 1 = invariants we know are violated today, with concret
 
 **Estimate.** 1-2 sessions. Migration is mechanical once the validator pinpoints the construction sites.
 
-#### 1d. Box-inner-type completeness *(snag #13's class)*
+#### 1d. Box-inner-type completeness *(SHIPPED 2026-05-07; commit `bfb6bb67`, defense-in-depth tests `095ff22f`)*
 
-**Invariant.** Every LIR StructDef whose name starts with `Box__` has `box_inner_type: Some(<inner>)` set. The `box_inner_type` field already exists (snag #13's fix); a validator locks it in.
-
-**Validator sketch.** Walk `module.structs`; for each whose name has the Box pattern, assert `box_inner_type.is_some()` and equals the suffix.
-
-**Why it matters.** Snag #13's family. The typed metadata exists; the guard ensures any future Box registration site can't forget to populate it. Cheap; ~10 lines of validator.
-
-**Burn-down.** One commit. No migration expected.
+Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `src/lir/lower/types.rs:615` (LIR module-exit, unconditional) AND under `assert_module_valid` per-pass via the `VALIDATORS` registry at `src/lir/validate.rs:74`. Both wirings active: per-pass under debug + `GG_VALIDATE_PASSES`, plus unconditional release-build fatal. 7 unit tests cover well-formed Boxes, trait-box skip, missing-inner detection, mismatched-suffix detection, non-Box ignore, unexpected-field-shape branch, and full-pipeline `assert_module_valid` integration. See DONE.md for the full chain.
 
 ### Tier 2 — invariants we should have, designed but not yet built
 
