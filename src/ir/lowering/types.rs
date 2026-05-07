@@ -274,9 +274,31 @@ impl TypeMapper {
                             make_opaque_type_def(n, protocol.copy_semantics, drop_strat)
                         });
 
-                        // Set protocol-derived metadata on the TypeDef
+                        // Set protocol-derived metadata on the TypeDef.
+                        //
+                        // Per-monomorphization protocols (Shared / Weak /
+                        // Channel / Guard / ReadGuard / WriteGuard) keep
+                        // `protocol.clone_fn = None` because the runtime
+                        // symbol is per-instantiation (`{Mangled}__clone`,
+                        // not a single static C symbol). The lowering
+                        // unconditionally emits `Call("{Mangled}__clone")`
+                        // for the receiver.clone() shape (`exprs/methods.rs`
+                        // Shared/Weak arms) and the deferred fn-sig table
+                        // (`mod.rs:2977`). Phase 2E (consume-site validator
+                        // typed migration) reads `metadata.clone_fn` via
+                        // `TypeRegistry::clone_fn_names_set()` and needs to
+                        // see the per-mono name to recognise the producer.
+                        // Write it here — same site that already writes the
+                        // per-mono `drop_strategy` (`{Mangled}__drop`).
+                        let clone_fn_name = match base {
+                            "Shared" | "Weak" | "Channel" | "Guard"
+                            | "ReadGuard" | "WriteGuard" => {
+                                Some(format!("{mangled}__clone"))
+                            }
+                            _ => protocol.clone_fn.map(String::from),
+                        };
                         if let Some(td) = registry.get_type_def_mut(&mangled) {
-                            td.metadata.clone_fn = protocol.clone_fn.map(String::from);
+                            td.metadata.clone_fn = clone_fn_name;
                             td.metadata.clone_inplace_fn = protocol.clone_inplace_fn.map(String::from);
                             td.metadata.materialize_fn = protocol.materialize_fn.map(String::from);
                             td.metadata.collection_kind = protocol.collection_kind;
