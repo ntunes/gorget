@@ -2,7 +2,15 @@
 
 ## High
 
-- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06]. User-reported via JS-interpreter porting. Recursive AST walker pattern (`match d.init: case Some(box): walk(*box)`) crashes with double-free / SIGSEGV; isolated minimal repro shows the underlying leak.
+- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06; **Cluster 1 unblocker shipped 2026-05-07 commit 2f89aa78**; full fix gated on Tier 2a].
+
+  **Status update 2026-05-07.** Cluster 1 (`ensure_option_type_registered` upgrade) shipped clean after the Move-mode-at-merge writer-site fix at `methods.rs:2061-2074`. Re-probing the original snag #24 path 1 (remove the Option/Result skip in `lir/lower/mod.rs:412-423` and `:471-491`) now confirms Phase C stays green — the Cluster 1 fix closed the shallow-copy violation class. **However, self_host_bootstrap regresses with `free(): double free detected in tcache 2`**, exposing the deeper Tier 2a (CoW consume-site discipline) gap: enum-constructor consume sites like `enum_init Node::VarDecl { copy _3 }` don't reliably clone owned-and-live resource args. The skip masks this. Removing it without Tier 2a in place produces runtime double-frees (the same gap snag #24's path-2 attempt also surfaced).
+
+  **Tier 1a (drop completeness validator + skip removal) is now formally gated on Tier 2a** per `docs/internals/structural-guards.md`'s sequencing. Tier 2a estimate: 5-10 sessions; "the load-bearing invariant for the entire CoW system." Once Tier 2a's consume-site validator+migration drives the IR to clone-or-move-zero at every enum_init / struct_init / push / put / send site for owned-and-live sources, the Option/Result skip can be removed and Tier 1a can ship as a single commit + sweep + promote.
+
+  Original entry preserved below for context.
+
+  ---
 
   **Root cause (single-layer view).** `lir/lower/mod.rs:412-423` skips Option/Result struct fields when populating `recursive_drop_structs`. Comment explains the skip was load-bearing for the self-host resolver's `v.get(i).unwrap()` shallow-copy pattern: dropping `Option[SpannedExpr]` there would double-free with the alias source. So the writer side picks "leak instead of double-free" as the conservative default. Same family as the Phase C "EnumFieldLoad shallow copy of resource payload — 12,294 violations" entry.
 
