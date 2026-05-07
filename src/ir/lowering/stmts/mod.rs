@@ -575,21 +575,52 @@ fn lower_var_decl(
 
             builder.assign_mode(assign_mode, Place::local(local_id), operand.clone());
 
-            // Propagate ownership: if RHS local owned its data (call result),
-            // the new local also owns the data (via move or clone).
-            // Skip if target is already SharedHeap (Branch A's value-aliasing
-            // shape carries source provenance — Owned would erase it and
-            // break has_string_borrowers / views_of_source queries).
+            // Propagate ownership to the destination.
+            //
+            // Tier 2a Phase 2A (writer-site tagging): when the assign mode
+            // is Move and the destination is droppable, the destination
+            // becomes Owned regardless of how the source was tagged
+            // upstream — Move-mode IS ownership transfer at the IR
+            // semantic level. Without this, the destination's ownership
+            // stays at the default `Untracked` whenever upstream lowering
+            // produced a fresh resource via a raw `builder.call*` (which
+            // doesn't tag) — leaving every downstream consume-site
+            // validator with no signal.
+            //
+            // The decision tree in `lower_var_decl_assign_mode` only
+            // selects Move for sources that are sound to consume; Branch
+            // A/C/D's borrow / clone / shared-heap shapes pre-set the
+            // destination's typed ownership to Borrowed{Alias},
+            // SharedHeap, or similar BEFORE this block runs and we must
+            // not clobber those. The skip below preserves their state.
+            //
+            // For Copy-mode of resource-typed assigns (Branch G safety
+            // net + the rare resource-typed Copy that slipped past F),
+            // still propagate from the source — preserves the legacy
+            // "owned source flows to owned destination" shape.
             if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                 let local_idx = local_id.0 as usize;
-                let is_shared_heap = local_idx < builder.locals.len()
+                let dst_already_typed = local_idx < builder.locals.len()
                     && matches!(
                         &builder.locals[local_idx].ownership,
                         crate::ir::LocalOwnership::SharedHeap { .. }
+                            | crate::ir::LocalOwnership::Borrowed { .. }
+                            | crate::ir::LocalOwnership::View { .. }
                     );
-                if ctx.is_owned_local(builder, p.local) && !is_shared_heap
-                {
-                    ctx.set_owned(builder, local_id);
+                if !dst_already_typed {
+                    let move_assign = assign_mode == AssignMode::Move;
+                    let target_needs_drop = ctx.type_registry.needs_drop(actual_var_type);
+                    if move_assign && target_needs_drop {
+                        // Move-mode + droppable destination: ownership
+                        // transfer is the IR semantic. Tag destination as
+                        // Owned so downstream consume-site validators see
+                        // a sound (Owned, dead, _) tuple.
+                        ctx.set_owned(builder, local_id);
+                    } else if ctx.is_owned_local(builder, p.local) {
+                        // Copy-mode of an owned source — preserve legacy
+                        // propagation-from-call-result shape.
+                        ctx.set_owned(builder, local_id);
+                    }
                 }
             }
 

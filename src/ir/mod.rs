@@ -7,6 +7,7 @@ pub mod printer;
 pub mod transforms;
 pub mod validate;
 pub mod liveness;
+pub mod tag_ownership;
 
 use instructions::{Instruction, Terminator};
 use types::{LocalId, TypeId, TypeRegistry};

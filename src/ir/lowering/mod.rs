@@ -1641,6 +1641,37 @@ pub fn lower_module(
         }
     }
 
+    // Tier 2a Phase 2A — post-lowering ownership inference.
+    //
+    // Walks every function and tags `Owned` / `FreshOwned` on
+    // producer destinations whose ownership is currently `Untracked`
+    // (default) but whose IR shape unambiguously identifies a fresh
+    // owned resource:
+    //
+    //   * `HeapAlloc` / `HeapAllocArray` → FreshOwned
+    //   * `Call` / `CallExtern` to a typed clone-or-fresh callee
+    //     (Phase 2E's `clone_fns` set + `RuntimeFn::returns_fresh`) →
+    //     FreshOwned
+    //   * `Call` (internal) returning a droppable non-pointer type →
+    //     Owned (functions return owned by value; non-pointer return
+    //     types don't alias into inputs)
+    //   * `EnumFieldLoad` / `FieldLoad` followed in the same block by
+    //     a `MoveZero` of the base → Owned (extracted slot owns the
+    //     heap; the base is dead)
+    //
+    // This complements `LoweringContext::set_owned`'s per-call-site
+    // setters: 200+ lowering paths call `builder.call*` or
+    // `builder.enum_field_load_move` directly without going through the
+    // `*_tracked` helpers — running structural inference once over the
+    // module catches all of them at one site.
+    //
+    // The pass NEVER overwrites a non-Untracked tag, so Branch A/C/D's
+    // borrow / shared-heap shapes from `lower_var_decl` (and the
+    // CoW alias propagation) are preserved.
+    //
+    // See `src/ir/tag_ownership.rs` for the rules + the rationale.
+    crate::ir::tag_ownership::infer_fresh_owned(&mut module);
+
     // Tier 2a Phase 1: consume-site discipline (CoW write-side).
     // Env-gated initial sweep — counts violations per ConsumeSiteClass +
     // per `(ownership, live_after, is_move)` tuple. NOT promoted to fatal
