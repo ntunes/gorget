@@ -6,6 +6,7 @@ pub mod lowering;
 pub mod printer;
 pub mod transforms;
 pub mod validate;
+pub mod liveness;
 
 use instructions::{Instruction, Terminator};
 use types::{LocalId, TypeId, TypeRegistry};

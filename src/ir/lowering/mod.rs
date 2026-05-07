@@ -1641,6 +1641,92 @@ pub fn lower_module(
         }
     }
 
+    // Tier 2a Phase 1: consume-site discipline (CoW write-side).
+    // Env-gated initial sweep — counts violations per ConsumeSiteClass +
+    // per `(ownership, live_after, is_move)` tuple. NOT promoted to fatal
+    // in Phase 1; Phase 2 migrates each class to ship the migration's
+    // missing clone/move at the consumer, then promotes.
+    //
+    // Activate with:
+    //   GG_VALIDATE_CONSUME_SITES=/tmp/2a-baseline.log cargo test ...
+    //
+    // See `docs/internals/structural-guards.md` Tier 2a + the project
+    // brief in TODO.md (filed alongside this Phase 1 commit).
+    if let Ok(log_path) = std::env::var("GG_VALIDATE_CONSUME_SITES") {
+        if !log_path.is_empty() {
+            let warnings = crate::ir::validate::validate_consume_sites(&module);
+            if !warnings.is_empty() {
+                use std::io::Write;
+                use rustc_hash::FxHashMap;
+                // Aggregate counts:
+                //   class_name -> count
+                //   class_name + violation -> count
+                //   class_name + source_type -> count
+                let mut by_class: FxHashMap<String, usize> = FxHashMap::default();
+                let mut by_class_violation: FxHashMap<(String, String), usize> = FxHashMap::default();
+                let mut by_class_type: FxHashMap<(String, String), usize> = FxHashMap::default();
+                let mut by_function: FxHashMap<String, usize> = FxHashMap::default();
+                for w in &warnings {
+                    let class_key = match &w.class {
+                        crate::ir::validate::ConsumeSiteClass::CollectionMutator { .. }
+                            => "CollectionMutator".to_string(),
+                        crate::ir::validate::ConsumeSiteClass::EnumInit { .. }
+                            => "EnumInit".to_string(),
+                        crate::ir::validate::ConsumeSiteClass::StructInit { .. }
+                            => "StructInit".to_string(),
+                        crate::ir::validate::ConsumeSiteClass::BoxNew
+                            => "BoxNew".to_string(),
+                        crate::ir::validate::ConsumeSiteClass::CallByValueArg { .. }
+                            => "CallByValueArg".to_string(),
+                        crate::ir::validate::ConsumeSiteClass::CallExternByValueArg { .. }
+                            => "CallExternByValueArg".to_string(),
+                    };
+                    *by_class.entry(class_key.clone()).or_insert(0) += 1;
+                    *by_class_violation
+                        .entry((class_key.clone(), w.violation.to_string()))
+                        .or_insert(0) += 1;
+                    *by_class_type
+                        .entry((class_key.clone(), w.source_type_name.clone()))
+                        .or_insert(0) += 1;
+                    *by_function.entry(w.function.clone()).or_insert(0) += 1;
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true).append(true).open(&log_path)
+                {
+                    let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
+                    let _ = writeln!(f, "[consume-sites] module={} total={}",
+                        module_name, warnings.len());
+                    let mut classes: Vec<_> = by_class.iter().collect();
+                    classes.sort_by(|a, b| a.0.cmp(b.0));
+                    for (k, v) in &classes {
+                        let _ = writeln!(f, "  class {}={}", k, v);
+                    }
+                    let mut cv: Vec<_> = by_class_violation.iter().collect();
+                    cv.sort_by(|a, b| b.1.cmp(a.1));
+                    for ((c, viol), n) in &cv {
+                        let _ = writeln!(f, "  class+viol {} | {} = {}", c, viol, n);
+                    }
+                    let mut ct: Vec<_> = by_class_type.iter().collect();
+                    ct.sort_by(|a, b| b.1.cmp(a.1));
+                    for ((c, ty), n) in ct.iter().take(50) {
+                        let _ = writeln!(f, "  class+type {} | {} = {}", c, ty, n);
+                    }
+                    let mut bf: Vec<_> = by_function.iter().collect();
+                    bf.sort_by(|a, b| b.1.cmp(a.1));
+                    for (fname, n) in bf.iter().take(20) {
+                        let _ = writeln!(f, "  fn @{} = {}", fname, n);
+                    }
+                    // Sample of full warnings (capped to keep logs readable).
+                    let _ = writeln!(f, "  -- sample warnings (first 200) --");
+                    for w in warnings.iter().take(200) {
+                        let _ = writeln!(f, "  {}", w);
+                    }
+                }
+            }
+        }
+    }
+
+
     // Propagate directive flags to module
     module.runtime.overflow_wrap = ctx.overflow_wrap;
     module.runtime.scheduler_mode = ctx.spawn.scheduler_mode;

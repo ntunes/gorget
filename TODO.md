@@ -2,6 +2,46 @@
 
 ## High
 
+
+- **Tier 2a Phase 2 — consume-site migrations (per `validate_consume_sites`)** [filed 2026-05-05]. Phase 1 shipped 2026-05-05 (commits b361a15c + 3f548f0b): backward-dataflow `Liveness` pass at `src/ir/liveness.rs`, consume-site validator at `src/ir/validate.rs::validate_consume_sites`, env-gated sweep via `GG_VALIDATE_CONSUME_SITES=<log>`. Initial sweep (1068 fixtures, 225 modules) found **3179 violations across 6 ConsumeSite classes**. Self-host_bootstrap stayed green throughout; integration sweep ran 1068/1068.
+
+  **Per-class breakdown (Phase 1 baseline 2026-05-05):**
+
+  | Class               | Count | Dominant violation                           |
+  |---------------------|-------|----------------------------------------------|
+  | `EnumInit`          | 2213  | Untracked source consumed (no decision)      |
+  | `StructInit`        | 966   | Untracked (948) + Borrowed (18, parse_url)   |
+  | `CollectionMutator` | 0     | clean — `clone_resource_args_for_init` works |
+  | `BoxNew`            | 0     | clean — handled at HeapAlloc shape           |
+  | `CallByValueArg`    | 0     | clean — Phase C `validate_resource_call_args` already fatal |
+  | `CallExternByValueArg` | 0  | clean                                        |
+
+  **Top type clusters (Phase 1 baseline):**
+  - `Vector__int64_t` 619 (501 EnumInit + 118 StructInit)
+  - `Vector__uint8_t` 461 (280 EnumInit + 181 StructInit)
+  - `Box__SpannedExpr` 352 (all EnumInit — driver/AST fixtures)
+  - `Dict__GorgetString__GorgetString` 357
+  - `GorgetString` 326
+  - `IoError` 288 (all EnumInit)
+  - `Box__SpannedType` 24, `Box__Expr` 16, `Box__SpannedPattern` 1
+
+  **Top writer-site files (where to look for the missing tag):**
+  - `src/ir/lowering/exprs/methods.rs` — likely the EnumInit / StructInit lowering
+  - `src/ir/lowering/exprs/calls.rs`
+  - `src/ir/lowering/stmts/mod.rs`
+  - `src/ir/lowering/context.rs::clone_resource_args_for_init` (line 1117) — extends here
+  - `src/ir/lowering/context.rs::ensure_owned_at_consuming_arg` (line 1662)
+
+  **Sub-TODO 2a-Phase2-A — `EnumInit` Untracked source migration (2213 violations)** [HIGH PRIORITY]. The bulk of Phase 1's findings. Pattern: enum constructors (Result.Ok / Option.Some / user enums with resource payloads) consume their args via `EnumInit { fields }` where each `fields[i]` is `Operand::Copy(_n)` of a resource-typed local whose `LocalOwnership` is `Untracked`. The lowering is correctly cloning where needed but never `set_owned`ing the cloned temp — the tag stays default. **Migration shape:** in the EnumInit lowering site (likely `lower_enum_constructor` / `lower_call`'s enum-variant branch), after `clone_resource_args_for_init` runs, call `set_owned`/`set_fresh_owned` on each cloned-arg local. Then the validator walks the same call site and sees `(Owned/FreshOwned, false, _) → sound`. Effort: ~2–4 hours (find the lowering site, add the ownership setter, sweep). High-impact: closes 2213 violations.
+
+  **Sub-TODO 2a-Phase2-B — `StructInit` Untracked source migration (948 violations)** [HIGH PRIORITY]. Same shape as 2a-Phase2-A but for `StructInit { fields }`. Lowering site is `lower_struct_init` (search `Instruction::StructInit { ` emissions). The `clone_resource_args_for_init` helper at `context.rs:1117` is already called from struct init paths — it just isn't tagging the cloned temps as `Owned`/`FreshOwned`. Effort: ~2–4 hours, often co-resolvable with 2a-Phase2-A.
+
+  **Sub-TODO 2a-Phase2-C — `StructInit` Borrowed source consumed (18 violations, 2 unique sites)** [HIGH PRIORITY but small]. Real bug — not a tagging gap. Both sites in `xtd.http.parse_url` constructing a tuple from `_41` and `_22` (both `GorgetString`, both `Borrowed`). The lowering is consuming a Borrowed source without cloning. **Migration shape:** check `xtd::http::parse_url` lowering — likely the `(scheme, host, path)` tuple return where the components are slices of the input URL String. Either insert a `clone_fn_for_ptr` call before the TupleInit, or restructure so the tuple owns fresh strings. Effort: ~30 min once the source is located.
+
+  **Sub-TODO 2a-Phase2-D — Promote each class to fatal once Phase 2 migrations land** [MEDIUM]. Mirror Phase C cadence: after a class hits 0 violations across the integration sweep, flip the class from env-gated warning to unconditional fatal panic in `src/ir/lowering/mod.rs` (alongside the existing `validate_resource_*` panics). Build the migration ladder one class at a time so a regression fires sharply.
+
+  **Sub-TODO 2a-Phase2-E — Replace `preceded_by_clone`'s name-match with a typed `is_fresh: bool` sidecar** [MEDIUM]. The validator currently recognises `_temp = clone_fn(...); consume(_temp)` by walking back to a producer whose callee name matches the clone-or-fresh-alloc family (`*__clone`, `gorget_*_clone`, `gorget_str_cat`, etc.). This is the runtime-symbol exception to the no-name-matching rule, but the long-term answer is to tag the producer with a typed `is_fresh: bool` on `Inst::Call`/`Inst::CallExtern` and read that flag in the validator. Mirrors the audit's drop of `Inst::CallExtern.original_name`. Effort: ~1 day. Not blocking — Phase 2 migrations land first.
+
 - **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06; **Cluster 1 unblocker shipped 2026-05-07 commit 2f89aa78**; full fix gated on Tier 2a].
 
   **Status update 2026-05-07.** Cluster 1 (`ensure_option_type_registered` upgrade) shipped clean after the Move-mode-at-merge writer-site fix at `methods.rs:2061-2074`. Re-probing the original snag #24 path 1 (remove the Option/Result skip in `lir/lower/mod.rs:412-423` and `:471-491`) now confirms Phase C stays green — the Cluster 1 fix closed the shallow-copy violation class. **However, self_host_bootstrap regresses with `free(): double free detected in tcache 2`**, exposing the deeper Tier 2a (CoW consume-site discipline) gap: enum-constructor consume sites like `enum_init Node::VarDecl { copy _3 }` don't reliably clone owned-and-live resource args. The skip masks this. Removing it without Tier 2a in place produces runtime double-frees (the same gap snag #24's path-2 attempt also surfaced).

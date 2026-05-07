@@ -1732,6 +1732,526 @@ fn collect_drop_registered_locals(func: &Function) -> FxHashSet<LocalId> {
     set
 }
 
+// ── Tier 2a Phase 1: consume-site discipline (CoW write-side) ────────
+// See `docs/internals/structural-guards.md` Tier 2a (and the project
+// brief in the Phase 1 task) for the full design.
+//
+// Companion to Phase C's READ-site validators (above): every consuming
+// position (push / put / insert / send / IndexStore / EnumInit /
+// StructInit / BoxNew / function arg with `ParamABI::ByValue`) must
+// see an IR shape consistent with the source's typed `LocalOwnership`
+// AND its post-call liveness. The four cases:
+//
+// | Source state                      | Required IR shape          |
+// |-----------------------------------|----------------------------|
+// | Owned AND dead at this call       | Move(p) + MoveZero(p)      |
+// | Borrow OR owned-but-live          | Clone-then-Move            |
+// | Static literal                    | Runtime *_materialize      |
+//
+// Today the IR commonly emits `Operand::Copy(p)` and relies on
+// `drops.unregister(p)` to pretend it's a Move — which is wrong when the
+// source is live past the call. Snag #24 (TODO) is the runtime
+// double-free that motivates this work.
+//
+// Phase 1 (this commit): build the validator + liveness pass, run an
+// initial sweep with env-gated logging, classify violations, file Phase
+// 2 migration TODOs. NO writer-site migrations in this phase.
+
+use crate::ir::liveness::Liveness;
+use crate::ir::{LocalOwnership, BorrowOrigin};
+
+/// Class of consuming position. Each variant carries enough metadata to
+/// build a meaningful diagnostic. The classification is data-driven by
+/// the IR shape, not by name-matching — `CollectionMutator` only fires
+/// at runtime calls flagged via the typed `runtime_callees` table /
+/// per-callee ABI metadata (see `for_each_consume_site` for how each
+/// class is detected).
+#[derive(Debug, Clone)]
+pub enum ConsumeSiteClass {
+    /// `Call/CallExtern` to a runtime collection mutator (push / put /
+    /// insert / send / IndexStore lowered to a runtime call) where the
+    /// element / value arg is consumed. Today these are the
+    /// `gorget_array_push`, `gorget_map_put`, `gorget_set_insert`,
+    /// `gorget_channel_send`, etc. families. Detection: callee in the
+    /// inverse `runtime_callees` table OR a known runtime-prefix arg
+    /// position with `AbiKind::VoidElem`/`Auto`.
+    CollectionMutator { callee: String, arg_index: usize },
+    /// `EnumInit { fields[arg_index] }` — every value-typed field is a
+    /// consume site at the constructor.
+    EnumInit { variant: String, arg_index: usize },
+    /// `StructInit { fields[arg_index] }`.
+    StructInit { type_name: String, arg_index: usize },
+    /// `HeapAlloc` payload assignments (BoxNew lowered shape: alloc + a
+    /// store of the payload through the new pointer). Today the GIR
+    /// emits this as `HeapAlloc + Assign(deref) = value`; we treat the
+    /// payload Assign as a consume site when the deref destination is
+    /// resource-typed.
+    BoxNew,
+    /// `Call` arg position with `ParamABI::ByValue` (internal calls).
+    /// Internal calls are validated by Phase C's read-side as
+    /// `ShallowCopyOfResourceArg` for the *type* axis; Tier 2a extends
+    /// to the *liveness* axis on top of that.
+    CallByValueArg { callee: String, arg_index: usize },
+    /// `CallExtern` arg position with `AbiKind::ByValue` /
+    /// `AbiKind::GorgetString` — same idea, ABI-routed through the
+    /// extern decl's per-param annotation.
+    CallExternByValueArg { callee: String, arg_index: usize },
+}
+
+/// A single consume-site finding. The Phase 1 sweep emits these as
+/// warnings — the validator log accumulates them per ConsumeSiteClass +
+/// per `(ownership, live_after, is_move)` tuple so Phase 2 can plan the
+/// migrations.
+#[derive(Debug, Clone)]
+pub struct ConsumeSiteWarning {
+    pub function: String,
+    pub block: BlockId,
+    pub inst_index: usize,
+    pub class: ConsumeSiteClass,
+    /// LocalId of the source operand (the local being consumed).
+    pub source_local: LocalId,
+    /// Type name of the source for diagnostic clustering.
+    pub source_type_name: String,
+    /// The classification of the violation.
+    pub violation: ConsumeSiteViolation,
+}
+
+/// Why a consume-site fails the rule. Each variant maps to one of the
+/// "INVALID" rows in the Phase 1 brief's table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConsumeSiteViolation {
+    /// Source is `Owned` AND live past this call, but the IR uses
+    /// `Operand::Copy(p)` without a preceding `_temp = clone(p)` —
+    /// the C-backend would either double-free at scope exit or leak.
+    OwnedLiveSourceConsumed,
+    /// Source is a borrow (Borrowed / View / SharedHeap shape) — the
+    /// callee is going to take ownership but the IR is consuming a
+    /// non-owning slot. Must be cloned at the boundary.
+    BorrowedSourceConsumed,
+    /// Source's `LocalOwnership` is `Untracked` AND the local is a
+    /// resource-typed value at a consume site. Untracked is the
+    /// FxHashMap-absence default — the lowering didn't decide. Phase D
+    /// rules say resource locals must transit through a concrete state
+    /// before crossing an ownership boundary; flag for review.
+    UntrackedSourceConsumed,
+    /// Source is `MaybeOwned`, meaning some paths borrowed and some
+    /// materialised — the IR must follow the conditional-drop discipline
+    /// (DropIfAlive + memcmp-zero) rather than emit a plain Copy.
+    MaybeOwnedSourceConsumed,
+}
+
+impl std::fmt::Display for ConsumeSiteViolation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OwnedLiveSourceConsumed =>
+                write!(f, "owned-but-live source consumed without preceding clone"),
+            Self::BorrowedSourceConsumed =>
+                write!(f, "borrowed source consumed at consuming position"),
+            Self::UntrackedSourceConsumed =>
+                write!(f, "untracked source consumed (ownership not decided)"),
+            Self::MaybeOwnedSourceConsumed =>
+                write!(f, "maybe-owned source consumed without conditional drop"),
+        }
+    }
+}
+
+impl std::fmt::Display for ConsumeSiteClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CollectionMutator { callee, arg_index } =>
+                write!(f, "CollectionMutator({}, arg #{})", callee, arg_index),
+            Self::EnumInit { variant, arg_index } =>
+                write!(f, "EnumInit({}, arg #{})", variant, arg_index),
+            Self::StructInit { type_name, arg_index } =>
+                write!(f, "StructInit({}, arg #{})", type_name, arg_index),
+            Self::BoxNew => write!(f, "BoxNew"),
+            Self::CallByValueArg { callee, arg_index } =>
+                write!(f, "CallByValueArg({}, arg #{})", callee, arg_index),
+            Self::CallExternByValueArg { callee, arg_index } =>
+                write!(f, "CallExternByValueArg({}, arg #{})", callee, arg_index),
+        }
+    }
+}
+
+impl std::fmt::Display for ConsumeSiteWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{}::bb{}::i{} — {} of _{} : {} : {}",
+            self.function, self.block.0, self.inst_index,
+            self.class, self.source_local.0, self.source_type_name, self.violation)
+    }
+}
+
+/// Run the Tier 2a Phase 1 consume-site validator over the module.
+///
+/// Returns a flat `Vec<ConsumeSiteWarning>`. Caller groups by
+/// `class` + `violation` to plan Phase 2 migrations.
+///
+/// Phase 1 is purely additive — no migration is performed. The
+/// `GG_VALIDATE_CONSUME_SITES` env gate is the only consumer today.
+pub fn validate_consume_sites(module: &Module) -> Vec<ConsumeSiteWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        let liveness = Liveness::compute(func);
+        for_each_consume_site(func, module, &liveness, |w| warnings.push(w));
+    }
+    warnings
+}
+
+/// Walker: identifies every consume site and routes through
+/// [`validate_consume`]. The walker is shape-driven on Instruction
+/// variants; ABI-based dispatch reads the typed `module.fn_param_abis`
+/// (internal calls) and `extern_decl.param_abis` (extern calls).
+fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
+    func: &Function,
+    module: &Module,
+    liveness: &Liveness,
+    mut emit: F,
+) {
+    let registry = &module.type_registry;
+    for (b, bb) in func.blocks.iter().enumerate() {
+        for (i, inst) in bb.instructions.iter().enumerate() {
+            match inst {
+                Instruction::StructInit { type_name, fields, .. } => {
+                    for (idx, op) in fields.iter().enumerate() {
+                        let class = ConsumeSiteClass::StructInit {
+                            type_name: type_name.clone(),
+                            arg_index: idx,
+                        };
+                        if let Some(w) = validate_consume(
+                            func, registry, liveness, op, &bb.instructions, b, i,
+                            class
+                        ) {
+                            emit(w);
+                        }
+                    }
+                }
+                Instruction::EnumInit { variant, fields, .. } => {
+                    for (idx, op) in fields.iter().enumerate() {
+                        let class = ConsumeSiteClass::EnumInit {
+                            variant: variant.clone(),
+                            arg_index: idx,
+                        };
+                        if let Some(w) = validate_consume(
+                            func, registry, liveness, op, &bb.instructions, b, i,
+                            class
+                        ) {
+                            emit(w);
+                        }
+                    }
+                }
+                Instruction::TupleInit { elements, .. } => {
+                    // Tuples are anonymous structs at the GIR level — same
+                    // consume semantics. We bin them under StructInit with
+                    // a synthetic type name so the cluster table stays
+                    // readable.
+                    for (idx, op) in elements.iter().enumerate() {
+                        let class = ConsumeSiteClass::StructInit {
+                            type_name: "<tuple>".into(),
+                            arg_index: idx,
+                        };
+                        if let Some(w) = validate_consume(
+                            func, registry, liveness, op, &bb.instructions, b, i,
+                            class
+                        ) {
+                            emit(w);
+                        }
+                    }
+                }
+                Instruction::Call { func: callee, args, .. } => {
+                    use crate::ir::lowering::context::ParamABI;
+                    // Try internal-call ABI table first.
+                    let abis = module.fn_param_abis.get(callee);
+                    let is_runtime_collection = is_runtime_collection_mutator(callee);
+                    for (idx, op) in args.iter().enumerate() {
+                        // For internal calls: ByValue is a consume position.
+                        // ByPtr / ByMutPtr are borrow shapes — the callee can't
+                        // take ownership through a Ptr without an explicit
+                        // clone, which the lowering already inserts elsewhere.
+                        let consumes = match abis {
+                            Some(av) => matches!(
+                                av.get(idx).copied().unwrap_or(ParamABI::ByValue),
+                                ParamABI::ByValue
+                            ),
+                            None => false, // unknown ABI — skip
+                        };
+                        if !consumes && !is_runtime_collection { continue; }
+                        let class = if is_runtime_collection {
+                            ConsumeSiteClass::CollectionMutator {
+                                callee: callee.clone(),
+                                arg_index: idx,
+                            }
+                        } else {
+                            ConsumeSiteClass::CallByValueArg {
+                                callee: callee.clone(),
+                                arg_index: idx,
+                            }
+                        };
+                        if let Some(w) = validate_consume(
+                            func, registry, liveness, op, &bb.instructions, b, i,
+                            class
+                        ) {
+                            emit(w);
+                        }
+                    }
+                }
+                Instruction::CallExtern { func: callee, args, .. } => {
+                    use crate::ir::abi::AbiKind;
+                    let extern_decl = module.find_extern(callee);
+                    let is_runtime_collection = is_runtime_collection_mutator(callee);
+                    for (idx, op) in args.iter().enumerate() {
+                        // Externs: ByValue/GorgetString consume the value;
+                        // VoidElem also consumes (the callee writes the data
+                        // into its slot — the source must own the data going
+                        // in or pass a fresh clone). Ptr/CStr/BytePtr/Opaque/
+                        // Scalar/Auto are borrow shapes for our purposes.
+                        let abi = extern_decl
+                            .and_then(|d| d.param_abis.get(idx).copied())
+                            .unwrap_or(AbiKind::Auto);
+                        let consumes = matches!(
+                            abi,
+                            AbiKind::ByValue | AbiKind::GorgetString | AbiKind::VoidElem
+                        );
+                        if !consumes && !is_runtime_collection { continue; }
+                        let class = if is_runtime_collection {
+                            ConsumeSiteClass::CollectionMutator {
+                                callee: callee.clone(),
+                                arg_index: idx,
+                            }
+                        } else {
+                            ConsumeSiteClass::CallExternByValueArg {
+                                callee: callee.clone(),
+                                arg_index: idx,
+                            }
+                        };
+                        if let Some(w) = validate_consume(
+                            func, registry, liveness, op, &bb.instructions, b, i,
+                            class
+                        ) {
+                            emit(w);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// The unified consume-site rule. Returns `Some(warning)` when the
+/// source operand's `(ownership, live_after, is_move)` tuple violates
+/// the Tier 2a rule; `None` when the site is sound or out of scope.
+///
+/// The rule (matching the brief's table):
+///
+/// ```text
+/// Source state                       | Required IR shape
+/// -----------------------------------|----------------------------
+/// Owned AND dead at this call        | Move(p) + MoveZero(p)
+/// Borrow OR owned-but-live           | Clone-then-Move
+/// Static literal                     | Runtime *_materialize
+/// ```
+///
+/// Implementation detail: a "preceded by clone" source — the
+/// `_temp = call clone_fn(orig); consume(_temp)` shape — is recognised
+/// by checking that the source local is `FreshOwned` AND was defined
+/// by a `Call` to a clone fn (or a fresh-allocating runtime fn). Such
+/// temps are dead-after-consume by construction (`live_after` returns
+/// false), so the `(FreshOwned, false, _)` tuple is sound regardless
+/// of whether the consumer used Copy or Move.
+fn validate_consume(
+    func: &Function,
+    registry: &TypeRegistry,
+    liveness: &Liveness,
+    operand: &Operand,
+    insts: &[Instruction],
+    block: usize,
+    inst_index: usize,
+    class: ConsumeSiteClass,
+) -> Option<ConsumeSiteWarning> {
+    // Constants are sound (they materialise via runtime helpers per the rule).
+    let place = match operand {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(_) => return None,
+    };
+    // Whole-local consumes only — projections (field/index extractions)
+    // are handled by the Phase C read-site validators.
+    if !place.projections.is_empty() { return None; }
+    let local_idx = place.local.0 as usize;
+    if local_idx >= func.locals.len() { return None; }
+    let local = &func.locals[local_idx];
+
+    // Skip non-resource args — trivially copyable.
+    if !registry.needs_drop(local.type_id) { return None; }
+
+    let live_after = liveness.is_live_after(place.local, BlockId(block as u32), inst_index);
+    let is_move = matches!(operand, Operand::Move(_));
+
+    use LocalOwnership::*;
+    let violation = match (&local.ownership, live_after, is_move) {
+        // VALID cases — no warning.
+        // Owned + dead + Move: classic transfer of ownership.
+        (Owned | FreshOwned | SharedHeap { .. }, false, true) => return None,
+        // Owned + dead + Copy: backend treats Copy as Move when source
+        // is dead and ownership is concrete. Fresh temps from clones
+        // land here. Sound.
+        (FreshOwned | Owned | SharedHeap { .. }, false, false) => return None,
+
+        // INVALID cases.
+        (Owned, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+        // FreshOwned + live: the temp IS shared with someone? Treat as
+        // owned-live for diagnostic purposes — same migration shape.
+        (FreshOwned, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+        (SharedHeap { .. }, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+
+        (Borrowed { .. } | View { .. }, _, _) => {
+            // Special-case: a freshly cloned temp at a consume site
+            // shows up here when the source is the cloned destination
+            // local (FreshOwned) but the lowering forgot to set the
+            // ownership. Also: function params with `&` sigil get
+            // `Borrowed { Param(self), .. }` and the lowering
+            // intentionally consumes them (after a clone) — recognise
+            // the "preceded by clone" shape to avoid double-counting.
+            if preceded_by_clone(insts, inst_index, place.local) {
+                return None;
+            }
+            ConsumeSiteViolation::BorrowedSourceConsumed
+        }
+        (MaybeOwned, _, _) => {
+            if preceded_by_clone(insts, inst_index, place.local) {
+                return None;
+            }
+            ConsumeSiteViolation::MaybeOwnedSourceConsumed
+        }
+        (Untracked, _, _) => {
+            if preceded_by_clone(insts, inst_index, place.local) {
+                return None;
+            }
+            ConsumeSiteViolation::UntrackedSourceConsumed
+        }
+    };
+    let _ = BorrowOrigin::Param(LocalId(0));  // suppress unused-import warnings on BorrowOrigin
+
+    let source_type_name = registry.type_name(local.type_id)
+        .unwrap_or_else(|| format!("ty{}", local.type_id.0));
+    Some(ConsumeSiteWarning {
+        function: func.name.clone(),
+        block: BlockId(block as u32),
+        inst_index,
+        class,
+        source_local: place.local,
+        source_type_name,
+        violation,
+    })
+}
+
+/// Did some instruction earlier in this block produce `local` via a
+/// call that looks like a clone / fresh-allocation? This is the
+/// "preceded by clone" recognition described in the Phase 1 brief:
+///
+///     _temp = call clone_fn(_orig)   // some earlier instruction
+///     consume(_temp)                  // this consume site
+///
+/// The clone produces a fresh allocation; `_temp` doesn't alias `_orig`
+/// at the heap level, so the consume is sound regardless of `_orig`'s
+/// ownership / liveness. Recognition is shape-driven:
+///
+/// 1. Find the most recent instruction in this block that defines `local`.
+/// 2. Check if that instruction is a `Call` / `CallExtern` whose callee
+///    name follows the clone/fresh-alloc convention used by the lowering
+///    layer (suffix `__clone`, prefix `gorget_*_clone`, or one of the
+///    known fresh-allocating runtime helpers).
+///
+/// We tolerate the name-based recognition here because the runtime-symbol
+/// boundary is the *one* place the layering-discipline doc explicitly
+/// allows it — see CLAUDE.md "No name matching" carve-out for runtime
+/// symbols. Long-term, the right answer is to tag the producer instruction
+/// with a typed `is_fresh: bool` sidecar; that's a Phase 2 follow-on.
+fn preceded_by_clone(insts: &[Instruction], inst_index: usize, local: LocalId) -> bool {
+    // Walk backward from inst_index-1 looking for the most recent def of `local`.
+    for k in (0..inst_index).rev() {
+        let inst = &insts[k];
+        let writes_local = match inst {
+            Instruction::Assign { dst, .. } if dst.projections.is_empty() => Some(dst.local),
+            Instruction::Call { dst: Some(d), .. }
+            | Instruction::CallExtern { dst: Some(d), .. }
+            | Instruction::CallIndirect { dst: Some(d), .. } => Some(*d),
+            Instruction::BinOp { dst, .. }
+            | Instruction::UnOp { dst, .. }
+            | Instruction::Cmp { dst, .. }
+            | Instruction::Cast { dst, .. }
+            | Instruction::BitCast { dst, .. }
+            | Instruction::PtrCast { dst, .. }
+            | Instruction::FieldLoad { dst, .. }
+            | Instruction::IndexLoad { dst, .. }
+            | Instruction::EnumFieldLoad { dst, .. }
+            | Instruction::HeapAlloc { dst, .. }
+            | Instruction::HeapAllocArray { dst, .. }
+            | Instruction::StructInit { dst, .. }
+            | Instruction::EnumInit { dst, .. }
+            | Instruction::TupleInit { dst, .. }
+            | Instruction::TagOf { dst, .. }
+            | Instruction::Borrow { dst, .. }
+            | Instruction::BorrowMut { dst, .. }
+            | Instruction::LoadThreadLocal { dst, .. }
+            | Instruction::LoadRef { dst, .. } => Some(*dst),
+            _ => None,
+        };
+        if let Some(w) = writes_local {
+            if w == local {
+                // Found the producer. Now check shape.
+                return is_clone_or_fresh_call(inst);
+            }
+        }
+    }
+    false
+}
+
+/// Does this instruction's callee match the "clone or fresh allocation"
+/// shape? See [`preceded_by_clone`] for the exception this name-match
+/// is allowed under.
+fn is_clone_or_fresh_call(inst: &Instruction) -> bool {
+    let name = match inst {
+        Instruction::Call { func, .. } => func.as_str(),
+        Instruction::CallExtern { func, .. } => func.as_str(),
+        _ => return false,
+    };
+    // Internal-call clone family: `T__clone` for any registered T.
+    if name.ends_with("__clone") { return true; }
+    // Runtime clone family: `gorget_string_clone`, `gorget_array_clone`,
+    // `gorget_map_clone`, `gorget_set_clone`, `gorget_string_copy_cow`, etc.
+    if name.starts_with("gorget_") && name.contains("_clone") { return true; }
+    if name == "gorget_string_copy_cow" { return true; }
+    // Runtime fresh-allocators that the lowering treats as
+    // `FreshOwned` producers (str_cat, str_format, str_to_upper/lower,
+    // collection-new functions): same effective semantic — the result
+    // doesn't alias any input at the heap level.
+    matches!(name,
+        "gorget_str_cat" | "gorget_str_concat" | "gorget_string_format"
+        | "gorget_str_format" | "gorget_str_to_upper" | "gorget_str_to_lower"
+        | "gorget_str_repeat" | "gorget_str_replace" | "gorget_str_replacen"
+        | "gorget_str_trim" | "gorget_str_strip" | "gorget_str_substring"
+        | "gorget_str_slice" | "gorget_str_byte_slice" | "gorget_str_char_at"
+        | "gorget_array_new" | "gorget_array_with_capacity"
+        | "gorget_map_new" | "gorget_set_new"
+        | "gorget_int_to_str" | "gorget_float_to_str" | "gorget_bool_to_str"
+        | "gorget_str_from_literal" | "gorget_str_from_cstr"
+    )
+}
+
+/// Is this callee one of the runtime collection mutators where the
+/// element / value arg is consumed? Used to bin call-arg consume sites
+/// under [`ConsumeSiteClass::CollectionMutator`] for clearer Phase 2
+/// migration planning. Same name-match exception as [`preceded_by_clone`].
+fn is_runtime_collection_mutator(name: &str) -> bool {
+    matches!(name,
+        "gorget_array_push" | "gorget_array_insert" | "gorget_array_set"
+        | "gorget_map_put" | "gorget_map_set" | "gorget_map_insert"
+        | "gorget_set_insert" | "gorget_set_add"
+        | "gorget_channel_send" | "gorget_channel_send_blocking"
+        | "gorget_array_extend" | "gorget_map_extend"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
