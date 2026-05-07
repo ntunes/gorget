@@ -2811,11 +2811,39 @@ impl<'a> LoweringContext<'a> {
     /// Used when Vector.get() is called and Option[T] wasn't pre-registered.
     /// If the inner type is droppable, immediately upgrades to Resource+Recursive
     /// so that drop elaboration sees the correct semantics during lowering.
+    ///
+    /// **Phase 2 widening migration prerequisite (2026-05-07).** Before this
+    /// commit, the doc above was aspirational: registration injected the
+    /// TypeDef via `get_or_register` but never ran the upgrade scan. Late-
+    /// registered Options (`Option[Box[T]]`, `Option[Vector[T]]`, etc. coming
+    /// from a `.get()` deep inside a function) had `copy_semantics=Default`
+    /// and `drop_strategy=None`, so `needs_drop` / `is_resource_or_contains_resource`
+    /// returned false for them — racing with the module-level
+    /// `upgrade_types_from_fields` pass that already ran at module start.
+    /// The fix: probe the inner type's drop status at registration time and
+    /// upgrade the freshly-registered Option immediately. The module-level
+    /// upgrade scan is still authoritative for transitive cases (struct A
+    /// containing Option[B] where B was upgraded after A), but
+    /// late-registered Options now have correct first-order metadata.
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
         use super::types::make_option_type_def;
+        use crate::ir::types::{CopySemantics, DropStrategy};
+        let was_already_registered = self.type_mapper.lookup_named(option_name).is_some();
         self.type_mapper.get_or_register(option_name, &mut self.type_registry, |n| {
             make_option_type_def(n, inner_type)
         });
+        // Only upgrade on fresh registration; pre-existing entries already
+        // went through the upgrade scan or carry intentional metadata.
+        if !was_already_registered && self.type_registry.needs_drop(inner_type) {
+            if let Some(td) = self.type_registry.get_type_def_mut(option_name) {
+                if td.metadata.drop_strategy == DropStrategy::None {
+                    td.metadata.drop_strategy = DropStrategy::Recursive;
+                }
+                if td.metadata.copy_semantics != CopySemantics::Resource {
+                    td.metadata.copy_semantics = CopySemantics::Resource;
+                }
+            }
+        }
     }
 
     /// Phase A — auto-register a collection-family TypeDef + Named TypeId

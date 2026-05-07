@@ -2059,13 +2059,18 @@ pub(super) fn lower_method_call(
                 })
             };
             let some_val = builder.enum_init(&option_name, "Some", ret_type, vec![payload]);
-            builder.assign(Place::local(result_id), FunctionBuilder::copy(some_val));
+            // Move from the fresh enum_init temp into the merge slot. The
+            // some_val/none_val temp is dead immediately after this assign;
+            // Copy mode would shallow-alias the heap payload of a resource
+            // Option, tripping Phase C's resource-moves validator. See
+            // `docs/internals/unified-resource-model.md` Phase A — Cluster 1.
+            builder.assign_mode(AssignMode::Move, Place::local(result_id), FunctionBuilder::copy(some_val));
             builder.jump(merge_bb);
 
             // === None block: construct Option.None() ===
             builder.switch_to(none_bb);
             let none_val = builder.enum_init(&option_name, "None", ret_type, vec![]);
-            builder.assign(Place::local(result_id), FunctionBuilder::copy(none_val));
+            builder.assign_mode(AssignMode::Move, Place::local(result_id), FunctionBuilder::copy(none_val));
             builder.jump(merge_bb);
 
             // === Merge ===
