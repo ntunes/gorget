@@ -5,7 +5,30 @@
 
 - **Tier 2a Phase 2 — consume-site migrations (per `validate_consume_sites`)** [filed 2026-05-05]. Phase 1 shipped 2026-05-05 (commits b361a15c + 3f548f0b): backward-dataflow `Liveness` pass at `src/ir/liveness.rs`, consume-site validator at `src/ir/validate.rs::validate_consume_sites`, env-gated sweep via `GG_VALIDATE_CONSUME_SITES=<log>`. Initial sweep (1068 fixtures, 225 modules) found **3179 violations across 6 ConsumeSite classes**. Self-host_bootstrap stayed green throughout; integration sweep ran 1068/1068.
 
-  **Per-class breakdown (Phase 1 baseline 2026-05-05):**
+  **Phase 2A progress (2026-05-07).** 4 commits landed (`26145106`, `6851c877`, `d0c2f2f6`, `81014df4`) implementing writer-site tagging across the major lowering paths. **Final sweep: 935 violations across 189 modules (avg 4.95) — 71% reduction from baseline 3371.** 1068/1068 integration tests passed; self_host_bootstrap stayed green throughout.
+
+  Components shipped:
+  * `src/ir/tag_ownership.rs` — post-lowering structural inference pass. Walks every function and tags `Owned`/`FreshOwned` on producer destinations whose ownership is currently `Untracked` but whose IR shape unambiguously identifies a fresh owned resource (HeapAlloc, Call/CallExtern to typed clone-or-fresh callee, Call returning droppable non-pointer, EnumFieldLoad/FieldLoad followed by MoveZero of base or matching field projection). Idempotent; never overwrites a non-Untracked tag. 4 unit tests.
+  * `lower_var_decl` Move-mode → set_owned (`stmts/mod.rs:583-625`).
+  * Box constructor returns FreshOwned (`exprs/calls.rs:538`, `exprs/mod.rs:1424`).
+  * Collection constructors `Vector[T]() / Dict[K,V]() / Set[K]()` route through `call_extern_tracked` + `set_owned_fresh` (`exprs/calls.rs:843-862`).
+  * `clone_resource_args_for_init` and `clone_multi_use_resource_args` tag cloned temps as `FreshOwned` (`context.rs:1134, 1161`, `exprs/mod.rs`).
+  * `lower_var_decl` Branch C-fallthrough Ptr clone tags FreshOwned (`stmts/mod.rs:489-496`).
+  * `Expr::Move` Move-mode temp tagged Owned (`exprs/mod.rs:278-280`).
+  * Per-mono runtime resolution in tag_ownership pass via `module.runtime_callees` (`tag_ownership.rs`).
+
+  **Remaining 935 violations (Phase 2B/2C scope, mostly snag #24-class):**
+
+  | Class               | Count | Dominant pattern                              |
+  |---------------------|-------|-----------------------------------------------|
+  | `EnumInit Untracked`   | 814 | Iter min/max/last/nth `Some(extracted)` rewrap (no MoveZero on iter result), `case Error(e): return Error(!e)` patterns where Move-temp is somehow not produced |
+  | `StructInit Untracked` | 102 | Residual struct construction edge cases       |
+  | `StructInit Borrowed`  |  18 | parse_url tuple (Sub-TODO 2a-Phase2-C, real bug) |
+  | `OwnedLive`            |   1 | Closure capture of `Shared__int64_t` needing clone |
+
+  These remaining patterns are largely snag #24 territory — the validator is correctly flagging cases where the lowering produces shallow copies of resource payloads without move-zero (e.g. `_27 = enum_field_load _11, Error, 0` followed by `_28 = enum_init Error { copy _27 }` with `_11` still alive). Closing them requires deeper lowering changes (move-zero on scrutinee variant payload at last-use, or cloning at the Some/Error wrapper). Phase C's read-side validators already constrain this; the missing piece is the write-side cloning at `Some(...)` / `Error(...)` rewraps.
+
+  **Per-class baseline (Phase 1):**
 
   | Class               | Count | Dominant violation                           |
   |---------------------|-------|----------------------------------------------|
