@@ -439,15 +439,26 @@ pub(super) fn lower_closure_spawn(
     //
     // Phase C FieldLoad migration (2026-05-06): the spawned task takes
     // ownership of the captures (the closure_local is dead at this site —
-    // last use, immediately consumed by the spawn). For resource-typed
+    // last use, immediately consumed by the spawn). For drop-tracked
     // captures, emit a `field_load + move_zero` pair so the GIR-level
     // Move semantic is explicit (the validator's next-inst peek
     // recognises this pattern and skips the shallow-copy warning).
-    // Non-resource captures (primitives) bit-copy is sound.
+    // Non-droppable captures (primitives) bit-copy is sound.
+    //
+    // Cluster 3 widening (2026-05-07): the gate is `needs_drop` (via
+    // is_resource_or_contains_resource), not the narrow is_resource_type.
+    // `Option[String]` / `Result[Vector, _]` / struct-with-resource-field
+    // captures carry heap pointers transitively — without MoveZero, the
+    // closure_local's drop at scope-exit and the spawn-arg's drop in the
+    // task body race on the same heap allocation. Cluster 1's
+    // ensure_option_type_registered upgrade fix made `needs_drop` reliable
+    // on late-registered Option/Result types. (No fixture currently
+    // exercises an Option/Result-of-resource capture flowing through
+    // spawn — the widening is correctness-driven for future code.)
     let mut spawn_args: Vec<Operand> = Vec::new();
     for (_, cap_type, field_index) in captures {
         let field_val = builder.field_load(Place::local(closure_local), *field_index, *cap_type);
-        if ctx.type_registry.is_resource_type(*cap_type) {
+        if ctx.type_registry.is_resource_or_contains_resource(*cap_type) {
             builder.move_zero(Place {
                 local: closure_local,
                 projections: vec![Projection::Field(*field_index)],
