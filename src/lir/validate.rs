@@ -65,7 +65,13 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// Adding a new shape invariant: append a `fn(&LirModule) -> Vec<LirError>`
 /// here. Phase C's `validate_resource_moves` (§5.8 of unified-resource-model.md)
 /// plugs in via this exact registry — same shape, same per-pass invocation.
-const VALIDATORS: &[ValidatorFn] = &[validate_module];
+///
+/// Tier 1d (`validate_box_inner_type`): every regular Box StructDef must carry
+/// typed inner-type metadata for the per-type drop-wrapper / box-helper emitter
+/// (snag #13's family — see commit `c7a652f0`). Cheap (~one pass over
+/// `module.structs`); per-pass invocation locks the contract under the
+/// invariant framework.
+const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
 /// a descriptive message tagged by `after` (the name of the pass that just
@@ -731,6 +737,92 @@ pub fn validate_ssa_dominance(func: &LirFunction) -> Vec<LirError> {
     errors
 }
 
+/// Tier 1d structural guard: every regular `Box[T]` `StructDef` in the module
+/// must carry typed `box_inner_type: Some(<T>)` metadata.
+///
+/// Recognition step (registrar boundary — name pattern is the legitimate
+/// allowlisted use per layering-discipline.md / structural-guards.md Tier 3a):
+/// a "regular Box" is a `StructDef` whose name starts with `Box__` AND has the
+/// single-pointer `_0` field shape produced by `lir/lower/mod.rs:790` (the
+/// `is_regular_box` registration site). Trait boxes (`Box[dyn Trait]`) share
+/// the `Box__` prefix but use the canonical `{data, vtable}` 16-byte layout
+/// and intentionally leave `box_inner_type = None`; this validator skips them
+/// by shape, not by name.
+///
+/// Why fatal: the C backend's `emit_box_drop_wrappers` and `emit_runtime_helpers`
+/// passes scan `module.structs` for `box_inner_type.is_some()` to emit the
+/// per-type `Box__<inner>__drop` wrapper and `__gorget_box_alloc_<inner>` /
+/// `__gorget_box_free_<inner>` helpers. A regular Box StructDef registered
+/// without populating `box_inner_type` would link-fail at runtime with
+/// undefined symbols (snag #13's family — see commit `c7a652f0`). The
+/// validator locks in that any future Box registration site (or refactor that
+/// touches struct cloning across modules) cannot regress the contract.
+///
+/// One source of truth: the field is set once at the regular-Box registration
+/// site in `src/lir/lower/mod.rs:790-803`; this validator is the read-side
+/// invariant check.
+pub fn validate_box_inner_type(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+    for sd in &module.structs {
+        if !sd.name.starts_with("Box__") {
+            continue;
+        }
+        // Trait-box shape: 2 fields named `data` + `vtable`. Skip — these
+        // legitimately have `box_inner_type: None` because the trait-obj
+        // layout doesn't carry a single inner pointee type.
+        let is_trait_box = sd.fields.len() == 2
+            && sd.fields[0].0 == "data"
+            && sd.fields[1].0 == "vtable";
+        if is_trait_box {
+            continue;
+        }
+        // Regular-Box shape: single field named `_0`. Other shapes (e.g. an
+        // empty placeholder from the deferred Pass-2 path before fields are
+        // filled) shouldn't reach this validator — but if they do, flag them
+        // too: any `Box__` StructDef without `_0` AND without trait-box layout
+        // is a structural inconsistency that the registrar wrote wrong.
+        let is_regular_box = sd.fields.len() == 1 && sd.fields[0].0 == "_0";
+        if !is_regular_box {
+            errors.push(LirError {
+                func: String::new(),
+                block: None,
+                message: format!(
+                    "Box StructDef {:?} has unexpected field shape {:?} (expected single `_0` field or trait-obj `[data, vtable]`)",
+                    sd.name,
+                    sd.fields.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(),
+                ),
+            });
+            continue;
+        }
+        // Regular Box: `box_inner_type` MUST be set, AND must equal the suffix
+        // of the StructDef name after `Box__`. The latter check guards against
+        // a future copy-bug where one Box's metadata is cloned into another
+        // Box's StructDef (e.g. the cross-module `c_runtime_alias` clone path
+        // in `src/lir/lower/mod.rs:858` if it were ever applied to a Box).
+        let suffix = &sd.name["Box__".len()..];
+        match &sd.box_inner_type {
+            None => errors.push(LirError {
+                func: String::new(),
+                block: None,
+                message: format!(
+                    "Box StructDef {:?} has `box_inner_type: None` (regular-Box shape requires `Some({:?})`); the per-type `Box__<inner>__drop` / `__gorget_box_alloc_<inner>` emitter scans this field — missing it produces link-time undefined symbols",
+                    sd.name, suffix,
+                ),
+            }),
+            Some(inner) if inner != suffix => errors.push(LirError {
+                func: String::new(),
+                block: None,
+                message: format!(
+                    "Box StructDef {:?} has `box_inner_type: Some({:?})` but name suffix is {:?}; the inner-type metadata must match the registered Box mangling",
+                    sd.name, inner, suffix,
+                ),
+            }),
+            Some(_) => {} // ok
+        }
+    }
+    errors
+}
+
 /// Compute reverse postorder of blocks via DFS from block 0.
 fn compute_rpo(n: usize, blocks: &[Block]) -> Vec<usize> {
     let mut visited = vec![false; n];
@@ -1205,5 +1297,97 @@ mod tests {
         module.add_function(func);
         let errors = validate_module(&module);
         assert!(errors.is_empty(), "post-split CFG should validate cleanly: {errors:?}");
+    }
+
+    // ── Tier 1d: Box-inner-type completeness ────────────────────────────────
+
+    fn make_box_struct(name: &str, inner: Option<&str>) -> StructDef {
+        StructDef {
+            name: name.into(),
+            fields: vec![("_0".into(), LirType::Ptr)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None,
+            elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
+            c_runtime_alias: None,
+            box_inner_type: inner.map(String::from),
+        }
+    }
+
+    fn make_trait_box_struct(name: &str) -> StructDef {
+        StructDef {
+            name: name.into(),
+            fields: vec![("data".into(), LirType::Ptr), ("vtable".into(), LirType::Ptr)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: Some(16), computed_c_align: Some(8),
+            elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
+            c_runtime_alias: None,
+            box_inner_type: None, // trait box: legitimately None
+        }
+    }
+
+    #[test]
+    fn box_inner_type_validator_accepts_well_formed_box() {
+        let mut module = LirModule::new();
+        module.add_struct(make_box_struct("Box__int64_t", Some("int64_t")));
+        module.add_struct(make_box_struct("Box__SpannedExpr", Some("SpannedExpr")));
+        let errors = validate_box_inner_type(&module);
+        assert!(errors.is_empty(), "well-formed Boxes should validate: {errors:?}");
+    }
+
+    #[test]
+    fn box_inner_type_validator_skips_trait_boxes() {
+        let mut module = LirModule::new();
+        // Trait-box layout: legitimately `box_inner_type: None` because the
+        // 16-byte data+vtable layout doesn't carry a single inner pointee.
+        module.add_struct(make_trait_box_struct("Box__Iterator"));
+        let errors = validate_box_inner_type(&module);
+        assert!(errors.is_empty(), "trait box should be skipped: {errors:?}");
+    }
+
+    #[test]
+    fn box_inner_type_validator_flags_missing_inner() {
+        let mut module = LirModule::new();
+        // Regular Box shape but `box_inner_type: None` — the bug class.
+        module.add_struct(make_box_struct("Box__int64_t", None));
+        let errors = validate_box_inner_type(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("box_inner_type: None")
+                && errors[0].message.contains("Box__int64_t"),
+            "expected missing-inner-type error, got: {errors:?}",
+        );
+    }
+
+    #[test]
+    fn box_inner_type_validator_flags_mismatched_inner() {
+        let mut module = LirModule::new();
+        // Name says Box__int64_t but inner says String — copy-paste bug.
+        module.add_struct(make_box_struct("Box__int64_t", Some("GorgetString")));
+        let errors = validate_box_inner_type(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0].message.contains("box_inner_type: Some(\"GorgetString\")")
+                && errors[0].message.contains("name suffix is \"int64_t\""),
+            "expected mismatch error, got: {errors:?}",
+        );
+    }
+
+    #[test]
+    fn box_inner_type_validator_ignores_non_box_structs() {
+        let mut module = LirModule::new();
+        module.add_struct(StructDef {
+            name: "MyStruct".into(),
+            fields: vec![("x".into(), LirType::I64)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None,
+            elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
+            c_runtime_alias: None,
+            box_inner_type: None,
+        });
+        let errors = validate_box_inner_type(&module);
+        assert!(errors.is_empty(), "non-Box struct should be ignored: {errors:?}");
     }
 }

@@ -597,7 +597,34 @@ fn lower_global_init_arg(arg: &ir::GlobalInitArg) -> LirGlobalInitArg {
 /// Top-level entry point: lower a GIR module to LIR.
 pub fn lower_module(gir: &ir::Module) -> LirModule {
     let ctx = LoweringContext::new(gir);
-    ctx.lower()
+    let module = ctx.lower();
+
+    // Tier 1d structural guard (unconditional; release + debug + tests):
+    // every regular `Box[T]` `StructDef` must carry typed `box_inner_type`
+    // metadata so the C backend's `emit_box_drop_wrappers` /
+    // `emit_runtime_helpers` passes can emit the per-type
+    // `Box__<inner>__drop` wrapper and `__gorget_box_alloc_<inner>` /
+    // `__gorget_box_free_<inner>` helpers without name-prefix scanning.
+    // Snag #13's family — see commit `c7a652f0` for the original fix and
+    // `docs/internals/structural-guards.md` Tier 1d for the rationale.
+    //
+    // The same validator also runs per-pass under `assert_module_valid` via
+    // the `VALIDATORS` registry, but that path is debug-only / env-gated
+    // (`GG_VALIDATE_PASSES`); the unconditional check here ensures release
+    // CI catches a regressing registration site at the LIR exit boundary.
+    let box_errors = super::super::validate::validate_box_inner_type(&module);
+    if !box_errors.is_empty() {
+        eprintln!("[box-inner-type] {} violation(s):", box_errors.len());
+        for e in &box_errors {
+            eprintln!("  {e}");
+        }
+        panic!(
+            "LIR module failed Box-inner-type validation ({} violation(s))",
+            box_errors.len()
+        );
+    }
+
+    module
 }
 
 /// Convert a GIR TypeId to its C type name (for spawn metadata).
