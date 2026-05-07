@@ -2961,6 +2961,11 @@ fn clone_multi_use_resource_args(
                             };
                             let cloned = builder.call(&clone_fn, vec![clone_arg], inner_type);
                             ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
+                            // Tier 2a Phase 2A: clone temps own a fresh
+                            // heap allocation, so tag FreshOwned. Mirrors
+                            // the same fix in
+                            // `clone_resource_args_for_init`.
+                            ctx.set_owned_fresh(builder, cloned);
                             *op = FunctionBuilder::copy(cloned);
                         }
                     }

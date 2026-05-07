@@ -837,10 +837,19 @@ pub(super) fn lower_call(
 
                     if positional_args.is_empty() {
                         let new_fn = format!("{mangled}__new");
+                        // Tier 2a Phase 2A: collection constructors return
+                        // a fresh heap allocation. Use `call_extern_tracked`
+                        // which registers the result for drop AND tags
+                        // ownership as Owned (consume-site validator
+                        // accepts `(Owned, dead, _)` at downstream
+                        // EnumInit/StructInit sites). Bumping to FreshOwned
+                        // afterward signals the strictly-stronger
+                        // "independent heap, no aliasing" axis.
                         if let Some(alloc_a) = alloc_arg {
                             let alloc_op = lower_expr(ctx, builder, &alloc_a.node.value);
                             builder.push_allocator(alloc_op);
-                            let coll_local = builder.call_extern(&new_fn, vec![], coll_type);
+                            let coll_local = ctx.call_extern_tracked(builder, &new_fn, vec![], coll_type);
+                            ctx.set_owned_fresh(builder, coll_local);
                             builder.pop_allocator();
                             if let Some(cap_a) = cap_arg {
                                 let cap_op = lower_expr(ctx, builder, &cap_a.node.value);
@@ -851,7 +860,8 @@ pub(super) fn lower_call(
                             }
                             return FunctionBuilder::copy(coll_local);
                         } else {
-                            let coll_local = builder.call_extern(&new_fn, vec![], coll_type);
+                            let coll_local = ctx.call_extern_tracked(builder, &new_fn, vec![], coll_type);
+                            ctx.set_owned_fresh(builder, coll_local);
                             if let Some(cap_a) = cap_arg {
                                 let cap_op = lower_expr(ctx, builder, &cap_a.node.value);
                                 let ptr_type = ctx.type_registry.insert(crate::ir::types::GirType::MutPtr(coll_type));

@@ -490,6 +490,12 @@ fn lower_var_decl(
                             // Owned Ptr source (function return, etc.) → auto-clone
                             ctx.warn_implicit_clone(value.span, _inner, crate::ir::ImplicitCloneReason::VarDeclFromBorrow);
                             let cloned = builder.call(&clone_fn, vec![operand.clone()], _inner);
+                            // Tier 2a Phase 2A: clone temp owns a fresh
+                            // heap allocation. Tag FreshOwned so the
+                            // consume-site validator sees a sound state
+                            // at the downstream consumer.
+                            ctx.drops.register_local(cloned, _inner, &ctx.type_registry);
+                            ctx.set_owned_fresh(builder, cloned);
                             operand = FunctionBuilder::copy(cloned);
                         } else if !ctx.type_registry.is_resource_type(_inner) {
                             // Non-resource pointee (primitives / value structs) — deref
