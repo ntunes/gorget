@@ -2,6 +2,12 @@
 
 ## High
 
+- **Tier 1b Move follow-through migration — 513 violations across 129 modules** [filed 2026-05-07 alongside validator commit `d6dacef4`]. The validator (`validate_move_follow_through` in `src/ir/validate.rs`) flags every `Inst::Assign { mode: Move, value: Copy(p) | Move(p) }` whose source `p` is drop-registered without a same-block `MoveZero(p)` before the next drop site. Initial sweep (1066 fixtures): 129 modules surfaced violations, 513 sites total. Run with `GG_VALIDATE_MOVE_FOLLOW_THROUGH=<log-path>` to surface counts and per-site detail.
+
+  **Promotion contract** (per `docs/internals/structural-guards.md`'s Tier 1b plan): each commit drops a class's count to zero and demonstrates the integration sweep stays green. Once the sweep is at zero, the env-gated block at `src/ir/lowering/mod.rs` becomes unconditional fatal (mirroring Phase C's resource-moves block).
+
+  **Migration shape:** every violation is a writer site that emits Move-mode without zeroing. The fix per site is structural — either emit a `MoveZero(p)` immediately after the assign, or change the assign mode to a non-transferring shape (Copy if non-resource, Borrow if Ptr). Snag #19's match-expr fix (commit `952b403f`) and snag #23's Box.new fix (`4ebefe44`) are the worked examples; the validator catches the rest of the same class. ~3-5 sessions estimated; classes are independent so multiple agents can pick up different writer sites in parallel.
+
 - **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06]. User-reported via JS-interpreter porting. Recursive AST walker pattern (`match d.init: case Some(box): walk(*box)`) crashes with double-free / SIGSEGV; isolated minimal repro shows the underlying leak.
 
   **Root cause (single-layer view).** `lir/lower/mod.rs:412-423` skips Option/Result struct fields when populating `recursive_drop_structs`. Comment explains the skip was load-bearing for the self-host resolver's `v.get(i).unwrap()` shallow-copy pattern: dropping `Option[SpannedExpr]` there would double-free with the alias source. So the writer side picks "leak instead of double-free" as the conservative default. Same family as the Phase C "EnumFieldLoad shallow copy of resource payload — 12,294 violations" entry.
