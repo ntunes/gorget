@@ -1563,6 +1563,168 @@ fn next_inst_zeroes_field(insts: &[Instruction], i: usize, base: &Place, field: 
     matches!(zp.projections.last(), Some(Projection::Field(f)) if *f == field)
 }
 
+// ── Tier 1b: Move follow-through validator ───────────────────────────
+// `docs/internals/structural-guards.md` §Tier 1b.
+//
+// Invariant. Every `Inst::Assign { mode: Move, value: Copy(p) | Move(p) }`
+// whose source `p` is drop-registered (i.e. some `Drop` / `DropIfAlive`
+// in the same function targets `p.local` bare) must be followed by a
+// `MoveZero` of `p` — in the same basic block — before any subsequent
+// `Drop` / `DropIfAlive` of `p` is emitted. Move means transfer of
+// ownership; declaring it without zeroing the source is the snag #19 /
+// #23 bug shape (shallow-copy aliasing the heap pointer that scope-exit
+// drops then double-frees).
+//
+// Phase C catches the symmetric Copy-direction class (shallow copy of a
+// resource); this validator closes the Move-direction. Both shapes
+// produce the same use-after-free at runtime — Phase C from the source
+// side, this from the destination's perspective on the source.
+
+/// A Move-follow-through validation finding. Tier 1b: warning during
+/// the env-gated stage; once the initial sweep is clean, the validator
+/// is promoted to fatal in `lowering/mod.rs`.
+#[derive(Debug, Clone)]
+pub struct MoveFollowThroughWarning {
+    pub function: String,
+    pub block: BlockId,
+    pub inst_index: usize,
+    pub kind: MoveFollowThroughWarningKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum MoveFollowThroughWarningKind {
+    /// `Assign { mode: Move, value: Copy(p) | Move(p) }` where `p` is a
+    /// drop-registered local (some `Drop`/`DropIfAlive` later targets
+    /// `p.local`) but the same basic block does NOT emit a `MoveZero(p)`
+    /// before the next drop site references `p`. The source slot stays
+    /// alive after the move; both source and destination then drop the
+    /// same heap allocation. See snag #19 / #23.
+    MoveWithoutZero {
+        source_local: LocalId,
+        dst_local: LocalId,
+    },
+}
+
+impl std::fmt::Display for MoveFollowThroughWarningKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MoveWithoutZero { source_local, dst_local } => write!(
+                f,
+                "Move-mode assign _{} = move _{}: source is drop-registered but is not MoveZero'd before the next drop site",
+                dst_local.0, source_local.0
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for MoveFollowThroughWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "@{}::bb{}::i{} — {}",
+            self.function, self.block.0, self.inst_index, self.kind
+        )
+    }
+}
+
+/// Tier 1b validator. Walk every function's basic blocks; for each
+/// `Inst::Assign { mode: Move, value: Copy(p) | Move(p) }` where `p` is
+/// bare (no projections) and `p.local` is drop-registered in this
+/// function, scan the same block forward for a bare `MoveZero(p)` (or
+/// any subsequent `Drop`/`DropIfAlive` of `p` — that's the violation).
+///
+/// "Drop-registered" is detected structurally: a local is drop-registered
+/// if any `Drop`/`DropIfAlive { place }` in the function targets
+/// `place.local == p.local && place.projections.is_empty()`. The drop
+/// accountant's lowering-time `is_registered` state isn't preserved past
+/// lowering; the IR's drop instructions ARE that ground truth at the
+/// validator stage.
+pub fn validate_move_follow_through(module: &Module) -> Vec<MoveFollowThroughWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        // Pre-compute: which locals receive a bare-place Drop or DropIfAlive
+        // anywhere in this function? Those are the drop-registered ones.
+        let drop_registered = collect_drop_registered_locals(func);
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                let Instruction::Assign { mode, dst, value } = inst else { continue };
+                if *mode != AssignMode::Move { continue }
+                // Self-assigns aren't move-follow-through sites.
+                let src_place = match value {
+                    Operand::Copy(p) | Operand::Move(p) => p,
+                    _ => continue,
+                };
+                if !src_place.projections.is_empty() { continue }
+                let src_local = src_place.local;
+                if !drop_registered.contains(&src_local) { continue }
+                // The dst can also be projected (struct-field move-into);
+                // for the warning's display we still report the base dst.
+                let dst_local = dst.local;
+                // Walk forward in the block. The first event for src_local:
+                // - bare MoveZero(src_local) → followed-through, OK
+                // - bare Drop / DropIfAlive(src_local) → violation
+                // - end of block → conservatively NOT a violation (the
+                //   drop, if any, must be in a subsequent block, and the
+                //   move-zero must precede it; but the validator can't see
+                //   inter-block flow without a full dataflow pass. The
+                //   doc says "in the same basic block" — we honour that
+                //   bound and the writer-site fix is to MoveZero locally).
+                let mut found_violation = false;
+                let mut zeroed = false;
+                for follow in bb.instructions.iter().skip(i + 1) {
+                    match follow {
+                        Instruction::MoveZero { place } if place.local == src_local && place.projections.is_empty() => {
+                            zeroed = true;
+                            break;
+                        }
+                        Instruction::Drop { place } | Instruction::DropIfAlive { place }
+                            if place.local == src_local && place.projections.is_empty() =>
+                        {
+                            found_violation = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if !zeroed && found_violation {
+                    warnings.push(MoveFollowThroughWarning {
+                        function: func.name.clone(),
+                        block: BlockId(b as u32),
+                        inst_index: i,
+                        kind: MoveFollowThroughWarningKind::MoveWithoutZero {
+                            source_local: src_local,
+                            dst_local,
+                        },
+                    });
+                }
+            }
+        }
+    }
+    warnings
+}
+
+/// Identify locals that receive a bare-place `Drop`/`DropIfAlive`
+/// instruction anywhere in `func`. These are "drop-registered" from the
+/// validator's vantage point — the lowering passes emitted a drop site
+/// for them, so a Move-mode assign of them must be followed through with
+/// a MoveZero (otherwise the drop will fire on a slot whose ownership was
+/// transferred elsewhere — snag #19 / #23 shape).
+fn collect_drop_registered_locals(func: &Function) -> FxHashSet<LocalId> {
+    let mut set = FxHashSet::default();
+    for bb in &func.blocks {
+        for inst in &bb.instructions {
+            let place = match inst {
+                Instruction::Drop { place } | Instruction::DropIfAlive { place } => place,
+                _ => continue,
+            };
+            if place.projections.is_empty() {
+                set.insert(place.local);
+            }
+        }
+    }
+    set
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
