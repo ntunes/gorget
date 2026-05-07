@@ -549,16 +549,23 @@ fn check_drop_targets(
             if !type_needs_drop(type_id, registry) {
                 // Allow drops on Option/Result enums with resource-type payloads
                 // (force-registered at VarDecl).
+                //
+                // Cluster 2 stylistic cleanup (2026-05-07): the original
+                // payload-droppable check was a three-way disjunction
+                // (type_needs_drop || is_resource_type || (Named-name-match
+                // for GorgetString / collection_type)). All three clauses
+                // covered the same set after the upgrade scan: GorgetString
+                // has copy_semantics=Resource (so `needs_drop` returns true),
+                // collection types carry collection_kind + Resource metadata,
+                // and `needs_drop` is the wider predicate that subsumes
+                // `is_resource_type`. The single `type_needs_drop` call
+                // suffices.
                 let is_force_droppable = if let Some(crate::ir::types::GirType::Named(name)) = registry.get(type_id) {
                     (name.starts_with("Option__") || name.starts_with("Result__"))
                     && registry.get_type_def(name).map_or(false, |td| {
                         if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
                             edef.variants.iter().any(|v| v.fields.iter().any(|f|
-                                type_needs_drop(f.type_id, registry)
-                                || registry.is_resource_type(f.type_id)
-                                || matches!(registry.get(f.type_id),
-                                    Some(crate::ir::types::GirType::Named(n))
-                                    if n == "GorgetString" || registry.is_collection_type_name(n))))
+                                type_needs_drop(f.type_id, registry)))
                         } else { false }
                     })
                 } else { false };

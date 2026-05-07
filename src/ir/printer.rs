@@ -247,8 +247,14 @@ fn print_block(out: &mut String, index: usize, block: &BasicBlock, reg: &TypeReg
 
 fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
     match inst {
-        Instruction::Assign { dst, value, .. } => {
-            write!(out, "{} = {}", format_place(dst), format_operand(value, reg)).unwrap();
+        Instruction::Assign { mode, dst, value } => {
+            let mode_str = match mode {
+                AssignMode::Copy => "",
+                AssignMode::Move => "[Mv] ",
+                AssignMode::Clone => "[Cl] ",
+                AssignMode::Borrow => "[Bw] ",
+            };
+            write!(out, "{}{} = {}", mode_str, format_place(dst), format_operand(value, reg)).unwrap();
         }
         Instruction::FieldLoad { dst, base, field, .. } => {
             write!(out, "_{} = field_load {}, {}", dst.0, format_place(base), field).unwrap();

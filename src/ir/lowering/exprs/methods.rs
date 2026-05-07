@@ -2614,8 +2614,12 @@ fn try_lower_option_result_combinator(
 
     // === Merge ===
     builder.switch_to(merge_bb);
-    if ctx.type_registry.needs_drop(result_type)
-        || ctx.type_registry.is_resource_type(result_type) {
+    // Cluster 2 stylistic cleanup (2026-05-07): the original disjunction
+    // `needs_drop || is_resource_type` was redundant — `needs_drop` already
+    // returns true for every type that owns heap (Resource copy semantics
+    // OR non-None drop strategy), which subsumes the narrow `is_resource_type`
+    // predicate. See `src/ir/types.rs` Phase 1 audit notes.
+    if ctx.type_registry.needs_drop(result_type) {
         ctx.drops.register_local(result_local, result_type, &ctx.type_registry);
     }
     ctx.set_owned(builder, result_local);
