@@ -269,6 +269,15 @@ fn lower_expr_inner(
                 };
                 builder.assign_mode(mode, Place::local(tmp), val);
                 ctx.move_zero_and_mark(builder, place_clone.local);
+                // Tier 2a Phase 2A: Move-mode receives ownership at the
+                // IR semantic level. Tag `tmp` as Owned so downstream
+                // consumers (EnumInit / StructInit) see a sound
+                // `(Owned, dead, _)` tuple at the validator. Skip for
+                // non-resource (Copy-mode) — primitives have no
+                // ownership.
+                if mode == crate::ir::instructions::AssignMode::Move {
+                    ctx.set_owned(builder, tmp);
+                }
                 // Clean up CoW tracking — moved local's data is zeroed, so
                 // any collection refs keyed on it are stale.
                 // Remove any collection refs keyed on this local (now zeroed/stale)
