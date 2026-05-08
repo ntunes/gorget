@@ -177,6 +177,15 @@ pub struct TypeMetadata {
     /// when the inferred Named type is just an alias of a runtime struct).
     /// Mirrors `BuiltinTypeProtocol::c_runtime_alias`.
     pub c_runtime_alias: Option<String>,
+    /// Set for `__Closure_N` struct types created by the closure-lowering pass.
+    /// The closure env owns captured values via lifetime-tied aliasing — it holds
+    /// bitwise copies of outer-scope locals whose lifetime exceeds the closure's.
+    /// The consume-site validator skips StructInit fields when the destination
+    /// is a closure-env type, because the outer scope's drop handles cleanup
+    /// (the env is always freed before the outer scope exits). This is the
+    /// typed-metadata form of the "closure alias" ownership pattern —
+    /// contrast with user struct inits where the struct independently owns its fields.
+    pub is_closure_env: bool,
 }
 
 impl Default for TypeMetadata {
@@ -192,6 +201,7 @@ impl Default for TypeMetadata {
             collection_kind: None,
             enum_category: None,
             c_runtime_alias: None,
+            is_closure_env: false,
         }
     }
 }

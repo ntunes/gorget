@@ -774,6 +774,7 @@ pub(super) fn register_collection_alias(
                 collection_kind: protocol.collection_kind,
                 enum_category: None,
                 c_runtime_alias: protocol.c_runtime_alias.map(String::from),
+                is_closure_env: false,
             },
         };
         registry.add_type_def(type_def);
@@ -877,6 +878,7 @@ pub(super) fn register_callable_alias(
             collection_kind: protocol.collection_kind,
             enum_category: None,
             c_runtime_alias: protocol.c_runtime_alias.map(String::from),
+            is_closure_env: false,
         },
     };
     registry.add_type_def(type_def);

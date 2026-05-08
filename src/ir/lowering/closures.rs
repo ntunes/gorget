@@ -140,7 +140,16 @@ impl ClosureLowering {
         let type_def = TypeDef {
             name: struct_name.clone(),
             kind: TypeDefKind::Struct(StructDef { fields }),
-            metadata: TypeMetadata::default(),
+            metadata: TypeMetadata {
+                // Marks this as a closure-env struct: captured locals at non-last-use
+                // are lifetime-tied aliases of outer-scope values (no independent
+                // ownership — outer-scope drops handle cleanup). The consume-site
+                // validator skips StructInit fields for closure-env destinations so
+                // the bitwise-copy alias pattern doesn't fire OwnedLiveSourceConsumed.
+                // See validate.rs `validate_consume` and docs/internals/closure-capture.md.
+                is_closure_env: true,
+                ..TypeMetadata::default()
+            },
         };
         ctx.type_registry.add_type_def(type_def);
         let struct_type_id = ctx.type_registry.insert(GirType::Named(struct_name.clone()));
@@ -263,6 +272,11 @@ impl ClosureLowering {
                         // Owned by-value resource captured at last-use: defer
                         // MoveZero to after StructInit so the field init can
                         // still read the source.
+                        // Only applies to CopySemantics::Resource types.
+                        // CopySemantics::Trivial types (Shared, Channel, Weak) are
+                        // bitwise-copyable at GIR level; the runtime handles their
+                        // refcounts via explicit drops. The consume-site validator
+                        // skips Trivial types (see validate.rs).
                         if ctx.pointee_type(cap.type_id).is_none()
                             && ctx.type_registry.is_resource_type(cap.type_id)
                             && ctx.drops.is_registered(cap.local_id)
@@ -272,12 +286,9 @@ impl ClosureLowering {
                             pending_move_zero.push(cap.local_id);
                             return FunctionBuilder::copy(cap.local_id);
                         }
-                        // Unified boundary clone: the closure struct needs an
-                        // independently owned value. `ensure_owned_at_boundary`
-                        // clones Ptr(T) borrows and by-value resource borrows.
-                        // Owned local captures that are NOT last-use fall through
-                        // — `ensure_owned_at_boundary` will clone to guarantee
-                        // independence (caller still wants the value afterward).
+                        // Unified boundary clone: `ensure_owned_at_boundary`
+                        // handles Ptr(T) borrows, ref-state locals, and
+                        // Untracked resource locals (via Tier 2a 2B extension).
                         ctx.ensure_owned_at_boundary(
                             builder,
                             FunctionBuilder::copy(cap.local_id),

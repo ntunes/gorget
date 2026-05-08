@@ -300,6 +300,18 @@ fn build_spawn_wrapper(
     // _0 = return slot, _1.._n_cap = capture params, _n_cap+1.. = call arg params.
     let n_cap = captures.len();
 
+    // Tag each capture param as Owned: the caller transfers ownership of each
+    // capture into the spawn wrapper (the spawn mechanism passes these by value).
+    // Without this tagging, params start as Untracked, and the validator fires
+    // `StructInit … untracked source consumed` at the struct_init below.
+    for i in 0..n_cap {
+        let local = LocalId((i + 1) as u32);
+        let idx = local.0 as usize;
+        if idx < builder.locals.len() {
+            builder.locals[idx].ownership = crate::ir::LocalOwnership::Owned;
+        }
+    }
+
     // Build field operands from capture params (_1.._n_cap).
     let field_operands: Vec<Operand> = (0..n_cap)
         .map(|i| FunctionBuilder::copy(LocalId((i + 1) as u32)))

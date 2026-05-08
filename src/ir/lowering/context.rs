@@ -1147,16 +1147,28 @@ impl<'a> LoweringContext<'a> {
                     }
 
                     if self.type_registry.is_resource_type(local_type) {
-                        // Already owned — skip
+                        // Already owned unnamed temp — dead by construction, skip (move).
                         if self.is_owned_local(builder, local) && !self.is_named_local(local) {
                             continue;
                         }
                         // Non-owned string views — always clone
                         let is_non_owned_string = self.is_string_type(local_type)
                             && !self.is_owned_local(builder, local);
-                        // Borrow params — always clone
+                        // Borrow params (bare Ptr param) — always clone
                         let is_borrow_param = self.is_bare_param(builder, local);
-                        if is_non_owned_string || is_borrow_param {
+                        // Named locals (any ownership) are potentially multi-use;
+                        // Untracked locals have unknown ownership — both must clone.
+                        // Unnamed owned temps are already handled by the early-continue above.
+                        let is_untracked = matches!(
+                            builder.locals.get(local.0 as usize)
+                                .map(|l| &l.ownership),
+                            Some(crate::ir::LocalOwnership::Untracked)
+                        );
+                        let needs_clone = is_non_owned_string
+                            || is_borrow_param
+                            || self.is_named_local(local)
+                            || is_untracked;
+                        if needs_clone {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 if let Some(s) = span {
                                     self.warn_implicit_clone(s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
@@ -1590,7 +1602,14 @@ impl<'a> LoweringContext<'a> {
         let is_borrow = self.is_ref_local(builder, local)
             || self.is_bare_param(builder, local)
             || self.is_cow_borrow(builder, local);
-        if !is_borrow {
+        // Untracked resource locals have unknown ownership — clone conservatively.
+        // The validator requires Owned ownership at consume sites; Untracked always
+        // fires unless preceded by a clone. (Tier 2a Phase 2B: close the gap.)
+        let is_untracked_resource = matches!(
+            builder.locals.get(local.0 as usize).map(|l| &l.ownership),
+            Some(crate::ir::LocalOwnership::Untracked)
+        ) && self.type_registry.is_resource_type(local_type);
+        if !is_borrow && !is_untracked_resource {
             return operand;
         }
 
@@ -2021,6 +2040,16 @@ impl<'a> LoweringContext<'a> {
                 mutability: crate::ir::Mutability::Shared,
             };
         }
+        // The element's drop responsibility transfers to the tuple: unregister the
+        // elem_local from the drops tracker so that scope-exit doesn't drop it a
+        // second time after the tuple has already taken ownership.  The return-path
+        // reader (stmts/mod.rs `tuple_element_sources`) still emits a MoveZero for
+        // droppable elem locals when the tuple is being *returned*, which zeroes the
+        // source slot so no aliased data survives; that MoveZero is safe whether or
+        // not the local is registered. For the non-return case (tuple passed to a
+        // function) the callee drops the tuple's contents — no additional caller-side
+        // drop is needed.
+        self.drops.unregister(local);
     }
 
     /// Walk `func.locals` and yield each local tagged as a TupleElement of
@@ -2884,6 +2913,7 @@ impl<'a> LoweringContext<'a> {
                         collection_kind: protocol.collection_kind,
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
+                        is_closure_env: false,
                     },
                 });
             }

@@ -1924,6 +1924,16 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
         for (i, inst) in bb.instructions.iter().enumerate() {
             match inst {
                 Instruction::StructInit { type_name, fields, .. } => {
+                    // Closure-env structs (`__Closure_N`) use lifetime-tied aliasing
+                    // for captured locals: the closure env is always freed before the
+                    // outer scope, so the outer scope's drops handle cleanup. These
+                    // captures are intentional bitwise aliases — not ownership violations.
+                    // Read `is_closure_env` from TypeDef metadata (set at registration,
+                    // no name matching). See closures.rs and types.rs TypeMetadata.
+                    let is_closure = registry.get_type_def(type_name)
+                        .map(|td| td.metadata.is_closure_env)
+                        .unwrap_or(false);
+                    if is_closure { continue; }
                     for (idx, op) in fields.iter().enumerate() {
                         let class = ConsumeSiteClass::StructInit {
                             type_name: type_name.clone(),
@@ -2095,6 +2105,19 @@ fn validate_consume(
 
     // Skip non-resource args — trivially copyable.
     if !registry.needs_drop(local.type_id) { return None; }
+    // Skip CopySemantics::Trivial types (Shared, Weak, Channel, Guard …).
+    // These are bitwise-copyable at the GIR level — the runtime handles
+    // refcount management via explicit drop calls, so a Copy of a live
+    // Shared/Channel at a consume site is NOT an ownership violation.
+    // Only CopySemantics::Resource types (GorgetString, GorgetArray, etc.)
+    // require true move semantics at ownership boundaries.
+    if let Some(GirType::Named(name)) = registry.get(local.type_id) {
+        if let Some(td) = registry.get_type_def(name) {
+            if td.metadata.copy_semantics == CopySemantics::Trivial {
+                return None;
+            }
+        }
+    }
 
     let live_after = liveness.is_live_after(place.local, BlockId(block as u32), inst_index);
     let is_move = matches!(operand, Operand::Move(_));

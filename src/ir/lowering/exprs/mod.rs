@@ -428,47 +428,39 @@ fn lower_expr_inner(
         }
 
         Expr::TupleLiteral(elems) => {
-            let operands: Vec<Operand> = elems.iter()
+            let mut operands: Vec<Operand> = elems.iter()
                 .map(|e| lower_expr(ctx, builder, e))
                 .collect();
-            // Infer element types using builder locals (handles nested tuples)
-            let _elem_types: Vec<TypeId> = operands.iter()
-                .map(|op| infer_operand_type_full(ctx, op, builder))
-                .collect();
-            // Track which locals are used as tuple elements (for return MoveZero)
+            // Ownership boundary: tuple fields need independently owned values.
+            // First pass: `ensure_owned_at_boundary` clones Ptr(T) borrows and
+            // ref-state locals (SharedHeap, Borrowed string views, bare params).
+            // Also handles Ptr(Str) deref (replaces the old Ptr(Str)-only loop).
+            for (i, op) in operands.iter_mut().enumerate() {
+                let span = elems.get(i).map(|e| e.span)
+                    .unwrap_or(crate::span::Span { start: 0, end: 0 });
+                let new_op = ctx.ensure_owned_at_boundary(
+                    builder,
+                    std::mem::replace(op, Operand::Constant(Constant::Unit)),
+                    span,
+                    crate::ir::ImplicitCloneReason::StructFieldFromBorrow,
+                );
+                *op = new_op;
+            }
+            // Second pass: clone_multi_use_resource_args handles by-value
+            // multi-use, loop-carried, and untracked resource locals.
+            // Mirrors the struct literal init path.
+            clone_multi_use_resource_args(ctx, builder, &mut operands, elems);
+            // Track which locals are used as tuple elements AFTER ownership
+            // processing (for return MoveZero). Must be post-processing so
+            // that cloned replacements are tracked, not the original sources
+            // (which must not be zeroed since they still own their data).
             let elem_locals: Vec<LocalId> = operands.iter()
                 .filter_map(|op| match op {
                     Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
                     _ => None,
                 })
                 .collect();
-            // For Ptr(Str) operands (string borrow params): deref to get owned Str value.
-            // Tuple fields are stored by value, not by Ptr.
-            let mut operands = operands;
-            for op in operands.iter_mut() {
-                if let Operand::Copy(place) | Operand::Move(place) = op {
-                    if place.projections.is_empty() {
-                        let local = place.local;
-                        let local_type = builder.local_type(local);
-                        // Only deref Ptr(Str) — already-owned Str values are fine
-                        if let Some(inner) = ctx.pointee_type(local_type) {
-                            if ctx.type_mapper.is_string_type(inner) {
-                                // Deref Ptr to get Str value
-                                let tmp = builder.add_local(inner, None);
-                                builder.assign(
-                                    crate::ir::instructions::Place::local(tmp),
-                                    Operand::Copy(crate::ir::instructions::Place {
-                                        local,
-                                        projections: vec![crate::ir::instructions::Projection::Deref],
-                                    }),
-                                );
-                                *op = FunctionBuilder::copy(tmp);
-                            }
-                        }
-                    }
-                }
-            }
-            // Re-infer types after deref (Ptr→Str change)
+            // Re-infer types after boundary processing (Ptr→Str change etc.)
             let elem_types: Vec<TypeId> = operands.iter()
                 .map(|op| infer_operand_type_full(ctx, op, builder))
                 .collect();
@@ -2953,7 +2945,16 @@ fn clone_multi_use_resource_args(
                     let in_loop = ctx.current_loop().is_some();
                     let is_named_in_loop = in_loop && ctx.is_named_local(local)
                         && !ctx.is_loop_body_local(local);
-                    if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string {
+                    // Untracked locals have unknown ownership — clone conservatively.
+                    // Named owned locals with no span info fall through is_multi_use=false
+                    // when the arg isn't a plain Identifier; clone them too.
+                    let is_untracked = matches!(
+                        builder.locals.get(local.0 as usize).map(|l| &l.ownership),
+                        Some(crate::ir::LocalOwnership::Untracked)
+                    );
+                    let is_named_no_span = ctx.is_named_local(local)
+                        && ast_args.get(i).map(|arg| !matches!(&arg.node, Expr::Identifier(_))).unwrap_or(true);
+                    if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string || is_untracked || is_named_no_span {
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             if let Some(span) = ast_args.get(i).map(|a| a.span) {

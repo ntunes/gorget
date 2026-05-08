@@ -2511,6 +2511,10 @@ fn try_lower_option_result_combinator(
     // === Some/Ok branch ===
     builder.switch_to(some_bb);
     let payload = builder.enum_field_load_move(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
+    // payload owns the extracted field; tag it and zero scrut so
+    // tag_ownership infers Owned for payload (Tier 2a Phase 2B).
+    ctx.set_owned(builder, payload);
+    builder.move_zero(Place::local(scrut_local));
 
     match method_name {
         "map" => {
@@ -2587,30 +2591,43 @@ fn try_lower_option_result_combinator(
         }
         "map" | "and_then" | "flat_map" if is_result => {
             // Error → Error(err)
+            // MoveZero scrut_local after extraction so tag_ownership sees the
+            // base is consumed and tags err_val as Owned (Tier 2a Phase 2B).
             let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
-            let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
+            ctx.set_owned(builder, err_val);
+            builder.move_zero(Place::local(scrut_local));
+            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
             builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
         }
         "or_else" if is_result => {
             // or_else: Error → fn(err)
+            // err_val owns the extracted payload — tag and zero scrut to propagate.
             let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+            ctx.set_owned(builder, err_val);
+            builder.move_zero(Place::local(scrut_local));
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], result_type);
             builder.assign(Place::local(result_local), result);
         }
         "unwrap_or_else" if is_result => {
             // unwrap_or_else: Error → fn(err)
+            // err_val owns the extracted payload — tag and zero scrut to propagate.
             let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+            ctx.set_owned(builder, err_val);
+            builder.move_zero(Place::local(scrut_local));
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], some_ok_type);
             builder.assign(Place::local(result_local), result);
         }
         "map_err" if is_result => {
             // map_err: Error → Error(fn(err))
+            // err_val owns the extracted payload — tag and zero scrut to propagate.
             let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+            ctx.set_owned(builder, err_val);
+            builder.move_zero(Place::local(scrut_local));
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], none_err_type);
-            let wrapped = builder.enum_init(&result_type_name, "Error", result_type, vec![mapped]);
+            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![mapped]);
             builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
         }
         _ => return None,
