@@ -410,23 +410,18 @@ impl<'a> LoweringContext<'a> {
                     _ => continue,
                 };
                 // Option/Result fields: skip for DROP (avoid double-free with
-                // match/unwrap and shallow-copy collection-get patterns —
-                // see the matching enum-variant comment below). Include for
-                // CLONE only if they wrap resource types.
+                // match/unwrap and shallow-copy collection-get patterns).
+                // Include for CLONE only if they wrap resource types.
                 //
-                // **Probed 2026-05-07 (post-Cluster-1 fix at commit 2f89aa78).**
-                // Removing the skip + relying on `infer_drop_strategy` for
-                // Option__T to populate the field drop correctly: Phase C now
-                // stays clean (the Cluster 1 Move-mode merge fix closed the
-                // shallow-copy violations), but self_host_bootstrap regresses
-                // with `free(): double free detected in tcache 2`. Root cause
-                // is Tier 2a (CoW consume-site discipline) per
-                // `docs/internals/structural-guards.md`: enum-constructor
-                // consume sites (`enum_init Node::VarDecl { copy _3 }`) don't
-                // reliably clone owned-and-live resource args. The skip masks
-                // this — once drops fire on the Option/Result field, the
-                // double-free at the un-cloned consume site surfaces.
-                // Tier 2a is the prerequisite. Keep the skip until then.
+                // Tier 2a closed consume-site violations (2026-05-08), but
+                // self_host_bootstrap still double-frees when this skip is
+                // removed — the root cause is FieldLoad / EnumFieldLoad of
+                // resource-typed payloads through borrowed Option/Result fields
+                // still producing shallow copies at use sites (Phase C's
+                // FieldLoad + EnumFieldLoad validators now stop those at compile
+                // time, but the self-host lowerer itself has paths that bypass
+                // that — Tier 2b is the prerequisite). Keep the skip until
+                // the FieldLoad consumer paths emit Borrow semantics uniformly.
                 if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
                     let field_strat = self.infer_drop_strategy(&field_type_name);
                     if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
@@ -484,20 +479,9 @@ impl<'a> LoweringContext<'a> {
                         _ => continue,
                     };
                     // Option/Result variant fields: skip for DROP, include for
-                    // CLONE if they wrap resource types. The skip is INTENTIONAL
-                    // and load-bearing for self-host correctness — the resolver's
-                    // hot path (resolve_stmt over Stmt-with-Option[SpannedExpr])
-                    // shallow-copies via `v.get(i).unwrap()` and then takes a
-                    // SpannedExpr-typed binding; both copy and source drop, and
-                    // dropping the Option[SpannedExpr] inside Stmt would
-                    // double-free the SpannedExpr's interior boxes/strings that
-                    // the standalone SpannedExpr__drop already freed.
-                    //
-                    // **Probed 2026-05-07 (see matching struct-field comment
-                    // above for full root cause).** Tier 2a CoW consume-site
-                    // discipline is the prerequisite — until enum-constructor
-                    // consume sites reliably clone owned-and-live resource
-                    // args, removing this skip causes double-free at runtime.
+                    // CLONE if they wrap resource types. See matching struct-field
+                    // comment above for full root cause; Tier 2b is prerequisite
+                    // for removal.
                     if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
                         let field_strat = self.infer_drop_strategy(&field_type_name);
                         if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {

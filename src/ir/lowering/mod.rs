@@ -271,6 +271,7 @@ pub fn lower_module(
                 collection_kind: Some(CollectionKind::Array),
                 enum_category: None,
                 c_runtime_alias: None,
+                is_closure_env: false,
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -292,6 +293,7 @@ pub fn lower_module(
                 collection_kind: Some(CollectionKind::Map),
                 enum_category: None,
                 c_runtime_alias: None,
+                is_closure_env: false,
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -313,6 +315,7 @@ pub fn lower_module(
                 collection_kind: Some(CollectionKind::Set),
                 enum_category: None,
                 c_runtime_alias: None,
+                is_closure_env: false,
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -383,6 +386,7 @@ pub fn lower_module(
                         collection_kind: protocol.collection_kind,
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
+                        is_closure_env: false,
                     },
                 });
                 let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
@@ -423,6 +427,7 @@ pub fn lower_module(
                             collection_kind: vector_protocol.collection_kind,
                             enum_category: None,
                             c_runtime_alias: vector_protocol.c_runtime_alias.map(String::from),
+                            is_closure_env: false,
                         },
                     });
                 }
@@ -1672,88 +1677,101 @@ pub fn lower_module(
     // See `src/ir/tag_ownership.rs` for the rules + the rationale.
     crate::ir::tag_ownership::infer_fresh_owned(&mut module);
 
-    // Tier 2a Phase 1: consume-site discipline (CoW write-side).
-    // Env-gated initial sweep — counts violations per ConsumeSiteClass +
-    // per `(ownership, live_after, is_move)` tuple. NOT promoted to fatal
-    // in Phase 1; Phase 2 migrates each class to ship the migration's
-    // missing clone/move at the consumer, then promotes.
+    // Tier 2a: consume-site discipline (CoW write-side) — FATAL.
+    // Promoted from env-gated warning (Phase 1) to unconditional fatal
+    // after Phase 2A/2B/2C drove the violation count to zero across all
+    // 1068 integration fixtures (2026-05-08).
     //
-    // Activate with:
-    //   GG_VALIDATE_CONSUME_SITES=/tmp/2a-baseline.log cargo test ...
+    // Any EnumInit / StructInit / CollectionMutator / HeapAlloc field that
+    // consumes a local with Borrowed / Untracked / OwnedLive ownership is
+    // a CoW violation: the callee would own a non-owning alias or a still-live
+    // owned value, producing either a double-free or a leak. The lowering
+    // must clone or move before reaching a consume site.
     //
-    // See `docs/internals/structural-guards.md` Tier 2a + the project
-    // brief in TODO.md (filed alongside this Phase 1 commit).
-    if let Ok(log_path) = std::env::var("GG_VALIDATE_CONSUME_SITES") {
-        if !log_path.is_empty() {
-            let warnings = crate::ir::validate::validate_consume_sites(&module);
-            if !warnings.is_empty() {
-                use std::io::Write;
-                use rustc_hash::FxHashMap;
-                // Aggregate counts:
-                //   class_name -> count
-                //   class_name + violation -> count
-                //   class_name + source_type -> count
-                let mut by_class: FxHashMap<String, usize> = FxHashMap::default();
-                let mut by_class_violation: FxHashMap<(String, String), usize> = FxHashMap::default();
-                let mut by_class_type: FxHashMap<(String, String), usize> = FxHashMap::default();
-                let mut by_function: FxHashMap<String, usize> = FxHashMap::default();
-                for w in &warnings {
-                    let class_key = match &w.class {
-                        crate::ir::validate::ConsumeSiteClass::CollectionMutator { .. }
-                            => "CollectionMutator".to_string(),
-                        crate::ir::validate::ConsumeSiteClass::EnumInit { .. }
-                            => "EnumInit".to_string(),
-                        crate::ir::validate::ConsumeSiteClass::StructInit { .. }
-                            => "StructInit".to_string(),
-                        crate::ir::validate::ConsumeSiteClass::BoxNew
-                            => "BoxNew".to_string(),
-                        crate::ir::validate::ConsumeSiteClass::CallByValueArg { .. }
-                            => "CallByValueArg".to_string(),
-                        crate::ir::validate::ConsumeSiteClass::CallExternByValueArg { .. }
-                            => "CallExternByValueArg".to_string(),
-                    };
-                    *by_class.entry(class_key.clone()).or_insert(0) += 1;
-                    *by_class_violation
-                        .entry((class_key.clone(), w.violation.to_string()))
-                        .or_insert(0) += 1;
-                    *by_class_type
-                        .entry((class_key.clone(), w.source_type_name.clone()))
-                        .or_insert(0) += 1;
-                    *by_function.entry(w.function.clone()).or_insert(0) += 1;
-                }
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true).append(true).open(&log_path)
-                {
-                    let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
-                    let _ = writeln!(f, "[consume-sites] module={} total={}",
-                        module_name, warnings.len());
-                    let mut classes: Vec<_> = by_class.iter().collect();
-                    classes.sort_by(|a, b| a.0.cmp(b.0));
-                    for (k, v) in &classes {
-                        let _ = writeln!(f, "  class {}={}", k, v);
-                    }
-                    let mut cv: Vec<_> = by_class_violation.iter().collect();
-                    cv.sort_by(|a, b| b.1.cmp(a.1));
-                    for ((c, viol), n) in &cv {
-                        let _ = writeln!(f, "  class+viol {} | {} = {}", c, viol, n);
-                    }
-                    let mut ct: Vec<_> = by_class_type.iter().collect();
-                    ct.sort_by(|a, b| b.1.cmp(a.1));
-                    for ((c, ty), n) in ct.iter().take(50) {
-                        let _ = writeln!(f, "  class+type {} | {} = {}", c, ty, n);
-                    }
-                    let mut bf: Vec<_> = by_function.iter().collect();
-                    bf.sort_by(|a, b| b.1.cmp(a.1));
-                    for (fname, n) in bf.iter().take(20) {
-                        let _ = writeln!(f, "  fn @{} = {}", fname, n);
-                    }
-                    // Sample of full warnings (capped to keep logs readable).
-                    let _ = writeln!(f, "  -- sample warnings (first 200) --");
-                    for w in warnings.iter().take(200) {
-                        let _ = writeln!(f, "  {}", w);
+    // Set GG_VALIDATE_CONSUME_SITES=/path/to/log to also write a structured
+    // report (class counts, sample violations) without suppressing the panic.
+    //
+    // See `docs/internals/structural-guards.md` Tier 2a for the full spec.
+    {
+        let warnings = crate::ir::validate::validate_consume_sites(&module);
+        if !warnings.is_empty() {
+            use std::io::Write;
+            use rustc_hash::FxHashMap;
+            let mut by_class: FxHashMap<String, usize> = FxHashMap::default();
+            let mut by_class_violation: FxHashMap<(String, String), usize> = FxHashMap::default();
+            let mut by_class_type: FxHashMap<(String, String), usize> = FxHashMap::default();
+            let mut by_function: FxHashMap<String, usize> = FxHashMap::default();
+            for w in &warnings {
+                let class_key = match &w.class {
+                    crate::ir::validate::ConsumeSiteClass::CollectionMutator { .. }
+                        => "CollectionMutator".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::EnumInit { .. }
+                        => "EnumInit".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::StructInit { .. }
+                        => "StructInit".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::BoxNew
+                        => "BoxNew".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::CallByValueArg { .. }
+                        => "CallByValueArg".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::CallExternByValueArg { .. }
+                        => "CallExternByValueArg".to_string(),
+                };
+                *by_class.entry(class_key.clone()).or_insert(0) += 1;
+                *by_class_violation
+                    .entry((class_key.clone(), w.violation.to_string()))
+                    .or_insert(0) += 1;
+                *by_class_type
+                    .entry((class_key.clone(), w.source_type_name.clone()))
+                    .or_insert(0) += 1;
+                *by_function.entry(w.function.clone()).or_insert(0) += 1;
+            }
+            // Optional structured log for investigation.
+            if let Ok(log_path) = std::env::var("GG_VALIDATE_CONSUME_SITES") {
+                if !log_path.is_empty() {
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true).open(&log_path)
+                    {
+                        let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
+                        let _ = writeln!(f, "[consume-sites] module={} total={}",
+                            module_name, warnings.len());
+                        let mut classes: Vec<_> = by_class.iter().collect();
+                        classes.sort_by(|a, b| a.0.cmp(b.0));
+                        for (k, v) in &classes {
+                            let _ = writeln!(f, "  class {}={}", k, v);
+                        }
+                        let mut cv: Vec<_> = by_class_violation.iter().collect();
+                        cv.sort_by(|a, b| b.1.cmp(a.1));
+                        for ((c, viol), n) in &cv {
+                            let _ = writeln!(f, "  class+viol {} | {} = {}", c, viol, n);
+                        }
+                        let mut ct: Vec<_> = by_class_type.iter().collect();
+                        ct.sort_by(|a, b| b.1.cmp(a.1));
+                        for ((c, ty), n) in ct.iter().take(50) {
+                            let _ = writeln!(f, "  class+type {} | {} = {}", c, ty, n);
+                        }
+                        let mut bf: Vec<_> = by_function.iter().collect();
+                        bf.sort_by(|a, b| b.1.cmp(a.1));
+                        for (fname, n) in bf.iter().take(20) {
+                            let _ = writeln!(f, "  fn @{} = {}", fname, n);
+                        }
+                        let _ = writeln!(f, "  -- sample warnings (first 200) --");
+                        for w in warnings.iter().take(200) {
+                            let _ = writeln!(f, "  {}", w);
+                        }
                     }
                 }
             }
+            // Always fatal: format the first violation for the panic message.
+            let first = &warnings[0];
+            panic!(
+                "Tier 2a consume-site violation: {} violation(s) in module '{}'. \
+                 First: fn @{} bb{} i{} — {} — {}. \
+                 Run with GG_VALIDATE_CONSUME_SITES=/tmp/violations.log for full report.",
+                warnings.len(),
+                module.source_filename.as_deref().unwrap_or("<unknown>"),
+                first.function, first.block.0, first.inst_index,
+                first.class, first.violation,
+            );
         }
     }
 
