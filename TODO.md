@@ -3,105 +3,18 @@
 ## High
 
 
-- **Tier 2a Phase 2 — consume-site migrations (per `validate_consume_sites`)** [filed 2026-05-05]. Phase 1 shipped 2026-05-05 (commits b361a15c + 3f548f0b): backward-dataflow `Liveness` pass at `src/ir/liveness.rs`, consume-site validator at `src/ir/validate.rs::validate_consume_sites`, env-gated sweep via `GG_VALIDATE_CONSUME_SITES=<log>`. Initial sweep (1068 fixtures, 225 modules) found **3179 violations across 6 ConsumeSite classes**. Self-host_bootstrap stayed green throughout; integration sweep ran 1068/1068.
+- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06; **Cluster 1 unblocker shipped 2026-05-07 commit 2f89aa78**].
 
-  **Phase 2A progress (2026-05-07).** 4 commits landed (`26145106`, `6851c877`, `d0c2f2f6`, `81014df4`) implementing writer-site tagging across the major lowering paths. **Final sweep: 935 violations across 189 modules (avg 4.95) — 71% reduction from baseline 3371.** 1068/1068 integration tests passed; self_host_bootstrap stayed green throughout.
+  **Status update 2026-05-08.** Tier 2a (consume-site discipline) is now complete — zero violations across all 1068 fixtures, validator promoted to fatal. However, the Option/Result skip in `lir/lower/mod.rs` (struct-field path ~412 and enum-variant path ~501) **still cannot be removed**: `self_host_bootstrap_fixed_point` double-frees with the skip removed. The root cause has shifted: it is no longer a consume-site violation (Tier 2a is clean), but a FieldLoad / EnumFieldLoad issue — the self-host lowerer's match-scrutinee / unwrap paths still emit shallow copies of Option-payload resources through borrowed struct fields. The Tier 2a validator doesn't catch these because they go through FieldLoad (a read site, governed by Phase C), not a consume site. **Prerequisite for skip removal: the FieldLoad/EnumFieldLoad consumer paths must emit Borrow semantics uniformly for resource-type payloads accessed through borrowed containers.** This is Phase C's FieldLoad Borrow migration (listed separately in Phase D4).
 
-  Components shipped:
-  * `src/ir/tag_ownership.rs` — post-lowering structural inference pass. Walks every function and tags `Owned`/`FreshOwned` on producer destinations whose ownership is currently `Untracked` but whose IR shape unambiguously identifies a fresh owned resource (HeapAlloc, Call/CallExtern to typed clone-or-fresh callee, Call returning droppable non-pointer, EnumFieldLoad/FieldLoad followed by MoveZero of base or matching field projection). Idempotent; never overwrites a non-Untracked tag. 4 unit tests.
-  * `lower_var_decl` Move-mode → set_owned (`stmts/mod.rs:583-625`).
-  * Box constructor returns FreshOwned (`exprs/calls.rs:538`, `exprs/mod.rs:1424`).
-  * Collection constructors `Vector[T]() / Dict[K,V]() / Set[K]()` route through `call_extern_tracked` + `set_owned_fresh` (`exprs/calls.rs:843-862`).
-  * `clone_resource_args_for_init` and `clone_multi_use_resource_args` tag cloned temps as `FreshOwned` (`context.rs:1134, 1161`, `exprs/mod.rs`).
-  * `lower_var_decl` Branch C-fallthrough Ptr clone tags FreshOwned (`stmts/mod.rs:489-496`).
-  * `Expr::Move` Move-mode temp tagged Owned (`exprs/mod.rs:278-280`).
-  * Per-mono runtime resolution in tag_ownership pass via `module.runtime_callees` (`tag_ownership.rs`).
+  **Root cause (single-layer view).** `lir/lower/mod.rs:412-430` skips Option/Result struct fields when populating `recursive_drop_structs`. The resolver's hot path (`v.get(i).unwrap()` over `Vector[Option[SpannedExpr]]`) shallow-copies the Option payload into a naked binding; both the binding and the collection element race to drop the interior strings/boxes at scope exit → double-free. The skip prevents the Option's drop from running, trading correctness for a leak. The correct fix requires the FieldLoad lowering to emit `Borrow` instead of `Copy` when reading through a borrowed container, so the drop doesn't fire on the alias side.
 
-  **Remaining 935 violations (Phase 2B/2C scope, mostly snag #24-class):**
+  **What was tried (2026-05-06/2026-05-08):**
+  1. Remove skip + rely on `infer_drop_strategy` — Phase C fatal validator blocks this.
+  2. Inline-drop scheme (`__option_inline_drop:` marker) — fixed the leak but exposed `enum_init Node::VarDecl { copy _3 }` shallow-copy (Vector handle aliased without clone-on-consume). That specific gap is now closed by Tier 2a, but the FieldLoad shallow-copy issue remains.
+  3. Remove skip post-Tier-2a — self_host_bootstrap still double-frees (confirmed 2026-05-08); the remaining issue is FieldLoad-through-borrowed-container, not consume-site.
 
-  | Class               | Count | Dominant pattern                              |
-  |---------------------|-------|-----------------------------------------------|
-  | `EnumInit Untracked`   | 814 | Iter min/max/last/nth `Some(extracted)` rewrap (no MoveZero on iter result), `case Error(e): return Error(!e)` patterns where Move-temp is somehow not produced |
-  | `StructInit Untracked` | 102 | Residual struct construction edge cases       |
-  | `StructInit Borrowed`  |  18 | parse_url tuple (Sub-TODO 2a-Phase2-C, real bug) |
-  | `OwnedLive`            |   1 | Closure capture of `Shared__int64_t` needing clone |
-
-  These remaining patterns are largely snag #24 territory — the validator is correctly flagging cases where the lowering produces shallow copies of resource payloads without move-zero (e.g. `_27 = enum_field_load _11, Error, 0` followed by `_28 = enum_init Error { copy _27 }` with `_11` still alive). Closing them requires deeper lowering changes (move-zero on scrutinee variant payload at last-use, or cloning at the Some/Error wrapper). Phase C's read-side validators already constrain this; the missing piece is the write-side cloning at `Some(...)` / `Error(...)` rewraps.
-
-  **Per-class baseline (Phase 1):**
-
-  | Class               | Count | Dominant violation                           |
-  |---------------------|-------|----------------------------------------------|
-  | `EnumInit`          | 2213  | Untracked source consumed (no decision)      |
-  | `StructInit`        | 966   | Untracked (948) + Borrowed (18, parse_url)   |
-  | `CollectionMutator` | 0     | clean — `clone_resource_args_for_init` works |
-  | `BoxNew`            | 0     | clean — handled at HeapAlloc shape           |
-  | `CallByValueArg`    | 0     | clean — Phase C `validate_resource_call_args` already fatal |
-  | `CallExternByValueArg` | 0  | clean                                        |
-
-  **Top type clusters (Phase 1 baseline):**
-  - `Vector__int64_t` 619 (501 EnumInit + 118 StructInit)
-  - `Vector__uint8_t` 461 (280 EnumInit + 181 StructInit)
-  - `Box__SpannedExpr` 352 (all EnumInit — driver/AST fixtures)
-  - `Dict__GorgetString__GorgetString` 357
-  - `GorgetString` 326
-  - `IoError` 288 (all EnumInit)
-  - `Box__SpannedType` 24, `Box__Expr` 16, `Box__SpannedPattern` 1
-
-  **Top writer-site files (where to look for the missing tag):**
-  - `src/ir/lowering/exprs/methods.rs` — likely the EnumInit / StructInit lowering
-  - `src/ir/lowering/exprs/calls.rs`
-  - `src/ir/lowering/stmts/mod.rs`
-  - `src/ir/lowering/context.rs::clone_resource_args_for_init` (line 1117) — extends here
-  - `src/ir/lowering/context.rs::ensure_owned_at_consuming_arg` (line 1662)
-
-  **Sub-TODO 2a-Phase2-A — `EnumInit` Untracked source migration (2213 violations)** [HIGH PRIORITY]. The bulk of Phase 1's findings. Pattern: enum constructors (Result.Ok / Option.Some / user enums with resource payloads) consume their args via `EnumInit { fields }` where each `fields[i]` is `Operand::Copy(_n)` of a resource-typed local whose `LocalOwnership` is `Untracked`. The lowering is correctly cloning where needed but never `set_owned`ing the cloned temp — the tag stays default. **Migration shape:** in the EnumInit lowering site (likely `lower_enum_constructor` / `lower_call`'s enum-variant branch), after `clone_resource_args_for_init` runs, call `set_owned`/`set_fresh_owned` on each cloned-arg local. Then the validator walks the same call site and sees `(Owned/FreshOwned, false, _) → sound`. Effort: ~2–4 hours (find the lowering site, add the ownership setter, sweep). High-impact: closes 2213 violations.
-
-  **Sub-TODO 2a-Phase2-B — `StructInit` Untracked source migration (948 violations)** [HIGH PRIORITY]. Same shape as 2a-Phase2-A but for `StructInit { fields }`. Lowering site is `lower_struct_init` (search `Instruction::StructInit { ` emissions). The `clone_resource_args_for_init` helper at `context.rs:1117` is already called from struct init paths — it just isn't tagging the cloned temps as `Owned`/`FreshOwned`. Effort: ~2–4 hours, often co-resolvable with 2a-Phase2-A.
-
-  **Sub-TODO 2a-Phase2-C — `StructInit` Borrowed source consumed (18 violations, 2 unique sites)** [HIGH PRIORITY but small]. Real bug — not a tagging gap. Both sites in `xtd.http.parse_url` constructing a tuple from `_41` and `_22` (both `GorgetString`, both `Borrowed`). The lowering is consuming a Borrowed source without cloning. **Migration shape:** check `xtd::http::parse_url` lowering — likely the `(scheme, host, path)` tuple return where the components are slices of the input URL String. Either insert a `clone_fn_for_ptr` call before the TupleInit, or restructure so the tuple owns fresh strings. Effort: ~30 min once the source is located.
-
-  **Sub-TODO 2a-Phase2-D — Promote each class to fatal once Phase 2 migrations land** [MEDIUM]. Mirror Phase C cadence: after a class hits 0 violations across the integration sweep, flip the class from env-gated warning to unconditional fatal panic in `src/ir/lowering/mod.rs` (alongside the existing `validate_resource_*` panics). Build the migration ladder one class at a time so a regression fires sharply.
-
-  **Sub-TODO 2a-Phase2-E — Replace `preceded_by_clone`'s name-match with typed metadata** [DONE 2026-05-07, commit `10abfbef`]. Closed: shipped through `RuntimeSig.returns_fresh` (with newly-tagged collection-allocator family) plus `TypeRegistry::clone_fn_names_set()` (typed walk of every TypeDef's `clone_fn_name_for_def`). See DONE.md for the migration shape and the per-monomorphization protocol-type gap that's been filed as a follow-on.
-
-  **Sub-TODO 2a-Phase2-E-followon — Per-monomorphization protocol clone fn metadata** [DONE 2026-05-07, commit `6242fc0a`]. Shipped together with the Phase 2E migration after the iso sweep showed +160 violations on `Shared__Vector__T` StructInit consumes (40 each on the 4 Shared__Vector__T mono'd types). Wrote `clone_fn = Some("{Mangled}__clone")` at the per-mono TypeDef registration in `src/ir/lowering/types.rs` for Shared/Weak/Channel/Guard/ReadGuard/WriteGuard. Verified count return to baseline (3371/229) and self_host_bootstrap_fixed_point canary clean.
-
-- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06; **Cluster 1 unblocker shipped 2026-05-07 commit 2f89aa78**; full fix gated on Tier 2a].
-
-  **Status update 2026-05-07.** Cluster 1 (`ensure_option_type_registered` upgrade) shipped clean after the Move-mode-at-merge writer-site fix at `methods.rs:2061-2074`. Re-probing the original snag #24 path 1 (remove the Option/Result skip in `lir/lower/mod.rs:412-423` and `:471-491`) now confirms Phase C stays green — the Cluster 1 fix closed the shallow-copy violation class. **However, self_host_bootstrap regresses with `free(): double free detected in tcache 2`**, exposing the deeper Tier 2a (CoW consume-site discipline) gap: enum-constructor consume sites like `enum_init Node::VarDecl { copy _3 }` don't reliably clone owned-and-live resource args. The skip masks this. Removing it without Tier 2a in place produces runtime double-frees (the same gap snag #24's path-2 attempt also surfaced).
-
-  **Tier 1a (drop completeness validator + skip removal) is now formally gated on Tier 2a** per `docs/internals/structural-guards.md`'s sequencing. Tier 2a estimate: 5-10 sessions; "the load-bearing invariant for the entire CoW system." Once Tier 2a's consume-site validator+migration drives the IR to clone-or-move-zero at every enum_init / struct_init / push / put / send site for owned-and-live sources, the Option/Result skip can be removed and Tier 1a can ship as a single commit + sweep + promote.
-
-  Original entry preserved below for context.
-
-  ---
-
-  **Root cause (single-layer view).** `lir/lower/mod.rs:412-423` skips Option/Result struct fields when populating `recursive_drop_structs`. Comment explains the skip was load-bearing for the self-host resolver's `v.get(i).unwrap()` shallow-copy pattern: dropping `Option[SpannedExpr]` there would double-free with the alias source. So the writer side picks "leak instead of double-free" as the conservative default. Same family as the Phase C "EnumFieldLoad shallow copy of resource payload — 12,294 violations" entry.
-
-  **What I tried during 2026-05-06 investigation:**
-
-  1. **Remove the Option/Result skip + re-run `upgrade_types_from_fields`** so `Option__Box__T` gets `DropStrategy::Recursive` based on the upgraded payload. Fix verified to populate `Decl__drop` with the `init` field correctly. **Blocked by Phase C validator**: `validate_resource_moves` is fatal in default builds, and an existing match-scrutinee shape (`_34 = copy _33` where `_33 = field_load _25.*, 1` reads the Option field through a `*Decl` borrow) is now a "shallow copy of resource" violation. Many fixtures would regress; the violation count for FieldLoad is 2,568 per the Phase C TODO sweep. Not safe to ship without first migrating the FieldLoad/EnumFieldLoad shallow-copy lowering sites to emit Borrow rather than Copy when the source is a borrowed parent.
-
-  2. **Inline the Option drop in the parent struct's `__drop` without upgrading the Option type's `drop_strategy`.** Encoded as `__option_inline_drop:<clone_fn>;<tag>,<field>,<drop>;…` marker on the field-drop entry. The C emitter recognises the marker and writes a tag-switch:
-     ```c
-     static inline void Decl__drop(void* __p) {
-         __gg_Decl* self = (__gg_Decl*)__p;
-         gorget_string_free(&self->name);
-         switch (self->init.tag) {
-             case 0: Box__Spanned__drop((void*)&self->init.Some_0); break;
-         }
-     }
-     ```
-     Phase C stays happy (Option type itself is still non-resource at the GIR level — match-scrutinee shallow-copy is sound as a borrow alias). **Fixed the leak** but exposed a deeper latent issue: `Node.VarDecl(decls)` shallow-copies the Vector handle into `root.node.VarDecl_0` (no clone-on-consume, no move-zero). With drops now actually firing on init, both `decls` and `root.node.VarDecl_0` race to free the same heap allocation at termination → use-after-free. The skip was masking this CoW gap.
-
-  **Both halves needed.** The proper fix is: (a) implement the inline-drop scheme from #2, AND (b) close the CoW gap so enum constructors clone Vector / Box args when the source is live past the call (CoW's stated rule: "owned AND live past this call → clone before call"). The IR currently emits `copy _3` instead of cloning at `enum_init Node::VarDecl { copy _3 }` even when `_3 = decls` is read at scope exit.
-
-  **Diff for the inline-drop prototype** is recoverable from the 2026-05-06 conversation history (or re-derivable from the description above). The marker design extends `__clone_only:` / `__drop_then_clone:` already in place at `lir/lower/mod.rs` and `backend/c_lir/emit_types.rs`.
-
-  **Workaround the user has shipped:** abandoned the post-parse AST walker; folded the static-semantics checks inline into the parser. Ugly but unblocks them. The natural recursive-walk shape can come back once this lands.
-
-
+  **Diff for the inline-drop prototype** is recoverable from the 2026-05-06 conversation history. The marker design extends `__clone_only:` / `__drop_then_clone:` already in place.
 
   After the round-5 fix, the Rust typechecker treats `Expr::Block` whose last statement is divergent (return / throw / break / continue) as type `Never`, and the closure return-type inference falls back to `closure_ret_var` when `body_type == Never` (so the parser's destructure-desugar `Block { ..., Return(expr) }` doesn't mis-specialize tuple-destructured closures as `Closure[Never(...)]`). The self-host typechecker has no analogous rules — its parser stores match arm bodies as `Vector[Stmt]` directly (no `Expr::Block` wrapper to special-case), and walks them through normal statement-checking where `Stmt::Return` doesn't carry an upward "this block diverges" signal.
 
