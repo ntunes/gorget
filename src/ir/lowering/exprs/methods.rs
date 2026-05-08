@@ -175,11 +175,14 @@ pub(super) fn lower_method_call(
                 if let Some(type_def) = ctx.type_registry.get_type_def(c_type_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
                         if e.variants.iter().any(|v| v.name == method_name) {
+                            let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
+                                .map(|a| Some(a.node.value.span))
+                                .collect();
                             let mut lowered_args = lowered_args;
                             let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
                             super::clone_multi_use_resource_args(ctx, builder, &mut lowered_args, &ast_args);
                             let type_id = ctx.type_mapper.lookup_named(name).unwrap_or(UNIT_TYPE);
-                            let dst = ctx.emit_enum_init_owned(builder, name, method_name, type_id, lowered_args);
+                            let dst = ctx.emit_enum_init_owned(builder, name, method_name, type_id, lowered_args, Some(arg_spans));
                             return FunctionBuilder::copy(dst);
                         }
                     }
@@ -2596,7 +2599,7 @@ fn try_lower_option_result_combinator(
             let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
-            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)]);
+            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)], None);
             builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
         }
         "or_else" if is_result => {
@@ -2627,7 +2630,7 @@ fn try_lower_option_result_combinator(
             builder.move_zero(Place::local(scrut_local));
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], none_err_type);
-            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![mapped]);
+            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![mapped], None);
             builder.assign(Place::local(result_local), FunctionBuilder::copy(wrapped));
         }
         _ => return None,

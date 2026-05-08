@@ -1066,6 +1066,7 @@ impl<'a> LoweringContext<'a> {
         variant_name: &str,
         type_id: TypeId,
         mut args: Vec<Operand>,
+        arg_spans: Option<Vec<Option<crate::span::Span>>>,
     ) -> LocalId {
         // Snapshot original locals before cloning — we need to know which
         // args were replaced by clones vs consumed directly.
@@ -1077,7 +1078,9 @@ impl<'a> LoweringContext<'a> {
         }).collect();
 
         // Clone resource args that can't be moved into the enum variant.
-        self.clone_resource_args_for_init(builder, &mut args, None);
+        // Pass per-arg spans so that owned named locals at their last use can
+        // be moved (no clone) rather than unconditionally cloned.
+        self.clone_resource_args_for_init(builder, &mut args, arg_spans.as_deref());
         let dst = builder.enum_init(enum_name, variant_name, type_id, args.clone());
         self.set_owned(builder, dst);
 
@@ -1121,19 +1124,20 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         args: &mut Vec<Operand>,
-        span: Option<crate::span::Span>,
+        arg_spans: Option<&[Option<crate::span::Span>]>,
     ) {
-        for op in args.iter_mut() {
+        for (idx, op) in args.iter_mut().enumerate() {
             if let Operand::Copy(place) = op {
                 if place.projections.is_empty() {
                     let local = place.local;
                     let local_type = builder.local_type(local);
+                    let maybe_span = arg_spans.and_then(|spans| spans.get(idx)).and_then(|s| *s);
 
                     // Ptr(resource) — always clone (borrows from someone else's storage)
                     if let Some(inner) = self.pointee_type(local_type) {
                         if self.type_registry.is_resource_type(inner) {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                                if let Some(s) = span {
+                                if let Some(s) = maybe_span {
                                     self.warn_implicit_clone(s, inner, crate::ir::ImplicitCloneReason::ConsumingArg);
                                 }
                                 let cloned = builder.call(&clone_fn,
@@ -1156,21 +1160,44 @@ impl<'a> LoweringContext<'a> {
                             && !self.is_owned_local(builder, local);
                         // Borrow params (bare Ptr param) — always clone
                         let is_borrow_param = self.is_bare_param(builder, local);
-                        // Named locals (any ownership) are potentially multi-use;
-                        // Untracked locals have unknown ownership — both must clone.
-                        // Unnamed owned temps are already handled by the early-continue above.
+                        // Untracked locals have unknown ownership — clone conservatively.
                         let is_untracked = matches!(
                             builder.locals.get(local.0 as usize)
                                 .map(|l| &l.ownership),
                             Some(crate::ir::LocalOwnership::Untracked)
                         );
+                        // Named owned locals: check last-use to decide move vs clone.
+                        // If this is the last use (span-confirmed), the value can be
+                        // moved into the enum/struct — no clone needed. The post-init
+                        // drop-transfer logic (was_cloned=false) unregisters the original
+                        // from scope-exit drops, so the enum owns the data exclusively.
+                        // Conservative fallback (no span, or not last-use): clone.
+                        if self.is_named_local(local) && !is_non_owned_string && !is_borrow_param && !is_untracked {
+                            let ownership = builder.locals.get(local.0 as usize)
+                                .map(|l| l.ownership.clone())
+                                .unwrap_or(crate::ir::LocalOwnership::Untracked);
+                            if ownership.is_owned() {
+                                if let Some(span) = maybe_span {
+                                    if let Some(name) = builder.locals.get(local.0 as usize)
+                                        .and_then(|l| l.name_hint.as_deref())
+                                    {
+                                        if self.is_last_use_at(name, span) {
+                                            // Last-use owned named local: move (no clone).
+                                            // Source dies here; enum takes ownership.
+                                            continue;
+                                        }
+                                    }
+                                }
+                                // No span, or not last-use: fall through to clone below.
+                            }
+                        }
                         let needs_clone = is_non_owned_string
                             || is_borrow_param
                             || self.is_named_local(local)
                             || is_untracked;
                         if needs_clone {
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
-                                if let Some(s) = span {
+                                if let Some(s) = maybe_span {
                                     self.warn_implicit_clone(s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                                 }
                                 let ptr_type = self.register_ptr_type(local_type);

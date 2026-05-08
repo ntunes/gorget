@@ -1198,6 +1198,9 @@ fn lower_expr_inner(
         // Resolves to the enum variant using the expected type from context.
         Expr::DotShorthand { variant, args } => {
             let variant_name = variant.node.clone();
+            let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
+                .map(|a| Some(a.node.value.span))
+                .collect();
             let lowered_args: Vec<Operand> = args.iter()
                 .map(|a| lower_expr(ctx, builder, &a.node.value))
                 .collect();
@@ -1208,7 +1211,7 @@ fn lower_expr_inner(
                     if let Some(type_def) = ctx.type_registry.get_type_def(&type_name) {
                         if let TypeDefKind::Enum(ref e) = type_def.kind {
                             if e.variants.iter().any(|v| v.name == variant_name) {
-                                let dst = ctx.emit_enum_init_owned(builder, &type_name, &variant_name, et, lowered_args);
+                                let dst = ctx.emit_enum_init_owned(builder, &type_name, &variant_name, et, lowered_args, Some(arg_spans));
                                 return FunctionBuilder::copy(dst);
                             }
                         }
@@ -1219,7 +1222,7 @@ fn lower_expr_inner(
             // 2. Fallback: variant map (for user-defined non-generic enums)
             if let Some((enum_name, vn)) = ctx.resolve_enum_variant(&variant_name) {
                 let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-                let dst = ctx.emit_enum_init_owned(builder, &enum_name, &vn, type_id, lowered_args);
+                let dst = ctx.emit_enum_init_owned(builder, &enum_name, &vn, type_id, lowered_args, Some(arg_spans));
                 return FunctionBuilder::copy(dst);
             }
 
@@ -1253,6 +1256,7 @@ fn resolve_option_result_variant(
 ) -> Option<Operand> {
     match name {
         "Some" if args.len() == 1 => {
+            let arg_span = args[0].span;
             let field_op = lower_expr(ctx, builder, &args[0]);
             let inner_type = infer_operand_type_full(ctx, &field_op, builder);
             let mangled = format!("Option__{}", format_type_for_mangle(inner_type, &ctx.type_registry));
@@ -1278,7 +1282,7 @@ fn resolve_option_result_variant(
                     ctx.type_mapper.lookup_named(&mangled).unwrap_or(UNIT_TYPE)
                 });
             let type_name = ctx.type_registry.type_name(type_id).unwrap_or_else(|| mangled.clone());
-            let dst = ctx.emit_enum_init_owned(builder, &type_name, "Some", type_id, vec![field_op]);
+            let dst = ctx.emit_enum_init_owned(builder, &type_name, "Some", type_id, vec![field_op], Some(vec![Some(arg_span)]));
             Some(FunctionBuilder::copy(dst))
         }
         "None" if args.is_empty() => {
@@ -1305,13 +1309,14 @@ fn resolve_option_result_variant(
         "Ok" if args.len() == 1 => {
             // Ok(value) — determine Result type from context (expected_type).
             // Use emit_enum_init_owned to clone borrowed resource args (e.g. BareParam strings).
+            let arg_span = args[0].span;
             if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", et, vec![field_op]);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", et, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1322,7 +1327,7 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", rt, vec![field_op]);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", rt, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1332,13 +1337,14 @@ fn resolve_option_result_variant(
             // Error(value) — determine Result type from context.
             // Use emit_enum_init_owned to clone non-owned string views and
             // MoveZero consumed args — matches Ok/Some/EnumConstructor paths.
+            let arg_span = args[0].span;
             if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
                 let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", et, vec![field_op]);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", et, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1348,7 +1354,7 @@ fn resolve_option_result_variant(
                     || name.starts_with("Result__");
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
-                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", rt, vec![field_op]);
+                    let dst = ctx.emit_enum_init_owned(builder, &name, "Error", rt, vec![field_op], Some(vec![Some(arg_span)]));
                     return Some(FunctionBuilder::copy(dst));
                 }
             }
@@ -1594,6 +1600,9 @@ fn lower_struct_literal(
 
     // Check if this is an enum variant constructor
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(&effective_name) {
+        let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
+            .map(|arg| Some(arg.span))
+            .collect();
         let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
@@ -1601,18 +1610,21 @@ fn lower_struct_literal(
         // that can't be safely moved into the enum variant.
         clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
+        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands, Some(arg_spans));
         return FunctionBuilder::copy(dst);
     }
     // Also check the base name for non-generic enum variants
     if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
+        let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
+            .map(|arg| Some(arg.span))
+            .collect();
         let mut field_operands: Vec<Operand> = args.iter()
             .map(|arg| lower_expr(ctx, builder, arg))
             .collect();
         // Clone multi-use resource args for enum variant init.
         clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
         let type_id = ctx.type_mapper.lookup_named(&enum_name).unwrap_or(UNIT_TYPE);
-        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands);
+        let dst = ctx.emit_enum_init_owned(builder, &enum_name, &variant_name, type_id, field_operands, Some(arg_spans));
         return FunctionBuilder::copy(dst);
     }
 
