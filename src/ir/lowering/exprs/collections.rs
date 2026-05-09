@@ -54,6 +54,12 @@ pub(super) fn lower_array_literal(
             vec![Operand::Constant(Constant::SizeOf(etype))],
             array_type,
         );
+        // The literal owns a fresh allocation. Without this tag, downstream
+        // ownership-sensitive sinks (Some(arr), struct field init, return)
+        // see Untracked → emit clone-then-leak: the literal's buffer is
+        // cloned into the consumer and the original is orphaned.
+        ctx.set_owned(builder, arr_local);
+        ctx.drops.register_local(arr_local, array_type, &ctx.type_registry);
         // Phase C: pick mode by source — owned call results / unnamed
         // temps (e.g., nested vector literals) get Move; primitives stay
         // Copy. Mirrors the broadened predicate in lower_return /
@@ -83,7 +89,24 @@ pub(super) fn lower_array_literal(
         // Push first element
         let elem_local = builder.add_local(etype, None);
         let first_mode = elem_mode(ctx, builder, &first, etype);
+        let first_clone = first.clone();
         builder.assign_mode(first_mode, Place::local(elem_local), first);
+        // Emit MoveZero + mark_moved so drop-tracking knows the source is
+        // dead. Without this, registering owned temps for drop (so they don't
+        // leak) turns Move-into-elem-slot into double-free: both source and
+        // dest retain the data pointer (memcpy alone) and both fire scope-exit
+        // drops. The LIR backend elides the actual zero when liveness proves
+        // the source is unobservable; this is just the IR-level signal.
+        if first_mode == crate::ir::instructions::AssignMode::Move {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = first_clone {
+                if place.projections.is_empty()
+                    && place.local != elem_local
+                    && !ctx.drops.is_moved(place.local)
+                {
+                    ctx.move_zero_and_mark(builder, place.local);
+                }
+            }
+        }
         let ref_local = builder.borrow(Place::local(elem_local), ctx.register_ptr_type(etype));
         let arr_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
         builder.call_extern(
@@ -96,7 +119,18 @@ pub(super) fn lower_array_literal(
             let elem_val = lower_expr(ctx, builder, elem_expr);
             let el = builder.add_local(etype, None);
             let mode = elem_mode(ctx, builder, &elem_val, etype);
+            let elem_val_clone = elem_val.clone();
             builder.assign_mode(mode, Place::local(el), elem_val);
+            if mode == crate::ir::instructions::AssignMode::Move {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = elem_val_clone {
+                    if place.projections.is_empty()
+                        && place.local != el
+                        && !ctx.drops.is_moved(place.local)
+                    {
+                        ctx.move_zero_and_mark(builder, place.local);
+                    }
+                }
+            }
             let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(etype));
             let ar_ref = builder.borrow_mut(Place::local(arr_local), ctx.register_mut_ptr_type(array_type));
             builder.call_extern(
@@ -118,6 +152,8 @@ pub(super) fn lower_array_literal(
             vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
             array_type,
         );
+        ctx.set_owned(builder, arr_local);
+        ctx.drops.register_local(arr_local, array_type, &ctx.type_registry);
         FunctionBuilder::copy(arr_local)
     };
     ctx.func_state.expected_type = saved_expected;

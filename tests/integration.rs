@@ -5739,7 +5739,7 @@ fn test_failure() {
 fn test_option_resource_field() {
     run_gg_test(
         "test_option_resource_field.gg",
-        &["5 passed, 0 failed"],
+        &["6 passed, 0 failed"],
         true,
     );
 }

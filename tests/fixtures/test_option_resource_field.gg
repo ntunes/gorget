@@ -22,3 +22,9 @@ test "option_vector_field_is_some":
 test "option_vector_field_is_none":
     Wrapper w = Wrapper(None(), None())
     assert w.items.is_none()
+
+test "option_vector_literal_into_some":
+    Option[Vector[int]] x = Some([1, 2, 3])
+    assert x.is_some()
+    Vector[int] tags = x.unwrap()
+    assert tags.len() == 3
