@@ -32,34 +32,7 @@ String format_float_decimal(float f):
     # (rare in parser canonical output — most large floats are integer-valued)
     return s
 
-# ── Typed accessors ──
-
-SpannedType get_stype_at(Vector[SpannedType] v, int i):
-    return v.get(i).unwrap()
-
-SpannedPattern get_spat_at(Vector[SpannedPattern] v, int i):
-    return v.get(i).unwrap()
-
-SpannedExpr get_sexpr_at(Vector[SpannedExpr] v, int i):
-    return v.get(i).unwrap()
-
-ElseBranch get_else_at(Vector[ElseBranch] v, int i):
-    return v.get(i).unwrap()
-
-MatchArm get_arm_at(Vector[MatchArm] v, int i):
-    return v.get(i).unwrap()
-
-Param get_param_at(Vector[Param] v, int i):
-    return v.get(i).unwrap()
-
-Stmt get_stmt_at(Vector[Stmt] v, int i):
-    return v.get(i).unwrap()
-
-String get_str_at(Vector[String] v, int i):
-    return v.get(i).unwrap()
-
-int sexpr_vec_len(Vector[SpannedExpr] v):
-    return v.len()
+# ── Option-on-Box helpers ──
 
 bool has_opt_boxed_expr(Option[Box[SpannedExpr]] opt):
     match opt:
@@ -89,7 +62,7 @@ String format_type(SpannedType st):
             while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedType arg = get_stype_at(args, i)
+                SpannedType arg = args.get(i).unwrap()
                 result = result + format_type(arg)
                 i = i + 1
             result = result + "]"
@@ -107,7 +80,7 @@ String format_type(SpannedType st):
             while i < elems.len():
                 if i > 0:
                     result = result + ", "
-                SpannedType e = get_stype_at(elems, i)
+                SpannedType e = elems.get(i).unwrap()
                 result = result + format_type(e)
                 i = i + 1
             result = result + ")"
@@ -118,7 +91,7 @@ String format_type(SpannedType st):
             while i < params.len():
                 if i > 0:
                     result = result + ", "
-                SpannedType p = get_stype_at(params, i)
+                SpannedType p = params.get(i).unwrap()
                 result = result + format_type(p)
                 i = i + 1
             result = result + ")"
@@ -148,7 +121,7 @@ String format_pattern(SpannedPattern sp):
             while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern a = get_spat_at(args, i)
+                SpannedPattern a = args.get(i).unwrap()
                 result = result + format_pattern(a)
                 i = i + 1
             result = result + ")"
@@ -161,7 +134,7 @@ String format_pattern(SpannedPattern sp):
             while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern a = get_spat_at(args, i)
+                SpannedPattern a = args.get(i).unwrap()
                 result = result + format_pattern(a)
                 i = i + 1
             result = result + ")"
@@ -172,7 +145,7 @@ String format_pattern(SpannedPattern sp):
             while i < elems.len():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern e = get_spat_at(elems, i)
+                SpannedPattern e = elems.get(i).unwrap()
                 result = result + format_pattern(e)
                 i = i + 1
             result = result + ")"
@@ -183,7 +156,7 @@ String format_pattern(SpannedPattern sp):
             while i < alts.len():
                 if i > 0:
                     result = result + " | "
-                SpannedPattern a = get_spat_at(alts, i)
+                SpannedPattern a = alts.get(i).unwrap()
                 result = result + format_pattern(a)
                 i = i + 1
             return result
@@ -233,7 +206,7 @@ String format_expr(SpannedExpr se):
             while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = get_sexpr_at(args, i)
+                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
                 i = i + 1
             result = result + ")"
@@ -245,7 +218,7 @@ String format_expr(SpannedExpr se):
             while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = get_sexpr_at(args, i)
+                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
                 i = i + 1
             result = result + ")"
@@ -270,7 +243,7 @@ String format_expr(SpannedExpr se):
             result = result + format_block(body)
             int i = 0
             while i < branches.len():
-                ElseBranch br = get_else_at(branches, i)
+                ElseBranch br = branches.get(i).unwrap()
                 match br.condition:
                     case Some(c):
                         result = result + " elif " + format_expr(c) + ":"
@@ -283,7 +256,7 @@ String format_expr(SpannedExpr se):
             String result = "match " + format_expr(*subject) + ":"
             int i = 0
             while i < arms.len():
-                MatchArm arm = get_arm_at(arms, i)
+                MatchArm arm = arms.get(i).unwrap()
                 String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
@@ -295,7 +268,7 @@ String format_expr(SpannedExpr se):
             while i < params.len():
                 if i > 0:
                     result = result + ", "
-                Param p = get_param_at(params, i)
+                Param p = params.get(i).unwrap()
                 result = result + format_type(p.param_type) + " " + p.param_name
                 i = i + 1
             result = result + "):"
@@ -311,7 +284,7 @@ String format_expr(SpannedExpr se):
             while i < elems.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr e = get_sexpr_at(elems, i)
+                SpannedExpr e = elems.get(i).unwrap()
                 result = result + format_expr(e)
                 i = i + 1
             result = result + "]"
@@ -322,7 +295,7 @@ String format_expr(SpannedExpr se):
             while i < elems.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr e = get_sexpr_at(elems, i)
+                SpannedExpr e = elems.get(i).unwrap()
                 result = result + format_expr(e)
                 i = i + 1
             result = result + ")"
@@ -332,11 +305,11 @@ String format_expr(SpannedExpr se):
             String close_b = r"}"
             String result = open_b
             int i = 0
-            while i < sexpr_vec_len(keys):
+            while i < keys.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr k = get_sexpr_at(keys, i)
-                SpannedExpr v = get_sexpr_at(vals, i)
+                SpannedExpr k = keys.get(i).unwrap()
+                SpannedExpr v = vals.get(i).unwrap()
                 result = result + format_expr(k) + ": " + format_expr(v)
                 i = i + 1
             result = result + close_b
@@ -344,23 +317,23 @@ String format_expr(SpannedExpr se):
         case EStructLiteral(name, fields, vals):
             String result = name + "("
             int i = 0
-            while i < sexpr_vec_len(vals):
+            while i < vals.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr v = get_sexpr_at(vals, i)
+                SpannedExpr v = vals.get(i).unwrap()
                 result = result + format_expr(v)
                 i = i + 1
             result = result + ")"
             return result
         case EDotShorthand(name, args):
-            if sexpr_vec_len(args) == 0:
+            if args.len() == 0:
                 return "." + name
             String result = "." + name + "("
             int i = 0
-            while i < sexpr_vec_len(args):
+            while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = get_sexpr_at(args, i)
+                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
                 i = i + 1
             result = result + ")"
@@ -481,7 +454,7 @@ String format_stmt(Stmt s):
             String result = "if " + format_expr(cond) + ":" + format_block(body)
             int i = 0
             while i < branches.len():
-                ElseBranch br = get_else_at(branches, i)
+                ElseBranch br = branches.get(i).unwrap()
                 match br.condition:
                     case Some(c):
                         result = result + " elif " + format_expr(c) + ":"
@@ -494,7 +467,7 @@ String format_stmt(Stmt s):
             String result = "match " + format_expr(subject) + ":"
             int i = 0
             while i < arms.len():
-                MatchArm arm = get_arm_at(arms, i)
+                MatchArm arm = arms.get(i).unwrap()
                 String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
