@@ -24,11 +24,7 @@ struct LowerCtx:
     Vector[Vector[Instruction]] block_insts
     Vector[Terminator] block_terms
     int current_block
-    # Maps local-binding name → GIR local id. Restored from a parallel-
-    # Vector workaround once the underlying `Dict[String, _]` codegen
-    # bug was fixed (the magic-name `__gorget_map_new_sized_` path was
-    # emitting `gorget_map_new` instead of `gorget_map_new_str` for
-    # String-keyed empty-literal Dicts; see DONE.md 2026-05-01).
+    # Maps local-binding name → GIR local id.
     Dict[String, int] named_locals
     int next_closure_id
     # Stack of (continue_target, break_target) bb ids for the enclosing
@@ -2809,10 +2805,10 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     # scrutinee's type, but fall back to the pattern's qualified name,
     # and finally scan all registered enums for a variant with this name.
     # `case ParseError.Empty()` arrives as variant_name="ParseError.Empty"
-    # — when the scrutinee type info is missing (Dict[String,_] bug on
-    # `gmod.type_infos`), we can still recover the enum from the pattern
-    # itself. Bare variants like `case EBinaryOp(...)` don't carry enum
-    # info, so we scan for a unique enum that declares this variant.
+    # — even without scrutinee type info, we recover the enum from the
+    # pattern's qualifier. Bare variants like `case EBinaryOp(...)` don't
+    # carry enum info, so we scan for a unique enum that declares this
+    # variant.
     String effective_enum = enum_name
     String effective_variant = variant_name
     if variant_name.contains("."):
@@ -2828,18 +2824,15 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
         String guessed = find_enum_by_variant(&gmod, effective_variant)
         if guessed.len() > 0:
             effective_enum = guessed
-    # Scrutinee-type fallback: when `match_enum_type` returned empty for
-    # the scrutinee (Dict[String,_] bug suppressed `type_infos.contains`,
-    # or the scrutinee's `auto`-inferred type didn't carry enum info into
-    # `lower_match_stmt`), recover the enum directly from the
-    # scrutinee's local type. The `__` mangling keeps `Option__T` /
-    # `Result__T__E` distinguishable, and the existing `match_variant_index`
-    # / `__field_read_<enum>_<field>` machinery already handles those
-    # prefixes (see line 2667-2678 + `lir_codegen.gg:3445` longest-prefix
-    # split). Closes the `case Ok(v):` / `case Some(v):` cascade — without
-    # this, `v` was never bound as a local and bare uses fell into the
-    # `[bug] EIdentifier` placeholder, mis-typing every Result/Option
-    # match arm body across the fixture sweep.
+    # Scrutinee-type fallback: when `match_enum_type` returned empty
+    # (e.g. `auto`-inferred scrutinee with prelude variants), recover
+    # the enum directly from the scrutinee's local type. The `__`
+    # mangling keeps `Option__T` / `Result__T__E` distinguishable, and
+    # the existing `match_variant_index` / `__field_read_<enum>_<field>`
+    # machinery already handles those prefixes (see line 2667-2678 +
+    # `lir_codegen.gg:3445` longest-prefix split). Required for
+    # `case Ok(v):` / `case Some(v):` cascades — without this, `v` was
+    # never bound as a local.
     if effective_enum == "":
         int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
         if scr_tid >= 0 and scr_tid < gmod.type_table.len():
@@ -4933,11 +4926,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Transitive generic discovery: fixpoint loop to find instances needed
     # inside already-discovered generic function bodies (e.g. tensor_zeros[T]
     # inside tensor_sum_axis[float], meta-op calls like tensor_scalar_op[T](t, val, meta /)).
-    #
-    # The `seen` Vector used inside discover_transitive_* is a linear-scan
-    # workaround for the self-host Dict[String, _] state-loss bug. Without
-    # it, contains() silently misses and the "already seen" instance keeps
-    # getting re-added, making transitive_changed stay true forever.
     bool transitive_changed = true
     while transitive_changed:
         transitive_changed = false
