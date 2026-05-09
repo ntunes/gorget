@@ -315,12 +315,25 @@ impl<'a> LoweringContext<'a> {
             // Collect (extern_idx, result_struct_id) pairs before mutating.
             let mut updates: Vec<(usize, StructId)> = Vec::new();
             for (ext_idx, ext) in self.module.externs.iter().enumerate() {
-                let is_option = ext.name.starts_with("Option__");
-                let is_result = ext.name.starts_with("Result__");
-                if !is_option && !is_result { continue; }
+                // Extract the method suffix from the extern name (the C symbol IS
+                // the contract with the runtime — name parsing is acceptable here
+                // per layering-discipline.md, only at this boundary).
                 let sep_pos = match ext.name.rfind("__") { Some(p) => p, None => continue };
                 let method = &ext.name[sep_pos + 2..];
                 if !CROSS_TYPE_METHODS.contains(&method) { continue; }
+
+                // Source struct: read the typed `enum_kind` for routing — never
+                // re-derive Option/Result from the name prefix.
+                let type_prefix = &ext.name[..sep_pos];
+                let src_struct = match self.module.structs.iter().find(|s| s.name == type_prefix) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let is_option = match src_struct.enum_kind {
+                    EnumKind::Option => true,
+                    EnumKind::Result => false,
+                    _ => continue,
+                };
 
                 // Closure struct is params[1].
                 let closure_ty = match ext.params.get(1) { Some(t) => t, None => continue };
@@ -337,36 +350,33 @@ impl<'a> LoweringContext<'a> {
                     None => continue,
                 };
 
-                // Source struct: provides payload field types for same-type comparison.
-                let type_prefix = &ext.name[..sep_pos];
-                let src_struct = self.module.structs.iter().find(|s| s.name == type_prefix);
-
-                // Find the result struct via typed field comparisons (no `__`-splitting).
+                // Find the result struct via typed `enum_kind` + field comparisons
+                // (no `__`-splitting on candidate names).
                 let result_sid: Option<StructId> = match method {
                     "map" | "filter" | "flat_map" => {
-                        let src_payload = src_struct.and_then(|s| s.fields.get(1)).map(|(_, t)| t);
+                        let src_payload = src_struct.fields.get(1).map(|(_, t)| t);
                         // Same-type map: no override needed.
                         if src_payload.map_or(true, |t| t == &closure_ret) { continue; }
                         if is_option {
-                            self.module.structs.iter().enumerate().find(|(_, s)| {
-                                s.name.starts_with("Option__")
-                                    && s.fields.get(1).map_or(false, |(_, t)| t == &closure_ret)
-                            }).and_then(|(_, s)| self.struct_reg.lookup(&s.name))
-                        } else {
-                            let err_lir = src_struct.and_then(|s| s.fields.get(2)).map(|(_, t)| t.clone());
                             self.module.structs.iter().find(|s| {
-                                s.name.starts_with("Result__")
+                                s.enum_kind == EnumKind::Option
+                                    && s.fields.get(1).map_or(false, |(_, t)| t == &closure_ret)
+                            }).and_then(|s| self.struct_reg.lookup(&s.name))
+                        } else {
+                            let err_lir = src_struct.fields.get(2).map(|(_, t)| t.clone());
+                            self.module.structs.iter().find(|s| {
+                                s.enum_kind == EnumKind::Result
                                     && s.fields.get(1).map_or(false, |(_, t)| t == &closure_ret)
                                     && s.fields.get(2).map_or(true, |(_, t)| err_lir.as_ref().map_or(true, |e| t == e))
                             }).and_then(|s| self.struct_reg.lookup(&s.name))
                         }
                     }
                     "map_err" => {
-                        let src_err = src_struct.and_then(|s| s.fields.get(2)).map(|(_, t)| t);
+                        let src_err = src_struct.fields.get(2).map(|(_, t)| t);
                         if src_err.map_or(true, |t| t == &closure_ret) { continue; }
-                        let ok_lir = src_struct.and_then(|s| s.fields.get(1)).map(|(_, t)| t.clone());
+                        let ok_lir = src_struct.fields.get(1).map(|(_, t)| t.clone());
                         self.module.structs.iter().find(|s| {
-                            s.name.starts_with("Result__")
+                            s.enum_kind == EnumKind::Result
                                 && s.fields.get(1).map_or(true, |(_, t)| ok_lir.as_ref().map_or(true, |o| t == o))
                                 && s.fields.get(2).map_or(false, |(_, t)| t == &closure_ret)
                         }).and_then(|s| self.struct_reg.lookup(&s.name))
@@ -983,12 +993,15 @@ impl<'a> LoweringContext<'a> {
             let is_large_enum = matches!(&def.kind, gir_types::TypeDefKind::Enum(_))
                 && fields.len() > 4;
             self.module.structs[sid.0 as usize].fields = fields;
-            self.module.structs[sid.0 as usize].enum_kind = if def.name.starts_with("Option__") {
-                EnumKind::Option
-            } else if def.name.starts_with("Result__") {
-                EnumKind::Result
-            } else {
-                EnumKind::General
+            // Read the typed `enum_category` from GIR TypeMetadata — set at GIR
+            // type registration (the source of truth) — instead of pattern-matching
+            // the type name. Preserves the legacy "EnumKind::General for everything
+            // else" behavior bit-for-bit; downstream readers only special-case
+            // Option/Result, treating General/NotEnum identically.
+            self.module.structs[sid.0 as usize].enum_kind = match def.metadata.enum_category {
+                Some(gir_types::EnumCategory::Option) => EnumKind::Option,
+                Some(gir_types::EnumCategory::Result) => EnumKind::Result,
+                None => EnumKind::General,
             };
             self.module.structs[sid.0 as usize].is_union_layout = is_large_enum;
         }
