@@ -148,6 +148,20 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
 
 /// Map a GIR C type name to its sizeof in bytes.
 /// `structs` is used to compute sizes of user-defined struct types.
+///
+/// Lookup order:
+///   1. Primitive C types (int64_t, double, ...) — fixed-width by definition.
+///   2. Registered `StructDef` — read `computed_c_size` (typed) or recurse via
+///      `c_sizeof_struct_def`. Honors `c_runtime_alias` for closure-aliased
+///      structs (Callable/MutCallable → GorgetClosure size).
+///   3. `BuiltinTypeProtocol` `c_runtime_alias` lookup — for monomorphized
+///      types whose LIR `StructDef` hasn't been built yet.
+///   4. `opaque_runtime_size` — the canonical name → runtime-size table for
+///      Vector/Dict/Set/Task/Guard/Box and concrete singletons. Keeping the
+///      remaining `starts_with` prefix matches in ONE place is the boundary
+///      between layered sources (per layering-discipline §Rule 3).
+///   5. `Tuple__`/`Option__` — recursive structural sizes (compute, don't look up).
+///   6. Pointer/opaque default — 8 bytes.
 pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
     match type_name {
         "int64_t" | "uint64_t" | "double" => 8,
@@ -157,45 +171,30 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
         // GorgetString is a 32-byte fat struct { data, cap, len, alloc }
         "GorgetString" | "String" | "Str" => 32,
         _ => {
-            // Phase A residual #1: Callable__T_args (and friends)
-            // monomorphizations now register a LIR StructDef whose
-            // `computed_c_size` is inherited from the GorgetClosure runtime
-            // struct (16 bytes). Read `c_runtime_alias` from the StructDef
-            // cache here so this site doesn't fall through to the size-8
-            // pointer fallback when the LIR struct exists but the GIR
-            // TypeDef registration didn't fire (cross-module, monomorph
-            // synthetics — same caveat as `infer_drop_strategy`).
+            // 2. Direct lookup on a registered StructDef.
             if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
-                if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
-                    return 16;
+                // Phase A residual #1: Callable monomorphizations register
+                // with `c_runtime_alias = "GorgetClosure"` — read the alias
+                // size (typed) instead of falling through to a name-prefix
+                // path. Resolves cross-module / pre-registration cases where
+                // the GIR TypeDef registration didn't fire.
+                if let Some(ref alias) = sd.c_runtime_alias {
+                    if let Some(alias_sd) = structs.iter().find(|s| s.name == *alias) {
+                        if let Some(sz) = alias_sd.computed_c_size {
+                            return sz;
+                        }
+                    }
+                    if let Some(sz) = opaque_runtime_size(alias) {
+                        return sz;
+                    }
                 }
+                return sd.computed_c_size.unwrap_or_else(|| c_sizeof_struct_def(sd, structs));
             }
-            // Runtime collection structs.
-            if type_name.starts_with("Vector__") || type_name == "GorgetArray" {
-                return 64; // {data, len, cap, elem_size, alloc, elem_drop, elem_clone, elem_materialize}
-            }
-            if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") || type_name == "GorgetMap" {
-                return 152;
-            }
-            // GorgetSet aliases GorgetMap (same struct)
-            if type_name.starts_with("Set__") || type_name.starts_with("HashSet__") || type_name == "GorgetSet" {
-                return 152;
-            }
-            // GorgetClosure / Callable family = {fn_ptr, env} = 16 bytes.
-            // Phase A residual #1 (sub-TODO 1a, 2026-05-05): the
-            // c_runtime_alias-tagged StructDef lookup above handles the
-            // registered-LIR case. This is the pre-registration fallback for
-            // `array_elem_size_from_monomorphized` and similar parsers that
-            // derive a type name from a generated function spelling (e.g.
-            // `Vector__Callable__GorgetClosure__new`) — the elem name
-            // surfaces here BEFORE the matching LIR StructDef is built.
-            //
-            // No name-matching: the recognizer reads `c_runtime_alias` from
-            // the matching `BuiltinTypeProtocol` (single source of truth,
-            // shared with `register_callable_alias`). The runtime size then
-            // comes from the alias's StructDef in `structs` (preferred) or
-            // from `opaque_runtime_size` (the parallel runtime-size table).
-            // Tracked in TODO Medium "Hardcoded type size database".
+
+            // 3. BuiltinTypeProtocol-tagged alias (Callable family →
+            //    GorgetClosure). Pre-registration fallback for parsers that
+            //    derive a type name from a generated function spelling (e.g.
+            //    `Vector__Callable__GorgetClosure__new`).
             if let Some(alias) = crate::ir::lowering::builtins::c_runtime_alias_for_mangled_name(type_name) {
                 if let Some(sd) = structs.iter().find(|s| s.name == alias) {
                     if let Some(sz) = sd.computed_c_size {
@@ -206,25 +205,27 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
                     return sz;
                 }
             }
-            // Task__T = { void* __task; void (*__drop)(void*); } = 16 bytes
-            if type_name.starts_with("Task__") {
-                return 16;
+
+            // 4. Canonical opaque-runtime size table — Vector/Dict/Set/Task/
+            //    Guard/Box prefix matches consolidated in `opaque_runtime_size`.
+            //    Tracked in TODO ("Hardcoded type size database") — full
+            //    elimination requires plumbing `struct_aliases` so the typed
+            //    StructDef-resolved-via-alias path can replace this table.
+            if let Some(sz) = opaque_runtime_size(type_name) {
+                return sz;
             }
-            // Tuple__T1__T2__... — sum of field sizes with 8-byte alignment per field
+
+            // 5. Recursive structural sizes (compute, don't look up).
             if let Some(rest) = type_name.strip_prefix("Tuple__") {
                 return c_sizeof_tuple_fields(rest, structs);
             }
-            // Option__T — tag(4) + padding(4) + payload
             if let Some(inner) = type_name.strip_prefix("Option__") {
                 let payload = c_sizeof_with_structs(inner, structs);
                 // struct { int32_t tag; <pad to 8>; T payload; }
                 return 8 + std::cmp::max(payload, 8);
             }
-            // User-defined struct — prefer cached size, fall back to computation.
-            if let Some(sd) = structs.iter().find(|s| s.name == type_name) {
-                return sd.computed_c_size.unwrap_or_else(|| c_sizeof_struct_def(sd, structs));
-            }
-            // Pointer/opaque types default to 8
+
+            // 6. Pointer/opaque default.
             8
         }
     }

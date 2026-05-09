@@ -217,7 +217,7 @@
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
 
-- **Hardcoded type size database — blocks self-host lowerer**: `c_sizeof_with_structs()` still has string-match fallbacks for `Vector__*`, `Dict__*`, `Set__*`, `Callable__*`, `Task__*`, `Tuple__*`, `Option__*`. These hit before the struct lookup. Fix: register monomorphized collection/option/tuple types with correct `computed_c_size` during type lowering so the match arms can be removed. [updated: 2026-04-06]
+- **Hardcoded type size database — final consolidation step**: `c_sizeof_with_structs()`'s direct prefix matches have been retired (Vector/Dict/Set/Task/Box/Guard now route through `opaque_runtime_size`, which remains the canonical name → runtime-size table). The remaining work is to retire `opaque_runtime_size`'s `_ if name.starts_with("Vector__") => 64` etc. arms by reading `computed_c_size` from each monomorphized alias's resolved `StructDef`. Blocker: `c_sizeof_with_structs` takes `&[StructDef]` (no alias map), so resolving `Vector__int64_t` via `module.struct_aliases` requires plumbing the alias `HashMap<String, StructId>` through several call sites (`elem_size_from_monomorphized`, `concurrency_elem_size`, `dict_elem_sizes_from_monomorphized`, `c_sizeof_tuple_fields`). Once plumbed, the table arms collapse to typed reads; `Tuple__`/`Option__` recursive paths stay (they compute structurally). [updated: 2026-05-09]
 
 
 - **`@[no_alloc]` function annotation**: Compiler error on allocating operations. [added: 2026-03-21]
