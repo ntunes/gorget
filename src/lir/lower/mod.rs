@@ -23,7 +23,7 @@ pub use self::types::lower_module;
 #[allow(unused_imports)]
 use self::calls::{
     fix_printf_format, runtime_extern_sig, lower_binop, lower_unop, map_cmp_op,
-    clone_fn_for_collection_element, is_type_name, is_self_by_ptr_method,
+    clone_fn_for_collection_element, is_type_name,
     map_monomorphized_to_runtime_with_table, map_monomorphized_to_runtime,
 };
 
@@ -87,8 +87,8 @@ pub(super) struct FuncLowering<'a> {
     pub(super) overflow_wrap: bool,
     /// Types whose `{Name}__drop` collides with a user method (e.g., DataFrame.drop()).
     pub(super) drop_collision_types: &'a std::collections::HashSet<String>,
-    /// Monomorphized method name → C runtime callee (from BuiltinTypeProtocol).
-    pub(super) runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
+    /// Monomorphized method name → runtime callee metadata (from BuiltinTypeProtocol).
+    pub(super) runtime_callees: &'a rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
     /// Enum types needing tag-based variant drop dispatch.
     pub(super) recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
     /// Struct types with field-level drop functions.
@@ -1229,7 +1229,7 @@ impl<'a> FuncLowering<'a> {
         module_globals: &'a [LirGlobal],
         overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
-        runtime_callees: &'a rustc_hash::FxHashMap<String, String>,
+        runtime_callees: &'a rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
         recursive_drop_enums: &'a std::collections::HashMap<String, Vec<(u32, String, String, String, String)>>,
         recursive_drop_structs: &'a std::collections::HashMap<String, Vec<(String, String, String)>>,
         type_drop_fns: &'a std::collections::HashMap<String, crate::lir::TypeDropInfo>,

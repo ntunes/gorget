@@ -601,45 +601,13 @@ pub(super) fn is_type_name(s: &str) -> bool {
         | "T" | "U" | "V")
 }
 
-/// Returns true if the GIR function name refers to a collection or concurrency
-/// method whose first argument (self) should be passed by pointer (GlobalAddr)
-/// rather than by value (GlobalAddr+Load). These are mutating methods on
-/// Vector, Dict, Set, HashMap, HashSet, Heap, Mutex, RWLock, etc.
-pub(super) fn is_self_by_ptr_method(name: &str) -> bool {
-    // Collections and guards store their data inline (as struct values), so passing
-    // by pointer (GlobalAddr without Load) gives a pointer to the struct — correct
-    // for mutating methods.
-    //
-    // Mutex and RWLock are already POINTER types (GorgetMutex*, GorgetRWLock*),
-    // so the global holds a pointer value. Passing by value (GlobalAddr+Load) gives
-    // the pointer itself, which is what the runtime functions expect. Do NOT include
-    // Mutex__ or RWLock__ here — they should be passed by value.
-    //
-    // Guard/ReadGuard/WriteGuard ARE structs (gorget_guard_t etc.), so they need
-    // by-pointer passing for their mutating methods (get, set, drop/release).
-    name.starts_with("Vector__")
-        || name.starts_with("GorgetArray__")
-        || name.starts_with("Dict__")
-        || name.starts_with("HashMap__")
-        || name.starts_with("GorgetMap__")
-        || name.starts_with("Set__")
-        || name.starts_with("HashSet__")
-        || name.starts_with("GorgetSet__")
-        || name.starts_with("Heap__")
-        || name.starts_with("Guard__")
-        || name.starts_with("ReadGuard__")
-        || name.starts_with("WriteGuard__")
-        || name.starts_with("GorgetString__")
-        || name.starts_with("Deque__")
-}
-
 pub(super) fn map_monomorphized_to_runtime_with_table(
     name: &str,
-    table: &rustc_hash::FxHashMap<String, String>,
+    table: &rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
 ) -> Option<String> {
     // Check the protocol-populated table first (covers all builtins).
-    if let Some(callee) = table.get(name) {
-        return Some(callee.clone());
+    if let Some(info) = table.get(name) {
+        return Some(info.name.clone());
     }
     // Fall through to legacy name-based mapping for types not in the table.
     map_monomorphized_to_runtime(name)

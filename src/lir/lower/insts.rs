@@ -445,10 +445,14 @@ impl<'a> FuncLowering<'a> {
                     // Map monomorphized collection/method names to runtime function names.
                     let emit_name = map_monomorphized_to_runtime_with_table(func, self.runtime_callees)
                         .unwrap_or_else(|| func.clone());
-                    // For collection/concurrency methods that take self by pointer,
-                    // if the first arg is a GlobalRef, emit GlobalAddr (pointer)
-                    // instead of GlobalAddr+Load (copy), so mutations affect the global.
-                    let needs_self_by_ptr = is_self_by_ptr_method(func);
+                    // For collection/concurrency methods that take self by pointer
+                    // (SelfConvention::Borrow | MutBorrow), if the first arg is a
+                    // GlobalRef, emit GlobalAddr (pointer) instead of GlobalAddr+Load
+                    // (copy), so mutations affect the global.  The flag is set from
+                    // BuiltinMethodDecl.self_conv at protocol registration time and
+                    // carried through runtime_callees — no name-prefix tests here.
+                    let needs_self_by_ptr = self.runtime_callees.get(func)
+                        .map_or(false, |info| info.self_by_ptr);
                     let lir_args: Vec<ValueId> =
                         args.iter().enumerate().map(|(i, a)| {
                             if i == 0 && needs_self_by_ptr {
@@ -598,10 +602,10 @@ impl<'a> FuncLowering<'a> {
                     self.lower_printf_args(args, bb)
                 } else {
                     {
-                    // For collection/concurrency methods that take self by pointer,
-                    // if the first arg is a GlobalRef, emit GlobalAddr (pointer)
-                    // instead of GlobalAddr+Load (copy), so mutations affect the global.
-                    let needs_self_by_ptr = is_self_by_ptr_method(func);
+                    // Same self-by-ptr decision as the non-printf path above —
+                    // driven by runtime_callees.self_by_ptr, not name-prefix tests.
+                    let needs_self_by_ptr = self.runtime_callees.get(func)
+                        .map_or(false, |info| info.self_by_ptr);
                     args.iter().enumerate().map(|(i, a)| {
                         if i == 0 && needs_self_by_ptr {
                             if let Operand::Constant(Constant::GlobalRef(name)) = a {

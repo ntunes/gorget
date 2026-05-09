@@ -314,10 +314,10 @@ pub struct LoweringContext<'a> {
     /// Maps fn_name → set of param names that are cloned.
     /// Populated during callee lowering, queried at caller call sites.
     pub fn_consumed_params: FxHashMap<String, rustc_hash::FxHashSet<String>>,
-    /// Maps monomorphized method name → C runtime function name.
+    /// Maps monomorphized method name → runtime callee metadata.
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
-    pub runtime_callees: FxHashMap<String, String>,
+    pub runtime_callees: FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
     /// Maps callee span start → mangled function name for cross-module calls.
     /// Built from resolution_map + module_fn_manglings so that call lowering
     /// uses the correct target when multiple modules define the same bare name.
@@ -494,10 +494,10 @@ impl<'a> LoweringContext<'a> {
                 let fn_key = format!("{mangled_name}__{}", method.name);
                 let method_params = (method.params)(&type_args);
                 let ret = (method.return_type)(&type_args, &lookup_ctx);
-                (fn_key, method_params, ret, method.runtime_callee)
+                (fn_key, method_params, ret, method.runtime_callee, method.self_conv)
             }).collect();
 
-            for (fn_key, method_params, ret, runtime_callee) in method_entries {
+            for (fn_key, method_params, ret, runtime_callee, self_conv) in method_entries {
                 // Build full params: self pointer + method params
                 let self_ptr_type = self.type_registry.insert(
                     GirType::MutPtr(*type_id)
@@ -512,7 +512,11 @@ impl<'a> LoweringContext<'a> {
 
                 // Runtime callee mapping (for LIR backend)
                 if let Some(callee) = runtime_callee {
-                    self.runtime_callees.insert(fn_key, callee.to_string());
+                    use crate::ir::lowering::builtins::SelfConvention;
+                    self.runtime_callees.insert(fn_key, crate::ir::RuntimeCalleeInfo {
+                        name: callee.to_string(),
+                        self_by_ptr: matches!(self_conv, SelfConvention::Borrow | SelfConvention::MutBorrow),
+                    });
                 }
             }
         }
@@ -521,14 +525,17 @@ impl<'a> LoweringContext<'a> {
     /// Populate only the runtime_callees table from the protocol (not fn_sigs).
     /// Called at startup; fn_sigs is populated on-the-fly by resolve_builtin_method_return_type.
     pub fn register_builtin_runtime_callees(&mut self) {
-        use crate::ir::lowering::builtins;
+        use crate::ir::lowering::builtins::{self, SelfConvention};
 
         for (mangled_name, &_type_id) in &self.type_mapper.named_types.clone() {
             if let Some(protocol) = builtins::protocol_for_mangled_name(mangled_name) {
                 for method in protocol.methods {
                     if let Some(callee) = method.runtime_callee {
                         let fn_key = format!("{mangled_name}__{}", method.name);
-                        self.runtime_callees.entry(fn_key).or_insert_with(|| callee.to_string());
+                        self.runtime_callees.entry(fn_key).or_insert_with(|| crate::ir::RuntimeCalleeInfo {
+                            name: callee.to_string(),
+                            self_by_ptr: matches!(method.self_conv, SelfConvention::Borrow | SelfConvention::MutBorrow),
+                        });
                     }
                 }
             }
@@ -647,7 +654,11 @@ impl<'a> LoweringContext<'a> {
 
         // Populate runtime_callees
         if let Some(callee) = method.runtime_callee {
-            self.runtime_callees.entry(fn_key).or_insert_with(|| callee.to_string());
+            use crate::ir::lowering::builtins::SelfConvention;
+            self.runtime_callees.entry(fn_key).or_insert_with(|| crate::ir::RuntimeCalleeInfo {
+                name: callee.to_string(),
+                self_by_ptr: matches!(method.self_conv, SelfConvention::Borrow | SelfConvention::MutBorrow),
+            });
         }
 
         Some(ret)
@@ -1020,7 +1031,7 @@ impl<'a> LoweringContext<'a> {
         if return_type == self.type_mapper.owned_string_type {
             let is_user_fn = !self.fn_sigs.contains_key(func_name.as_str());
             let is_fresh_builtin = self.runtime_callees.get(func_name.as_str())
-                .map_or(false, |rt| runtime_returns_fresh(rt));
+                .map_or(false, |info| runtime_returns_fresh(&info.name));
             if is_user_fn || is_fresh_builtin {
                 self.set_owned_fresh(builder, local);
             }

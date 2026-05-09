@@ -212,7 +212,6 @@
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
-- **`is_self_by_ptr_method` name-list in `src/lir/lower/calls.rs:608`** — re-derives whether a collection/concurrency method's self parameter is by-pointer using 10+ `name.starts_with("Vector__")` / `"Dict__"` / `"Mutex__"` etc. checks. The upstream source of truth is `BuiltinMethodDecl.self_conv: SelfConvention` (set in `builtins.rs:71`). When a new collection type is added without updating this list, the LIR silently uses wrong ABI for self. Fix: thread `self_conv` through to the LIR's `CallExtern` metadata (or add `self_passing_kind` to the typed call sidecar) and read it here instead. [added: 2026-05-09]
 
 - **Map combinator result-type reconstruction by name-parsing in `src/backend/c_lir/mod.rs:~1555`** — reconstructs the output `Option__T` or `Result__OkType__ErrType` name by splitting the source type name at `__` boundaries. The GIR already resolved the map return type; it should be attached to the call site. Fix: propagate result type as a typed field on the map combinator HOF entry rather than re-parsing it in the C backend. [added: 2026-05-09]
 

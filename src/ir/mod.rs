@@ -198,6 +198,19 @@ impl std::fmt::Display for ImplicitCloneReason {
     }
 }
 
+/// Typed metadata carried from builtin protocol registration to LIR lowering.
+/// Replaces the `is_self_by_ptr_method` name-list at the LIR call site.
+#[derive(Debug, Clone)]
+pub struct RuntimeCalleeInfo {
+    /// C runtime function name (e.g. `gorget_array_push`).
+    pub name: String,
+    /// True when `self_conv` is `Borrow | MutBorrow` — the method receives
+    /// self as a pointer.  False for `ByValue` (concurrency handles) and
+    /// `Static` (no receiver).  Drives the GlobalRef→GlobalAddr decision in
+    /// LIR arg lowering.
+    pub self_by_ptr: bool,
+}
+
 /// A complete GIR module.
 #[derive(Debug, Clone)]
 pub struct Module {
@@ -219,10 +232,10 @@ pub struct Module {
     pub implicit_clone_warnings: Vec<ImplicitCloneWarning>,
     /// Suggestions to use `!arg` (move) for last-use arguments.
     pub move_suggestions: Vec<MoveSuggestion>,
-    /// Maps monomorphized method name → C runtime function name.
-    /// Populated from BuiltinTypeProtocol declarations. Used by LIR backend
-    /// to replace `map_monomorphized_to_runtime()`.
-    pub runtime_callees: rustc_hash::FxHashMap<String, String>,
+    /// Maps monomorphized method name → runtime callee metadata.
+    /// Populated from BuiltinTypeProtocol declarations; `self_by_ptr` is set
+    /// from `SelfConvention` so LIR lowering never re-derives it by name.
+    pub runtime_callees: rustc_hash::FxHashMap<String, RuntimeCalleeInfo>,
     /// Per-function extern ABI kinds: fn_name → Vec<AbiKind>.
     /// Populated from FunctionDef.param_abis for Declaration-body functions.
     pub fn_extern_abi_kinds: rustc_hash::FxHashMap<String, Vec<abi::AbiKind>>,

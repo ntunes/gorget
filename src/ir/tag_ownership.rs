@@ -99,7 +99,7 @@ fn infer_func(
     func: &mut Function,
     registry: &TypeRegistry,
     clone_fns: &FxHashSet<String>,
-    runtime_callees: &rustc_hash::FxHashMap<String, String>,
+    runtime_callees: &rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
 ) {
     // Two-phase per function:
     //   Phase 1 (immutable walk): collect ownership decisions as
@@ -325,7 +325,7 @@ fn call_result_is_owned(
 fn is_clone_or_fresh_call_name(
     name: &str,
     clone_fns: &FxHashSet<String>,
-    runtime_callees: &rustc_hash::FxHashMap<String, String>,
+    runtime_callees: &rustc_hash::FxHashMap<String, crate::ir::RuntimeCalleeInfo>,
 ) -> bool {
     // Direct typed lookup: the callee name IS the runtime symbol.
     if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(name) {
@@ -337,8 +337,8 @@ fn is_clone_or_fresh_call_name(
     // `Vector__T__new`, …) map through `runtime_callees` to the runtime
     // family member (`gorget_dict_new`). Rerun the typed predicate on
     // the resolved name.
-    if let Some(rt_name) = runtime_callees.get(name) {
-        if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(rt_name) {
+    if let Some(info) = runtime_callees.get(name) {
+        if let Some(rt) = crate::lir::runtime::RuntimeFn::from_c_name(&info.name) {
             if rt.signature().returns_fresh {
                 return true;
             }
