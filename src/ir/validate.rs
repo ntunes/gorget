@@ -1732,6 +1732,125 @@ fn collect_drop_registered_locals(func: &Function) -> FxHashSet<LocalId> {
     set
 }
 
+/// A drop-pre-rebind validation finding. Tier 2c: snag #23 class.
+///
+/// When a value flows into a heap-allocating consumer (`__gorget_box_alloc_*`,
+/// `gorget_string_clone_to_owned`, `gorget_array_clone`, etc.) the source's
+/// drop registration must be retired *before* any subsequent drop emission
+/// targets the source — i.e. the source slot must be `MoveZero`'d AND
+/// `drops.mark_moved` must fire, not just `drops.unregister`.
+///
+/// Snag #23's bug: `Box.new(!lhs)` only called `drops.unregister(lhs)`. The
+/// scope-exit drop was retired, but `lower_assign`'s INSTRUCTION-LEVEL
+/// pre-rebind drop still saw the source slot as alive — and freed the
+/// interior pointers the new Box now owns. This validator locks the rule
+/// so a future heap-allocating consumer can't forget the move-zero step.
+#[derive(Debug, Clone)]
+pub struct DropPreRebindWarning {
+    pub function: String,
+    pub block: BlockId,
+    pub inst_index: usize,
+    pub callee: String,
+    pub source_local: LocalId,
+}
+
+impl std::fmt::Display for DropPreRebindWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "@{}::bb{}::i{} — call to heap-allocating consumer `{}` with Copy/Move(_{}): source is drop-registered but is not MoveZero'd before the next drop site (snag #23 class)",
+            self.function, self.block.0, self.inst_index, self.callee, self.source_local.0
+        )
+    }
+}
+
+/// Tier 2c — drop-tracking pre-rebind correctness. Walks every function's
+/// blocks; for each `Call`/`CallExtern` to a **shallow-copy heap-allocating
+/// consumer** with a `Copy(p)` or `Move(p)` arg where `p` is bare and
+/// drop-registered, scan the same block forward for a `MoveZero(p)` before
+/// the next bare `Drop`/`DropIfAlive(p)` site. Mismatch is the snag #23 shape.
+///
+/// **Shallow-copy heap-allocating consumer.** The class is narrow on
+/// purpose: only `__gorget_box_alloc_*` qualifies today. Box.new
+/// `__gorget_box_alloc_<T>(value)` shallow-copies the value's interior
+/// pointers into a fresh heap slot — both source and the new Box now alias
+/// the same heap data, so the source MUST be MoveZero'd before any
+/// subsequent Drop, otherwise that drop frees what the new Box owns.
+///
+/// **NOT in scope** (deep-clone consumers — source stays independent, Drop
+/// of source is fine):
+/// - `gorget_string_clone_to_owned`, `gorget_array_clone`, `gorget_map_clone`,
+///   `gorget_set_clone`: produce a new owned value with new interior storage;
+///   source's storage is untouched. A later Drop of source is correct.
+/// - `gorget_*_clone_inplace`: write into an existing slot, no shallow alias.
+///
+/// Adding a new shallow-copy heap-allocating runtime consumer would
+/// require widening this validator's recognition set.
+pub fn validate_drop_pre_rebind(module: &Module) -> Vec<DropPreRebindWarning> {
+    let mut warnings = Vec::new();
+
+    let _ = module.type_registry.type_defs(); // keep registry import live for future widening
+
+    for func in &module.functions {
+        let drop_registered = collect_drop_registered_locals(func);
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                let (callee, args) = match inst {
+                    Instruction::Call { func: name, args, .. } => (name.as_str(), args),
+                    Instruction::CallExtern { func: name, args, .. } => (name.as_str(), args),
+                    _ => continue,
+                };
+                let is_heap_alloc = callee.starts_with("__gorget_box_alloc_");
+                if !is_heap_alloc { continue }
+
+                for arg in args {
+                    let src_place = match arg {
+                        Operand::Copy(p) | Operand::Move(p) => p,
+                        _ => continue,
+                    };
+                    if !src_place.projections.is_empty() { continue }
+                    let src_local = src_place.local;
+                    if !drop_registered.contains(&src_local) { continue }
+
+                    // Walk forward in the same block. First event for src_local:
+                    //   - MoveZero(src_local) → followed-through, OK
+                    //   - Drop / DropIfAlive(src_local) → snag #23 violation
+                    //   - end of block → conservatively pass (cross-block drop
+                    //     would be a different shape, beyond this validator's
+                    //     same-block scope, mirroring Tier 1b's bound).
+                    let mut zeroed = false;
+                    let mut violated = false;
+                    for follow in bb.instructions.iter().skip(i + 1) {
+                        match follow {
+                            Instruction::MoveZero { place } if place.local == src_local && place.projections.is_empty() => {
+                                zeroed = true;
+                                break;
+                            }
+                            Instruction::Drop { place } | Instruction::DropIfAlive { place }
+                                if place.local == src_local && place.projections.is_empty() =>
+                            {
+                                violated = true;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !zeroed && violated {
+                        warnings.push(DropPreRebindWarning {
+                            function: func.name.clone(),
+                            block: BlockId(b as u32),
+                            inst_index: i,
+                            callee: callee.to_string(),
+                            source_local: src_local,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    warnings
+}
+
 // ── Tier 2a Phase 1: consume-site discipline (CoW write-side) ────────
 // See `docs/internals/structural-guards.md` Tier 2a (and the project
 // brief in the Phase 1 task) for the full design.

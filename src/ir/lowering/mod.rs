@@ -1646,6 +1646,26 @@ pub fn lower_module(
         }
     }
 
+    // Tier 2c — drop-tracking pre-rebind correctness (snag #23 class lock).
+    // Every call to a heap-allocating consumer (`__gorget_box_alloc_*`,
+    // `gorget_string_clone_to_owned`, `gorget_array_clone`, …) with a
+    // Copy/Move source operand must be followed by a `MoveZero` of the
+    // source in the same basic block before any subsequent
+    // `Drop`/`DropIfAlive` of the source. Promote to fatal once the
+    // initial sweep is clean — Snag #23's bug shipped a fix at
+    // `4ebefe44` that the validator now locks in. See
+    // `docs/internals/structural-guards.md` Tier 2c.
+    {
+        let dpr_warnings = crate::ir::validate::validate_drop_pre_rebind(&module);
+        if !dpr_warnings.is_empty() {
+            eprintln!("[drop-pre-rebind] {} violation(s):", dpr_warnings.len());
+            for w in &dpr_warnings {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed drop-pre-rebind validation ({} violation(s))", dpr_warnings.len());
+        }
+    }
+
     // Tier 2a Phase 2A — post-lowering ownership inference.
     //
     // Walks every function and tags `Owned` / `FreshOwned` on
