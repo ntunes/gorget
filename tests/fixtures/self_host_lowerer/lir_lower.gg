@@ -1592,28 +1592,7 @@ int type_elem_size(String elem, StructRegistry &sr):
         return 8
     return 8
 
-# Get the element size for a collection constructor.
-int collection_elem_size(String name, StructRegistry &sr):
-    # Extract element type from name like "Vector__int64_t" or "Vector__GorgetString"
-    String elem = ""
-    if name.starts_with("Vector__"):
-        elem = name.slice(8, name.len())
-    elif name.starts_with("Deque__"):
-        elem = name.slice(7, name.len())
-    elif name.starts_with("Set__"):
-        elem = name.slice(5, name.len())
-    elif name.starts_with("HashSet__"):
-        elem = name.slice(9, name.len())
-    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        # Dict needs key_size, val_size — handled separately
-        return 8
-    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return 8
-    return type_elem_size(elem, &sr)
-
-# Size-aware variant that uses LirModule to sum actual struct field
-# sizes. Mirrors collection_elem_size; prefer this at call sites where
-# Vector[MyStruct] / Set[MyStruct] element size matters.
+# Get element size for a collection constructor using LirModule metadata.
 int collection_elem_size_in_mod(String name, StructRegistry &sr, LirModule &m):
     String cat = type_category_for_name(name, &m)
     if cat == "GorgetMap" or cat == "Ptr":
@@ -1775,39 +1754,6 @@ bool is_scalar_type_prefix(String name):
     if name.starts_with("bool__"):
         return true
     return false
-
-# Extract elem_size from a monomorphized name for functions needing it.
-# E.g. "Vector__int64_t__contains" → 8, "Vector__GorgetString__contains" → 32
-int extract_elem_size_from_name(String name, StructRegistry &sr):
-    String elem = ""
-    if name.starts_with("Vector__"):
-        # Strip "Vector__" prefix and method suffix
-        String rest = name.slice(8, name.len())
-        int i = 0
-        while i < rest.len() - 1:
-            String c1 = rest.slice(i, i + 1)
-            String c2 = rest.slice(i + 1, i + 2)
-            if c1 == "_" and c2 == "_":
-                elem = rest.slice(0, i)
-                break
-            i += 1
-        if elem == "":
-            elem = rest
-    elif name.starts_with("Set__"):
-        String rest = name.slice(5, name.len())
-        int i = 0
-        while i < rest.len() - 1:
-            String c1 = rest.slice(i, i + 1)
-            String c2 = rest.slice(i + 1, i + 2)
-            if c1 == "_" and c2 == "_":
-                elem = rest.slice(0, i)
-                break
-            i += 1
-        if elem == "":
-            elem = rest
-    if elem != "":
-        return type_elem_size(elem, &sr)
-    return 8
 
 # Size-aware variant used at lower_instruction's `gorget_array_contains`
 # site where the element may be a user struct requiring real size lookup.
