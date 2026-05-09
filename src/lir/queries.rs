@@ -53,17 +53,6 @@ pub fn is_spawn_wrapper(func: &LirFunction) -> bool {
         || n.starts_with("__shared_token_")
 }
 
-/// Whether the named Box type is a trait-object box (i.e. there is a
-/// matching `<TraitName>_TraitObj` struct in the module). Trait boxes
-/// are 16 bytes (data ptr + vtable ptr); concrete-type boxes are 8
-/// (just data ptr). Both backends need to disambiguate to pick the
-/// right LLVM/C struct type for `Box[T]` slots.
-pub fn is_trait_box(module: &LirModule, box_type: &str) -> bool {
-    let trait_name = box_type.strip_prefix("Box__").unwrap_or(box_type);
-    let traitobj_name = format!("{trait_name}_TraitObj");
-    module.structs.iter().any(|d| d.name == traitobj_name)
-}
-
 /// Walks the struct's field graph and returns true if any (transitively-
 /// reached) field type is a runtime resource — `GorgetString`,
 /// `GorgetArray`, `GorgetMap`, `GorgetSet`, or `GorgetClosure`. Used to

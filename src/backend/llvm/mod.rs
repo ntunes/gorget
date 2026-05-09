@@ -690,14 +690,10 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
             if let Some(def) = structs.get(sid.0 as usize) {
                 // Box[Trait] is C-typedef'd to <Trait>_TraitObj (16 bytes:
                 // {data, vtable}). The opaque table says 8 — correct for
-                // Box[Concrete], not for trait boxes. Detect via TraitObj
-                // sibling presence and override.
-                if def.name.starts_with("Box__") {
-                    let trait_name = def.name.strip_prefix("Box__").unwrap_or(&def.name);
-                    let traitobj_name = format!("{trait_name}_TraitObj");
-                    if structs.iter().any(|d| d.name == traitobj_name) {
-                        return 16;
-                    }
+                // Box[Concrete], not for trait boxes. Read the typed
+                // `is_trait_box` flag set at registration time (commit e5de1616).
+                if def.name.starts_with("Box__") && def.is_trait_box {
+                    return 16;
                 }
                 // Shared opaque-runtime-struct table (Box__, Match, Socket, …).
                 if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&def.name) {
@@ -919,13 +915,15 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 } else if name == "File" || name == "GorgetFile" {
                     writeln!(out, "%{name} = type {{ ptr, i64 }}").unwrap();
                 } else if name.starts_with("Box__")
-                    && crate::lir::queries::is_trait_box(module, name)
+                    && module.structs.iter().find(|s| s.name == *name)
+                        .map_or(false, |s| s.is_trait_box)
                 {
                     // Box[Trait] is C-typedef'd to <Trait>_TraitObj (16 bytes:
                     // { data ptr, vtable ptr }) — the opaque-runtime-size table
                     // says 8 (correct for Box[Concrete]), but trait boxes need
                     // the 16-byte TraitObj layout so memcpy/sizeof/by-value
-                    // ABI all match the C runtime.
+                    // ABI all match the C runtime. Read the typed `is_trait_box`
+                    // flag set at registration time (commit e5de1616).
                     writeln!(out, "%{name} = type {{ ptr, ptr }}").unwrap();
                 } else if sz == 8 {
                     // Pointer-sized handle (TaskGroup, Socket, AtomicInt, …).

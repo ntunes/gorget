@@ -151,14 +151,21 @@ pub(super) fn emit_wrapper_typedef(out: &mut String, name: &str, module: &LirMod
         writeln!(out, "typedef gorget_write_guard_t {name};").unwrap();
     } else if name == "TaskGroup" {
         writeln!(out, "typedef gorget_task_group_t* TaskGroup;").unwrap();
-    } else if name.starts_with("Box__") && is_trait_box(module, name) {
-        // Trait object box — typedef to the TraitObj struct.
-        let trait_name = name.strip_prefix("Box__").unwrap();
-        let traitobj_orig = format!("{trait_name}_TraitObj");
-        let traitobj_cname = orig_to_c.get(&traitobj_orig).cloned().unwrap_or(traitobj_orig);
-        writeln!(out, "typedef {traitobj_cname} {name};").unwrap();
     } else if name.starts_with("Box__") {
-        writeln!(out, "typedef void* {name};").unwrap();
+        // Read the typed `is_trait_box` flag set at registration time
+        // (commit e5de1616). Trait-object Box typedef'd to <Trait>_TraitObj
+        // (16 bytes: data + vtable); concrete Box typedef'd to void* (8 bytes).
+        let is_trait = module.structs.iter()
+            .find(|s| s.name == name)
+            .map_or(false, |s| s.is_trait_box);
+        if is_trait {
+            let trait_name = name.strip_prefix("Box__").unwrap();
+            let traitobj_orig = format!("{trait_name}_TraitObj");
+            let traitobj_cname = orig_to_c.get(&traitobj_orig).cloned().unwrap_or(traitobj_orig);
+            writeln!(out, "typedef {traitobj_cname} {name};").unwrap();
+        } else {
+            writeln!(out, "typedef void* {name};").unwrap();
+        }
     } else if name == "AtomicInt" {
         writeln!(out, "typedef GorgetAtomicInt* AtomicInt;").unwrap();
     } else if name == "AtomicBool" {
@@ -340,13 +347,12 @@ pub(super) fn find_struct_cname_by_orig(module: &LirModule, orig_name: &str, sn:
     orig_name.to_string()
 }
 
-// `is_trait_box`, `struct_contains_resource`, `is_user_hashable_key`,
-// `hashable_key_fn_names` were lifted to `crate::lir::queries` so the
-// LLVM backend can consume them without reaching into `c_lir`. Use the
-// `queries::*` paths at call sites; this module re-exports through the
-// `pub use` at the top of `helpers.rs` to avoid churn at internal sites.
+// `struct_contains_resource`, `is_user_hashable_key`, `hashable_key_fn_names`
+// were lifted to `crate::lir::queries` so the LLVM backend can consume them
+// without reaching into `c_lir`. Use the `queries::*` paths at call sites;
+// this module re-exports through the `pub use` at the top of `helpers.rs` to
+// avoid churn at internal sites.
 pub use crate::lir::queries::{
-    is_trait_box,
     struct_contains_resource,
     is_user_hashable_key,
     hashable_key_fn_names,
@@ -1790,7 +1796,7 @@ pub(super) fn test_cleanup_push_code_lir(
     slot_idx: u32,
     func: &LirFunction,
     module: &LirModule,
-    sn: &HashMap<u32, String>,
+    _sn: &HashMap<u32, String>,
 ) -> Option<String> {
     let slot = &func.slots[slot_idx as usize];
     let slot_ty = &slot.ty;
@@ -1805,15 +1811,10 @@ pub(super) fn test_cleanup_push_code_lir(
 
     if let Some(name) = struct_name {
         // Box types: push raw pointer (no address-of since Box is a typedef for T*).
+        // Concrete and trait-object boxes both clean up via free(slot) post the
+        // thin-pointer redesign (commit 7034597d) — no longer need to discriminate.
         if name.starts_with("Box__") {
-            let _c_name = sn.get(&if let LirType::Struct(sid) = slot_ty { sid.0 } else { 0 }).cloned().unwrap_or_default();
-            // Check for trait object Box (Box__TraitObj).
-            let inner = &name[5..];
-            if module.structs.iter().any(|s| s.name == format!("{inner}_TraitObj")) {
-                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
-            } else {
-                return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
-            }
+            return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
         }
 
         // GorgetString
