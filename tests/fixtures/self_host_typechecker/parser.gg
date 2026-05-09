@@ -2,6 +2,7 @@
 # Consumes a token stream from the lexer and produces an AST.
 
 from std.collections import Vector
+from std.conv import int_to_str
 from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
 
@@ -1012,6 +1013,9 @@ struct Parser:
     # `parse_source_with_offset` initializes this; `parse_prefix`'s
     # f-string branch reads and increments it.
     int next_interp_offset
+    # Binding stmts prepended to a closure body from tuple-destructure params.
+    # Reset at the start of each parse_closure_expr call.
+    Vector[Stmt] desugar_stmts
 
 # ── Parser methods ───────────────────────────────────────────
 
@@ -1994,14 +1998,60 @@ equip Parser:
         SpannedType auto_type = SpannedType(TInferred(), Span(pn.lex_start, pn.lex_end))
         return Param(auto_type, pname, OWN_BORROW)
 
+    # Parse one closure param, desugaring tuple destructure patterns.
+    # `(T1 a, T2 b)` → synthetic `__dp_N: (T1,T2)` param + binds pushed to desugar_stmts.
+    Param parse_closure_param_indexed(&self, int param_idx):
+        if self.check_tok(TOK_LPAREN):
+            # Peek ahead to determine if this is a destructure `(T name, ...)` pattern
+            # vs. a regular tuple type `(T1, T2) name`.
+            int saved = self.pos
+            self.advance()  # consume `(`
+            # Try parsing a type; if next token is IDENT it's a destructure.
+            SpannedType first_ty = self.parse_type()
+            bool is_destructure = self.check_tok(TOK_IDENT)
+            self.pos = saved  # restore position
+
+            if is_destructure:
+                self.advance()  # consume `(`
+                Vector[SpannedType] comp_types = Vector[SpannedType]()
+                Vector[String] comp_names = Vector[String]()
+                SpannedType ct0 = self.parse_type()
+                SpannedToken cn0_tok = self.advance()
+                comp_types.push(ct0)
+                comp_names.push(token_ident(cn0_tok.lex_token))
+                while self.match_tok(TOK_COMMA):
+                    SpannedType ctn = self.parse_type()
+                    SpannedToken cnn_tok = self.advance()
+                    comp_types.push(ctn)
+                    comp_names.push(token_ident(cnn_tok.lex_token))
+                self.expect_tok(TOK_RPAREN, "expected ')' in tuple destructure param")
+                String dp_name = "__dp_" + int_to_str(param_idx)
+                # Build binding stmts before moving comp_types into TTuple.
+                int ci = 0
+                while ci < comp_names.len():
+                    String cname = comp_names.get(ci).unwrap()
+                    SpannedType cty = stype_vec_get(comp_types, ci)
+                    SpannedExpr dp_id = SpannedExpr(EIdentifier(dp_name), Span(0, 0))
+                    String field_name = "_" + int_to_str(ci)
+                    SpannedExpr field_acc = SpannedExpr(EFieldAccess(Box(dp_id), field_name), Span(0, 0))
+                    self.desugar_stmts.push(SVarDecl(cty, cname, field_acc, OWN_BORROW, 0, -1))
+                    ci = ci + 1
+                SpannedType dp_type = SpannedType(TTuple(comp_types), Span(0, 0))
+                return Param(dp_type, dp_name, OWN_BORROW)
+        return self.parse_closure_param()
+
     # Parse a closure expression: (params): body
     SpannedExpr parse_closure_expr(&self, int start):
         self.expect_tok(TOK_LPAREN, "expected '(' for closure")
+        self.desugar_stmts = Vector[Stmt]()
         Vector[Param] params = Vector[Param]()
+        int param_idx = 0
         if not self.check_tok(TOK_RPAREN):
-            params.push(self.parse_closure_param())
+            params.push(self.parse_closure_param_indexed(param_idx))
+            param_idx = param_idx + 1
             while self.match_tok(TOK_COMMA):
-                params.push(self.parse_closure_param())
+                params.push(self.parse_closure_param_indexed(param_idx))
+                param_idx = param_idx + 1
         self.expect_tok(TOK_RPAREN, "expected ')' after closure params")
         self.expect_tok(TOK_COLON, "expected ':' after closure params")
         # Inline closure: body is a single expression or a block
@@ -2013,6 +2063,18 @@ equip Parser:
             # Inline closure: parse single expression
             SpannedExpr expr = self.parse_expr()
             body.push(SExpr(expr))
+        # Prepend tuple-destructure binding stmts (if any) to body
+        if self.desugar_stmts.len() > 0:
+            Vector[Stmt] new_body = Vector[Stmt]()
+            int di = 0
+            while di < self.desugar_stmts.len():
+                new_body.push(self.desugar_stmts.get(di).unwrap())
+                di = di + 1
+            int bi = 0
+            while bi < body.len():
+                new_body.push(body.get(bi).unwrap())
+                bi = bi + 1
+            body = new_body
         return SpannedExpr(EClosure(params, body), Span(start, self.peek().lex_start))
 
     SpannedExpr parse_prefix(&self):
@@ -2055,7 +2117,7 @@ equip Parser:
                                     int interp_base = self.next_interp_offset
                                     self.next_interp_offset = interp_base + 1048576
                                     Vector[SpannedToken] sub_tokens = lex_tokenize_with_offset(expr_text, interp_base)
-                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776)
+                                    Parser sub = Parser(sub_tokens, 0, Vector[String](), 0, 1099511627776, Vector[Stmt]())
                                     SpannedExpr parsed_expr = sub.parse_expr()
                                     fexprs.push(parsed_expr)
                             fsi = fsi + 1
@@ -4005,6 +4067,6 @@ Module parse_source_with_offset(String source, int base_offset):
         if tag != TOK_COMMENT and tag != TOK_DOCCOMMENT:
             tokens.push(tok)
         ti = ti + 1
-    Parser p = Parser(tokens, 0, Vector[String](), 0, INTERP_OFFSET_BASE)
+    Parser p = Parser(tokens, 0, Vector[String](), 0, INTERP_OFFSET_BASE, Vector[Stmt]())
     Module m = p.parse_module()
     return m

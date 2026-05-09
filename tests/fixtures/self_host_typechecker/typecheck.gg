@@ -22,7 +22,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, get_rtype_at, get_i
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
-from traits import build_trait_registry
+from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
 
 # ── Option helpers ──────────────────────────────────────────
 
@@ -736,6 +736,26 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
             int elem_type = extract_element_type(obj_type, scopes, types)
+            # Resolve full method signature for closure-arg type propagation.
+            # This lets (r): body get its param typed when passed to a method
+            # expecting Callable[ReturnType(ParamType)].
+            Vector[int] method_param_types = Vector[int]()
+            if obj_type >= 0 and obj_type < types.types.len():
+                MethodResolution mres = resolve_method_full(types.trait_registry, obj_type, method_name, scopes, &types)
+                if not mres.found:
+                    String recv_name = ""
+                    ResolvedType obj_rt = get_rtype_at(types.types, obj_type)
+                    match obj_rt:
+                        case RTDefined(rdef):
+                            recv_name = scopes.get_def(rdef).name
+                        case RTGeneric(rdef, _):
+                            recv_name = scopes.get_def(rdef).name
+                        else:
+                            pass
+                    if recv_name.len() > 0:
+                        mres = resolve_method_by_name(types.trait_registry, recv_name, method_name)
+                if mres.found:
+                    method_param_types = mres.sig.params
             int ai = 0
             while ai < args.len():
                 SpannedExpr arg = args.get(ai).unwrap()
@@ -765,6 +785,11 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         owns.push(0)
                         owns.push(0)
                         expected = types.add_type(RTFunction(ptypes, owns, init_type))
+                # Fallback: use method signature's param type for this arg index.
+                # Enables closure params to be typed when the method expects a
+                # Callable/function-type argument (e.g. router.get(path, (r): ...)).
+                if expected < 0 and ai < method_param_types.len():
+                    expected = get_int_at(method_param_types, ai)
                 if expected >= 0:
                     walk_expr_closures_with_type(arg, expected, scope_id, &scopes, &types, ctx)
                 else:
