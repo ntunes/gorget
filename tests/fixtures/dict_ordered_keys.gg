@@ -1,0 +1,32 @@
+from std.collections import Dict
+
+void main():
+    # Dict[String, int]: insertion order must be preserved
+    Dict[String, int] scores = {}
+    scores.put("charlie", 3)
+    scores.put("alice", 1)
+    scores.put("bob", 2)
+    scores.put("diana", 4)
+
+    Vector[String] keys1 = scores.keys()
+    int ki = 0
+    while ki < keys1.len():
+        print(keys1.get(ki).unwrap())
+        ki += 1
+
+    # contains must work correctly after put
+    print(f"{scores.contains("alice")}")
+    print(f"{scores.contains("missing")}")
+    print(f"{scores.get("bob").unwrap()}")
+
+    # Dict[int, String]: insertion order preserved for non-String keys
+    Dict[int, String] labels = {}
+    labels.put(30, "thirty")
+    labels.put(10, "ten")
+    labels.put(20, "twenty")
+
+    Vector[int] keys2 = labels.keys()
+    int ki2 = 0
+    while ki2 < keys2.len():
+        print(labels.get(keys2.get(ki2).unwrap()).unwrap())
+        ki2 += 1
