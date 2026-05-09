@@ -101,25 +101,15 @@ pub(super) fn lower_for(
                 let tid = builder.locals[local_idx].type_id;
                 let tid = ctx.pointee_type(tid).unwrap_or(tid);
                 if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
-                    // Metadata-based: check collection_kind on the TypeDef
+                    // Metadata-based: read `collection_kind` from the TypeDef.
+                    // Both runtime singletons (GorgetArray/GorgetMap/GorgetSet —
+                    // registered in `lowering/mod.rs`) and monomorphized aliases
+                    // (Vector__T/Dict__K__V/... — registered via
+                    // `register_collection_alias` in `lowering/types.rs:766`)
+                    // carry `collection_kind` in their TypeMetadata. The earlier
+                    // name-prefix fallback was dead — Phase A made it so.
                     ctx.type_registry.get_type_def(name)
                         .and_then(|td| td.metadata.collection_kind)
-                        .or_else(|| {
-                            // Fallback for types without TypeDefs (registered via register_collection_alias)
-                            if name.starts_with("Vector__") || name.starts_with("GorgetArray") || name.starts_with("Deque__") {
-                                Some(CollectionKind::Array)
-                            } else if name.starts_with("Dict__") {
-                                Some(CollectionKind::OrderedMap)
-                            } else if name.starts_with("HashMap__") || name.starts_with("GorgetMap") || name.starts_with("GorgetDict") {
-                                Some(CollectionKind::Map)
-                            } else if name.starts_with("Set__") {
-                                Some(CollectionKind::OrderedSet)
-                            } else if name.starts_with("HashSet__") || name.starts_with("GorgetSet") {
-                                Some(CollectionKind::Set)
-                            } else {
-                                None
-                            }
-                        })
                 } else {
                     None
                 }
@@ -693,7 +683,12 @@ fn lower_for_set(
     let type_name = ctx.type_name_for_id(iter_type)
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let is_ordered = type_name.starts_with("Set__");
+    // Read typed `collection_kind` to discriminate ordered Set vs unordered
+    // HashSet (the iteration shape differs: ordered walks `order[]`, unordered
+    // walks `states[]`). Replaces a name-prefix probe on the receiver type.
+    let is_ordered = ctx.type_registry.get_type_def(&type_name)
+        .and_then(|td| td.metadata.collection_kind)
+        == Some(CollectionKind::OrderedSet);
     let elem_gir_type = parse_set_elem_type(&type_name);
     let elem_type = ctx.lookup_type_by_name(&elem_gir_type).unwrap_or(I64_TYPE);
 
