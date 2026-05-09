@@ -206,6 +206,13 @@
 
 ## Medium
 
+- **Self-host codegen bug: `Option[int].unwrap_or(default)` skips the None-check.** When source is `dict.get(K)` returning `Option[int]`, the self-host's emission is:
+  ```c
+  __v143 = gorget_map_get(dict, key);   // returns NULL on miss
+  __v144 = *(int64_t *)(__v143);        // CRASH on NULL
+  ```
+  No NULL guard, no fallback to the `default` arg. Reproduces during `self_host_bootstrap_fixed_point` when `lir_lower.gg` calls `sr.get(name).unwrap_or(-1)` on a non-trivial Dict. The Rust gg compiler emits this correctly; the self-host's lowering of `Option.unwrap_or` is the gap. Workaround in place: `sr_lookup(&sr, name)` helper using `if sr.contains(name): return sr.get(name).unwrap()` (line 40-43 of `tests/fixtures/self_host_lowerer/lir_lower.gg`). Inline once fixed. Likely a missing `OptionUnwrapOr` lowering in `lower.gg`'s expression emitter, or LIR codegen not honoring the None-tag. [added: 2026-05-09]
+
 - **Extend `noreturn` qualifier to builtins (`panic`) and other `_Noreturn` C functions.** Round 6 added `noreturn` to the parser/typecheck/IR pipeline and marked `std.os.exit` as `extern noreturn`. `panic` is a hardcoded compiler builtin (treated as void-returning at typecheck via `matches!(cname, "print" | "assert" | "panic")` in `typecheck.rs:1443`, lowered via a hardcoded `call_extern("gorget_panic", …)` in `stmts/mod.rs:1814`), so the noreturn pipeline doesn't reach it — calls to `panic()` in match-as-expression arms still hit the void-vs-T mismatch. Two options: (a) declare `panic` in `lib/std/io.gg` (or wherever) as `extern noreturn void panic(String msg)` and remove the hardcoded path; (b) extend the typecheck builtin special-case to return `never_id` for panic and add `"gorget_panic"` to `LoweringContext.noreturn_fns` at construction. Option (a) is the layering-discipline-correct answer — it removes a name-match in the compiler. Also audit `lib/freestanding/runtime.c` and `c_runtime.rs` for any other `_Noreturn` C functions exposed to Gorget (likely none today). [added: 2026-05-06 from JS-interpreter snag #12 round 6 follow-up]
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 5 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks). Struct init was already covered. Enum variant init fixed (was missing `clone_multi_use_resource_args` at the `methods.rs` and `calls.rs` call sites — caused double-free on resource-typed fields in loops). [updated: 2026-04-16]
