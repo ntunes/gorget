@@ -174,11 +174,8 @@ struct GirModule:
     Dict[String, bool] none_decls
     # Enum registry — used by `find_enum_by_variant` for the inverted
     # variant→enum lookup and by `enum_variant_index` for ordinal
-    # resolution. Kept as parallel Vectors (not a Dict) because the
-    # primary access pattern is iteration across all enums to locate a
-    # variant, not keyed lookup. Mirrors Rust's `ctx.resolve_enum_variant`.
-    Vector[String] enum_names
-    Vector[Vector[String]] enum_variants
+    # resolution. Mirrors Rust's `ctx.resolve_enum_variant`.
+    Dict[String, Vector[String]] enum_registry
     # Float constants. Module-level `float EPSILON = 0.000001` etc.
     # lands here so `EIdentifier(EPSILON)` can inline an
     # `OpConstF64(value)` rather than emitting a `[bug] EIdentifier:
@@ -284,22 +281,13 @@ void none_mark(GirModule &gmod, String name):
     if not gmod.none_decls.contains(name):
         gmod.none_decls.put(name.clone(), true)
 
-# enum registry accessors. Used when match_enum_type can't trust
-# gmod.type_infos.contains() due to the Dict[String, _] bug.
+# enum registry accessors.
 bool enum_registered(GirModule &gmod, String enum_name):
-    bool found = false
-    int i = 0
-    while i < gmod.enum_names.len():
-        String k = gmod.enum_names.get(i).unwrap()
-        if k == enum_name:
-            found = true
-        i += 1
-    return found
+    return gmod.enum_registry.contains(enum_name)
 
 void register_enum(GirModule &gmod, String enum_name, Vector[String] variants):
-    if not enum_registered(&gmod, enum_name):
-        gmod.enum_names.push(enum_name.clone())
-        gmod.enum_variants.push(variants)
+    if not gmod.enum_registry.contains(enum_name):
+        gmod.enum_registry.put(enum_name.clone(), variants)
 
 # Scan registered enums to find one that declares a given variant.
 # Mirrors Rust's `resolve_enum_variant` fallback used by the pattern
@@ -308,34 +296,32 @@ void register_enum(GirModule &gmod, String enum_name, Vector[String] variants):
 # first to stay deterministic).
 String find_enum_by_variant(GirModule &gmod, String variant_name):
     String result = ""
+    Vector[String] enum_names = gmod.enum_registry.keys()
     int i = 0
-    while i < gmod.enum_names.len():
-        Vector[String] vs = gmod.enum_variants.get(i).unwrap()
+    while i < enum_names.len():
+        String enum_name = enum_names.get(i).unwrap()
+        Vector[String] vs = gmod.enum_registry.get(enum_name).unwrap()
         int j = 0
         while j < vs.len():
             String vn = vs.get(j).unwrap()
             if vn == variant_name and result == "":
-                result = gmod.enum_names.get(i).unwrap().clone()
+                result = enum_name.clone()
             j += 1
         i += 1
     return result
 
 # Look up the variant index (ordinal) for a given enum + variant.
 int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
-    int result = -1
-    int i = 0
-    while i < gmod.enum_names.len():
-        String k = gmod.enum_names.get(i).unwrap()
-        if k == enum_name:
-            Vector[String] vs = gmod.enum_variants.get(i).unwrap()
-            int j = 0
-            while j < vs.len():
-                String vn = vs.get(j).unwrap()
-                if vn == variant_name and result == -1:
-                    result = j
-                j += 1
-        i += 1
-    return result
+    if not gmod.enum_registry.contains(enum_name):
+        return -1
+    Vector[String] vs = gmod.enum_registry.get(enum_name).unwrap()
+    int j = 0
+    while j < vs.len():
+        String vn = vs.get(j).unwrap()
+        if vn == variant_name:
+            return j
+        j += 1
+    return -1
 
 # type_infos / call_redirects / fn_sigs / type_subs accessors —
 # thin wrappers over the underlying Dict so call sites stay stable.

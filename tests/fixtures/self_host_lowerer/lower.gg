@@ -4739,13 +4739,9 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             else:
                 pass
         tai += 1
-    # Build type field info for LIR drop analysis. The enum_names /
-    # enum_variants registry stays as parallel Vectors because the access
-    # pattern is iteration across all enums (find_enum_by_variant), not
-    # keyed lookup — mirrors Rust's `ctx.resolve_enum_variant`.
+    # Build type field info for LIR drop analysis.
     Dict[String, GirTypeInfo] type_infos = {}
-    Vector[String] enum_names = []
-    Vector[Vector[String]] enum_variants = []
+    Dict[String, Vector[String]] enum_registry = {}
     int tfi = 0
     while tfi < m.items.len():
         Item tfi_item = m.items.get(tfi).unwrap()
@@ -4778,8 +4774,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     variant_names_only.push(var.name.clone())
                     evi += 1
                 type_infos.put(edef.name, GirTypeInfo(edef.name, no_fields, variants, true))
-                enum_names.push(edef.name.clone())
-                enum_variants.push(!variant_names_only)
+                enum_registry.put(edef.name.clone(), !variant_names_only)
             else:
                 pass
         tfi += 1
@@ -4793,7 +4788,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     Vector[String] static_keys_init = []
     Vector[String] static_init_exprs_init = []
     Vector[int] static_type_ids_init = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_names, !enum_variants, !float_const_decls, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
