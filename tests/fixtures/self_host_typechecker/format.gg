@@ -32,7 +32,7 @@ String format_float_decimal(float f):
     # (rare in parser canonical output — most large floats are integer-valued)
     return s
 
-# ── Typed accessors (workaround: pattern-destructured Vectors lose generic type) ──
+# ── Typed accessors ──
 
 SpannedType get_stype_at(Vector[SpannedType] v, int i):
     return v.get(i).unwrap()

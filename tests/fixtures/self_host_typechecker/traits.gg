@@ -7,9 +7,11 @@
 # param type; Shape-2: bind G when it appears in the return type and a
 # function-typed arg's return type fills it in).
 #
-# Storage uses parallel Vectors over method names instead of
-# Dict[String, _] so the structure is robust against the known stage-N
-# Dict[String, _] state-loss issue should the typechecker ever bootstrap.
+# Storage uses struct-of-arrays (parallel Vectors over method names)
+# rather than Dict[String, MethodInfo] for cache locality during the
+# linear scan that dominates resolution. A future refactor could
+# migrate to Dict[String, MethodInfo] now that ordering is preserved
+# (TODO).
 
 from std.collections import Vector
 from ast import Module, Item, Type, FunctionDef, TraitDef, EquipBlock, Param, SpannedType, Span

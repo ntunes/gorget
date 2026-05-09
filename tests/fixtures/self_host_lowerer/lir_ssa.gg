@@ -481,11 +481,8 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
         if incomplete_phis.len() > prev_phi_count:
             changed = true
 
-    # Build target_bb → [slots in param order] by iterating pending_phi_bbs /
-    # pending_phis in insertion order. Dict[int, Vector[int]] is insertion-order-
-    # preserving now that the gorget_dict_new fix is in place — keys() returns
-    # them in the order they were first put, so no parallel Vector workaround is
-    # needed.
+    # Build target_bb → [slots in param order] by iterating
+    # pending_phi_bbs / pending_phis in insertion order.
     Dict[int, Vector[int]] target_slots = {}
     int pp_i = 0
     while pp_i < pending_phi_bbs.len():
