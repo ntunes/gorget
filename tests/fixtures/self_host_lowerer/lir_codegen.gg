@@ -3803,9 +3803,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     # Enum variant constructor: `VariantName(x)` → inline struct init for
     # the parent enum (no C function exists for variants). For 0-arg
     # variants, emits just the tag. For 1+-arg variants, initializes the
-    # variant's payload fields. Prefer parallel-vector lookup — Dict
-    # state-loss otherwise misses TkEof / TSelf / etc. and emits them as
-    # undefined-symbol calls instead of inline struct literals.
+    # variant's payload fields.
     if m.enum_variant_parent.contains(ev_name):
         String parent_name = m.enum_variant_parent.get(ev_name).unwrap()
         int parent_sid = find_struct_type(parent_name, &m)

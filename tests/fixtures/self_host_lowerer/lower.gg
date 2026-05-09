@@ -1820,12 +1820,10 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = inner
                     else:
                         pass
-            # Look up field info from type_infos. Prefer the parallel
-            # ti_keys/ti_vals (Dict[String, _] state-loss workaround); fall
-            # back to Dict if not yet populated. We resolve to (field_name,
-            # field_type_name, field_index) tuples without cloning the whole
-            # GirTypeInfo — the Vector clone path double-frees nested
-            # heap data on the self-host.
+            # Look up field info from type_infos. Resolve to
+            # (field_name, field_type_name, field_index) tuples without
+            # cloning the whole GirTypeInfo — the Vector clone path
+            # double-frees nested heap data on the self-host.
             int found_fi = -1
             String found_type_name = ""
             if gmod.type_infos.contains(base_type_name):
@@ -2112,12 +2110,8 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
             is_dict_lit = true
         else:
             return
-    # Look up the ctor's field type. Prefer parallel ti_vals — Dict
-    # state-loss otherwise leaves Vector fields without an elem-size
-    # hint, so `GirModule([], ...)` allocates `gmod.functions` with
-    # elem_size=8 and subsequent pushes truncate every GirFunction
-    # to the first 8 bytes. Avoid value-copying GirTypeInfo (its
-    # nested Vectors don't survive a shallow clone in stage-1).
+    # Look up the ctor's field type. Avoid value-copying GirTypeInfo
+    # (its nested Vectors don't survive a shallow clone in stage-1).
     String fty_name = ""
     if gmod.type_infos.contains(ctor_name):
         GirTypeInfo cti_info = gmod.type_infos.get(ctor_name).unwrap()
@@ -2208,11 +2202,8 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 SpannedType ta = targs.get(ti).unwrap()
                 call_name = call_name + "__" + type_to_c_name(ta, &gmod)
                 ti += 1
-        # Resolve call redirects (bare → module-prefixed name) — prefer
-        # parallel storage to dodge Dict[String, _] state-loss.
-        if call_redirect_contains(&gmod, call_name):
-            call_name = call_redirect_lookup(&gmod, call_name)
-        elif gmod.call_redirects.contains(call_name):
+        # Resolve call redirects (bare → module-prefixed name).
+        if gmod.call_redirects.contains(call_name):
             call_name = gmod.call_redirects.get(call_name).unwrap()
         # User function call
         Vector[Operand] gir_args = []
@@ -2638,8 +2629,7 @@ bool lower_is_ptr_type(int tid, GirModule &gmod):
 # Look up the parent enum name for a type. If `type_name` itself is an
 # enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".
 String match_enum_type(String type_name, GirModule &gmod):
-    # Prefer the parallel enum registry — the gmod.type_infos Dict silently
-    # drops lookups for some keys in self-host-compiled runs.
+    # Check the enum registry first (populated from EnumDef pass).
     if enum_registered(&gmod, type_name):
         return type_name
     if gmod.type_infos.contains(type_name):
@@ -2679,9 +2669,7 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
         if variant_name == "Error":
             return 1
         return -1
-    # Prefer the parallel enum registry — gmod.type_infos Dict[String, _]
-    # lookups silently miss for some keys in self-host-compiled runs. The
-    # registry walks parallel Vectors and finds the right index.
+    # Check the enum registry first; fall back to type_infos.
     int reg_idx = enum_variant_index(&gmod, enum_name, variant_name)
     if reg_idx >= 0:
         return reg_idx
@@ -4958,8 +4946,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         while tfix_i < tfix_end:
             GenericInstance tinst = generic_instances.get(tfix_i).unwrap()
             String tfix_key = tinst.base_name.clone()
-            if not fn_templates.contains(tfix_key) and call_redirect_contains(&gmod, tinst.base_name):
-                tfix_key = call_redirect_lookup(&gmod, tinst.base_name)
             if not fn_templates.contains(tfix_key) and gmod.call_redirects.contains(tinst.base_name):
                 tfix_key = gmod.call_redirects.get(tinst.base_name).unwrap()
             if fn_templates.contains(tfix_key):
