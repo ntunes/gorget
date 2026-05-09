@@ -270,7 +270,12 @@ fn lower_var_decl(
             // returns false because the type upgrade scan hasn't run yet).
             if !ctx.drops.is_registered(local_id) {
                 if let Some(crate::ir::types::GirType::Named(tn)) = ctx.type_registry.get(gir_type).cloned() {
-                    if tn.starts_with("Option__") || tn.starts_with("Result__") {
+                    // Read typed `enum_category` (Option/Result discriminator)
+                    // instead of name-prefix matching the type name.
+                    let is_opt_or_result = ctx.type_registry.get_type_def(&tn)
+                        .and_then(|td| td.metadata.enum_category)
+                        .is_some();
+                    if is_opt_or_result {
                         if let Some(td) = ctx.type_registry.get_type_def(&tn) {
                             if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
                                 let droppable = edef.variants.iter().any(|v| v.fields.iter().any(|f| {
@@ -1490,12 +1495,15 @@ fn lower_return(
         {
             let ret_type = builder.locals[0].type_id;
             let ret_name = ctx.type_registry.type_name(ret_type).unwrap_or_default();
-            let is_array_type = ret_name.starts_with("Vector__")
-                || ret_name.starts_with("Deque__")
-                || ret_name == "GorgetArray";
-            let is_dict_type = ret_name.starts_with("Dict__")
-                || ret_name.starts_with("HashMap__")
-                || ret_name == "GorgetMap";
+            // Read typed `collection_kind` (Phase A) instead of name-prefix
+            // matching. Both runtime singletons and monomorphized aliases
+            // (Vector__T/Dict__K__V/...) carry the kind in their TypeDef.
+            let kind = ctx.type_registry.get_type_def(&ret_name)
+                .and_then(|td| td.metadata.collection_kind);
+            let is_array_type = kind == Some(crate::ir::types::CollectionKind::Array);
+            let is_dict_type = matches!(kind,
+                Some(crate::ir::types::CollectionKind::OrderedMap)
+                | Some(crate::ir::types::CollectionKind::Map));
             // Skip materialization when the function has no string borrows —
             // no views could have been pushed into the returned collection.
             if (is_array_type || is_dict_type) && ctx.func_state.has_string_borrows {

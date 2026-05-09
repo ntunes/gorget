@@ -80,17 +80,18 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 /// **As you migrate**: lower the budget in the same commit that retires
 /// the site(s).
 ///
-/// Baseline 2026-05-09: 425 (initial 438; -6 in lower_index_assign /
-/// lower_compound_index_assign; -7 in for_loops.rs collection_kind dispatch
-/// dead-fallback retirement + Set/HashSet ordered discrimination). Source-of-
-/// truth count for the date — re-derive with
+/// Baseline 2026-05-09: 419 (initial 438; -6 lower_index_assign /
+/// lower_compound_index_assign; -7 for_loops.rs dead-fallback +
+/// Set/HashSet ordered discrimination; -6 stmts/mod.rs return-value
+/// materialization + Option/Result-of-resource drop registration).
+/// Source-of-truth count for the date — re-derive with
 /// `grep -roE 'starts_with\("(...)__"\)' src/ | wc -l`.
 /// (Counts occurrences, not lines — a line with two matches counts twice.)
 #[test]
 fn no_growth_in_name_prefix_routing() {
     /// Maximum allowed count of name-prefix routing sites in src/. Decrease
     /// when you migrate sites to typed metadata.
-    const BUDGET: usize = 425;
+    const BUDGET: usize = 419;
 
     let count = count_name_prefix_sites();
     assert!(
