@@ -45,97 +45,6 @@ pub(super) fn closure_params_need_ref(module: &LirModule, call_fn: &str) -> Vec<
     }
 }
 
-/// For a `map` combinator, determine the source enum type and the result enum type.
-/// The source type comes from the function name (e.g. `Option__int64_t__map` → `Option__int64_t`).
-/// The result type is an Option/Result wrapping the closure's return type.
-/// If the closure returns the same element type, source == result.
-/// If different (cross-type map), find the matching Option__<ret_type> struct.
-pub(super) fn map_combinator_types(
-    name: &str, type_prefix: &str, call_fn: &str,
-    module: &LirModule, sn: &HashMap<u32, String>,
-) -> (String, String) {
-    // Source type name = type_prefix (e.g., "Option__int64_t")
-    let src_c = find_struct_c_name_by_prefix(type_prefix, module, sn)
-        .unwrap_or_else(|| type_prefix.to_string());
-
-    // Get the closure call function's return type.
-    let closure_ret = closure_call_return_type(module, call_fn, sn);
-
-    // If the closure returns the same type as the source payload, no cross-type.
-    // If it returns a struct (Option/Result), the caller already does and_then, not map.
-    // For map, the result wraps the closure return in the same Option/Result variant.
-    if let Some(ref ret_ty) = closure_ret {
-        // Extract what element type the source Option wraps.
-        // E.g., "Option__int64_t" → payload is "int64_t"
-        let src_payload = type_prefix.strip_prefix("Option__")
-            .or_else(|| type_prefix.strip_prefix("Result__"));
-        if let Some(payload) = src_payload {
-            let payload_c = elem_type_to_c(payload);
-            if *ret_ty != payload_c {
-                // Cross-type: need Option__<ret_ty> or Result__<ret_ty> struct.
-                let result_prefix = if name.starts_with("Option__") {
-                    format!("Option__{}", type_name_to_monomorphized(ret_ty))
-                } else {
-                    // Result map keeps the error type; extract it from source struct
-                    let err_part = module.structs.iter().find(|s| s.name == type_prefix)
-                        .and_then(|s| s.fields.get(2))
-                        .map(|(_, t)| c_type_named(t, sn));
-                    if let Some(err_c) = err_part {
-                        let err_m = type_name_to_monomorphized(&err_c);
-                        format!("Result__{}__{err_m}", type_name_to_monomorphized(ret_ty))
-                    } else {
-                        format!("Result__{}", type_name_to_monomorphized(ret_ty))
-                    }
-                };
-                let result_c = find_struct_c_name_by_prefix(&result_prefix, module, sn)
-                    .unwrap_or(src_c.clone());
-                return (src_c, result_c);
-            }
-        }
-    }
-    (src_c.clone(), src_c)
-}
-
-/// Compute source and result types for Result__T__E__map_err (closure transforms E → E2).
-pub(super) fn map_err_combinator_types(
-    _name: &str, type_prefix: &str, call_fn: &str,
-    module: &LirModule, sn: &HashMap<u32, String>,
-) -> (String, String) {
-    let src_c = find_struct_c_name_by_prefix(type_prefix, module, sn)
-        .unwrap_or_else(|| type_prefix.to_string());
-    let closure_ret = closure_call_return_type(module, call_fn, sn);
-    if let Some(ref ret_ty) = closure_ret {
-        // Result__T__E → Ok type is field[1], Error type is field[2].
-        let ok_c = module.structs.iter().find(|s| s.name == type_prefix)
-            .and_then(|s| s.fields.get(1))
-            .map(|(_, t)| c_type_named(t, sn));
-        if let Some(ok_c) = ok_c {
-            let ok_m = type_name_to_monomorphized(&ok_c);
-            let result_prefix = format!("Result__{ok_m}__{}", type_name_to_monomorphized(ret_ty));
-            let result_c = find_struct_c_name_by_prefix(&result_prefix, module, sn)
-                .unwrap_or(src_c.clone());
-            return (src_c, result_c);
-        }
-    }
-    (src_c.clone(), src_c)
-}
-
-/// Compute source and result types for and_then (closure returns the full Result/Option).
-pub(super) fn and_then_combinator_types(
-    _name: &str, type_prefix: &str, call_fn: &str,
-    module: &LirModule, sn: &HashMap<u32, String>,
-) -> (String, String) {
-    let src_c = find_struct_c_name_by_prefix(type_prefix, module, sn)
-        .unwrap_or_else(|| type_prefix.to_string());
-    let closure_ret = closure_call_return_type(module, call_fn, sn);
-    if let Some(ref ret_ty) = closure_ret {
-        // The closure returns the full wrapped type (e.g. Option__U, Result__U__E).
-        let result_c = find_struct_c_name_by_prefix(ret_ty, module, sn)
-            .unwrap_or(src_c.clone());
-        return (src_c, result_c);
-    }
-    (src_c.clone(), src_c)
-}
 
 /// Find the C name for a struct whose original name matches a prefix.
 pub(super) fn find_struct_c_name_by_prefix(prefix: &str, module: &LirModule, sn: &HashMap<u32, String>) -> Option<String> {
@@ -145,15 +54,6 @@ pub(super) fn find_struct_c_name_by_prefix(prefix: &str, module: &LirModule, sn:
         }
     }
     None
-}
-
-/// Map a C type name back to its monomorphized form for struct lookup.
-pub(super) fn type_name_to_monomorphized(c_type: &str) -> &str {
-    // Normalize C type names to monomorphized struct names.
-    match c_type {
-        "Str" => "GorgetString",
-        _ => c_type,
-    }
 }
 
 /// Convert a monomorphized element type name to its C type.
@@ -229,27 +129,24 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
 
                         let (ok_field, err_field) = enum_payload_fields(type_prefix, module);
 
-                        // For map/map_err/and_then, source and result types may differ.
-                        let (src_c, result_c) = if method == "map" {
-                            map_combinator_types(name, type_prefix, &call_fn, module, sn)
-                        } else if method == "map_err" {
-                            map_err_combinator_types(name, type_prefix, &call_fn, module, sn)
-                        } else if method == "and_then" {
-                            and_then_combinator_types(name, type_prefix, &call_fn, module, sn)
-                        } else if method == "flatten" {
-                            // flatten: source is Option[Option[T]], result is Option[T]
-                            let src = find_struct_c_name_by_prefix(type_prefix, module, sn)
-                                .unwrap_or_else(|| type_prefix.to_string());
-                            let inner = module.structs.iter().find(|s| s.name == type_prefix)
+                        let src_c = find_struct_c_name_by_prefix(type_prefix, module, sn)
+                            .unwrap_or_else(|| type_prefix.to_string());
+
+                        // Result C type: read from the typed LirExtern field when available
+                        // (set by the LIR post-pass for cross-type maps), otherwise same as source.
+                        // For flatten: result is the Option/Result's inner payload type.
+                        let result_c = if method == "flatten" {
+                            module.structs.iter().find(|s| s.name == type_prefix)
                                 .and_then(|s| s.fields.get(1))
                                 .map(|(_, t)| c_type_named(t, sn))
-                                .unwrap_or_else(|| src.clone());
-                            (src, inner)
+                                .unwrap_or_else(|| src_c.clone())
+                        } else if let Some(sid) = ext.and_then(|e| e.combinator_result_struct_id) {
+                            let idx = sid.0 as usize;
+                            sn.get(&(idx as u32)).cloned()
+                                .or_else(|| module.structs.get(idx).map(|s| s.name.clone()))
+                                .unwrap_or_else(|| src_c.clone())
                         } else {
-                            // Non-map combinators: source == result.
-                            let c = find_struct_c_name_by_prefix(type_prefix, module, sn)
-                                .unwrap_or_else(|| type_prefix.to_string());
-                            (c.clone(), c)
+                            src_c.clone()
                         };
 
                         helpers.push((name.clone(), src_c, result_c, method.to_string(), closure_c_type, call_fn, ok_field, err_field));
@@ -441,27 +338,6 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
             }
         }
         writeln!(out).unwrap();
-    }
-}
-pub(super) fn elem_type_to_c(elem: &str) -> String {
-    elem_type_to_c_with_sn(elem, &HashMap::new())
-}
-
-pub(super) fn elem_type_to_c_with_sn(elem: &str, orig_to_c: &HashMap<String, String>) -> String {
-    match elem {
-        "int64_t" | "int32_t" | "int16_t" | "int8_t" => elem.to_string(),
-        "uint64_t" | "uint32_t" | "uint16_t" | "uint8_t" => elem.to_string(),
-        "bool" => "bool".to_string(),
-        "float" | "double" => elem.to_string(),
-        "Str" | "GorgetString" => "Str".to_string(),
-        _ => {
-            // Try to resolve through struct name map.
-            if let Some(cname) = orig_to_c.get(elem) {
-                return cname.clone();
-            }
-            // Could be a user struct — use the name as-is.
-            elem.to_string()
-        }
     }
 }
 /// Generate blocking spawn/await helpers for each spawned function.

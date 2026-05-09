@@ -511,6 +511,7 @@ mod tests {
             is_variadic: false,
             param_abis: vec![],
             return_abi: Default::default(),
+            combinator_result_struct_id: None,
         });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);

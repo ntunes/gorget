@@ -213,8 +213,6 @@
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
 
-- **Map combinator result-type reconstruction by name-parsing in `src/backend/c_lir/mod.rs:~1555`** — reconstructs the output `Option__T` or `Result__OkType__ErrType` name by splitting the source type name at `__` boundaries. The GIR already resolved the map return type; it should be attached to the call site. Fix: propagate result type as a typed field on the map combinator HOF entry rather than re-parsing it in the C backend. [added: 2026-05-09]
-
 - **Trait-box detection by name-lookup in `src/lir/lower/drops.rs:~172`** — detects whether a `Box__T` wraps a trait object by checking whether `{T}_TraitObj` exists in the GIR type registry. The TypeDef for `Box__T` already knows its inner type; the trait-object nature should be a boolean flag on the `StructDef` or `TypeDef`, not re-derived by naming convention. Related to the `box_inner_type` field added in Snag #13 — that field is at registration time but doesn't carry the trait-object flag. [added: 2026-05-09]
 
 

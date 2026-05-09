@@ -241,27 +241,7 @@ fn find_struct_by_prefix(prefix: &str, module: &LirModule) -> Option<StructId> {
         .map(|(i, _)| StructId(i as u32))
 }
 
-/// Convert a LirType to the monomorphized C name used in struct names (e.g., I64→"int64_t").
-fn lir_type_to_monomorphized(ty: &LirType, structs: &[StructDef]) -> String {
-    match ty {
-        LirType::I8 => "int8_t".to_string(),
-        LirType::I16 => "int16_t".to_string(),
-        LirType::I32 => "int32_t".to_string(),
-        LirType::I64 => "int64_t".to_string(),
-        LirType::U8 => "uint8_t".to_string(),
-        LirType::U16 => "uint16_t".to_string(),
-        LirType::U32 => "uint32_t".to_string(),
-        LirType::U64 => "uint64_t".to_string(),
-        LirType::F32 => "float".to_string(),
-        LirType::F64 => "double".to_string(),
-        LirType::Bool => "bool".to_string(),
-        LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef => "ptr".to_string(),
-        LirType::Struct(sid) => structs.get(sid.0 as usize)
-            .map(|d| d.name.clone())
-            .unwrap_or_else(|| format!("struct_{}", sid.0)),
-        LirType::Void => "void".to_string(),
-    }
-}
+
 
 /// Map a C element type name (from Vector__<elem>__method) to an LLVM type string and size.
 fn elem_c_to_llvm(elem: &str, module: &LirModule, snames: &HashMap<u32, String>) -> (String, usize) {
@@ -4761,26 +4741,13 @@ fn emit_inst(
 
                     // Determine the result struct size for alloca.
                     // For most combinators, result type == source type.
-                    // For map/map_err, it may differ (cross-type).
+                    // For map/map_err/and_then/filter/flat_map, read from the typed
+                    // LirExtern.combinator_result_struct_id (set by the LIR post-pass).
                     let result_sid = match method {
-                        "map" => {
-                            // Result type wraps the closure's return type
-                            closure_info.as_ref().and_then(|(_, ret_ty, _)| {
-                                // Build target name: Option__<ret_monomorphized> or Result__<ok_ret>__<err>
-                                let _ret_llvm = llvm_type_full(ret_ty, snames);
-                                let ret_mono = lir_type_to_monomorphized(ret_ty, &module.structs);
-                                let target = if name.starts_with("Result__") {
-                                    // Keep err type from source
-                                    let err_mono = src_sdef.and_then(|d| d.fields.get(2))
-                                        .map(|(_, t)| lir_type_to_monomorphized(t, &module.structs))
-                                        .unwrap_or_else(|| "int64_t".to_string());
-                                    format!("Result__{ret_mono}__{err_mono}")
-                                } else {
-                                    format!("Option__{ret_mono}")
-                                };
-                                find_struct_by_prefix(&target, module)
-                                    .or(src_sid) // fallback to source type for same-type map
-                            }).or(src_sid)
+                        "map" | "map_err" | "and_then" | "filter" | "flat_map" => {
+                            module.externs.iter().find(|e| e.name == *name)
+                                .and_then(|e| e.combinator_result_struct_id)
+                                .or(src_sid)
                         }
                         "flatten" => {
                             // Flatten: result is the inner Option/Result (payload type)

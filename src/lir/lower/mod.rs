@@ -181,6 +181,7 @@ impl<'a> LoweringContext<'a> {
                 is_variadic: ext.is_variadic,
                 param_abis: ext.param_abis.clone(),
                 return_abi: Default::default(),
+                combinator_result_struct_id: None,
             });
         }
 
@@ -299,6 +300,94 @@ impl<'a> LoweringContext<'a> {
 
         for func in funcs {
             self.module.add_function(func);
+        }
+
+        // Post-pass: populate combinator_result_struct_id on Option/Result HOF externs.
+        // The GIR ExternDecl return type is `ret_self` (the source enum) for map/map_err/and_then;
+        // when the closure maps to a different element type (cross-type map), the result struct
+        // differs. We resolve it once here — from the closure struct's __call return type —
+        // and store the StructId so the C backend can read a typed field instead of re-deriving
+        // by splitting the name at `__` boundaries.
+        {
+            // Methods that produce a (potentially different) result struct from the HOF.
+            const CROSS_TYPE_METHODS: &[&str] = &["map", "map_err", "and_then", "filter", "flat_map"];
+
+            // Collect (extern_idx, result_struct_id) pairs before mutating.
+            let mut updates: Vec<(usize, StructId)> = Vec::new();
+            for (ext_idx, ext) in self.module.externs.iter().enumerate() {
+                let is_option = ext.name.starts_with("Option__");
+                let is_result = ext.name.starts_with("Result__");
+                if !is_option && !is_result { continue; }
+                let sep_pos = match ext.name.rfind("__") { Some(p) => p, None => continue };
+                let method = &ext.name[sep_pos + 2..];
+                if !CROSS_TYPE_METHODS.contains(&method) { continue; }
+
+                // Closure struct is params[1].
+                let closure_ty = match ext.params.get(1) { Some(t) => t, None => continue };
+                let closure_struct_name = match closure_ty {
+                    LirType::Struct(sid) => self.module.structs.get(sid.0 as usize).map(|s| s.name.as_str()),
+                    _ => None,
+                };
+                let closure_struct_name = match closure_struct_name { Some(n) => n, None => continue };
+
+                // Look up the closure's __call return type (typed field on LirFunction).
+                let call_fn_name = format!("{closure_struct_name}__call");
+                let closure_ret = match self.module.functions.iter().find(|f| f.name == call_fn_name) {
+                    Some(f) => f.return_type.clone(),
+                    None => continue,
+                };
+
+                // Source struct: provides payload field types for same-type comparison.
+                let type_prefix = &ext.name[..sep_pos];
+                let src_struct = self.module.structs.iter().find(|s| s.name == type_prefix);
+
+                // Find the result struct via typed field comparisons (no `__`-splitting).
+                let result_sid: Option<StructId> = match method {
+                    "map" | "filter" | "flat_map" => {
+                        let src_payload = src_struct.and_then(|s| s.fields.get(1)).map(|(_, t)| t);
+                        // Same-type map: no override needed.
+                        if src_payload.map_or(true, |t| t == &closure_ret) { continue; }
+                        if is_option {
+                            self.module.structs.iter().enumerate().find(|(_, s)| {
+                                s.name.starts_with("Option__")
+                                    && s.fields.get(1).map_or(false, |(_, t)| t == &closure_ret)
+                            }).and_then(|(_, s)| self.struct_reg.lookup(&s.name))
+                        } else {
+                            let err_lir = src_struct.and_then(|s| s.fields.get(2)).map(|(_, t)| t.clone());
+                            self.module.structs.iter().find(|s| {
+                                s.name.starts_with("Result__")
+                                    && s.fields.get(1).map_or(false, |(_, t)| t == &closure_ret)
+                                    && s.fields.get(2).map_or(true, |(_, t)| err_lir.as_ref().map_or(true, |e| t == e))
+                            }).and_then(|s| self.struct_reg.lookup(&s.name))
+                        }
+                    }
+                    "map_err" => {
+                        let src_err = src_struct.and_then(|s| s.fields.get(2)).map(|(_, t)| t);
+                        if src_err.map_or(true, |t| t == &closure_ret) { continue; }
+                        let ok_lir = src_struct.and_then(|s| s.fields.get(1)).map(|(_, t)| t.clone());
+                        self.module.structs.iter().find(|s| {
+                            s.name.starts_with("Result__")
+                                && s.fields.get(1).map_or(true, |(_, t)| ok_lir.as_ref().map_or(true, |o| t == o))
+                                && s.fields.get(2).map_or(false, |(_, t)| t == &closure_ret)
+                        }).and_then(|s| self.struct_reg.lookup(&s.name))
+                    }
+                    "and_then" => {
+                        // Closure returns the full wrapped type; result IS the closure return.
+                        match &closure_ret {
+                            LirType::Struct(sid) => Some(*sid),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+
+                if let Some(sid) = result_sid {
+                    updates.push((ext_idx, sid));
+                }
+            }
+            for (ext_idx, sid) in updates {
+                self.module.externs[ext_idx].combinator_result_struct_id = Some(sid);
+            }
         }
 
         // Populate spawned_fns metadata for the LIR→C backend to generate

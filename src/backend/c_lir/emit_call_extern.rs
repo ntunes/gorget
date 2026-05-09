@@ -99,34 +99,15 @@ pub(super) fn emit_call_extern(
                         String::new()
                     };
 
-                    // Determine result type for map: wraps the closure's return type.
-                    // For same-type map (int→int), result == source.
-                    // For cross-type map (int→str), find the Option__<ret> struct.
-                    let result_ty = if method == "map" && !call_fn.is_empty() {
-                        closure_call_return_type(module, &call_fn, sn)
-                            .and_then(|ret_ty| {
-                                if name.starts_with("Result__") {
-                                    // For Result map, the error type stays the same.
-                                    // Extract error type from source struct to build target name.
-                                    let err_ty = module.structs.iter().find(|s| s.name == type_prefix)
-                                        .and_then(|s| s.fields.get(2))
-                                        .map(|(_, t)| c_type_named(t, sn));
-                                    if let Some(err_c) = err_ty {
-                                        let ret_m = type_name_to_monomorphized(&ret_ty);
-                                        let err_m = type_name_to_monomorphized(&err_c);
-                                        let target = format!("Result__{ret_m}__{err_m}");
-                                        find_struct_c_name_by_prefix(&target, module, sn)
-                                    } else {
-                                        let ret_m = type_name_to_monomorphized(&ret_ty);
-                                        let target = format!("Result__{ret_m}");
-                                        find_struct_c_name_by_prefix(&target, module, sn)
-                                    }
-                                } else {
-                                    let ret_m = type_name_to_monomorphized(&ret_ty);
-                                    let target = format!("Option__{ret_m}");
-                                    find_struct_c_name_by_prefix(&target, module, sn)
-                                }
-                            })
+                    // Determine result type: read from the typed LirExtern field when available
+                    // (set by the LIR post-pass for cross-type maps), otherwise same as source.
+                    let result_ty = if let Some(sid) = module.externs.iter()
+                        .find(|e| e.name == *name)
+                        .and_then(|e| e.combinator_result_struct_id)
+                    {
+                        let idx = sid.0 as usize;
+                        sn.get(&(idx as u32)).cloned()
+                            .or_else(|| module.structs.get(idx).map(|s| s.name.clone()))
                             .unwrap_or_else(|| src_ty.clone())
                     } else if method == "flatten" {
                         // flatten: result type is the payload type of the outer Option

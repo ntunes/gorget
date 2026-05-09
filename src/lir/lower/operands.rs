@@ -237,6 +237,7 @@ impl<'a> FuncLowering<'a> {
                     is_variadic: false,
                     param_abis: abis,
                     return_abi: ret_abi,
+                    combinator_result_struct_id: None,
                 });
             }
             return;
@@ -280,6 +281,7 @@ impl<'a> FuncLowering<'a> {
                     is_variadic: false,
                     param_abis: abis,
                     return_abi: crate::ir::abi::AbiKind::Auto,
+                    combinator_result_struct_id: None,
                 });
                 return;
             }
@@ -315,6 +317,7 @@ impl<'a> FuncLowering<'a> {
             is_variadic: false,
             param_abis: abi_tags,
             return_abi: ret_abi,
+            combinator_result_struct_id: None,
         });
     }
 

@@ -1458,48 +1458,24 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     }
 
     // Fix cross-type map combinator types. When Option__T__map is called with
-    // a closure that returns U≠T, the result should be Option__U. The GIR doesn't
-    // track this, so the slot and val_types have the wrong type. Fix both: val_types
-    // for the value declaration and slot_overrides for the slot declaration.
+    // a closure that returns U≠T, the result should be Option__U. Read the correct
+    // result struct from the typed LirExtern.combinator_result_struct_id field set
+    // by the LIR post-pass, instead of re-deriving by splitting the extern name.
     let mut slot_overrides: HashMap<u32, LirType> = HashMap::new();
     for block in &func.blocks {
         let insts = &block.insts;
         for (idx, inst) in insts.iter().enumerate() {
-            if let Inst::CallExtern { dst: Some(d), name, args: call_args, .. } = inst {
-                if let Some((_type_prefix, "map")) = parse_option_result_combinator(name) {
-                    if call_args.len() > 1 {
-                        let closure_struct = ptr_pointee.get(call_args[1].0 as usize)
-                            .and_then(|t| t.as_ref())
-                            .map(|t| c_type_named(t, sn));
-                        let call_fn = closure_struct
-                            .map(|n| find_closure_call_fn(module, &n, sn))
-                            .unwrap_or_default();
-                        if !call_fn.is_empty() {
-                            if let Some(ret_ty_name) = closure_call_return_type(module, &call_fn, sn) {
-                                let ret_mono = type_name_to_monomorphized(&ret_ty_name);
-                                let target_name = if name.starts_with("Option__") {
-                                    format!("Option__{ret_mono}")
-                                } else {
-                                    // Result__OkType__ErrType__map → extract error type from source
-                                    let type_prefix = _type_prefix;
-                                    let err_suffix = type_prefix.strip_prefix("Result__")
-                                        .and_then(|rest| rest.find("__").map(|pos| &rest[pos..]));
-                                    if let Some(err) = err_suffix {
-                                        format!("Result__{ret_mono}{err}")
-                                    } else {
-                                        format!("Result__{ret_mono}")
-                                    }
-                                };
-                                if let Some(target_sid) = module.structs.iter().position(|s| s.name == target_name) {
-                                    let target_ty = LirType::Struct(StructId(target_sid as u32));
-                                    val_types[d.0 as usize] = Some(target_ty.clone());
-                                    // Also fix the slot that receives this value.
-                                    if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(idx + 1) {
-                                        if *value == *d {
-                                            slot_overrides.insert(slot.0, target_ty);
-                                        }
-                                    }
-                                }
+            if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
+                if parse_option_result_combinator(name).is_some() {
+                    if let Some(result_sid) = module.externs.iter()
+                        .find(|e| e.name == *name)
+                        .and_then(|e| e.combinator_result_struct_id)
+                    {
+                        let target_ty = LirType::Struct(result_sid);
+                        val_types[d.0 as usize] = Some(target_ty.clone());
+                        if let Some(Inst::SlotStore { slot, value, .. }) = insts.get(idx + 1) {
+                            if *value == *d {
+                                slot_overrides.insert(slot.0, target_ty);
                             }
                         }
                     }

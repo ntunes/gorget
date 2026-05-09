@@ -1499,6 +1499,11 @@ pub struct LirExtern {
     pub param_abis: Vec<crate::ir::abi::AbiKind>,
     /// Return value ABI marshalling kind. Auto = no conversion.
     pub return_abi: crate::ir::abi::AbiKind,
+    /// For Option/Result combinator HOFs (map, map_err, and_then): the StructId of
+    /// the output enum, which may differ from `return_type` when the closure maps
+    /// to a different element type (cross-type map). Set by a post-pass in LIR
+    /// lowering; None for non-combinator externs and for same-type maps.
+    pub combinator_result_struct_id: Option<StructId>,
 }
 
 // ── Module ──────────────────────────────────────────────────────────────────
