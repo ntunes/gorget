@@ -3563,21 +3563,12 @@ impl<'a> FuncLowering<'a> {
                         let dst_gir_ty = self.gir_func.locals[d.0 as usize].type_id;
                         self.map_type(&dst_gir_ty)
                     });
-                    // Only resource-type payloads have drop functions that could
-                    // double-free after a shallow-copy unwrap. Primitives (I64,
-                    // F64, …) and trivial structs have no Option__T__drop.
-                    let payload_is_resource = match &payload_ty {
-                        LirType::Ptr | LirType::PtrTo(_) => true,
-                        LirType::Struct(sid) => {
-                            let sname = self.module_structs
-                                .get(sid.0 as usize)
-                                .map(|s| s.name.as_str())
-                                .unwrap_or("");
-                            self.recursive_drop_structs.contains_key(sname)
-                                || self.recursive_drop_enums.contains_key(sname)
-                        }
-                        _ => false,
-                    };
+                    // The GIR signals a consuming unwrap (resource payload that
+                    // needs drop) by passing the borrow as Operand::Move rather
+                    // than Operand::Copy. Read the operand kind — a typed,
+                    // upstream-resolved fact — instead of re-deriving it here
+                    // from the drop registry.
+                    let payload_is_resource = matches!(args[0], Operand::Move(_));
                     let arg_ptr = lir_args[0];
 
                     if let Some(sid) = opt_sid {

@@ -574,6 +574,19 @@ pub(super) fn lower_method_call(
                 let borrow = builder.add_local(ptr_type, None);
                 builder.emit_borrow(borrow, place.clone());
 
+                // Decide once at the GIR layer: resource payloads require the
+                // source Option/Result to be invalidated after extraction to
+                // prevent a double-free when the source is later dropped.
+                // Signal this to the LIR by passing the borrow as Operand::Move;
+                // the LIR __option_unwrap special-case reads the operand kind
+                // instead of re-deriving the fact from the drop registry.
+                let inner_is_resource = ctx.type_registry.is_resource_type(inner_type);
+                let borrow_op = if inner_is_resource {
+                    FunctionBuilder::mov(borrow)
+                } else {
+                    FunctionBuilder::copy(borrow)
+                };
+
                 if method_name == "unwrap_or" {
                     // unwrap_or(default) → (tag == 0) ? data.Variant._0 : default
                     let default_val = if !args.is_empty() {
@@ -584,12 +597,12 @@ pub(super) fn lower_method_call(
                     let extern_name = if is_result { "__result_unwrap_or" } else { "__option_unwrap_or" };
                     let dst = ctx.call_extern_tracked(builder,
                         extern_name,
-                        vec![FunctionBuilder::copy(borrow), default_val],
+                        vec![borrow_op, default_val],
                         inner_type,
                     );
                     // Move-if-dead: unwrap consumes the Option/Result.
                     // Unregister + MoveZero to transfer ownership.
-                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                    if inner_is_resource {
                         ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
@@ -599,12 +612,12 @@ pub(super) fn lower_method_call(
                     let extern_name = if is_result { "__result_unwrap" } else { "__option_unwrap" };
                     let dst = ctx.call_extern_tracked(builder,
                         extern_name,
-                        vec![FunctionBuilder::copy(borrow)],
+                        vec![borrow_op],
                         inner_type,
                     );
                     // Move-if-dead: unwrap consumes the Option/Result.
                     // Unregister + MoveZero to transfer ownership.
-                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                    if inner_is_resource {
                         ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
                     }
@@ -648,9 +661,15 @@ pub(super) fn lower_method_call(
                     );
                     let borrow = builder.add_local(ptr_type, None);
                     builder.emit_borrow(borrow, place.clone());
+                    let err_is_resource = ctx.type_registry.is_resource_type(err_type);
+                    let borrow_op = if err_is_resource {
+                        FunctionBuilder::mov(borrow)
+                    } else {
+                        FunctionBuilder::copy(borrow)
+                    };
                     let dst = ctx.call_extern_tracked(builder,
                         "__result_unwrap_error",
-                        vec![FunctionBuilder::copy(borrow)],
+                        vec![borrow_op],
                         err_type,
                     );
                     // Move-if-dead: unwrap_error consumes the Result.
@@ -662,7 +681,7 @@ pub(super) fn lower_method_call(
                     // reads while drop-tracking takes ownership; for temps
                     // there are no later reads but MoveZero costs nothing and
                     // closes any aliased-read window.
-                    if is_resource_type_local(dst, builder, &ctx.type_registry) {
+                    if err_is_resource {
                         ctx.drops.unregister(place.local);
                         if !ctx.is_named_local(place.local) {
                             ctx.move_zero_and_mark(builder, place.local);
