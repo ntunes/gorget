@@ -2811,17 +2811,15 @@ LirModule lower_gir_to_lir(GirModule &gmod):
     # `EIdentifier(name)` lowerings emitted `__global_ref__<name>`
     # GICallExterns earlier; the intercept in the GICallExtern arm
     # below scans `m.globals` for the matching name and rewrites to
-    # `IGlobalAddr(dst, gid)`. Iterating in `static_keys` order keeps
-    # the global-id sequence deterministic across runs (Vector iter
-    # order, not Dict iter order — the bootstrap demands byte-equal
-    # output).
+    # `IGlobalAddr(dst, gid)`. Dict insertion-order iteration keeps the
+    # global-id sequence deterministic across runs.
+    Vector[String] static_names = gmod.statics.keys()
     int sgi = 0
-    while sgi < gmod.static_keys.len():
-        String sg_name = gmod.static_keys.get(sgi).unwrap()
-        String sg_init = gmod.static_init_exprs.get(sgi).unwrap()
-        int sg_gir_ty = gmod.static_type_ids.get(sgi).unwrap()
-        int sg_lir_ty = map_gir_type(sg_gir_ty, &gmod, &sr)
-        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_init.clone(), false)
+    while sgi < static_names.len():
+        String sg_name = static_names.get(sgi).unwrap()
+        GirStaticInfo sg_info = gmod.statics.get(sg_name).unwrap()
+        int sg_lir_ty = map_gir_type(sg_info.type_id, &gmod, &sr)
+        LirGlobal sg = LirGlobal(sg_name.clone(), sg_lir_ty, GINIT_RUNTIME_CALL, -1, sg_info.init_expr.clone(), false)
         lir_mod_add_global(&m, sg)
         sgi += 1
 

@@ -4785,10 +4785,8 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # `stdin` from lib/std/io.gg etc.). Populated below in the
     # IStaticDecl handler when int/float eval miss and the init shape is
     # a zero-arg call.
-    Vector[String] static_keys_init = []
-    Vector[String] static_init_exprs_init = []
-    Vector[int] static_type_ids_init = []
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !static_keys_init, !static_init_exprs_init, !static_type_ids_init)
+    Dict[String, GirStaticInfo] statics = {}
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !const_decls, !none_decls, !enum_registry, !float_const_decls, !statics)
 
     # Refine fn_sigs for functions with named/generic return types. The
     # pre-scan above defaulted those to `I64_TYPE` because `map_ast_type`
