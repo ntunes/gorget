@@ -1817,19 +1817,15 @@ pub(super) fn test_cleanup_push_code_lir(
             return Some(format!("    __gorget_cleanup_push(free, (void*)__s{slot_idx});\n"));
         }
 
-        // GorgetString
-        if name == "GorgetString" {
-            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_string_free, (void*)&__s{slot_idx});\n"));
-        }
-
-        // Vector/Array types
-        if name.starts_with("Vector__") || name.starts_with("Deque__") || name == "GorgetArray" {
-            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_array_free, (void*)&__s{slot_idx});\n"));
-        }
-
-        // Dict/Map types
-        if name.starts_with("Dict__") || name.starts_with("HashMap__") || name == "GorgetMap" {
-            return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn)gorget_map_free, (void*)&__s{slot_idx});\n"));
+        // Resource types: read `elem_drop_fn` from the typed StructDef (alias-
+        // aware lookup handles Vector__T → GorgetArray etc.). Replaces three
+        // parallel name-prefix matches against `gorget_*_free` strings; the
+        // runtime singletons (GorgetString/Array/Map/Set/Closure) and their
+        // monomorphized aliases all carry the same canonical drop fn here.
+        if let Some(sd) = module.struct_def_by_name(name) {
+            if let Some(ref drop_fn) = sd.elem_drop_fn {
+                return Some(format!("    __gorget_cleanup_push((__gorget_cleanup_fn){drop_fn}, (void*)&__s{slot_idx});\n"));
+            }
         }
 
         // User struct with custom drop: check if a {Name}__drop function exists.

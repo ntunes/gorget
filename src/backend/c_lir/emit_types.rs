@@ -1286,25 +1286,25 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
 /// Returns `None` for primitive / driveless inners (int, bool, etc.) where
 /// the wrapper just frees the heap allocation without recursing.
 fn box_inner_drop_fn(inner: &str, module: &LirModule) -> Option<String> {
-    // Trivial-drop runtime resource types: route through the matching
-    // `gorget_*_free` (uniform `void(void*)` signature).
-    if inner.starts_with("Vector__") || inner.starts_with("Deque__") || inner == "GorgetArray" {
-        return Some("gorget_array_free".into());
-    }
-    if inner.starts_with("Dict__") || inner.starts_with("HashMap__") || inner == "GorgetMap" {
-        return Some("gorget_map_free".into());
-    }
-    if inner.starts_with("Set__") || inner.starts_with("HashSet__") || inner == "GorgetSet" {
-        return Some("gorget_set_free".into());
-    }
-    if inner == "GorgetString" || inner == "Str" || inner == "String" {
-        return Some("gorget_string_free".into());
-    }
-    // Phase A residual #1: Callable family aliases of GorgetClosure read
-    // through their LIR StructDef's `c_runtime_alias` / `elem_drop_fn`.
-    if let Some(sd) = module.structs.iter().find(|s| s.name == inner) {
-        if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
-            return Some("gorget_closure_free".into());
+    // Resolve the runtime-backing StructDef via the alias map
+    // (Vector__T → GorgetArray, Dict__K__V → GorgetMap, etc.) and read
+    // the typed `elem_drop_fn` — the canonical "uniform `void(void*)` free
+    // function for this resource type" entry set at builtin registration
+    // (`src/lir/types.rs:83/98/151/178`). Replaces four parallel
+    // `name.starts_with(...)` prefix matches and a hardcoded
+    // `c_runtime_alias == "GorgetClosure" → "gorget_closure_free"` shortcut.
+    if let Some(sd) = module.struct_def_by_name(inner) {
+        if let Some(ref drop_fn) = sd.elem_drop_fn {
+            return Some(drop_fn.clone());
+        }
+        // Indirect via c_runtime_alias for monomorphizations whose alias
+        // target carries the elem_drop_fn (Callable family → GorgetClosure).
+        if let Some(ref alias) = sd.c_runtime_alias {
+            if let Some(alias_sd) = module.struct_def_by_name(alias) {
+                if let Some(ref drop_fn) = alias_sd.elem_drop_fn {
+                    return Some(drop_fn.clone());
+                }
+            }
         }
     }
     // Nested Box[Box[T]]: route through the inner Box's wrapper. The inner
