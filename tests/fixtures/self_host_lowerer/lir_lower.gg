@@ -1377,7 +1377,8 @@ bool is_collection_constructor(String name, LirModule &m):
         return true
     # Slow path: unregistered name — check prefix + method-suffix heuristics.
     # Handles types that haven't been seen as type declarations yet.
-    if not (name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("Channel__") or name.starts_with("Shared__")):
+    # collection_runtime_type is the source-of-truth for prefix matching.
+    if collection_runtime_type(name) == "" and not is_opaque_pointer_type(name):
         return false
     String method = extract_method_name(name)
     if method == "int64_t" or method == "double" or method == "bool" or method == "int32_t":

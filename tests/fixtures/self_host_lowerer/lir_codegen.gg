@@ -1194,44 +1194,43 @@ bool is_runtime_dict_or_set_ctor(String mapped_name):
 # bare form while explicit `.new()` / `.with_capacity()` calls keep the
 # suffix. Returns "" for primitive / monomorphized-scalar keys (those
 # get the runtime's byte-FNV / memcmp fallback for free).
-String extract_user_hashable_key(String orig_name):
-    String prefix = ""
-    bool is_set = false
-    if orig_name.starts_with("Dict__"):
-        prefix = "Dict__"
-    elif orig_name.starts_with("HashMap__"):
-        prefix = "HashMap__"
-    elif orig_name.starts_with("Set__"):
-        prefix = "Set__"
-        is_set = true
-    elif orig_name.starts_with("HashSet__"):
-        prefix = "HashSet__"
-        is_set = true
-    if prefix.len() == 0:
-        return ""
-    String rest = orig_name.slice(prefix.len(), orig_name.len())
-    String body_str = rest
-    if rest.ends_with("__new_str"):
-        body_str = rest.slice(0, rest.len() - 9)
-    elif rest.ends_with("__new"):
-        body_str = rest.slice(0, rest.len() - 5)
-    elif rest.ends_with("__with_capacity"):
-        body_str = rest.slice(0, rest.len() - 15)
-    String key_ty = ""
-    if is_set:
-        key_ty = body_str
-    else:
-        int sep_i = 0
-        while sep_i + 1 < body_str.byte_len():
-            if body_str.byte_at(sep_i) == 0x5F and body_str.byte_at(sep_i + 1) == 0x5F:
-                key_ty = body_str.slice(0, sep_i)
-                break
-            sep_i += 1
-    if key_ty.len() == 0:
-        return ""
-    if is_primitive_hashable_key(key_ty):
-        return ""
-    return key_ty
+# Phase A — uses typed coll_key_type_map / coll_elem_type_map on LirModule.
+String lc_coll_key_lookup(String name, LirModule &m):
+    if m.coll_key_type_map.contains(name):
+        return m.coll_key_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_key_type_map.contains(prefix):
+                return m.coll_key_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+String lc_coll_elem_lookup(String name, LirModule &m):
+    if m.coll_elem_type_map.contains(name):
+        return m.coll_elem_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_elem_type_map.contains(prefix):
+                return m.coll_elem_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+String extract_user_hashable_key(String orig_name, LirModule &m):
+    String key_ty = lc_coll_key_lookup(orig_name, &m)
+    if key_ty != "":
+        if is_primitive_hashable_key(key_ty):
+            return ""
+        return key_ty
+    String elem_ty = lc_coll_elem_lookup(orig_name, &m)
+    if elem_ty != "":
+        if is_primitive_hashable_key(elem_ty):
+            return ""
+        return elem_ty
+    return ""
 
 # Resolve T__hash / T__eq fn names. Returns Vector with [hash, eq] when
 # both are present in the module (either bare `T__method` form or
@@ -1284,7 +1283,7 @@ Vector[String] collect_hashable_key_types(LirModule &m):
                     else:
                         pass
                 if is_runtime_dict_or_set_ctor(mapped_name) and orig_name.len() > 0:
-                    String key_ty = extract_user_hashable_key(orig_name)
+                    String key_ty = extract_user_hashable_key(orig_name, &m)
                     if key_ty.len() > 0:
                         bool already = false
                         int hki = 0
@@ -1330,7 +1329,7 @@ String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, 
         return ""
     if not is_runtime_dict_or_set_ctor(mapped_name):
         return ""
-    String key_ty = extract_user_hashable_key(original_name)
+    String key_ty = extract_user_hashable_key(original_name, &m)
     if key_ty.len() == 0:
         return ""
     Vector[String] names = hashable_key_fn_names(&m, key_ty)
