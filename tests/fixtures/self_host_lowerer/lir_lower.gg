@@ -28,10 +28,6 @@ from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
-# Iterate registered type-info keys.
-Vector[String] type_info_keys_safe(GirModule &gmod):
-    return gmod.type_infos.keys()
-
 # Lookup wrapper for the struct registry. Uses contains-first / get-unwrap
 # instead of unwrap_or(-1) — the self-host's codegen for
 # `Option[int].unwrap_or(default)` emits a NULL deref of the Dict's value
@@ -434,7 +430,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     # Collect enum variant names to skip them in Pass 1 — they should be
     # represented as their parent enum, not as their own standalone struct.
     Dict[String, bool] enum_variant_names = {}
-    Vector[String] ti_all_keys = type_info_keys_safe(&gmod)
+    Vector[String] ti_all_keys = gmod.type_infos.keys()
     int tiek = 0
     while tiek < ti_all_keys.len():
         String tname_k = ti_all_keys.get(tiek).unwrap()
@@ -545,11 +541,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
         ti += 1
 
     # Pass 1b: Ensure all types from type_infos have LIR struct entries.
-    # Use the parallel `type_info_keys` (via type_info_keys_safe) — the
-    # Dict.keys() at stage-1 runtime returns DUPLICATE keys due to the
-    # Dict[String, _] state-loss bug, registering each struct twice in
-    # `m.structs` → "redefinition of struct" cc errors in stage-2.
-    Vector[String] ti_keys = type_info_keys_safe(&gmod)
+    Vector[String] ti_keys = gmod.type_infos.keys()
     int tki_pre = 0
     while tki_pre < ti_keys.len():
         String tname = ti_keys.get(tki_pre).unwrap()
@@ -2681,7 +2673,7 @@ String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Di
 # Populate drop/clone metadata on the LirModule from GIR type info.
 void populate_drop_metadata(LirModule &m, GirModule &gmod):
     # Pass 1: Struct field drops
-    Vector[String] type_keys = type_info_keys_safe(&gmod)
+    Vector[String] type_keys = gmod.type_infos.keys()
     int ki = 0
     while ki < type_keys.len():
         String type_name = type_keys.get(ki).unwrap()
@@ -2784,7 +2776,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
 
     # Populate enum variant → parent enum map for codegen rewriting of
     # `Variant(args)` calls into inline struct initializers.
-    Vector[String] ti_keys_v = type_info_keys_safe(&gmod)
+    Vector[String] ti_keys_v = gmod.type_infos.keys()
     int tivi = 0
     while tivi < ti_keys_v.len():
         String tname_v = ti_keys_v.get(tivi).unwrap()
