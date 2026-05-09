@@ -292,14 +292,8 @@ int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
         j += 1
     return -1
 
-# type_infos / call_redirects / fn_sigs / type_subs accessors —
-# thin wrappers over the underlying Dict so call sites stay stable.
-bool type_info_contains(GirModule &gmod, String name):
-    return gmod.type_infos.contains(name)
-
-void type_info_register(GirModule &gmod, String name, GirTypeInfo info):
-    gmod.type_infos.put(name.clone(), info)
-
+# call_redirects / fn_sigs / type_subs accessors — thin wrappers over
+# the underlying Dict so call sites stay stable.
 bool call_redirect_contains(GirModule &gmod, String name):
     return gmod.call_redirects.contains(name)
 

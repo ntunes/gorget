@@ -1579,7 +1579,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # silently misses on stage-1 (`ScopeTable` etc.) and
                     # we'd fall through to method-call-on-int64 path,
                     # producing `int64_t__new_scope_table` undefined refs.
-                    bool is_type = type_info_contains(&gmod, ident_name) or gmod.type_infos.contains(ident_name)
+                    bool is_type = gmod.type_infos.contains(ident_name)
                     # Also treat primitive type names as types.
                     if not is_type:
                         if ident_name == "int" or ident_name == "float" or ident_name == "bool":
@@ -1652,7 +1652,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
-                            if type_info_contains(&gmod, ident_name) or gmod.type_infos.contains(ident_name):
+                            if gmod.type_infos.contains(ident_name):
                                 static_ret = lookup_or_register_named(&gmod, ident_name)
                             else:
                                 # int.default() → int, float.default() → double, etc.
@@ -2279,7 +2279,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 ret_type = lookup_or_register_named(&gmod, call_name)
         # Monomorphized user-struct constructors (e.g. Wrapper__int64_t) —
         # detect via type_infos lookup even if name contains "__".
-        if ret_type == I64_TYPE and (type_info_contains(&gmod, call_name) or gmod.type_infos.contains(call_name)):
+        if ret_type == I64_TYPE and gmod.type_infos.contains(call_name):
             ret_type = lookup_or_register_named(&gmod, call_name)
         # Template-name constructor: Wrapper__int64_t has template Wrapper
         # in type_infos. Route to the monomorphized named type.
@@ -4087,26 +4087,19 @@ String compute_mangled_name(Vector[SpannedType] targs, String base_name):
         ti += 1
     return mangled
 
-# Set up type substitutions for a generic instance. Mirror Dict puts
-# into parallel Vectors to dodge the Dict[String, _] state-loss bug —
-# without this, `R`/`W` type-param substitutions silently miss in
-# stage-1 runtime and method dispatch emits `R__read` / `W__write`
-# undefined refs.
+# Set up type substitutions for a generic instance.
 void setup_type_subs(GirModule &gmod, Vector[String] type_params, Vector[SpannedType] type_args):
     gmod.type_subs = {}
-    type_sub_clear(&gmod)
     int i = 0
     while i < type_params.len() and i < type_args.len():
         String param_name = type_params.get(i).unwrap()
         SpannedType arg_type = type_args.get(i).unwrap()
         int tid = map_ast_type(arg_type, &gmod)
         gmod.type_subs.put(param_name, tid)
-        type_sub_register(&gmod, param_name, tid)
         i += 1
 
 void clear_type_subs(GirModule &gmod):
     gmod.type_subs = {}
-    type_sub_clear(&gmod)
 
 # Lower a monomorphized instance of a generic function
 void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String] type_params, Vector[SpannedType] type_args, GirModule &gmod):
@@ -5015,7 +5008,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # Register only when the mono'd name isn't already there
             # (avoids duplicate clones when `generic_instances` lists
             # the same mono more than once across import cycles).
-            if not type_info_contains(&gmod, mrinst.mangled_name):
+            if not gmod.type_infos.contains(mrinst.mangled_name):
                 Vector[GirEnumVariantInfo] mono_no_variants = []
                 gmod.type_infos.put(mrinst.mangled_name.clone(), GirTypeInfo(mrinst.mangled_name.clone(), mono_fields, mono_no_variants, false))
             clear_type_subs(&gmod)

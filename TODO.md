@@ -206,6 +206,8 @@
 
 ## Medium
 
+- **Parser bug: `(method_call())` in boolean context parses as tuple start.** Reproduces with `if x and (d.contains("a")):` — parser emits "expected ',', found '.'" at the dot in `d.contains`. The `(...)` is read as a tuple-element list, hits the dot, fails. Workaround: drop the redundant parens (`if x and d.contains("a"):` parses fine). Affects ergonomics — perfectly natural-looking Gorget breaks. Likely in the recursive-descent expression parser's prefix handling for `(`. [added: 2026-05-09]
+
 - **Self-host codegen bug: `Option[int].unwrap_or(default)` skips the None-check.** When source is `dict.get(K)` returning `Option[int]`, the self-host's emission is:
   ```c
   __v143 = gorget_map_get(dict, key);   // returns NULL on miss
