@@ -213,6 +213,12 @@
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
+- **`is_self_by_ptr_method` name-list in `src/lir/lower/calls.rs:608`** — re-derives whether a collection/concurrency method's self parameter is by-pointer using 10+ `name.starts_with("Vector__")` / `"Dict__"` / `"Mutex__"` etc. checks. The upstream source of truth is `BuiltinMethodDecl.self_conv: SelfConvention` (set in `builtins.rs:71`). When a new collection type is added without updating this list, the LIR silently uses wrong ABI for self. Fix: thread `self_conv` through to the LIR's `CallExtern` metadata (or add `self_passing_kind` to the typed call sidecar) and read it here instead. [added: 2026-05-09]
+
+- **Map combinator result-type reconstruction by name-parsing in `src/backend/c_lir/mod.rs:~1555`** — reconstructs the output `Option__T` or `Result__OkType__ErrType` name by splitting the source type name at `__` boundaries. The GIR already resolved the map return type; it should be attached to the call site. Fix: propagate result type as a typed field on the map combinator HOF entry rather than re-parsing it in the C backend. [added: 2026-05-09]
+
+- **Trait-box detection by name-lookup in `src/lir/lower/drops.rs:~172`** — detects whether a `Box__T` wraps a trait object by checking whether `{T}_TraitObj` exists in the GIR type registry. The TypeDef for `Box__T` already knows its inner type; the trait-object nature should be a boolean flag on the `StructDef` or `TypeDef`, not re-derived by naming convention. Related to the `box_inner_type` field added in Snag #13 — that field is at registration time but doesn't carry the trait-object flag. [added: 2026-05-09]
+
 
 - **Hardcoded type size database — blocks self-host lowerer**: `c_sizeof_with_structs()` still has string-match fallbacks for `Vector__*`, `Dict__*`, `Set__*`, `Callable__*`, `Task__*`, `Tuple__*`, `Option__*`. These hit before the struct lookup. Fix: register monomorphized collection/option/tuple types with correct `computed_c_size` during type lowering so the match arms can be removed. [updated: 2026-04-06]
 
