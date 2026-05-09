@@ -151,10 +151,6 @@ pub(super) fn lower_method_call(
             let is_primitive_type = matches!(name.as_str(), "int" | "float" | "bool" | "uint8" | "uint16" | "uint32" | "uint64"
                 | "int8" | "int16" | "int32" | "str" | "String" | "char" | "byte");
             if is_primitive_type || ctx.type_mapper.lookup_named(name).is_some() || ctx.resolve_enum_variant(name).is_some() {
-                let lowered_args: Vec<Operand> = args.iter()
-                    .map(|arg| lower_expr(ctx, builder, &arg.node.value))
-                    .collect();
-
                 // Map Gorget primitive names to C type names for method lookup
                 let c_type_name = match name.as_str() {
                     "int" => "int64_t",
@@ -171,6 +167,34 @@ pub(super) fn lower_method_call(
                     "int32" => "int32_t",
                     _ => name.as_str(),
                 };
+                // For qualified enum variant constructors (Color.Red(), R2.A(...)),
+                // pre-resolve the variant's field types so each arg sees the
+                // correct expected_type during lowering. Without this, a nested
+                // constructor like `Some(s)` inside `R2.A(Some(s))` infers its
+                // type from the operand (a *GorgetString borrow) and produces
+                // `Option[*GorgetString]` (Option__T<n>) — a 16-byte struct
+                // instead of the variant slot's 40-byte `Option__GorgetString`.
+                let variant_field_types: Vec<Option<TypeId>> = ctx.type_registry
+                    .get_type_def(c_type_name)
+                    .and_then(|td| match &td.kind {
+                        TypeDefKind::Enum(ed) => Some(ed),
+                        _ => None,
+                    })
+                    .and_then(|ed| ed.variants.iter().find(|v| v.name == method_name))
+                    .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
+                    .unwrap_or_else(|| vec![None; args.len()]);
+                let lowered_args: Vec<Operand> = args.iter()
+                    .enumerate()
+                    .map(|(i, arg)| {
+                        let prev = ctx.func_state.expected_type;
+                        if let Some(ft) = variant_field_types.get(i).and_then(|f| *f) {
+                            ctx.func_state.expected_type = Some(ft);
+                        }
+                        let op = lower_expr(ctx, builder, &arg.node.value);
+                        ctx.func_state.expected_type = prev;
+                        op
+                    })
+                    .collect();
                 // Check if this is a qualified enum variant constructor: Color.Red()
                 if let Some(type_def) = ctx.type_registry.get_type_def(c_type_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {

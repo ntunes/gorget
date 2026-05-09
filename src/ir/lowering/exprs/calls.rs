@@ -925,8 +925,33 @@ pub(super) fn lower_call(
                 .map(|a| Some(a.node.value.span))
                 .collect();
             let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
+            // Look up variant field types so that nested constructors like
+            // `R2.A(Some(s))` see the expected `Option[GorgetString]` payload
+            // type when lowering the inner `Some(s)`. Without this, `Some(s)`
+            // infers from the operand type of `s` (a `*GorgetString` borrow)
+            // and produces `Option[*GorgetString]` (Option__T<n>) — the
+            // resulting struct is 16 bytes vs the variant's 40-byte slot,
+            // and the memcpy into the variant payload reads past the source.
+            let field_types: Vec<Option<TypeId>> = ctx.type_registry
+                .get_type_def(&enum_name)
+                .and_then(|td| match &td.kind {
+                    crate::ir::types::TypeDefKind::Enum(ed) => Some(ed),
+                    _ => None,
+                })
+                .and_then(|ed| ed.variants.iter().find(|v| v.name == variant_name))
+                .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
+                .unwrap_or_else(|| vec![None; args.len()]);
             let mut field_operands: Vec<Operand> = args.iter()
-                .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                .enumerate()
+                .map(|(i, arg)| {
+                    let prev = ctx.func_state.expected_type;
+                    if let Some(ft) = field_types.get(i).and_then(|f| *f) {
+                        ctx.func_state.expected_type = Some(ft);
+                    }
+                    let op = lower_expr(ctx, builder, &arg.node.value);
+                    ctx.func_state.expected_type = prev;
+                    op
+                })
                 .collect();
             // Clone multi-use resource args that can't be safely moved into the enum variant.
             super::clone_multi_use_resource_args(ctx, builder, &mut field_operands, &ast_args);
@@ -940,8 +965,26 @@ pub(super) fn lower_call(
                 .map(|a| Some(a.node.value.span))
                 .collect();
             let ast_args: Vec<_> = args.iter().map(|a| a.node.value.clone()).collect();
+            let field_types: Vec<Option<TypeId>> = ctx.type_registry
+                .get_type_def(&enum_name)
+                .and_then(|td| match &td.kind {
+                    crate::ir::types::TypeDefKind::Enum(ed) => Some(ed),
+                    _ => None,
+                })
+                .and_then(|ed| ed.variants.iter().find(|v| v.name == variant_name))
+                .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
+                .unwrap_or_else(|| vec![None; args.len()]);
             let mut field_operands: Vec<Operand> = args.iter()
-                .map(|arg| lower_expr(ctx, builder, &arg.node.value))
+                .enumerate()
+                .map(|(i, arg)| {
+                    let prev = ctx.func_state.expected_type;
+                    if let Some(ft) = field_types.get(i).and_then(|f| *f) {
+                        ctx.func_state.expected_type = Some(ft);
+                    }
+                    let op = lower_expr(ctx, builder, &arg.node.value);
+                    ctx.func_state.expected_type = prev;
+                    op
+                })
                 .collect();
             // Clone multi-use resource args for enum variant init.
             super::clone_multi_use_resource_args(ctx, builder, &mut field_operands, &ast_args);
