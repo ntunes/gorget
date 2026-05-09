@@ -48,17 +48,6 @@ MatchArm get_arm_at(Vector[MatchArm] v, int i):
 String get_str_at(Vector[String] v, int i):
     return v.get(i).unwrap()
 
-# ── Typed len helpers ──
-
-int else_vec_len(Vector[ElseBranch] v):
-    return v.len()
-
-int spat_vec_len(Vector[SpannedPattern] v):
-    return v.len()
-
-int sexpr_vec_len(Vector[SpannedExpr] v):
-    return v.len()
-
 # ── Typed Option helpers ──
 
 bool has_opt_sexpr(Option[SpannedExpr] opt):
@@ -577,7 +566,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             scopes.pop_scope()
 
             int ei = 0
-            while ei < else_vec_len(elif_branches):
+            while ei < elif_branches.len():
                 ElseBranch branch = get_else_at(elif_branches, ei)
                 scopes.push_scope(SkBlock())
                 if has_opt_sexpr(branch.condition):
@@ -657,7 +646,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_block(then_body, &scopes, &types, &ctx)
             scopes.pop_scope()
             int ei = 0
-            while ei < else_vec_len(elif_branches):
+            while ei < elif_branches.len():
                 ElseBranch branch = get_else_at(elif_branches, ei)
                 scopes.push_scope(SkBlock())
                 resolve_block(branch.body, &scopes, &types, &ctx)
@@ -757,7 +746,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*condition, &scopes, &ctx)
             resolve_block_expr(then_body, &scopes, &ctx)
             int ei = 0
-            while ei < else_vec_len(elif_branches):
+            while ei < elif_branches.len():
                 ElseBranch branch = get_else_at(elif_branches, ei)
                 if has_opt_sexpr(branch.condition):
                     resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
@@ -850,21 +839,21 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
 
         case EArrayLiteral(elements):
             int ei = 0
-            while ei < sexpr_vec_len(elements):
+            while ei < elements.len():
                 SpannedExpr elem = get_sexpr_at(elements, ei)
                 resolve_expr(elem, &scopes, &ctx)
                 ei = ei + 1
 
         case ETupleLiteral(elements):
             int ei = 0
-            while ei < sexpr_vec_len(elements):
+            while ei < elements.len():
                 SpannedExpr elem = get_sexpr_at(elements, ei)
                 resolve_expr(elem, &scopes, &ctx)
                 ei = ei + 1
 
         case EDictLiteral(keys, values):
             int di = 0
-            while di < sexpr_vec_len(keys):
+            while di < keys.len():
                 SpannedExpr k = get_sexpr_at(keys, di)
                 resolve_expr(k, &scopes, &ctx)
                 SpannedExpr v = get_sexpr_at(values, di)
@@ -876,14 +865,14 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             if def_id >= 0:
                 ctx.resolution_map.put(expr.span.start, def_id)
             int ai = 0
-            while ai < sexpr_vec_len(args):
+            while ai < args.len():
                 SpannedExpr arg = get_sexpr_at(args, ai)
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
         case EDotShorthand(_, args):
             int ai = 0
-            while ai < sexpr_vec_len(args):
+            while ai < args.len():
                 SpannedExpr arg = get_sexpr_at(args, ai)
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
@@ -892,7 +881,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             # Walk pre-parsed interpolation segments so identifiers /
             # closures inside `{...}` get resolved.
             int fi = 0
-            while fi < sexpr_vec_len(exprs):
+            while fi < exprs.len():
                 SpannedExpr fe = get_sexpr_at(exprs, fi)
                 resolve_expr(fe, &scopes, &ctx)
                 fi = fi + 1
@@ -983,7 +972,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(then_body, &scopes, &ctx)
             scopes.pop_scope()
             int ei = 0
-            while ei < else_vec_len(elif_branches):
+            while ei < elif_branches.len():
                 ElseBranch branch = get_else_at(elif_branches, ei)
                 scopes.push_scope(SkBlock())
                 if has_opt_sexpr(branch.condition):
@@ -1057,7 +1046,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(then_body, &scopes, &ctx)
             scopes.pop_scope()
             int ei = 0
-            while ei < else_vec_len(elif_branches):
+            while ei < elif_branches.len():
                 ElseBranch branch = get_else_at(elif_branches, ei)
                 scopes.push_scope(SkBlock())
                 resolve_block_expr(branch.body, &scopes, &ctx)
@@ -1077,27 +1066,27 @@ void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
 
         case PConstructor(_, fields):
             int i = 0
-            while i < spat_vec_len(fields):
+            while i < fields.len():
                 SpannedPattern field = get_spat_at(fields, i)
                 define_pattern_bindings(field, &scopes)
                 i = i + 1
 
         case PDotShorthand(_, fields):
             int i = 0
-            while i < spat_vec_len(fields):
+            while i < fields.len():
                 SpannedPattern field = get_spat_at(fields, i)
                 define_pattern_bindings(field, &scopes)
                 i = i + 1
 
         case PTuple(elements):
             int i = 0
-            while i < spat_vec_len(elements):
+            while i < elements.len():
                 SpannedPattern elem = get_spat_at(elements, i)
                 define_pattern_bindings(elem, &scopes)
                 i = i + 1
 
         case POr(alternatives):
-            if spat_vec_len(alternatives) > 0:
+            if alternatives.len() > 0:
                 SpannedPattern first = get_spat_at(alternatives, 0)
                 define_pattern_bindings(first, &scopes)
 
