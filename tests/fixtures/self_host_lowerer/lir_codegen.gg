@@ -158,28 +158,6 @@ bool is_runtime_defined_named(String name):
         return true
     return false
 
-# Monomorphized wrapper types that get typedef'd to runtime types.
-bool is_mono_wrapper(String name):
-    if name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return true
-    if name.starts_with("Weak__") or name.starts_with("Vector__"):
-        return true
-    if name.starts_with("Dict__") or name.starts_with("Set__"):
-        return true
-    if name.starts_with("HashMap__") or name.starts_with("HashSet__"):
-        return true
-    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
-        return true
-    if name.starts_with("Guard__") or name.starts_with("ReadGuard__"):
-        return true
-    if name.starts_with("WriteGuard__") or name == "AtomicInt":
-        return true
-    if name == "AtomicBool" or name == "TaskGroup":
-        return true
-    if name.starts_with("Task__") or name.starts_with("Box__"):
-        return true
-    return false
-
 # Map LIR struct names to their runtime C names when they differ.
 String lir_to_runtime_name(String name):
     if name == "GorgetString":
@@ -266,7 +244,7 @@ Vector[String] build_struct_names(LirModule &m):
             map.push(rt)
         elif is_runtime_struct(sdef.name) or is_lir_named_struct(sdef.name):
             map.push(sdef.name.clone())
-        elif is_mono_wrapper(sdef.name):
+        elif m.type_runtime_map.contains(sdef.name):
             map.push(sdef.name.clone())
         else:
             # Sanitize: replace non-alphanumeric chars with underscores.
@@ -299,7 +277,7 @@ bool should_skip_struct(LirStructDef &sdef, LirModule &m):
         return true
     if is_runtime_defined_named(sdef.name):
         return true
-    if is_mono_wrapper(sdef.name):
+    if m.type_runtime_map.contains(sdef.name):
         return true
     if lir_to_runtime_name(sdef.name) != "":
         return true
@@ -637,7 +615,7 @@ String emit_externs(LirModule &m, Vector[String] &sn):
             i += 1
             continue
         # Skip monomorphized wrapper methods.
-        if is_mono_wrapper_method(ext.name):
+        if is_mono_wrapper_method(ext.name, &m):
             i += 1
             continue
         # Skip variadic externs with no params.
@@ -669,17 +647,18 @@ String emit_externs(LirModule &m, Vector[String] &sn):
         out = out + "\n"
     return out
 
-bool is_mono_wrapper_method(String name):
-    if name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return true
-    if name.starts_with("Weak__") or name.starts_with("Mutex__"):
-        return true
-    if name.starts_with("RWLock__") or name.starts_with("Guard__"):
-        return true
-    if name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__"):
-        return true
-    if name.starts_with("Box__"):
-        return true
+bool is_mono_wrapper_method(String name, LirModule &m):
+    # Phase A — use type_runtime_map: scan __ split points; any prefix registered as
+    # "Ptr" or "Guard" means this is a monomorphized wrapper method to skip.
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.type_runtime_map.contains(prefix):
+                String cat = m.type_runtime_map.get(prefix).unwrap_or("")
+                if cat == "Ptr" or cat == "Box" or cat == "Guard":
+                    return true
+        i += 1
     return false
 
 # Simple check for common runtime functions (they're already in the C runtime).
@@ -732,8 +711,8 @@ String emit_box_allocators(LirModule &m, Vector[String] &sn):
                         String alloc_name = ""
                         if n.starts_with("__gorget_box_alloc_"):
                             alloc_name = n
-                        elif n.starts_with("Box__"):
-                            # codegen will rewrite Box__TYPE(x) → __gorget_box_alloc_TYPE(x)
+                        elif m.type_runtime_map.contains(n) and m.type_runtime_map.get(n).unwrap_or("") == "Box":
+                            # Phase A — Box type detected via type_runtime_map "Box" category.
                             alloc_name = "__gorget_box_alloc_" + n.slice(5, n.len())
                         if alloc_name != "" and not seen.contains(alloc_name):
                             seen.put(alloc_name, true)
@@ -1655,6 +1634,8 @@ int runtime_fn_return_type(String name, LirModule &m):
     # ISlotStore shape.
     if name.starts_with("__gorget_array_new_sized_"):
         return find_struct_type("GorgetArray", &m)
+    if name.starts_with("__gorget_dict_new_sized_"):
+        return find_struct_type("GorgetMap", &m)
     if name.starts_with("__gorget_map_new_sized_"):
         return find_struct_type("GorgetMap", &m)
     # Array functions returning GorgetArray
@@ -1883,20 +1864,15 @@ bool is_void_runtime_fn(String name):
 
 # Check if a call name is a struct constructor (not a runtime function).
 bool is_struct_constructor(String name, LirModule &m):
-    # Skip runtime/collection prefixed names
+    # Skip gorget_ runtime functions
     if name.starts_with("gorget_") or name.starts_with("__gorget_"):
         return false
-    if name.starts_with("Vector__") or name.starts_with("Dict__") or name.starts_with("Set__"):
+    # Phase A — resource/collection wrapper types are in type_runtime_map;
+    # they alias a runtime struct and are not user-defined struct constructors.
+    if m.type_runtime_map.contains(name):
         return false
-    if name.starts_with("HashMap__") or name.starts_with("HashSet__"):
-        return false
-    if name.starts_with("Channel__") or name.starts_with("Shared__") or name.starts_with("Mutex__"):
-        return false
-    if name.starts_with("Box__") or name.starts_with("Task__"):
-        return false
-    if name == "TaskGroup" or name == "AtomicInt" or name == "AtomicBool":
-        return false
-    if name == "printf" or name == "fprintf":
+    # Non-parameterized built-in types not in type_runtime_map
+    if name == "TaskGroup" or name == "printf" or name == "fprintf":
         return false
     # Check if there's a struct with this name in the module
     int i = 0
@@ -1906,6 +1882,21 @@ bool is_struct_constructor(String name, LirModule &m):
             return true
         i += 1
     return false
+
+# Map a type_runtime_map category to the C sizeof type string.
+# Phase A — single conversion point; no starts_with duplication.
+String runtime_category_to_c_type(String runtime):
+    if runtime == "GorgetArray":
+        return "GorgetArray"
+    elif runtime == "GorgetMap":
+        return "GorgetMap"
+    elif runtime == "GorgetSet":
+        return "GorgetSet"
+    elif runtime == "Ptr" or runtime == "Box" or runtime == "Guard":
+        return "void*"
+    elif runtime == "Task":
+        return "TaskHandle"
+    return ""
 
 # Resolve a Gorget type name to the C type name suitable for `sizeof(...)`.
 # Used by the typed-literal allocator magic names (`__gorget_array_new_sized_T`
@@ -1917,20 +1908,16 @@ bool is_struct_constructor(String name, LirModule &m):
 #   3. User structs registered in m.structs → their emitted C name
 #      (typically `__gg_<TypeName>`), via find_c_struct_name.
 String resolve_sizeof_c_type(String tyname, LirModule &m, Vector[String] &sn):
-    if tyname.starts_with("Vector__"):
-        return "GorgetArray"
-    if tyname.starts_with("Dict__") or tyname.starts_with("HashMap__") or tyname.starts_with("Map__") or tyname.starts_with("OrderedDict__"):
-        return "GorgetMap"
-    if tyname.starts_with("Set__") or tyname.starts_with("HashSet__") or tyname.starts_with("OrderedSet__"):
-        return "GorgetSet"
-    if tyname.starts_with("Box__") or tyname.starts_with("Channel__") or tyname.starts_with("Shared__") or tyname.starts_with("Weak__"):
-        return "void*"
-    if tyname.starts_with("Task__"):
-        return "TaskHandle"
-    if tyname.starts_with("Mutex__") or tyname.starts_with("RWLock__"):
-        return "void*"
     if tyname == "String":
         return "GorgetString"
+    # Phase A — look up runtime category from type_runtime_map; convert to C type.
+    # Guard contains before get: Dict.get() on missing key returns NULL in
+    # self-host-compiled code (no Option wrapping) → memcpy crash.
+    if m.type_runtime_map.contains(tyname):
+        String runtime = m.type_runtime_map.get(tyname).unwrap_or("")
+        String c_ty = runtime_category_to_c_type(runtime)
+        if c_ty != "":
+            return c_ty
     # Fall through to struct-registry lookup for user types and runtime aliases.
     return find_c_struct_name(tyname, &m, &sn)
 
@@ -2110,12 +2097,8 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
         case ICallExtern(dst, name, args_ce, _, _):
             if dst >= 0:
                 # Enum variant constructor: returns parent enum struct.
-                if evp_contains(&m, name) or m.enum_variant_parent.contains(name):
-                    String parent = ""
-                    if evp_contains(&m, name):
-                        parent = evp_lookup(&m, name)
-                    else:
-                        parent = m.enum_variant_parent.get(name).unwrap()
+                if m.enum_variant_parent.contains(name):
+                    String parent = m.enum_variant_parent.get(name).unwrap()
                     int psid = find_struct_type(parent, &m)
                     if psid >= LT_STRUCT_BASE:
                         return psid
@@ -2124,11 +2107,7 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                     int uix = name.index_of("__").unwrap()
                     String eparent = name.slice(0, uix)
                     String evariant = name.slice(uix + 2, name.len())
-                    bool match_p = false
-                    if evp_contains(&m, evariant) and evp_lookup(&m, evariant) == eparent:
-                        match_p = true
-                    elif m.enum_variant_parent.contains(evariant) and m.enum_variant_parent.get(evariant).unwrap() == eparent:
-                        match_p = true
+                    bool match_p = m.enum_variant_parent.contains(evariant) and m.enum_variant_parent.get(evariant).unwrap() == eparent
                     if match_p:
                         int psid_q = find_struct_type(eparent, &m)
                         if psid_q >= LT_STRUCT_BASE:
@@ -2137,8 +2116,8 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                 if name == "None" and args_ce.len() == 0 and func_ret_ty >= LT_STRUCT_BASE:
                     int none_sid = func_ret_ty - LT_STRUCT_BASE
                     if none_sid < m.structs.len():
-                        String none_nm = m.structs.get(none_sid).unwrap().name
-                        if none_nm.starts_with("Option__"):
+                        # Phase A — use enum_kind instead of starts_with
+                        if m.structs.get(none_sid).unwrap().enum_kind == EK_OPTION:
                             return func_ret_ty
                 # Prelude variants Some/None/Ok/Error — compute parametrized
                 # Option/Result type from arg type.
@@ -2171,15 +2150,15 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                             if psid_ce >= LT_STRUCT_BASE:
                                 return psid_ce
                     # Fallback: consult the enclosing function's return type.
-                    # If it's Option__X / Result__X__Y, assume the variant is
-                    # being returned.
+                    # If it's Option__X / Result__X__Y, assume the variant is being returned.
+                    # Phase A — use enum_kind instead of starts_with on struct names.
                     if func_ret_ty >= LT_STRUCT_BASE:
                         int frt_sid_inf = func_ret_ty - LT_STRUCT_BASE
                         if frt_sid_inf < m.structs.len():
-                            String frt_name_inf = m.structs.get(frt_sid_inf).unwrap().name
-                            if (name == "Some" or name == "None") and frt_name_inf.starts_with("Option__"):
+                            int frt_ek = m.structs.get(frt_sid_inf).unwrap().enum_kind
+                            if (name == "Some" or name == "None") and frt_ek == EK_OPTION:
                                 return func_ret_ty
-                            if (name == "Ok" or name == "Error") and frt_name_inf.starts_with("Result__"):
+                            if (name == "Ok" or name == "Error") and frt_ek == EK_RESULT:
                                 return func_ret_ty
                 # Box(x) / Box__TYPE(x) — returns Box__TYPE. Prefer the
                 # registered struct type so val_types carries enough info for
@@ -2200,7 +2179,8 @@ int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_ty
                         if bx_sid >= LT_STRUCT_BASE:
                             return bx_sid
                     return LT_PTR
-                if name.starts_with("Box__"):
+                if m.type_runtime_map.contains(name) and m.type_runtime_map.get(name).unwrap_or("") == "Box":
+                    # Phase A — Box type detected via type_runtime_map "Box" category.
                     int box_sid = find_struct_type(name, &m)
                     if box_sid >= LT_STRUCT_BASE:
                         return box_sid
@@ -2911,10 +2891,15 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                 LirFunction callee = m.functions.get(fid).unwrap()
                 # If this is actually an enum variant constructor, route
                 # through emit_call_extern which handles inline struct init.
-                if evp_contains(&m, callee.name) or m.enum_variant_parent.contains(callee.name):
+                if m.enum_variant_parent.contains(callee.name):
                     return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
-                if callee.name == "Box" or callee.name.starts_with("Box__"):
+                # Phase A — Box type detected via type_runtime_map "Box" category.
+                bool is_box_callee = callee.name == "Box"
+                if not is_box_callee and m.type_runtime_map.contains(callee.name):
+                    if m.type_runtime_map.get(callee.name).unwrap_or("") == "Box":
+                        is_box_callee = true
+                if is_box_callee:
                     return emit_call_extern_with(dst, callee.name, &args, &sn, &val_types, &m, func.return_type)
                 # Prelude Option/Result variant constructors — pulled from
                 # user-code even if unrecognized in type_infos. The codegen
@@ -3512,6 +3497,19 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             String arr_c_tname = resolve_sizeof_c_type(arr_tyname, &m, &sn)
             return v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
         return ";"
+    if name.starts_with("__gorget_dict_new_sized_"):
+        if dst >= 0:
+            String rest_kv_d = name.slice(24, name.len())
+            int sep_pos_d = find_substr(rest_kv_d, "__GGSEP__")
+            if sep_pos_d > 0:
+                String k_tyname_d = rest_kv_d.slice(0, sep_pos_d)
+                String v_tyname_d = rest_kv_d.slice(sep_pos_d + 9, rest_kv_d.len())
+                String k_c_tname_d = resolve_sizeof_c_type(k_tyname_d, &m, &sn)
+                String v_c_tname_d = resolve_sizeof_c_type(v_tyname_d, &m, &sn)
+                if k_c_tname_d == "Str" or k_c_tname_d == "GorgetString":
+                    return v(dst) + " = gorget_dict_new_str(sizeof(" + v_c_tname_d + "));"
+                return v(dst) + " = gorget_dict_new(sizeof(" + k_c_tname_d + "), sizeof(" + v_c_tname_d + "));"
+        return ";"
     if name.starts_with("__gorget_map_new_sized_"):
         if dst >= 0:
             String rest_kv = name.slice(23, name.len())
@@ -3655,9 +3653,10 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     int callee_idx = find_fn_by_name(&m, name)
 
     # Box__TYPE(x) constructor: Rust emits `__gorget_box_alloc_TYPE(x)`. The
-    # raw name Box__TYPE arrives before map_mono_to_runtime mutation. Match
-    # on raw_name to avoid false matches with mapped runtime prefixes.
-    if raw_name.starts_with("Box__") and args.len() == 1:
+    # raw name Box__TYPE arrives before map_mono_to_runtime mutation.
+    # Phase A — Box type detected via type_runtime_map "Box" category.
+    bool raw_is_box = m.type_runtime_map.contains(raw_name) and m.type_runtime_map.get(raw_name).unwrap_or("") == "Box"
+    if raw_is_box and args.len() == 1:
         String box_type = raw_name.slice(5, raw_name.len())
         String box_out = ""
         if dst >= 0:
@@ -3738,19 +3737,20 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 int frt_sid = func_ret_ty - LT_STRUCT_BASE
                 if frt_sid < m.structs.len():
                     LirStructDef frt_sdef = m.structs.get(frt_sid).unwrap()
+                    # Phase A — use enum_kind instead of starts_with on struct names.
                     bool accept = false
-                    if (name == "Some" or name == "None") and frt_sdef.name.starts_with("Option__"):
+                    if (name == "Some" or name == "None") and frt_sdef.enum_kind == EK_OPTION:
                         accept = true
-                    if (name == "Ok" or name == "Error") and frt_sdef.name.starts_with("Result__"):
+                    if (name == "Ok" or name == "Error") and frt_sdef.enum_kind == EK_RESULT:
                         accept = true
                     if accept:
                         parent_sid_pv = func_ret_ty
-            # None with no args: pick any Option__X.
+            # None with no args: pick any Option__X (first registered Option type).
             if parent_sid_pv < 0 and (name == "None"):
                 int sdi_pv = 0
                 while sdi_pv < m.structs.len():
                     LirStructDef sd_pv = m.structs.get(sdi_pv).unwrap()
-                    if sd_pv.name.starts_with("Option__"):
+                    if sd_pv.enum_kind == EK_OPTION:
                         parent_sid_pv = LT_STRUCT_BASE + sdi_pv
                         break
                     sdi_pv += 1
@@ -3791,7 +3791,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         int underscore_idx = name.index_of("__").unwrap()
         String maybe_parent = name.slice(0, underscore_idx)
         String maybe_variant = name.slice(underscore_idx + 2, name.len())
-        if (evp_contains(&m, maybe_variant) and evp_lookup(&m, maybe_variant) == maybe_parent) or (m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent):
+        if m.enum_variant_parent.contains(maybe_variant) and m.enum_variant_parent.get(maybe_variant).unwrap() == maybe_parent:
             ev_name = maybe_variant
 
     # Enum variant constructor: `VariantName(x)` → inline struct init for
@@ -3800,17 +3800,13 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     # variant's payload fields. Prefer parallel-vector lookup — Dict
     # state-loss otherwise misses TkEof / TSelf / etc. and emits them as
     # undefined-symbol calls instead of inline struct literals.
-    if evp_contains(&m, ev_name) or m.enum_variant_parent.contains(ev_name):
-        String parent_name = ""
-        if evp_contains(&m, ev_name):
-            parent_name = evp_lookup(&m, ev_name)
-        else:
-            parent_name = m.enum_variant_parent.get(ev_name).unwrap()
+    if m.enum_variant_parent.contains(ev_name):
+        String parent_name = m.enum_variant_parent.get(ev_name).unwrap()
         int parent_sid = find_struct_type(parent_name, &m)
         if parent_sid >= LT_STRUCT_BASE:
             int parent_idx = parent_sid - LT_STRUCT_BASE
             LirStructDef pdef = m.structs.get(parent_idx).unwrap()
-            # Prefer the pre-computed enum_variant_tag map populated by
+            # Use the pre-computed enum_variant_tag map populated by
             # lir_lower. That uses the variant's ordinal position in the
             # source enum declaration, which is the CORRECT runtime tag and
             # matches what `match`-pattern tests against. The old heuristic
@@ -3819,9 +3815,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             # got tag = seen_variants.len() (6) instead of their real
             # ordinal (63) — and match-ing TkEof at runtime never hit.
             int variant_tag = -1
-            if evt_contains(&m, ev_name):
-                variant_tag = evt_lookup(&m, ev_name)
-            elif m.enum_variant_tag.contains(ev_name):
+            if m.enum_variant_tag.contains(ev_name):
                 variant_tag = m.enum_variant_tag.get(ev_name).unwrap()
             # Fallback: old heuristic for any variants the map missed.
             if variant_tag < 0:
@@ -4725,7 +4719,7 @@ String emit_mono_typedefs(LirModule &m):
     int si = 0
     while si < m.structs.len():
         LirStructDef sdef = m.structs.get(si).unwrap()
-        if is_mono_wrapper(sdef.name):
+        if m.type_runtime_map.contains(sdef.name):
             bool dup = false
             int sj = 0
             while sj < seen.len():
@@ -4734,7 +4728,7 @@ String emit_mono_typedefs(LirModule &m):
                 sj += 1
             if not dup:
                 seen.push(sdef.name.clone())
-                String runtime_ty = mono_wrapper_runtime_type(sdef.name)
+                String runtime_ty = mono_wrapper_runtime_type(sdef.name, &m)
                 if runtime_ty != "":
                     sb_push(&buf, "typedef ")
                     sb_push(&buf, runtime_ty)
@@ -4746,33 +4740,21 @@ String emit_mono_typedefs(LirModule &m):
         sb_push(&buf, "\n")
     return buf.s
 
-# Map monomorphized wrapper type names to their runtime C type.
-String mono_wrapper_runtime_type(String name):
-    if name.starts_with("Vector__"):
-        return "GorgetArray"
-    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        return "GorgetMap"
-    if name.starts_with("Set__") or name.starts_with("HashSet__"):
-        return "GorgetSet"
-    if name.starts_with("Channel__"):
-        return "void*"
-    if name.starts_with("Shared__") or name.starts_with("Weak__"):
-        return "void*"
-    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
-        return "void*"
-    if name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__"):
-        return "void*"
-    if name.starts_with("Task__"):
-        return "TaskHandle"
-    if name.starts_with("Box__"):
-        return "void*"
+# Map a wrapper type name to its C typedef target.
+# Phase A — parameterized types resolved via type_runtime_map (no starts_with);
+# the three non-parameterized built-ins keep exact-name matches.
+String mono_wrapper_runtime_type(String name, LirModule &m):
     if name == "TaskGroup":
         return "gorget_task_group_t*"
     if name == "AtomicInt":
         return "GorgetAtomicInt"
     if name == "AtomicBool":
         return "GorgetAtomicBool"
-    return ""
+    # Guard contains before get (Dict.get() crashes on missing key in self-host).
+    if not m.type_runtime_map.contains(name):
+        return ""
+    String runtime = m.type_runtime_map.get(name).unwrap_or("")
+    return runtime_category_to_c_type(runtime)
 
 String generate_c(LirModule &m):
     Vector[String] sn = build_struct_names(&m)

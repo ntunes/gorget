@@ -5451,6 +5451,24 @@ fn dict_subscript() {
 }
 
 #[test]
+fn dict_ordered_keys() {
+    run_gg(
+        "dict_ordered_keys.gg",
+        "\
+charlie
+alice
+bob
+diana
+true
+false
+2
+thirty
+ten
+twenty",
+    );
+}
+
+#[test]
 fn dict_get_or_put() {
     run_gg(
         "dict_get_or_put.gg",

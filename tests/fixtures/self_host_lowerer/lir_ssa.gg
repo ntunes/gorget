@@ -481,17 +481,12 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
         if incomplete_phis.len() > prev_phi_count:
             changed = true
 
-    # Build target_bb → [slots in param order]. CRITICAL: iterate
-    # pending_phi_bbs / pending_phis in insertion order, NOT
-    # incomplete_phis.keys() — Dict.keys() iteration order at stage-1
-    # runtime doesn't match the order params were registered (also a
-    # Dict[String/int, _] state-loss artefact). Mismatched order →
-    # block-param assignments swap their args at the call site, e.g.
-    # `bp16 = *(bool*)__v15; bp17 = __v5;` instead of
-    # `bp16 = __v5; bp17 = __v15;`.
+    # Build target_bb → [slots in param order] by iterating pending_phi_bbs /
+    # pending_phis in insertion order. Dict[int, Vector[int]] is insertion-order-
+    # preserving now that the gorget_dict_new fix is in place — keys() returns
+    # them in the order they were first put, so no parallel Vector workaround is
+    # needed.
     Dict[int, Vector[int]] target_slots = {}
-    Vector[Vector[int]] target_slots_parallel = []
-    Vector[int] target_slots_keys = []
     int pp_i = 0
     while pp_i < pending_phi_bbs.len():
         int target_bb = pending_phi_bbs.get(pp_i).unwrap()
@@ -509,44 +504,32 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
                 break
             akpi += 1
         if slot >= 0:
-            int found_idx = -1
-            int tk_i = 0
-            while tk_i < target_slots_keys.len():
-                if target_slots_keys.get(tk_i).unwrap() == target_bb:
-                    found_idx = tk_i
-                    break
-                tk_i += 1
-            if found_idx < 0:
-                target_slots_keys.push(target_bb)
+            if not target_slots.contains(target_bb):
                 Vector[int] new_slots = [slot]
-                target_slots_parallel.push(!new_slots)
+                target_slots.put(target_bb, !new_slots)
             else:
-                Vector[int] existing = target_slots_parallel.get(found_idx).unwrap()
-                existing.push(slot)
-                target_slots_parallel.set(found_idx, !existing)
+                # Rebuild the inner Vector from scratch + slot, then put it back.
+                # The straightforward `get().push()` pattern silently loses the
+                # mutation for nested Vector[Vector[int]] in a Dict (the inner
+                # Vector returned by .get() is a borrow that doesn't persist
+                # through .put()). Rebuilding forces a fresh owned Vector.
+                Vector[int] old_slots = target_slots.get(target_bb).unwrap()
+                Vector[int] new_slots2 = []
+                int osi = 0
+                while osi < old_slots.len():
+                    new_slots2.push(old_slots.get(osi).unwrap())
+                    osi += 1
+                new_slots2.push(slot)
+                target_slots.put(target_bb, !new_slots2)
         pp_i += 1
-    # Mirror into Dict for the existing reader code below.
-    int rs_i = 0
-    while rs_i < target_slots_keys.len():
-        int rs_bb = target_slots_keys.get(rs_i).unwrap()
-        Vector[int] rs_slots = target_slots_parallel.get(rs_i).unwrap()
-        # Clone the inner vector so we don't share heap with the parallel one.
-        Vector[int] rs_clone = []
-        int rsc_i = 0
-        while rsc_i < rs_slots.len():
-            rs_clone.push(rs_slots.get(rsc_i).unwrap())
-            rsc_i += 1
-        target_slots.put(rs_bb, !rs_clone)
-        rs_i += 1
 
     # For each predecessor→target edge, collect args in param order.
-    # Iterate the parallel target_slots_keys directly — Dict.keys() at
-    # stage-1 runtime returns keys in non-insertion order, which causes
-    # arg-list scrambling (see comment above).
+    # Dict.keys() is now insertion-order, so iteration matches registration order.
+    Vector[int] target_slots_keys = target_slots.keys()
     int ti = 0
     while ti < target_slots_keys.len():
         int target_bb = target_slots_keys.get(ti).unwrap()
-        Vector[int] slots = target_slots_parallel.get(ti).unwrap()
+        Vector[int] slots = target_slots.get(target_bb).unwrap()
         Vector[int] bb_preds = preds.get(target_bb).unwrap()
         int pi = 0
         while pi < bb_preds.len():

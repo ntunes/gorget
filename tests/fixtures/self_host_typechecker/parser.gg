@@ -3972,9 +3972,7 @@ equip Parser:
                             else:
                                 pass
             self.skip_trivia()
-        Vector[String] cr_keys_init = []
-        Vector[String] cr_vals_init = []
-        return Module(items, !cr_keys_init, !cr_vals_init)
+        return Module(items)
 
 # ── Public API ───────────────────────────────────────────────
 

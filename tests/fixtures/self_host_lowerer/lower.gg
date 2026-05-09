@@ -45,6 +45,7 @@ struct LowerCtx:
     String pending_vec_elem_tyname
     String pending_dict_key_tyname
     String pending_dict_val_tyname
+    bool pending_dict_ordered
     # Name of the function currently being lowered. Threaded for
     # diagnostic attribution — without this, the ~58k EIdentifier
     # unknown-identifier bug reports can't be tied back to specific
@@ -2042,16 +2043,20 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDictLiteral(dkeys, dvals):
             # `{}` / `{k: v, …}` — lower each key/value for side effects,
-            # then call gorget_map_new(key_size, val_size) to produce a
-            # GorgetMap with valid `alloc`. Without a Dict[K, V] hint from
-            # SVarDecl the sizes fall back to 8 (pointer/int); with the
-            # hint we emit `__gorget_map_new_sized_K__<K>__V__<V>` which
-            # the codegen expands to `gorget_map_new(sizeof(K), sizeof(V))` —
-            # required whenever K or V is an aggregate (LirStructDef et al.).
+            # then call the appropriate constructor to produce a map with
+            # valid `alloc`. Dict[K,V] → insertion-order-preserving
+            # (gorget_dict_new*); HashMap[K,V] → unordered (gorget_map_new*).
+            # Without a hint from SVarDecl the sizes fall back to 8
+            # (pointer/int); with the hint we emit a magic sentinel name
+            # `__gorget_{dict,map}_new_sized_K__<K>__V__<V>` which the
+            # codegen expands to `gorget_{dict,map}_new(sizeof(K), sizeof(V))`
+            # — required whenever K or V is an aggregate (LirStructDef et al.).
             String dict_kname = ctx.pending_dict_key_tyname
             String dict_vname = ctx.pending_dict_val_tyname
+            bool dict_ordered = ctx.pending_dict_ordered
             ctx.pending_dict_key_tyname = ""
             ctx.pending_dict_val_tyname = ""
+            ctx.pending_dict_ordered = false
             int dli = 0
             while dli < dkeys.len():
                 SpannedExpr dk = dkeys.get(dli).unwrap()
@@ -2067,12 +2072,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # Sentinel `__GGSEP__` separates K and V type names — zero
                 # collision risk with real type names (no "GGSEP" pattern
                 # appears in any monomorphized Gorget type).
-                String magic_dict = "__gorget_map_new_sized_" + dict_kname + "__GGSEP__" + dict_vname
+                String magic_prefix = "__gorget_map_new_sized_"
+                if dict_ordered:
+                    magic_prefix = "__gorget_dict_new_sized_"
+                String magic_dict = magic_prefix + dict_kname + "__GGSEP__" + dict_vname
                 Vector[Operand] dn_args_typed = []
                 emit(&ctx, GICallExtern(ddst, magic_dict, dn_args_typed))
             else:
-                Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
-                emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+                if dict_ordered:
+                    Vector[Operand] dn_args_ord = [OpConstI64(8), OpConstI64(8)]
+                    emit(&ctx, GICallExtern(ddst, "gorget_dict_new", dn_args_ord))
+                else:
+                    Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
+                    emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
             return ddst
         else:
             # Remaining: EIt, EImplicitClosure, ESetComp,
@@ -2131,14 +2143,17 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
         # nested generics (Dict__Vector__int64_t__int64_t) stay unhinted
         # and fall back to size 8.
         int d_prefix_len = -1
+        bool d_ordered = false
         if fty_name.starts_with("Dict__"):
             d_prefix_len = 6
+            d_ordered = true
         elif fty_name.starts_with("HashMap__"):
             d_prefix_len = 9
         elif fty_name.starts_with("Map__"):
             d_prefix_len = 5
         elif fty_name.starts_with("OrderedDict__"):
             d_prefix_len = 13
+            d_ordered = true
         if d_prefix_len > 0:
             String d_rest = fty_name.slice(d_prefix_len, fty_name.len())
             int d_sep = -1
@@ -2156,6 +2171,7 @@ void apply_container_hint_for_ctor_arg(LowerCtx &ctx, String ctor_name, int ai, 
                     # clone to owned before storing.
                     ctx.pending_dict_key_tyname = k_only.clone()
                     ctx.pending_dict_val_tyname = v_only.clone()
+                    ctx.pending_dict_ordered = d_ordered
 
 int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
@@ -2319,6 +2335,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 String val_tc = type_to_c_name(val_st, &gmod)
                                 ctx.pending_dict_key_tyname = key_tc.clone()
                                 ctx.pending_dict_val_tyname = val_tc.clone()
+                                ctx.pending_dict_ordered = (tn_d == "Dict" or tn_d == "OrderedDict")
                         else:
                             pass
                 else:
@@ -3047,7 +3064,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     Vector[int] _lc_stk = []
     Vector[int] _lb_stk = []
     Dict[String, int] _named_locals = {}
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", fdef.name.clone())
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, 0, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone())
 
     # _0 = return place
     add_local(&ctx, ret_type, NO_NAME)
@@ -3145,6 +3162,28 @@ String mangle_trait_name(String raw):
 
 # ── Equip block lowering ─────────────────────────────────
 
+# Predicate: is this trait name a built-in derive-generated trait?
+# These traits use the short mangled form (Type__method) rather than the
+# explicit form (Trait_for_Type__method). Centralises the check so adding
+# a new built-in trait touches ONE place, not the 5 callsites that had
+# identical inline boolean chains before this helper was extracted.
+bool is_builtin_trait(String tname):
+    if tname == "Equatable" or tname == "Displayable" or tname == "Cloneable":
+        return true
+    if tname == "Hashable" or tname == "Serializable" or tname == "Deserializable":
+        return true
+    if tname == "Ordinal" or tname == "Drop":
+        return true
+    if tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div":
+        return true
+    if tname.starts_with("Iterator") or tname.starts_with("Iterable"):
+        return true
+    if tname.starts_with("Add[") or tname.starts_with("Sub["):
+        return true
+    if tname.starts_with("Mul[") or tname.starts_with("Div["):
+        return true
+    return false
+
 void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
     # Get the target type name
     String target_name = type_to_c_name(eqblk.target, &gmod)
@@ -3160,7 +3199,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
             case Some(tname):
                 # Derive-generated traits use short form (Type__method)
                 # Explicit trait impls use prefix (Trait_for_Type__method)
-                bool is_derive = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
+                bool is_derive = is_builtin_trait(tname)
                 if not is_derive:
                     String mangled_trait = mangle_trait_name(tname)
                     mangled = mangled_trait + "_for_" + target_name + "__" + mdef.name
@@ -3173,7 +3212,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         Vector[int] _lc_stk2 = []
         Vector[int] _lb_stk2 = []
         Dict[String, int] _named_locals2 = {}
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", mangled.clone())
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, 0, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone())
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -3196,7 +3235,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod):
         bool is_explicit_trait = false
         match eqblk.trait_name:
             case Some(tname):
-                bool is_derive_trait = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
+                bool is_derive_trait = is_builtin_trait(tname)
                 if not is_derive_trait:
                     is_explicit_trait = true
             case None:
@@ -5099,7 +5138,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                         Vector[int] _lc_stk3 = []
                         Vector[int] _lb_stk3 = []
                         Dict[String, int] _named_locals3 = {}
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", test_fn_name.clone())
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, 0, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone())
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())
@@ -5171,7 +5210,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     bool has_explicit_trait = false
                     match eqblk.trait_name:
                         case Some(tn):
-                            bool is_derive2 = tn == "Equatable" or tn == "Displayable" or tn == "Cloneable" or tn == "Hashable" or tn == "Serializable" or tn == "Deserializable" or tn == "Ordinal" or tn == "Drop" or tn == "Add" or tn == "Sub" or tn == "Mul" or tn == "Div" or tn.starts_with("Iterator") or tn.starts_with("Iterable")
+                            bool is_derive2 = is_builtin_trait(tn)
                             if not is_derive2:
                                 has_explicit_trait = true
                         case None:
@@ -5232,7 +5271,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     bool did_split = false
                     match eqblk.trait_name:
                         case Some(tname):
-                            bool is_derive_sp = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable") or tname.starts_with("Add[") or tname.starts_with("Sub[") or tname.starts_with("Mul[") or tname.starts_with("Div[")
+                            bool is_derive_sp = is_builtin_trait(tname)
                             if not is_derive_sp and trait_defs.contains(tname):
                                 did_split = true
                                 TraitDef tdef = trait_defs.get(tname).unwrap()
@@ -5401,7 +5440,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     # These use Type__method naming (no trait prefix).
                     match equip_tmpl.trait_name:
                         case Some(tname):
-                            bool is_derive_g = tname == "Equatable" or tname == "Displayable" or tname == "Cloneable" or tname == "Hashable" or tname == "Serializable" or tname == "Deserializable" or tname == "Ordinal" or tname == "Drop" or tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div" or tname.starts_with("Iterator") or tname.starts_with("Iterable")
+                            bool is_derive_g = is_builtin_trait(tname)
                             if not is_derive_g and trait_defs.contains(tname):
                                 TraitDef gtdef = trait_defs.get(tname).unwrap()
                                 # Build set of explicitly implemented methods

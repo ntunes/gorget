@@ -1160,6 +1160,16 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
         case IFunction(func):
             type_check_function(func, scope_id, &scopes, &types, ctx, -1)
 
+        case IExternBlock(efns):
+            # Extern function signatures are already registered in the pre-pass;
+            # this arm ensures they're also handled when called outside the module-level
+            # pre-pass (e.g. equip blocks or nested scopes). No body to check.
+            int efi = 0
+            while efi < efns.len():
+                FunctionDef efunc = get_fndef_at(efns, efi)
+                register_function_signature(efunc, scope_id, &scopes, &types, ctx, -1)
+                efi += 1
+
         case IStruct(sdef):
             # Build a field type lookup table for EFieldAccess inference.
             # Store struct_name.field_name → type_id in variant_field_types dict.
@@ -1346,6 +1356,12 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
         match r_item:
             case IFunction(r_func):
                 register_function_signature(r_func, module_scope, &scopes, &types, ctx, -1)
+            case IExternBlock(efns):
+                int efi = 0
+                while efi < efns.len():
+                    FunctionDef efunc = get_fndef_at(efns, efi)
+                    register_function_signature(efunc, module_scope, &scopes, &types, ctx, -1)
+                    efi += 1
             else:
                 pass
         rs = rs + 1

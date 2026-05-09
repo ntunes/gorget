@@ -175,6 +175,16 @@ bool is_opaque_pointer_type(String name):
         return true
     if name.starts_with("RWLock__") or name.starts_with("Thread__"):
         return true
+    if name.starts_with("Heap__"):
+        return true
+    if name.starts_with("AtomicInt__") or name.starts_with("AtomicBool__"):
+        return true
+    if name.starts_with("Semaphore__") or name.starts_with("Barrier__"):
+        return true
+    if name.starts_with("OnceFlag__") or name.starts_with("WaitGroup__"):
+        return true
+    if name.starts_with("TaskGroup__"):
+        return true
     if name == "Barrier" or name == "CondVar" or name == "AtomicInt":
         return true
     if name == "AtomicBool" or name == "Process" or name == "Thread":
@@ -185,6 +195,50 @@ bool is_opaque_pointer_type(String name):
 
 bool is_guard_struct_type(String name):
     return name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__")
+
+# Phase A — source-of-truth C method prefix for opaque pointer types.
+# Returns "" for types that have per-method special cases (Channel/Shared/Thread).
+# Called at type-registration time to populate type_method_prefix_map.
+String opaque_ptr_method_prefix(String name):
+    if name.starts_with("Mutex__"):
+        return "gorget_mutex"
+    if name.starts_with("RWLock__"):
+        return "gorget_rwlock"
+    if name.starts_with("Weak__"):
+        return "gorget_weak"
+    if name.starts_with("Heap__"):
+        return "gorget_heap"
+    if name.starts_with("AtomicInt__"):
+        return "gorget_atomic_int"
+    if name.starts_with("AtomicBool__"):
+        return "gorget_atomic_bool"
+    if name.starts_with("Semaphore__"):
+        return "gorget_semaphore"
+    if name.starts_with("Barrier__"):
+        return "gorget_barrier"
+    if name.starts_with("OnceFlag__"):
+        return "gorget_once_flag"
+    if name.starts_with("WaitGroup__"):
+        return "gorget_wait_group"
+    if name.starts_with("TaskGroup__"):
+        return "gorget_task_group"
+    # Channel: all methods follow gorget_channel_METHOD pattern (drop → free alias
+    # handled in the prefix-scan dispatch loop in map_runtime_name).
+    if name.starts_with("Channel__"):
+        return "gorget_channel"
+    # Shared: all methods gorget_shared_METHOD except read → get, write → set aliases
+    # (handled in the prefix-scan dispatch loop in map_runtime_name).
+    if name.starts_with("Shared__"):
+        return "gorget_shared"
+    return ""
+
+# Phase A — source-of-truth C method prefix for guard struct types.
+String guard_method_prefix(String name):
+    if name.starts_with("ReadGuard__"):
+        return "gorget_read_guard"
+    if name.starts_with("WriteGuard__"):
+        return "gorget_write_guard"
+    return "gorget_guard"
 
 # Generic template / placeholder type names that should not be emitted as real
 # structs in C. These arise from unmonomorphized templates leaking into the
@@ -325,19 +379,22 @@ void register_field_type_in_sr(String tname, StructRegistry &sr, LirModule &m):
         int rt_sid = sr_lookup(&sr, rt)
         if rt_sid >= 0:
             sr_register(&sr, tname, rt_sid)
-            return
-    # Box / Guard / opaque / prelude types we know how to stamp. Falls
-    # back to the shared collection-runtime treatment if the name matches
-    # a known prefix; else leaves unregistered (resolve_field_lir_type
-    # will emit LT_PTR, which is correct for unknown opaque types).
+        m.type_runtime_map.put(tname.clone(), rt.clone())
+        return
+    # Box / Guard / opaque / prelude types we know how to stamp.
     if tname.starts_with("Box__"):
         Vector[StructField] box_fields = []
         box_fields.push(StructField("_0", LT_PTR))
         String box_name_ctor = tname.clone()
         int box_id = lir_mod_add_struct(&m, LirStructDef(box_name_ctor, box_fields, 0, false, 8, -1))
         sr_register(&sr, tname, box_id)
+        m.type_runtime_map.put(tname.clone(), "Box")
         return
     if is_opaque_pointer_type(tname):
+        m.type_runtime_map.put(tname.clone(), "Ptr")
+        String opm = opaque_ptr_method_prefix(tname)
+        if opm != "":
+            m.type_method_prefix_map.put(tname.clone(), opm)
         return
     if is_guard_struct_type(tname):
         Vector[StructField] guard_fields = []
@@ -346,6 +403,8 @@ void register_field_type_in_sr(String tname, StructRegistry &sr, LirModule &m):
         String guard_name_ctor = tname.clone()
         int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name_ctor, guard_fields, 0, false, 16, -1))
         sr_register(&sr, tname, guard_id)
+        m.type_runtime_map.put(tname.clone(), "Guard")
+        m.type_method_prefix_map.put(tname.clone(), guard_method_prefix(tname))
         return
 
 int resolve_field_lir_type(String type_name, StructRegistry &sr):
@@ -419,12 +478,16 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 if sr_lookup(&sr, name) < 0:
                     String rt = collection_runtime_type(name)
                     if rt != "":
-                        # Map to existing runtime struct
+                        # Map to existing runtime struct — record in type_runtime_map
                         int rt_sid = sr_lookup(&sr, rt)
                         if rt_sid >= 0:
                             sr_register(&sr, name, rt_sid)
+                        m.type_runtime_map.put(name.clone(), rt.clone())
                     elif is_opaque_pointer_type(name):
-                        pass
+                        m.type_runtime_map.put(name.clone(), "Ptr")
+                        String opm2 = opaque_ptr_method_prefix(name)
+                        if opm2 != "":
+                            m.type_method_prefix_map.put(name.clone(), opm2)
                     elif name.starts_with("Box__"):
                         # Box types: {_0: Ptr}
                         Vector[StructField] box_fields = []
@@ -432,6 +495,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         String box_name = name.clone()
                         int box_id = lir_mod_add_struct(&m, LirStructDef(box_name, box_fields, 0, false, 8, -1))
                         sr_register(&sr, name, box_id)
+                        m.type_runtime_map.put(name.clone(), "Box")
                     elif is_guard_struct_type(name):
                         # Guard types: {owner: Ptr, ptr: Ptr}
                         Vector[StructField] guard_fields = []
@@ -440,12 +504,16 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         String guard_name = name.clone()
                         int guard_id = lir_mod_add_struct(&m, LirStructDef(guard_name, guard_fields, 0, false, 16, -1))
                         sr_register(&sr, name, guard_id)
+                        m.type_runtime_map.put(name.clone(), "Guard")
+                        m.type_method_prefix_map.put(name.clone(), guard_method_prefix(name))
                     else:
                         # Create placeholder (will be filled in Pass 2)
                         Vector[StructField] empty_fields = []
                         String ph_name = name.clone()
                         int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
                         sr_register(&sr, name, sid)
+                        if name.starts_with("Task__"):
+                            m.type_runtime_map.put(name.clone(), "Task")
             else:
                 pass
         ti += 1
@@ -766,7 +834,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
 
 # ── Runtime function name mapping ───────────────────────────
 
-String map_runtime_name(String name):
+String map_runtime_name(String name, LirModule &m):
     # Hardcoded aliases for extern-method stubs whose method name carries
     # the File/stream receiver type (lost to `int64_t__` fallback when the
     # self-host type inference can't keep the receiver as a named type).
@@ -840,55 +908,56 @@ String map_runtime_name(String name):
         return map_set_method(sm)
 
     # Collection constructors (bare name, no method suffix).
-    # Vector__int64_t() → gorget_array_new(sizeof(int64_t))
-    # Dict__K__V() → gorget_dict_new(sizeof(K), sizeof(V)) or gorget_dict_new_str(sizeof(V))
-    # Set__T() → gorget_ordered_set_new(sizeof(T)) or gorget_ordered_set_new_str(0)
-    if is_collection_constructor(name):
-        if name.starts_with("Vector__") or name.starts_with("Deque__"):
+    # Phase A: dispatch on type_runtime_map category; Dict/HashMap and Set/HashSet
+    # still need starts_with only to pick the specific "new" function variant.
+    if is_collection_constructor(name, &m):
+        String ctor_cat = type_category_for_name(name, &m)
+        if ctor_cat == "GorgetArray":
             return "gorget_array_new"
-        elif name.starts_with("Dict__"):
+        elif ctor_cat == "GorgetMap":
             if is_string_keyed(name):
-                return "gorget_dict_new_str"
-            return "gorget_dict_new"
-        elif name.starts_with("HashMap__"):
-            if is_string_keyed(name):
-                return "gorget_map_new_str"
-            return "gorget_map_new"
-        elif name.starts_with("Set__"):
-            if is_string_keyed(name):
-                return "gorget_ordered_set_new_str"
-            return "gorget_ordered_set_new"
-        elif name.starts_with("HashSet__"):
-            if is_string_keyed(name):
-                return "gorget_set_new_str"
-            return "gorget_set_new"
-        elif name.starts_with("Channel__"):
-            return "gorget_channel_new"
-        elif name.starts_with("Shared__"):
-            return "gorget_shared_new"
-        return name
-
-    # Vector methods
-    if name.starts_with("Vector__") and name.contains("__"):
-        String method = extract_method_name(name)
-        return map_array_method(method)
-
-    # Dict/HashMap methods
-    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        String method = extract_method_name(name)
-        if method == "new":
-            bool is_dict = name.starts_with("Dict__")
-            if is_string_keyed(name):
-                if is_dict:
+                if name.starts_with("Dict__"):
                     return "gorget_dict_new_str"
                 return "gorget_map_new_str"
-            if is_dict:
+            if name.starts_with("Dict__"):
+                return "gorget_dict_new"
+            return "gorget_map_new"
+        elif ctor_cat == "GorgetSet":
+            if is_string_keyed(name):
+                if name.starts_with("Set__"):
+                    return "gorget_ordered_set_new_str"
+                return "gorget_set_new_str"
+            if name.starts_with("Set__"):
+                return "gorget_ordered_set_new"
+            return "gorget_set_new"
+        elif ctor_cat == "Ptr":
+            # Channel/Shared constructors: look up prefix in type_method_prefix_map.
+            int ci = 0
+            while ci < name.len() - 1:
+                if name.slice(ci, ci + 2) == "__":
+                    String cp = name.slice(0, ci)
+                    if m.type_method_prefix_map.contains(cp):
+                        return m.type_method_prefix_map.get(cp).unwrap_or("") + "_new"
+                ci += 1
+        return name
+
+    # Phase A: collection method dispatch via type_runtime_map category.
+    # Dict/HashMap and Set/HashSet still need starts_with for "new" disambiguation.
+    String coll_cat = type_category_for_name(name, &m)
+    if coll_cat == "GorgetArray":
+        return map_array_method(extract_method_name(name))
+    if coll_cat == "GorgetMap":
+        String method = extract_method_name(name)
+        if method == "new":
+            if is_string_keyed(name):
+                if name.starts_with("Dict__"):
+                    return "gorget_dict_new_str"
+                return "gorget_map_new_str"
+            if name.starts_with("Dict__"):
                 return "gorget_dict_new"
             return "gorget_map_new"
         return map_dict_method(method)
-
-    # Set methods
-    if name.starts_with("Set__") or name.starts_with("HashSet__"):
+    if coll_cat == "GorgetSet":
         String method = extract_method_name(name)
         if method == "new":
             if is_string_keyed(name):
@@ -931,85 +1000,37 @@ String map_runtime_name(String name):
             else:
                 return "gorget_str_" + method
 
-    # Prefix → runtime prefix (simple 1:1 mappings)
-    if name.starts_with("Heap__"):
-        return "gorget_heap_" + extract_method_name(name)
-    if name.starts_with("Mutex__"):
-        return "gorget_mutex_" + extract_method_name(name)
-    if name.starts_with("RWLock__"):
-        return "gorget_rwlock_" + extract_method_name(name)
-    if name.starts_with("ReadGuard__"):
-        return "gorget_read_guard_" + extract_method_name(name)
-    if name.starts_with("WriteGuard__"):
-        return "gorget_write_guard_" + extract_method_name(name)
-    if name.starts_with("Weak__"):
-        return "gorget_weak_" + extract_method_name(name)
-    if name.starts_with("AtomicInt__"):
-        return "gorget_atomic_int_" + extract_method_name(name)
-    if name.starts_with("AtomicBool__"):
-        return "gorget_atomic_bool_" + extract_method_name(name)
-    if name.starts_with("Semaphore__"):
-        return "gorget_semaphore_" + extract_method_name(name)
-    if name.starts_with("Barrier__"):
-        return "gorget_barrier_" + extract_method_name(name)
-    if name.starts_with("OnceFlag__"):
-        return "gorget_once_flag_" + extract_method_name(name)
-    if name.starts_with("WaitGroup__"):
-        return "gorget_wait_group_" + extract_method_name(name)
-    if name.starts_with("TaskGroup__"):
-        return "gorget_task_group_" + extract_method_name(name)
+    # Phase A — simple prefix dispatch: scan type_method_prefix_map for the type
+    # prefix of the method name. Covers Heap, Mutex, RWLock, Guard, ReadGuard,
+    # WriteGuard, Weak, AtomicInt, AtomicBool, Semaphore, Barrier, OnceFlag,
+    # WaitGroup, TaskGroup, Channel (all registered at lower_type_defs time).
+    # "drop" → "free" is a general alias (runtime uses _free for destruction);
+    # Guard "drop" → "gorget_guard_release" is the only exception.
+    int pfx_i = 0
+    while pfx_i < name.len() - 1:
+        if name.slice(pfx_i, pfx_i + 2) == "__":
+            String pfx_cand = name.slice(0, pfx_i)
+            if m.type_method_prefix_map.contains(pfx_cand):
+                String pfx = m.type_method_prefix_map.get(pfx_cand).unwrap_or("")
+                if pfx != "":
+                    String method = extract_method_name(name)
+                    # Guard: drop → gorget_guard_release (suffix differs from method name).
+                    if pfx == "gorget_guard" and method == "drop":
+                        return "gorget_guard_release"
+                    # Shared: read → get, write → set aliases.
+                    if pfx == "gorget_shared":
+                        if method == "read":
+                            return "gorget_shared_get"
+                        if method == "write":
+                            return "gorget_shared_set"
+                    # General alias: drop → free.
+                    if method == "drop":
+                        method = "free"
+                    return pfx + "_" + method
+        pfx_i += 1
 
-    # Guard: drop → release
-    if name.starts_with("Guard__"):
-        String method = extract_method_name(name)
-        match method:
-            case "drop":
-                return "gorget_guard_release"
-            else:
-                return "gorget_guard_" + method
-
-    # Channel methods (some need special mapping)
-    if name.starts_with("Channel__"):
-        String method = extract_method_name(name)
-        match method:
-            case "send":
-                return "gorget_channel_send"
-            case "recv":
-                return "gorget_channel_recv"
-            case "close":
-                return "gorget_channel_close"
-            case "try_recv":
-                return "gorget_channel_try_recv"
-            case "try_send":
-                return "gorget_channel_try_send"
-            case "clone":
-                return "gorget_channel_clone"
-            case "new":
-                return "gorget_channel_new"
-            case "free" | "drop":
-                return "gorget_channel_free"
-            else:
-                return "gorget_channel_" + method
-
-    # Shared methods (some need special mapping)
-    if name.starts_with("Shared__"):
-        String method = extract_method_name(name)
-        match method:
-            case "get" | "read":
-                return "gorget_shared_get"
-            case "set" | "write":
-                return "gorget_shared_set"
-            case "clone":
-                return "gorget_shared_clone"
-            case "new":
-                return "gorget_shared_new"
-            case "free" | "drop":
-                return "gorget_shared_free"
-            else:
-                return "gorget_shared_" + method
-
-    # Box methods
-    if name.starts_with("Box__"):
+    # Box methods — Phase A: detect via type_runtime_map "Box" category.
+    if type_category_for_name(name, &m) == "Box":
         String method = extract_method_name(name)
         match method:
             case "new":
@@ -1235,16 +1256,38 @@ String map_option_result_method(String method):
         else:
             return ""
 
+# Phase A — find the type_runtime_map category for a method name (or bare type name).
+# Scans __ split points from left to right to find the first registered type prefix.
+# Returns "" if no registered type prefix is found.
+# Examples: "Vector__int64_t__push" → "GorgetArray"
+#           "Box__Foo__clone" → "Box"
+#           "Guard__Mutex__int__deref" → "Guard"
+#           "unknown_fn" → ""
+String type_category_for_name(String name, LirModule &m):
+    if m.type_runtime_map.contains(name):
+        return m.type_runtime_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.type_runtime_map.contains(prefix):
+                return m.type_runtime_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
 # Check if a name is a bare collection constructor (no method suffix).
 # E.g., "Vector__int64_t" is a constructor, "Vector__int64_t__push" is a method.
-bool is_collection_constructor(String name):
+# Phase A — uses type_runtime_map: registered types are constructors, unregistered
+# names with collection prefixes could be method calls.
+bool is_collection_constructor(String name, LirModule &m):
+    # Fast path: if this exact name is registered as a runtime type, it's a constructor.
+    if m.type_runtime_map.contains(name):
+        return true
+    # Slow path: unregistered name — check prefix + method-suffix heuristics.
+    # Handles types that haven't been seen as type declarations yet.
     if not (name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("Channel__") or name.starts_with("Shared__")):
         return false
-    # Count "__" separators. Constructors have exactly 1 (prefix__type).
-    # Methods have 2+ (prefix__type__method).
     String method = extract_method_name(name)
-    # If the extracted "method" looks like a type name (starts with uppercase or is a C type),
-    # it's a constructor, not a method call.
     if method == "int64_t" or method == "double" or method == "bool" or method == "int32_t":
         return true
     if method == "int16_t" or method == "int8_t" or method == "uint64_t" or method == "uint32_t":
@@ -1884,7 +1927,7 @@ bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand]
     # Enums + enum variants have different init semantics; skip them.
     if sdef.enum_kind != EK_NOT_ENUM:
         return false
-    if evp_contains(&m, func_name) or m.enum_variant_parent.contains(func_name):
+    if m.enum_variant_parent.contains(func_name):
         return false
     # Require positional ctor — arg count must match field count exactly.
     # A mismatch usually means this is a method call that happens to share
@@ -2202,12 +2245,12 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     f.blocks.set(bb, blk2)
             else:
                 # Extern or runtime call
-                String mapped = map_runtime_name(func_name)
+                String mapped = map_runtime_name(func_name, &m)
                 String call_name = func_name
                 if mapped != "":
                     call_name = mapped
                 # Collection constructors need element size argument(s)
-                if is_collection_constructor(func_name):
+                if is_collection_constructor(func_name, &m):
                     if func_name.starts_with("Dict__") or func_name.starts_with("HashMap__"):
                         # Dict/Map: need key_size + val_size, or just val_size for _str variant
                         String key_ty = dict_key_type(func_name)
@@ -2356,7 +2399,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
                 f.blocks.set(bb, bblk2)
                 return
-            String mapped_early = map_runtime_name(func_name)
+            String mapped_early = map_runtime_name(func_name, &m)
             String effective_name = func_name
             if mapped_early != "":
                 effective_name = mapped_early
@@ -2410,7 +2453,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
                     lir_args.push(arg_val)
                 ai += 1
-            String mapped = map_runtime_name(func_name)
+            String mapped = map_runtime_name(func_name, &m)
             String call_name = func_name
             if mapped != "":
                 call_name = mapped
@@ -2656,26 +2699,34 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, StructRegistry 
 
 # Determine the drop function name for a given type name.
 # Returns "" if the type doesn't need dropping.
-String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types):
+String drop_fn_for_type(String type_name, Dict[String, bool] &resource_types, Dict[String, String] &type_runtime_map):
     if type_name == "GorgetString" or type_name == "Str":
         return "gorget_string_free"
-    elif type_name == "GorgetArray":
+    if type_name == "GorgetArray":
         return "gorget_array_free"
-    elif type_name == "GorgetMap":
+    if type_name == "GorgetMap":
         return "gorget_map_free"
-    elif type_name == "GorgetSet":
+    if type_name == "GorgetSet":
         return "gorget_set_free"
-    elif type_name == "GorgetClosure":
+    if type_name == "GorgetClosure":
         return "gorget_closure_free"
-    elif type_name.starts_with("Vector__") or type_name.starts_with("Deque__"):
+    # Phase A — use type_runtime_map for parameterized collection/resource types.
+    # Registered once at type-definition time; no starts_with name matching.
+    # Guard contains before get (Dict.get() crashes on missing key in self-host).
+    String runtime = ""
+    if type_runtime_map.contains(type_name):
+        runtime = type_runtime_map.get(type_name).unwrap_or("")
+    if runtime == "GorgetArray":
         return "gorget_array_free"
-    elif type_name.starts_with("Dict__") or type_name.starts_with("HashMap__"):
+    elif runtime == "GorgetMap":
         return "gorget_map_free"
-    elif type_name.starts_with("Set__") or type_name.starts_with("HashSet__"):
+    elif runtime == "GorgetSet":
         return "gorget_set_free"
-    elif type_name.starts_with("Box__"):
+    elif runtime == "Ptr" or runtime == "Box":
         return "free"
-    elif resource_types.contains(type_name):
+    elif runtime == "Task":
+        return ""
+    if resource_types.contains(type_name):
         return type_name + "__drop"
     return ""
 
@@ -2701,7 +2752,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
         int fi = 0
         while fi < info.fields.len():
             GirFieldInfo finfo = info.fields.get(fi).unwrap()
-            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types)
+            String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map)
             if drop_fn != "":
                 field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
             fi += 1
@@ -2738,7 +2789,7 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             int vfi = 0
             while vfi < vinfo.fields.len():
                 GirFieldInfo finfo = vinfo.fields.get(vfi).unwrap()
-                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types)
+                String drop_fn = drop_fn_for_type(finfo.type_name, &gmod.resource_types, &m.type_runtime_map)
                 if drop_fn != "":
                     # Field name in the C struct is VariantName_N (e.g., Literal_0)
                     # finfo.name is "_N" (e.g., "_0"), so strip the leading underscore
@@ -2797,16 +2848,12 @@ LirModule lower_gir_to_lir(GirModule &gmod):
             while vi_v < tinfo_v.variants.len():
                 GirEnumVariantInfo v_v = tinfo_v.variants.get(vi_v).unwrap()
                 m.enum_variant_parent.put(v_v.name, tname_v)
-                m.evp_keys.push(v_v.name.clone())
-                m.evp_vals.push(tname_v.clone())
                 # The variant's ordinal position in the source enum declaration
                 # IS its runtime tag. The codegen's struct-field-scan heuristic
                 # (emit_call_extern) gets this wrong for unit variants, because
                 # unit variants contribute no payload fields. Record the right
                 # tag here so callers can look it up.
                 m.enum_variant_tag.put(v_v.name, vi_v)
-                m.evt_keys.push(v_v.name.clone())
-                m.evt_vals.push(vi_v)
                 vi_v += 1
         tivi += 1
 
