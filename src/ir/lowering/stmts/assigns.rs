@@ -687,9 +687,14 @@ pub(super) fn lower_index_assign(
     let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
     let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
-    let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
-    let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
-        || type_name == "GorgetMap";
+    // Read typed `collection_kind` from TypeMetadata (Phase A) instead of
+    // matching `type_name.starts_with("Vector__"/"Dict__"/...)`. The kind
+    // covers Vector/Deque/GorgetArray as Array; Dict as OrderedMap; HashMap/
+    // GorgetMap as Map; Set as OrderedSet; HashSet/GorgetSet as Set.
+    let kind = ctx.type_registry.get_type_def(&type_name)
+        .and_then(|td| td.metadata.collection_kind);
+    let is_vector = kind == Some(CollectionKind::Array);
+    let is_dict = matches!(kind, Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map));
 
     // Auto-clone borrow sources for consuming args at `Dict[k]=v` / `Vec[i]=v` sites.
     // The runtime is symmetric with gorget_array_push: gorget_map_put / _set /
@@ -1114,9 +1119,12 @@ pub(super) fn lower_compound_assign(
         let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
         let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
         let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
-        let is_vector = type_name.starts_with("Vector__") || type_name == "GorgetArray";
-        let is_dict = type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")
-            || type_name == "GorgetMap";
+        // Typed dispatch via `collection_kind` (mirrors the lower_index_assign
+        // arm above; see its comment for the kind-to-prefix mapping).
+        let kind = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.collection_kind);
+        let is_vector = kind == Some(CollectionKind::Array);
+        let is_dict = matches!(kind, Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map));
 
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
             // Save index into a local so it can be reused for both read and write.
