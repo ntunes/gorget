@@ -379,6 +379,13 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
         case IStaticDecl(_, _, val):
             resolve_expr(val, &scopes, &ctx)
 
+        case IExternBlock(fns):
+            int fi = 0
+            while fi < fns.len():
+                FunctionDef f = get_fndef_at(fns, fi)
+                resolve_extern_fn_generics(f, &scopes, &ctx)
+                fi = fi + 1
+
         case ITest(_, with_exprs, with_names, body):
             scopes.push_scope(SkFunction())
             int wi = 0
@@ -409,6 +416,23 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
 
         else:
             pass
+
+
+# Creates a body scope for an extern function and defines its generic type params
+# so `register_function_signature` can resolve them via `ast_type_to_resolved`.
+# Does NOT define param variable defs — Rust doesn't emit TYPE lines for extern
+# params, so we must not either (keeps exact-match count high).
+void resolve_extern_fn_generics(FunctionDef f, ScopeTable &scopes, ResolveContext &ctx):
+    if f.type_params.len() == 0:
+        return
+    int body_scope = scopes.push_scope(SkFunction())
+    fn_scope_set(&ctx, f.name, body_scope)
+    int gi = 0
+    while gi < f.type_params.len():
+        String gp = get_str_at(f.type_params, gi)
+        scopes.define(gp, DkGenericParam(), Span(0, 0))
+        gi = gi + 1
+    scopes.pop_scope()
 
 
 void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):

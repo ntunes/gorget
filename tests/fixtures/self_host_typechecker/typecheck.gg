@@ -9,7 +9,7 @@ from std.collections import Vector, Dict
 from ast import Module, Item, Stmt, Param, FunctionDef, StructDef, EnumDef
 from ast import EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch
 from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Pattern
-from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv
+from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv, EMatch
 from ast import SExpr, SVarDecl, SReturn
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
@@ -790,6 +790,17 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 SpannedExpr fe = exprs.get(fei).unwrap()
                 walk_expr_closures(fe, scope_id, &scopes, &types, ctx)
                 fei = fei + 1
+
+        case EMatch(scrutinee, arms):
+            # Match-as-expression: assign pattern binding types and walk arm bodies.
+            int scrut_type = infer_expr_type(SpannedExpr((*scrutinee).expr, (*scrutinee).span), scopes, &types, ctx)
+            int ai = 0
+            while ai < arms.len():
+                MatchArm arm = arms.get(ai).unwrap()
+                if scrut_type >= 0:
+                    assign_pattern_types(arm.pattern, scrut_type, scope_id, &scopes, &types)
+                type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
+                ai = ai + 1
 
         else:
             pass

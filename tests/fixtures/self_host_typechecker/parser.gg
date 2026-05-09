@@ -1911,6 +1911,9 @@ equip Parser:
                 first_is_type = is_type_keyword(kw)
             else:
                 pass
+        # A leading `(` inside the param list means tuple type `(T1, T2) name`.
+        if not first_is_type and self.check_tok(TOK_LPAREN):
+            first_is_type = true
         if not first_is_type:
             # Could also be a named type (identifier) followed by another identifier
             if self.check_tok(TOK_IDENT):
@@ -1969,6 +1972,9 @@ equip Parser:
                 is_typed = is_type_keyword(kw)
             else:
                 pass
+        # A leading `(` means tuple type `(T1, T2) name` — always typed.
+        if not is_typed and self.check_tok(TOK_LPAREN):
+            is_typed = true
         if not is_typed and self.check_tok(TOK_IDENT):
             # Could be: ident ident (typed) or just ident (untyped)
             self.advance()
