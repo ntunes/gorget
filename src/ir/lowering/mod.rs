@@ -2445,6 +2445,7 @@ fn lower_test_items(
             } else {
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
+            ctx.flush_ownership_to_locals(&mut builder);
             module.functions.push(builder.build());
             module.runtime.has_suite_setup = true;
         }
@@ -2464,6 +2465,7 @@ fn lower_test_items(
             } else {
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
+            ctx.flush_ownership_to_locals(&mut builder);
             module.functions.push(builder.build());
             module.runtime.has_suite_teardown = true;
         }
@@ -2538,6 +2540,7 @@ fn lower_test_items(
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
 
+            ctx.flush_ownership_to_locals(&mut builder);
             let mut test_fn = builder.build();
             test_fn.is_test_fn = true;
             module.functions.push(test_fn);
@@ -2598,6 +2601,7 @@ fn lower_bench_items(
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
             }
 
+            ctx.flush_ownership_to_locals(&mut builder);
             let mut bench_fn = builder.build();
             bench_fn.is_test_fn = true; // enable cleanup stack
             module.functions.push(bench_fn);

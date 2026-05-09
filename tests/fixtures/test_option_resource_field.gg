@@ -1,0 +1,24 @@
+struct Wrapper:
+    Option[String] name
+    Option[Vector[int]] items
+
+test "option_string_field_is_some":
+    Wrapper w = Wrapper(Some("hello"), None())
+    assert w.name.is_some()
+
+test "option_string_field_is_none":
+    Wrapper w = Wrapper(None(), None())
+    assert w.name.is_none()
+
+test "option_string_field_unwrap":
+    Wrapper w = Wrapper(Some("world"), None())
+    assert w.name.unwrap() == "world"
+
+test "option_vector_field_is_some":
+    Vector[int] v = [1, 2, 3]
+    Wrapper w = Wrapper(None(), Some(v))
+    assert w.items.is_some()
+
+test "option_vector_field_is_none":
+    Wrapper w = Wrapper(None(), None())
+    assert w.items.is_none()

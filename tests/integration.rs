@@ -5736,6 +5736,15 @@ fn test_failure() {
 }
 
 #[test]
+fn test_option_resource_field() {
+    run_gg_test(
+        "test_option_resource_field.gg",
+        &["5 passed, 0 failed"],
+        true,
+    );
+}
+
+#[test]
 fn test_suite_setup_teardown() {
     run_gg_test(
         "test_suite.gg",
