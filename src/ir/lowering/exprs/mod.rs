@@ -2207,7 +2207,10 @@ fn lower_match_expr(
     // AssignMode by source shape — see stage_match_scrutinee.
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
-    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
+    let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
+        ctx.is_last_use_at(name, scrutinee.span)
+    } else { false };
+    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
 
     // Allocate result local with the surrounding context's expected type when
     // available (VarDecl `T x = match …`, return-position match, struct
@@ -2752,7 +2755,10 @@ fn lower_match_stmt_as_expr(
     // `_scrut = copy _b` shallow aliases.
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
-    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
+    let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
+        ctx.is_last_use_at(name, scrutinee.span)
+    } else { false };
+    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
 
     let result_local = builder.add_local(I64_TYPE, None);
     let merge_bb = builder.new_block();

@@ -2,6 +2,13 @@ struct Wrapper:
     Option[String] name
     Option[Vector[int]] items
 
+enum WResult:
+    OkW(Wrapper)
+    ErrW(String)
+
+WResult make_w(String s):
+    return WResult.OkW(Wrapper(Some(s), None()))
+
 test "option_string_field_is_some":
     Wrapper w = Wrapper(Some("hello"), None())
     assert w.name.is_some()
@@ -28,3 +35,23 @@ test "option_vector_literal_into_some":
     assert x.is_some()
     Vector[int] tags = x.unwrap()
     assert tags.len() == 3
+
+# Snag #25d regression: matching a named local (auto r = ...) and
+# unwrapping a struct-field Option in the arm previously double-freed
+# the inner String. Direct match (`match make_w("..."):`) always
+# worked because the scrutinee was an unnamed temp; only the bind-then-
+# match path triggered the aliasing. Both must pass.
+test "match_direct_arm_unwrap":
+    match make_w("hello"):
+        case WResult.OkW(w):
+            assert w.name.unwrap() == "hello"
+        case WResult.ErrW(_):
+            assert false
+
+test "match_bound_arm_unwrap":
+    auto r = make_w("hello")
+    match r:
+        case WResult.OkW(w):
+            assert w.name.unwrap() == "hello"
+        case WResult.ErrW(_):
+            assert false

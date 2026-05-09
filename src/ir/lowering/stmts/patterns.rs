@@ -30,6 +30,7 @@ pub fn stage_match_scrutinee(
     builder: &mut FunctionBuilder,
     scrut_op: &Operand,
     scrut_type: TypeId,
+    source_at_last_use: bool,
 ) -> LocalId {
     use crate::ir::instructions::AssignMode;
     let scrut_local = builder.add_local(scrut_type, None);
@@ -62,10 +63,29 @@ pub fn stage_match_scrutinee(
         if place.projections.is_empty() && ctx.is_owned_local(builder, place.local) {
             ctx.set_owned(builder, scrut_local);
             let src_type = builder.local_type(place.local);
-            if ctx.type_registry.needs_drop(src_type) && !ctx.is_named_local(place.local) {
-                ctx.drops.unregister(place.local);
-                ctx.move_zero_and_mark(builder, place.local);
-                ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
+            if ctx.type_registry.needs_drop(src_type) {
+                if !ctx.is_named_local(place.local) {
+                    // Unnamed temp source: dead by construction at this site,
+                    // safe to zero. Existing transfer + zero pattern.
+                    ctx.drops.unregister(place.local);
+                    ctx.move_zero_and_mark(builder, place.local);
+                    ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
+                } else if source_at_last_use {
+                    // Named source at last-use: source is dead after the
+                    // match, so transferring the drop to the scrutinee is
+                    // sound — without this, an arm's `unwrap()` zeros only
+                    // the scrutinee's variant tag (memcpy aliased the source
+                    // and scrut at the resource fields), and the source's
+                    // scope-exit drop double-frees what unwrap extracted.
+                    // No move_zero: `tag_of source` reads the source after
+                    // the staging assign and needs the data intact.
+                    ctx.drops.unregister(place.local);
+                    ctx.drops.register_local(scrut_local, scrut_type, &ctx.type_registry);
+                }
+                // Named source NOT at last-use: leave drop on source. The
+                // user's later use of the source expects its data to live;
+                // transferring would leak. Aliasing-double-free risk on
+                // arm consumption stays open (Snag #25d).
             }
         }
         // Ref propagation: see comment in lower_match_stmt below.
@@ -130,7 +150,11 @@ pub(super) fn lower_match_stmt(
 
     // Phase C: stage the scrutinee with the right AssignMode and ownership
     // transfer. See `stage_match_scrutinee` for the full rationale.
-    let scrut_local = stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type);
+    // Snag #25d: pass last-use to enable safe drop transfer for named
+    // sources at end-of-life — without this, an arm's `unwrap()` zeros only
+    // the scrutinee copy and the source's drop double-frees the payload.
+    let source_at_last_use = scrutinee_dead_original.is_some();
+    let scrut_local = stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
 
     let merge_bb = builder.new_block();
 

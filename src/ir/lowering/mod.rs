@@ -2437,6 +2437,7 @@ fn lower_test_items(
             let mut builder = FunctionBuilder::new("__suite_setup", UNIT_TYPE, &[]);
             ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
+            ctx.func_state.liveness = liveness::compute_function_liveness(&setup.body.stmts);
             stmts::lower_block(ctx, &mut builder, &setup.body);
             let last = builder.current_block.0 as usize;
             if builder.blocks[last].terminator.is_none() {
@@ -2457,6 +2458,7 @@ fn lower_test_items(
             let mut builder = FunctionBuilder::new("__suite_teardown", UNIT_TYPE, &[]);
             ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
+            ctx.func_state.liveness = liveness::compute_function_liveness(&teardown.body.stmts);
             stmts::lower_block(ctx, &mut builder, &teardown.body);
             let last = builder.current_block.0 as usize;
             if builder.blocks[last].terminator.is_none() {
@@ -2529,6 +2531,14 @@ fn lower_test_items(
             let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
             ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
+            // Match scrutinee staging consults `is_last_use_at` to decide
+            // whether to transfer drop ownership from a named source to the
+            // staged scrutinee. Without function-level liveness data (Snag
+            // #25d), it stays conservative — the source's drop fires at
+            // scope exit, double-freeing payloads an arm's `unwrap()`
+            // already extracted via the aliased scrutinee. Same call as
+            // the regular function lowering path in `functions.rs`.
+            ctx.func_state.liveness = liveness::compute_function_liveness(&test_def.body.stmts);
 
             stmts::lower_block(ctx, &mut builder, &test_def.body);
 
@@ -2590,6 +2600,7 @@ fn lower_bench_items(
             let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
             ctx.clear_locals();
             ctx.drops.push_scope(drops::DropScopeKind::Function);
+            ctx.func_state.liveness = liveness::compute_function_liveness(&bench_def.body.stmts);
 
             stmts::lower_block(ctx, &mut builder, &bench_def.body);
 
