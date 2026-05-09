@@ -1372,10 +1372,18 @@ String coll_ctor_fn_for_name(String name, LirModule &m):
 # Phase A — uses type_runtime_map: registered types are constructors, unregistered
 # names with collection prefixes could be method calls.
 bool is_collection_constructor(String name, LirModule &m):
-    # Fast path: if this exact name is registered as a runtime type, it's a constructor.
+    # Fast path: registered collection types (GorgetArray/Map/Set) only.
+    # Box, Guard, Task, Ptr, Option, Result, GorgetString are also in
+    # type_runtime_map but are NOT collection constructors — only the three
+    # collection categories qualify here. "Ptr" (opaque types: Mutex, Channel,
+    # Shared, etc.) fall through to the method-suffix check below.
     if m.type_runtime_map.contains(name):
-        return true
-    # Slow path: unregistered name — check prefix + method-suffix heuristics.
+        String cat = m.type_runtime_map.get(name).unwrap_or("")
+        if cat == "GorgetArray" or cat == "GorgetMap" or cat == "GorgetSet":
+            return true
+        if cat != "Ptr":
+            return false
+    # Slow path: unregistered name or Ptr-category — check prefix + method-suffix.
     # Handles types that haven't been seen as type declarations yet.
     # collection_runtime_type is the source-of-truth for prefix matching.
     if collection_runtime_type(name) == "" and not is_opaque_pointer_type(name):

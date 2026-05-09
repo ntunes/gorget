@@ -277,8 +277,13 @@ bool should_skip_struct(LirStructDef &sdef, LirModule &m):
         return true
     if is_runtime_defined_named(sdef.name):
         return true
+    # Only skip types whose runtime category has a concrete C alias (collection
+    # aliases, Box/Guard/Task/Ptr, string aliases). Categories without a C alias
+    # (Option, Result) need their own struct definitions and must NOT be skipped.
     if m.type_runtime_map.contains(sdef.name):
-        return true
+        String cat = m.type_runtime_map.get(sdef.name).unwrap_or("")
+        if runtime_category_to_c_type(cat) != "":
+            return true
     if lir_to_runtime_name(sdef.name) != "":
         return true
     # Imported type — only skip if the runtime preamble already defines it.
@@ -1891,6 +1896,8 @@ String runtime_category_to_c_type(String runtime):
         return "GorgetMap"
     elif runtime == "GorgetSet":
         return "GorgetSet"
+    elif runtime == "GorgetString":
+        return "GorgetString"
     elif runtime == "Ptr" or runtime == "Box" or runtime == "Guard":
         return "void*"
     elif runtime == "Task":
