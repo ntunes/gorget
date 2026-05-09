@@ -240,81 +240,6 @@ fn emit_hashable_key_bridges(out: &mut String, module: &LirModule) {
             }
         }
     }
-    // The original CallExtern-based scan loop is preserved below as a
-    // dead branch under `cfg(any())` for one merge cycle, in case any
-    // subset (e.g. via-delegation stubs) escapes the SetCollectionBridge
-    // emission window. Delete in B1 once the new path is proven.
-    #[cfg(any())]
-    for func in &module.functions {
-        for block in &func.blocks {
-            for inst in &block.insts {
-                if let Inst::CallExtern { name, original_name, .. } = inst {
-                    // The original_name (when present) captures the
-                    // still-mangled Dict__K__V or Set__T constructor. The
-                    // direct `name` path captures calls that haven't been
-                    // re-routed yet. Cover both.
-                    //
-                    // Constructor names end with `__new` / `__new_str` /
-                    // `__with_capacity` on the mapped form, or are bare
-                    // `Dict__K__V` / `Set__T` on the pre-map form.
-                    let (is_mapped_constructor, lookup_name) = match (name.as_str(), original_name) {
-                        ("gorget_dict_new", Some(orig))
-                        | ("gorget_map_new", Some(orig))
-                        | ("gorget_dict_new_str", Some(orig))
-                        | ("gorget_map_new_str", Some(orig))
-                        | ("gorget_set_new", Some(orig))
-                        | ("gorget_set_with_capacity", Some(orig))
-                        | ("gorget_ordered_set_new", Some(orig))
-                        | ("gorget_ordered_set_new_str", Some(orig)) => (true, orig.as_str()),
-                        _ => (false, name.as_str()),
-                    };
-                    let (prefix, is_set) = if lookup_name.starts_with("Dict__") {
-                        ("Dict__", false)
-                    } else if lookup_name.starts_with("HashMap__") {
-                        ("HashMap__", false)
-                    } else if lookup_name.starts_with("Set__") {
-                        ("Set__", true)
-                    } else if lookup_name.starts_with("HashSet__") {
-                        ("HashSet__", true)
-                    } else {
-                        continue;
-                    };
-                    let rest = match lookup_name.strip_prefix(prefix) {
-                        Some(r) => r,
-                        None => continue,
-                    };
-                    // On the mapped form, rest looks like `Named__new` /
-                    // `Named__new_str` / `Named__with_capacity`; strip the
-                    // method-suffix to leave the element / key type. On the
-                    // pre-map form rest IS the type (`Named` or `K__V`).
-                    let rest = if is_mapped_constructor {
-                        rest.strip_suffix("__new_str")
-                            .or_else(|| rest.strip_suffix("__new"))
-                            .or_else(|| rest.strip_suffix("__with_capacity"))
-                            .unwrap_or(rest)
-                    } else {
-                        // Pre-map: the last `__` segment must be a collection
-                        // type constructor (primitive name) — otherwise this
-                        // is a method call like `Dict__K__V__put` and we skip.
-                        let last = rest.rsplit("__").next().unwrap_or("");
-                        if !is_collection_type_constructor(last) {
-                            continue;
-                        }
-                        rest
-                    };
-                    let key = if is_set {
-                        rest.to_string()
-                    } else {
-                        rest.splitn(2, "__").next().unwrap_or("").to_string()
-                    };
-                    if key.is_empty() { continue; }
-                    if helpers::is_user_hashable_key(&key, module) {
-                        key_types.insert(key);
-                    }
-                }
-            }
-        }
-    }
     if key_types.is_empty() { return; }
     writeln!(out, "\n// ── Hashable/Equatable runtime bridges for user-type Dict/Set keys ──").unwrap();
     for ty in &key_types {
@@ -3090,7 +3015,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
         });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

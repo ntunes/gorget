@@ -1834,152 +1834,6 @@ impl<'a> FuncLowering<'a> {
     /// function-name matching that previously covered gorget_array_push,
     /// gorget_map_put, etc.  Follows Rust MIR convention: Operand::Move
     /// signals ownership transfer; the caller zeros its source slot.
-    /// Determine elem_drop/elem_clone/elem_materialize function names for a
-    /// collection constructor call based on the monomorphized original_name.
-    /// Returns (field_offset, function_name) pairs to store.
-    pub(super) fn infer_collection_elem_fns(
-        &self,
-        emit_name: &str,
-        original_name: &str,
-    ) -> Vec<(usize, String)> {
-        let mut stores: Vec<(usize, String)> = Vec::new();
-
-        // ── Vector/Array constructors ──
-        let is_array_ctor = emit_name.starts_with("gorget_array_new")
-            || emit_name == "gorget_array_with_capacity";
-        let is_vector_orig = original_name.starts_with("Vector__")
-            || original_name.starts_with("Deque__");
-
-        if is_array_ctor && is_vector_orig {
-            let raw_elem = original_name.strip_prefix("Vector__")
-                .or_else(|| original_name.strip_prefix("Deque__"))
-                .unwrap_or("");
-            let elem_type = raw_elem.strip_suffix("__new")
-                .or_else(|| raw_elem.strip_suffix("__with_capacity"))
-                .unwrap_or(raw_elem);
-
-            // GorgetArray offsets: elem_drop=40, elem_clone=48, elem_materialize=56
-            // elem_drop: built-in resource types AND user types with drop.
-            // When the collection itself is freed (gorget_array_free), elem_drop
-            // fires for each element. The ownership system handles individual
-            // element drops (via IndexLoad MoveZero), not batch cleanup.
-            if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type, self.gir_types) {
-                stores.push((40, drop_fn));
-            } else if self.recursive_drop_structs.contains_key(elem_type)
-                || self.recursive_drop_enums.contains_key(elem_type)
-            {
-                let drop_name = format!("{elem_type}__drop");
-                stores.push((40, drop_name));
-            }
-            // elem_clone: built-in resource types AND user types with resource
-            // fields. Without elem_clone, gorget_array_clone does a shallow
-            // memcpy of elements, creating shared String pointers that
-            // use-after-free when one copy is dropped.
-            if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type, self.gir_types) {
-                stores.push((48, clone_fn));
-            } else if self.recursive_drop_structs.contains_key(elem_type)
-                || self.recursive_drop_enums.contains_key(elem_type)
-            {
-                let clone_name = format!("{elem_type}__clone_inplace");
-                stores.push((48, clone_name));
-            }
-            if elem_type == "GorgetString" {
-                stores.push((56, "gorget_string_materialize_inplace".into()));
-            }
-        }
-
-        // ── Dict/Map constructors ──
-        let is_map_ctor = emit_name.starts_with("gorget_dict_new")
-            || emit_name.starts_with("gorget_map_new");
-        let is_dict_orig = original_name.starts_with("Dict__")
-            || original_name.starts_with("HashMap__");
-
-        if is_map_ctor && is_dict_orig {
-            let prefix = if original_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
-            if let Some(rest) = original_name.strip_prefix(prefix) {
-                // Track whether this is the `_str` runtime variant — those
-                // ctors pre-wire `key_drop` / `key_clone` for the String
-                // key inside the runtime, so we must NOT emit our own.
-                let is_str_variant = rest.ends_with("__new_str");
-                let rest_stripped = rest.strip_suffix("__new_str")
-                    .or_else(|| rest.strip_suffix("__new"))
-                    .unwrap_or(rest);
-                if let Some(pos) = rest_stripped.find("__") {
-                    let key_type = &rest_stripped[..pos];
-                    let val_type = &rest_stripped[pos + 2..];
-                    // GorgetMap offsets: val_drop=104, val_clone=112,
-                    // key_drop=120, key_clone=128, val_materialize=136.
-                    // val_drop: built-in + user recursive types (see elem_drop comment).
-                    if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type, self.gir_types) {
-                        stores.push((104, drop_fn));
-                    } else if self.recursive_drop_structs.contains_key(val_type)
-                        || self.recursive_drop_enums.contains_key(val_type)
-                    {
-                        let drop_name = format!("{val_type}__drop");
-                        stores.push((104, drop_name));
-                    }
-                    // val_clone: built-in + user recursive types (see elem_clone comment).
-                    if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type, self.gir_types) {
-                        stores.push((112, clone_fn));
-                    } else if self.recursive_drop_structs.contains_key(val_type)
-                        || self.recursive_drop_enums.contains_key(val_type)
-                    {
-                        let clone_name = format!("{val_type}__clone_inplace");
-                        stores.push((112, clone_name));
-                    }
-                    // key_drop / key_clone for user-defined keys with resource
-                    // fields (`@derive(Drop)` or transitive). Skipped on the
-                    // `_str` variant (runtime handles String key drop) and
-                    // for primitive keys (no `T__drop` exists). The gate
-                    // `recursive_drop_*.contains_key(key_type)` is exactly
-                    // "this user type has a generated `T__drop` function";
-                    // it returns false for `int64_t`, `String`, etc.
-                    if !is_str_variant
-                        && (self.recursive_drop_structs.contains_key(key_type)
-                            || self.recursive_drop_enums.contains_key(key_type))
-                    {
-                        stores.push((120, format!("{key_type}__drop")));
-                        stores.push((128, format!("{key_type}__clone_inplace")));
-                    }
-                    if val_type == "GorgetString" {
-                        stores.push((136, "gorget_string_materialize_inplace".into()));
-                    }
-                }
-            }
-        }
-
-        // ── Set/HashSet constructors (GorgetSet is typedef'd to GorgetMap,
-        // so the same key_drop=120 / key_clone=128 offsets apply). The
-        // element IS the key. The `_str` variant pre-wires String key
-        // handling in the runtime; user-resource elements need explicit
-        // wiring so bucket eviction / set drop frees the held resources.
-        let is_set_ctor = emit_name.starts_with("gorget_set_new")
-            || emit_name.starts_with("gorget_ordered_set_new")
-            || emit_name == "gorget_set_with_capacity";
-        let is_set_orig = original_name.starts_with("Set__")
-            || original_name.starts_with("HashSet__");
-
-        if is_set_ctor && is_set_orig {
-            let prefix = if original_name.starts_with("Set__") { "Set__" } else { "HashSet__" };
-            if let Some(rest) = original_name.strip_prefix(prefix) {
-                let is_str_variant = rest.ends_with("__new_str");
-                let elem_type = rest.strip_suffix("__new_str")
-                    .or_else(|| rest.strip_suffix("__new"))
-                    .or_else(|| rest.strip_suffix("__with_capacity"))
-                    .unwrap_or(rest);
-                if !is_str_variant
-                    && (self.recursive_drop_structs.contains_key(elem_type)
-                        || self.recursive_drop_enums.contains_key(elem_type))
-                {
-                    stores.push((120, format!("{elem_type}__drop")));
-                    stores.push((128, format!("{elem_type}__clone_inplace")));
-                }
-            }
-        }
-
-        stores
-    }
-
     /// Emit NamedFuncAddr + byte-offset Store instructions to set function
     /// pointers (elem_drop, elem_clone, etc.) on a freshly constructed collection.
     pub(super) fn emit_collection_fn_ptr_stores(
@@ -2008,6 +1862,194 @@ impl<'a> FuncLowering<'a> {
                 value: fn_ptr,
             });
         }
+    }
+
+    /// Parse the effective original GIR name for a collection constructor call.
+    ///
+    /// Returns `(kind, elem_type, val_type?, with_capacity, str_keyed)` when
+    /// the runtime `emit_name` and GIR `effective_orig` name together identify
+    /// a collection constructor; `None` for non-ctor calls.
+    ///
+    /// Called ONCE in `emit_generic_call` so the name is parsed at the right
+    /// layer — never re-parsed downstream. Mirrors the `parse_original` logic
+    /// in `lir::runtime::promote_collection_ctors`, which becomes a no-op once
+    /// all ctors are emitted as `CollectionCtor` at construction time.
+    fn parse_collection_ctor_info(
+        emit_name: &str,
+        effective_orig: &str,
+    ) -> Option<(crate::lir::CollectionCtorKind, String, Option<String>, bool, bool)> {
+        use crate::lir::CollectionCtorKind;
+        let is_array = emit_name == "gorget_array_new" || emit_name == "gorget_array_with_capacity";
+        let is_map = emit_name == "gorget_dict_new" || emit_name == "gorget_dict_new_str"
+            || emit_name == "gorget_map_new" || emit_name == "gorget_map_new_str";
+        let is_set = emit_name == "gorget_set_new" || emit_name == "gorget_set_new_str"
+            || emit_name == "gorget_ordered_set_new" || emit_name == "gorget_ordered_set_new_str"
+            || emit_name == "gorget_set_with_capacity";
+        if !is_array && !is_map && !is_set { return None; }
+
+        let with_capacity = emit_name.ends_with("_with_capacity");
+        let str_keyed = emit_name.ends_with("_new_str");
+
+        fn strip_ctor_suffix(s: &str) -> &str {
+            s.strip_suffix("__new_str")
+                .or_else(|| s.strip_suffix("__new"))
+                .or_else(|| s.strip_suffix("__with_capacity"))
+                .unwrap_or(s)
+        }
+
+        if let Some(rest) = effective_orig.strip_prefix("Vector__") {
+            return Some((CollectionCtorKind::Vector, strip_ctor_suffix(rest).to_string(), None, with_capacity, str_keyed));
+        }
+        if let Some(rest) = effective_orig.strip_prefix("Deque__") {
+            return Some((CollectionCtorKind::Deque, strip_ctor_suffix(rest).to_string(), None, with_capacity, str_keyed));
+        }
+        if let Some(rest) = effective_orig.strip_prefix("Dict__") {
+            let stripped = strip_ctor_suffix(rest);
+            if let Some(pos) = stripped.find("__") {
+                return Some((CollectionCtorKind::Dict, stripped[..pos].to_string(), Some(stripped[pos+2..].to_string()), with_capacity, str_keyed));
+            }
+        }
+        if let Some(rest) = effective_orig.strip_prefix("HashMap__") {
+            let stripped = strip_ctor_suffix(rest);
+            if let Some(pos) = stripped.find("__") {
+                return Some((CollectionCtorKind::HashMap, stripped[..pos].to_string(), Some(stripped[pos+2..].to_string()), with_capacity, str_keyed));
+            }
+        }
+        if let Some(rest) = effective_orig.strip_prefix("Set__") {
+            return Some((CollectionCtorKind::Set, strip_ctor_suffix(rest).to_string(), None, with_capacity, str_keyed));
+        }
+        if let Some(rest) = effective_orig.strip_prefix("HashSet__") {
+            return Some((CollectionCtorKind::HashSet, strip_ctor_suffix(rest).to_string(), None, with_capacity, str_keyed));
+        }
+
+        None
+    }
+
+    /// Convert a LIR-level C type name to `ElemMeta`. Used when emitting
+    /// `CollectionCtor` directly — reads typed LIR metadata rather than
+    /// re-matching on name strings downstream.
+    pub(super) fn elem_type_to_meta(&self, name: &str) -> crate::lir::ElemMeta {
+        use crate::lir::{ElemMeta, ResourceKind};
+        match name {
+            "int64_t" | "uint64_t" => ElemMeta::Primitive(LirType::I64),
+            "int32_t" | "uint32_t" => ElemMeta::Primitive(LirType::I32),
+            "int16_t" | "uint16_t" => ElemMeta::Primitive(LirType::I16),
+            "int8_t" => ElemMeta::Primitive(LirType::I8),
+            "uint8_t" => ElemMeta::Primitive(LirType::U8),
+            "double" => ElemMeta::Primitive(LirType::F64),
+            "float" => ElemMeta::Primitive(LirType::F32),
+            "bool" | "_Bool" => ElemMeta::Primitive(LirType::Bool),
+            "GorgetString" | "Str" => ElemMeta::Resource(ResourceKind::GorgetString),
+            "GorgetArray" => ElemMeta::Resource(ResourceKind::GorgetArray),
+            "GorgetMap" => ElemMeta::Resource(ResourceKind::GorgetMap),
+            "GorgetSet" => ElemMeta::Resource(ResourceKind::GorgetSet),
+            "GorgetClosure" => ElemMeta::Resource(ResourceKind::GorgetClosure),
+            n if n.starts_with("Vector__") || n.starts_with("Deque__") => {
+                ElemMeta::Resource(ResourceKind::GorgetArray)
+            }
+            n if n.starts_with("Dict__") || n.starts_with("HashMap__") => {
+                ElemMeta::Resource(ResourceKind::GorgetMap)
+            }
+            n if n.starts_with("Set__") || n.starts_with("HashSet__") => {
+                ElemMeta::Resource(ResourceKind::GorgetSet)
+            }
+            n => {
+                if let Some(sid) = self.struct_reg.lookup(n) {
+                    // Callable variants (Callable__T_args, MutCallable__T_args, …) are
+                    // registered with `c_runtime_alias = "GorgetClosure"`. Read the typed
+                    // flag rather than matching on the name prefix.
+                    if let Some(sd) = self.module_structs.get(sid.0 as usize) {
+                        if sd.c_runtime_alias.as_deref() == Some("GorgetClosure") {
+                            return ElemMeta::Resource(ResourceKind::GorgetClosure);
+                        }
+                    }
+                    ElemMeta::UserType(sid)
+                } else {
+                    ElemMeta::Primitive(LirType::Ptr) // fallback: no metadata available
+                }
+            }
+        }
+    }
+
+    /// Compute `(byte_offset, fn_name)` fn-ptr store pairs for a collection ctor
+    /// from the already-parsed element type names. Called alongside `CollectionCtor`
+    /// emission to wire elem_drop/elem_clone/elem_materialize at runtime.
+    ///
+    /// Replaces the name-parsing path in `infer_collection_elem_fns` — the
+    /// elem type string is now passed in directly rather than re-extracted from
+    /// the mangled GIR name.
+    pub(super) fn infer_fn_ptr_stores_from_types(
+        &self,
+        kind: crate::lir::CollectionCtorKind,
+        elem_type: &str,
+        val_type: Option<&str>,
+        str_keyed: bool,
+    ) -> Vec<(usize, String)> {
+        use crate::lir::CollectionCtorKind;
+        let mut stores: Vec<(usize, String)> = Vec::new();
+
+        match kind {
+            CollectionCtorKind::Vector | CollectionCtorKind::Deque => {
+                // GorgetArray offsets: elem_drop=40, elem_clone=48, elem_materialize=56
+                if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type, self.gir_types) {
+                    stores.push((40, drop_fn));
+                } else if self.recursive_drop_structs.contains_key(elem_type)
+                    || self.recursive_drop_enums.contains_key(elem_type)
+                {
+                    stores.push((40, format!("{elem_type}__drop")));
+                }
+                if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type, self.gir_types) {
+                    stores.push((48, clone_fn));
+                } else if self.recursive_drop_structs.contains_key(elem_type)
+                    || self.recursive_drop_enums.contains_key(elem_type)
+                {
+                    stores.push((48, format!("{elem_type}__clone_inplace")));
+                }
+                if elem_type == "GorgetString" {
+                    stores.push((56, "gorget_string_materialize_inplace".into()));
+                }
+            }
+            CollectionCtorKind::Dict | CollectionCtorKind::HashMap => {
+                // GorgetMap offsets: val_drop=104, val_clone=112, key_drop=120, key_clone=128, val_materialize=136
+                let val_type = val_type.unwrap_or("");
+                if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type, self.gir_types) {
+                    stores.push((104, drop_fn));
+                } else if self.recursive_drop_structs.contains_key(val_type)
+                    || self.recursive_drop_enums.contains_key(val_type)
+                {
+                    stores.push((104, format!("{val_type}__drop")));
+                }
+                if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type, self.gir_types) {
+                    stores.push((112, clone_fn));
+                } else if self.recursive_drop_structs.contains_key(val_type)
+                    || self.recursive_drop_enums.contains_key(val_type)
+                {
+                    stores.push((112, format!("{val_type}__clone_inplace")));
+                }
+                if !str_keyed
+                    && (self.recursive_drop_structs.contains_key(elem_type)
+                        || self.recursive_drop_enums.contains_key(elem_type))
+                {
+                    stores.push((120, format!("{elem_type}__drop")));
+                    stores.push((128, format!("{elem_type}__clone_inplace")));
+                }
+                if val_type == "GorgetString" {
+                    stores.push((136, "gorget_string_materialize_inplace".into()));
+                }
+            }
+            CollectionCtorKind::Set | CollectionCtorKind::HashSet => {
+                // GorgetSet: key_drop=120, key_clone=128 (same offsets as GorgetMap)
+                if !str_keyed
+                    && (self.recursive_drop_structs.contains_key(elem_type)
+                        || self.recursive_drop_enums.contains_key(elem_type))
+                {
+                    stores.push((120, format!("{elem_type}__drop")));
+                    stores.push((128, format!("{elem_type}__clone_inplace")));
+                }
+            }
+        }
+
+        stores
     }
 
     pub(super) fn emit_post_call_zeros(&mut self, args: &[Operand], bb: BlockId) {
@@ -3900,16 +3942,13 @@ impl<'a> FuncLowering<'a> {
         let actual_emit_name = emit_name.to_string();
         self.ensure_extern(&actual_emit_name, &arg_types, &ret_ty);
 
-        // Self-cleaning: gorget_array_set calls elem_drop internally.
-
         // Array literal path: gorget_array_new(sizeof(T)) from lower_array_literal
         // doesn't carry element type info in original_name (it's just "gorget_array_new").
-        // Synthesize a monomorphized name so the C backend can set elem_drop/elem_clone.
-        // Callable element types come through as `GirType::FnPtr` (no Named name); map
-        // them to `Vector__GorgetClosure__new` so the C backend wires
-        // `gorget_closure_free` as elem_drop and frees the heap-alloc'd closure envs
-        // (otherwise `Vector[Callable].push(closure)` leaks `sizeof(env)` per push).
-        let effective_original_name = if original_name == "gorget_array_new" && !args.is_empty() {
+        // Synthesize a monomorphized name so downstream parsing can determine the element type.
+        // Callable element types come through as GirType::FnPtr (no Named name); map
+        // them to Vector__GorgetClosure__new so the runtime wires gorget_closure_free
+        // as elem_drop (otherwise Vector[Callable].push(closure) leaks sizeof(env) per push).
+        let effective_original_name: String = if original_name == "gorget_array_new" && !args.is_empty() {
             if let Some(Operand::Constant(Constant::SizeOf(type_id))) = args.first() {
                 match self.gir_types.get(*type_id) {
                     Some(GirType::Named(name)) => format!("Vector__{name}__new"),
@@ -3930,35 +3969,62 @@ impl<'a> FuncLowering<'a> {
         // from runtime_extern_sig's explicit tags or user-declared extern "C" annotations).
         let call_arg_abis = self.lookup_arg_abis(&actual_emit_name);
 
-
-        // Capture collection element info before moving into CallExtern.
-        let collection_elem_fns = self.infer_collection_elem_fns(
-            &actual_emit_name, &effective_original_name);
+        // Parse the effective_original_name ONCE at this layer to determine if this
+        // is a collection constructor. If so, emit CollectionCtor directly (so
+        // promote_collection_ctors downstream is a no-op) and compute fn-ptr stores
+        // from the parsed element type names (not from the mangled string downstream).
+        //
+        // Layering contract: element type names are extracted here from GIR context;
+        // infer_fn_ptr_stores_from_types reads GIR type metadata; elem_type_to_meta
+        // reads typed LIR struct registry. No downstream pass re-parses the name.
+        if let Some((kind, elem_type, val_type, with_capacity, str_keyed)) =
+            Self::parse_collection_ctor_info(&actual_emit_name, &effective_original_name)
+        {
+            let dst_val = result.unwrap_or_else(|| self.lir_func.next_value());
+            let elem_or_key = self.elem_type_to_meta(&elem_type);
+            let val = val_type.as_deref().map(|n| self.elem_type_to_meta(n));
+            let collection_elem_fns = self.infer_fn_ptr_stores_from_types(
+                kind, &elem_type, val_type.as_deref(), str_keyed);
+            self.lir_func.block_mut(bb).insts.push(Inst::CollectionCtor {
+                dst: dst_val,
+                kind,
+                elem_or_key,
+                val,
+                args: lir_args,
+                arg_abis: call_arg_abis,
+                with_capacity,
+                str_keyed,
+            });
+            if let (Some(d), Some(r)) = (*dst, result) {
+                self.store_to_local(d, r, bb);
+            }
+            // Wire elem_drop/elem_clone/elem_materialize function pointers at runtime.
+            // Must use the slot address (not the return value) since store_to_local
+            // may have moved the value.
+            if !collection_elem_fns.is_empty() {
+                if let Some(d) = dst {
+                    let slot = self.local_to_slot[d.0 as usize];
+                    let slot_addr = self.lir_func.next_value();
+                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        dst: slot_addr,
+                        slot,
+                    });
+                    self.emit_collection_fn_ptr_stores(slot_addr, &collection_elem_fns, bb);
+                }
+            }
+            self.emit_post_call_zeros(args, bb);
+            return bb;
+        }
 
         self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
             args: lir_args,
-            original_name: Some(effective_original_name),
+            original_name: None,
             arg_abis: call_arg_abis,
         });
         if let (Some(d), Some(r)) = (*dst, result) {
             self.store_to_local(d, r, bb);
-        }
-
-        // Set elem_drop/elem_clone/elem_materialize on collection constructors.
-        // Must use the slot address (not the return value) since the value
-        // has been stored to the local slot by store_to_local above.
-        if !collection_elem_fns.is_empty() {
-            if let Some(d) = dst {
-                let slot = self.local_to_slot[d.0 as usize];
-                let slot_addr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
-                    dst: slot_addr,
-                    slot,
-                });
-                self.emit_collection_fn_ptr_stores(slot_addr, &collection_elem_fns, bb);
-            }
         }
 
         // Generic post-call zeroing for Move operands.  Consuming args

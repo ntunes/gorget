@@ -767,13 +767,10 @@ pub fn validate_box_inner_type(module: &LirModule) -> Vec<LirError> {
         if !sd.name.starts_with("Box__") {
             continue;
         }
-        // Trait-box shape: 2 fields named `data` + `vtable`. Skip — these
-        // legitimately have `box_inner_type: None` because the trait-obj
-        // layout doesn't carry a single inner pointee type.
-        let is_trait_box = sd.fields.len() == 2
-            && sd.fields[0].0 == "data"
-            && sd.fields[1].0 == "vtable";
-        if is_trait_box {
+        // Trait-box shape: read the typed flag set at registration time.
+        // Skip — these legitimately have `box_inner_type: None` because the
+        // trait-obj layout doesn't carry a single inner pointee type.
+        if sd.is_trait_box {
             continue;
         }
         // Regular-Box shape: single field named `_0`. Other shapes (e.g. an
@@ -853,7 +850,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
                       });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
@@ -981,7 +978,7 @@ mod tests {
             fields: vec![("x".into(), LirType::I32)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
                       });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
@@ -1311,6 +1308,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: inner.map(String::from),
+            is_trait_box: false,
         }
     }
 
@@ -1324,6 +1322,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None, // trait box: legitimately None
+            is_trait_box: true,
         }
     }
 
@@ -1386,6 +1385,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
+            is_trait_box: false,
         });
         let errors = validate_box_inner_type(&module);
         assert!(errors.is_empty(), "non-Box struct should be ignored: {errors:?}");
@@ -1413,6 +1413,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
+            is_trait_box: false,
         });
         let errors = validate_box_inner_type(&module);
         assert_eq!(errors.len(), 1);

@@ -169,11 +169,12 @@ impl<'a> FuncLowering<'a> {
 
                 // Check if this is a trait-object Box (struct with data+vtable)
                 // vs a regular Box (raw pointer). Trait boxes need free(val.data).
+                // Read from the typed LIR flag set at registration time — no
+                // GIR registry probe needed here.
                 let is_trait_box = type_name.as_deref()
-                    .and_then(|n| n.strip_prefix("Box__"))
-                    .map(|inner| {
-                        self.gir_types.get_type_def(&format!("{inner}_TraitObj")).is_some()
-                    })
+                    .and_then(|n| self.struct_reg.lookup(n))
+                    .and_then(|sid| self.module_structs.get(sid.0 as usize))
+                    .map(|sd| sd.is_trait_box)
                     .unwrap_or(false);
 
                 if is_trait_box {

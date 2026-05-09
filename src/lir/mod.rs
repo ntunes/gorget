@@ -1412,16 +1412,21 @@ pub struct StructDef {
     /// `Box__` name prefix. None for non-Box structs and for trait-object
     /// boxes (those use the `{Inner}_TraitObj` 16-byte layout instead).
     pub box_inner_type: Option<String>,
+    /// True when this struct is a trait-object Box (`Box[dyn Trait]`) with
+    /// `{data: Ptr, vtable: Ptr}` layout. Used by `drops.rs` to route
+    /// drop codegen to `free(val.data)` rather than `Box__T__drop`. Replaces
+    /// the downstream `{Inner}_TraitObj` GIR registry probe.
+    pub is_trait_box: bool,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {
@@ -1877,7 +1882,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);
