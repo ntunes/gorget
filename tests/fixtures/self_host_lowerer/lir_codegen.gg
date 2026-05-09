@@ -228,12 +228,9 @@ String lir_to_runtime_name(String name):
         return "GorgetGLContext"
     return ""
 
-# Build a mapping from struct index (as string) → C type name.
-# Returns a Vector indexed by struct index (sid) — the keys would
-# otherwise be int-as-String in a Dict[String, String], hitting the
-# self-host's Dict[String, _] state-loss bug. With a Vector, lookups
-# are O(1) and reliable: stage-1 was emitting `__lir_s0` placeholders
-# all over because the Dict lookups silently missed for many sid keys.
+# Build a mapping from struct index → C type name. Vector indexed by
+# sid is O(1) lookup by construction; no Dict needed (the key would
+# be an int).
 Vector[String] build_struct_names(LirModule &m):
     Vector[String] map = []
     int i = 0
@@ -508,13 +505,12 @@ String emit_structs(LirModule &m, Vector[String] &sn):
             sb_push(&buf, c_field_name(tag_field.name))
             sb_push(&buf, ";\n")
             sb_push(&buf, "    union {\n")
-            # Group remaining fields by variant prefix. Avoid the nested
-            # Vector[Vector[int]] mutation pattern (`outer.get(i).unwrap().push(x)`
-            # mutates a copy in self-host-compiled code — see
-            # feedback_nested_vector_get_set.md). Use parallel flat vectors:
-            # `variant_starts[i]` is the start index in `variant_indices`
-            # for variant i; the count is `variant_starts[i+1] - variant_starts[i]`
-            # (with sentinel = total length appended at the end).
+            # Group remaining fields by variant prefix using flat
+            # parallel vectors: `variant_starts[i]` is the start index
+            # in `variant_indices` for variant i; the count is
+            # `variant_starts[i+1] - variant_starts[i]` (with sentinel
+            # = total length appended at the end). Avoids nested
+            # Vector[Vector[int]] allocation per variant.
             Vector[String] variant_names = []
             Vector[int] variant_starts = []
             Vector[int] variant_indices = []
@@ -737,11 +733,7 @@ String emit_box_allocators(LirModule &m, Vector[String] &sn):
 # and emit one static inline helper per unique suffix. Uses a simple scan
 # (String doesn't have index_of_from, so we slice+index_of per step).
 String emit_box_allocators_scan(String &body):
-    # Use parallel Vector instead of Dict[String, bool] — Dict.contains
-    # silently misses on stage-1 → if it always returns true (false negative
-    # inverted), we never emit any allocator. Either way, the parallel
-    # form sidesteps the bug.
-    Vector[String] seen = []
+    Dict[String, bool] seen = {}
     String out = ""
     String prefix = "__gorget_box_alloc_"
     int plen = prefix.len()
@@ -768,15 +760,8 @@ String emit_box_allocators_scan(String &body):
         if end >= blen:
             break
         String suffix = body.slice(start, end)
-        bool already_seen = false
-        int si = 0
-        while si < seen.len():
-            if seen.get(si).unwrap() == suffix:
-                already_seen = true
-                break
-            si += 1
-        if not already_seen:
-            seen.push(suffix.clone())
+        if not seen.contains(suffix):
+            seen.put(suffix.clone(), true)
             String c_ty = box_alloc_c_type(suffix)
             out = out + "static inline void* " + prefix + suffix + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
         pos = end + 1
@@ -4714,24 +4699,13 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
 # but still need typedef'd so C code can reference them.
 String emit_mono_typedefs(LirModule &m):
     StrBuf buf = sb_new()
-    # `seen` was Dict[String, bool] but the self-host-compiled
-    # Dict[String, _] silently drops keys (see feedback_selfhost_workarounds.md
-    # #9). Without the dedup, stage-1 emitted 34× duplicate
-    # `typedef void* Box__SpannedExpr;` lines (one per struct iteration that
-    # mentions Box__SpannedExpr). Linear-scan Vector instead.
-    Vector[String] seen = []
+    Dict[String, bool] seen = {}
     int si = 0
     while si < m.structs.len():
         LirStructDef sdef = m.structs.get(si).unwrap()
         if m.type_runtime_map.contains(sdef.name):
-            bool dup = false
-            int sj = 0
-            while sj < seen.len():
-                if seen.get(sj).unwrap() == sdef.name:
-                    dup = true
-                sj += 1
-            if not dup:
-                seen.push(sdef.name.clone())
+            if not seen.contains(sdef.name):
+                seen.put(sdef.name.clone(), true)
                 String runtime_ty = mono_wrapper_runtime_type(sdef.name, &m)
                 if runtime_ty != "":
                     sb_push(&buf, "typedef ")
