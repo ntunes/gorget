@@ -297,16 +297,12 @@ String prim_to_c_name(String name):
 String type_to_c_name(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            # Check type substitutions for mangling — parallel first.
-            if type_sub_contains(&gmod, name):
-                return type_id_to_name(type_sub_lookup(&gmod, name), &gmod)
+            # Apply type substitutions for generic monomorphization mangling.
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return prim_to_c_name(name)
         case TNamed(name, targs):
-            # Check type substitutions for mangling — parallel first.
-            if type_sub_contains(&gmod, name):
-                return type_id_to_name(type_sub_lookup(&gmod, name), &gmod)
+            # Apply type substitutions for generic monomorphization mangling.
             if gmod.type_subs.contains(name):
                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
             return mangle_type_name(name, targs, &gmod)
@@ -317,9 +313,7 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
         case TPrimitive(name):
-            # Check type substitutions (generic monomorphization) — parallel first.
-            if type_sub_contains(&gmod, name):
-                return type_sub_lookup(&gmod, name)
+            # Apply type substitutions for generic monomorphization.
             if gmod.type_subs.contains(name):
                 return gmod.type_subs.get(name).unwrap()
             match name:
@@ -336,9 +330,7 @@ int map_ast_type(SpannedType stype, GirModule &gmod):
                 else:
                     pass
         case TNamed(name, targs):
-            # Check type substitutions (generic monomorphization) — parallel first.
-            if type_sub_contains(&gmod, name):
-                return type_sub_lookup(&gmod, name)
+            # Apply type substitutions for generic monomorphization.
             if gmod.type_subs.contains(name):
                 return gmod.type_subs.get(name).unwrap()
             # Resolve type aliases (meta type = ...)
@@ -611,7 +603,7 @@ int lower_float_const_ident(LowerCtx &ctx, GirModule &gmod, String name):
 # The helper is in its own function (not inlined) for the same
 # stack-frame reason as `lower_float_const_ident`.
 int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
-    if not gmod.fn_sigs.contains(name) and not fn_sig_contains(&gmod, name):
+    if not gmod.fn_sigs.contains(name):
         return -1
     int gs_tid = lookup_or_register_named(&gmod, "GorgetClosure")
     int adst = add_local(&ctx, gs_tid, NO_NAME)
@@ -1004,9 +996,7 @@ bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
                     # source name (`_parse_last_error`) and the C symbol
                     # (`gorget_parse_last_error`) match.
                     String resolved = fname
-                    if call_redirect_contains(&gmod, fname):
-                        resolved = call_redirect_lookup(&gmod, fname)
-                    elif gmod.call_redirects.contains(fname):
+                    if gmod.call_redirects.contains(fname):
                         resolved = gmod.call_redirects.get(fname).unwrap()
                     # Current allow-list is narrow: only externs that
                     # return raw `const char*` via their C signature.
@@ -1447,7 +1437,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Check if fname is a local variable (callable parameter or closure).
                     # If so, dispatch through closure protocol instead of direct call.
                     # Skip if fname is a known function (fn_sigs) or redirect target.
-                    if nl_contains(&ctx, fname) and not gmod.fn_sigs.contains(fname) and not call_redirect_contains(&gmod, fname) and not gmod.call_redirects.contains(fname):
+                    if nl_contains(&ctx, fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
                         int callable_local = nl_get(&ctx, fname)
                         # Lower args
                         Vector[Operand] cl_args = []
@@ -1571,10 +1561,6 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         String sub_name = type_id_to_name(sub_tid, &gmod)
                         if sub_name.len() > 0:
                             ident_name = sub_name
-                    # Prefer parallel type_info storage — Dict.contains
-                    # silently misses on stage-1 (`ScopeTable` etc.) and
-                    # we'd fall through to method-call-on-int64 path,
-                    # producing `int64_t__new_scope_table` undefined refs.
                     bool is_type = gmod.type_infos.contains(ident_name)
                     # Also treat primitive type names as types.
                     if not is_type:
@@ -1643,9 +1629,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             type_prefix = "GorgetString"
                         String static_name = type_prefix + "__" + mname
                         int static_ret = I64_TYPE
-                        if fn_sig_contains(&gmod, static_name):
-                            static_ret = fn_sig_lookup(&gmod, static_name)
-                        elif gmod.fn_sigs.contains(static_name):
+                        if gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
                             if gmod.type_infos.contains(ident_name):
@@ -1779,9 +1763,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # gives the real return type for equip-block methods. Fall back
             # to the name-based heuristic if no signature is recorded.
             int ret_tid = I64_TYPE
-            if fn_sig_contains(&gmod, full_name):
-                ret_tid = fn_sig_lookup(&gmod, full_name)
-            elif gmod.fn_sigs.contains(full_name):
+            if gmod.fn_sigs.contains(full_name):
                 ret_tid = gmod.fn_sigs.get(full_name).unwrap()
             else:
                 ret_tid = infer_method_return_type(mname, recv, &ctx, &gmod)
@@ -1844,7 +1826,6 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     field_args.push(OpMove(base))
                 field_args.push(OpConstI64(found_fi))
                 gmod.fn_sigs.put(field_fn, field_type)
-                fn_sig_register(&gmod, field_fn, field_type)
                 emit(&ctx, GICallExtern(fdst, field_fn, field_args))
                 return fdst
             # HARD BUG: unknown field access fell through to I64/0
@@ -1964,7 +1945,6 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int cdst = add_local(&ctx, closure_tid, NO_NAME)
             Vector[Operand] make_args = []
             gmod.fn_sigs.put(make_fn, closure_tid)
-            fn_sig_register(&gmod, make_fn, closure_tid)
             emit(&ctx, GICallExtern(cdst, make_fn, make_args))
             return cdst
         case EAs(inner_box, _):
@@ -2238,11 +2218,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int ret_type = I64_TYPE
         if gmod.fn_sigs.contains(call_name):
             ret_type = gmod.fn_sigs.get(call_name).unwrap()
-        # Also check call_redirects for the original name (parallel first).
-        if ret_type == I64_TYPE and call_redirect_contains(&gmod, fname):
-            String redir_p = call_redirect_lookup(&gmod, fname)
-            if gmod.fn_sigs.contains(redir_p):
-                ret_type = gmod.fn_sigs.get(redir_p).unwrap()
+        # Also check call_redirects for the original name.
         if ret_type == I64_TYPE and gmod.call_redirects.contains(fname):
             String redir = gmod.call_redirects.get(fname).unwrap()
             if gmod.fn_sigs.contains(redir):
@@ -4790,7 +4766,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                 case None:
                                     pass
                             gmod.fn_sigs.put(rs_fdef.name, rs_rt)
-                            fn_sig_register(&gmod, rs_fdef.name, rs_rt)
                         else:
                             pass
             else:
@@ -5002,7 +4977,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     int ret_tid = map_fn_return_type(fsdef.return_type, &gmod)
                     if ret_tid >= 0:
                         gmod.fn_sigs.put(fsdef.name.clone(), ret_tid)
-                        fn_sig_register(&gmod, fsdef.name, ret_tid)
             case IEquip(ieqblk):
                 # Register equip-block methods as TypeName__method in fn_sigs.
                 # Only for non-generic equip blocks on concrete types.
@@ -5046,7 +5020,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             clear_type_subs(&gmod)
             # Monomorphized generics use bare names (no module prefix)
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
-            fn_sig_register(&gmod, inst.mangled_name, rt)
         si += 1
 
     # Build trait lookup map for default method generation
@@ -5369,8 +5342,6 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
         GenericInstance inst = generic_instances.get(mi).unwrap()
         # Look up template by base name, or by call-redirected (mangled) name.
         String fn_key = inst.base_name.clone()
-        if not fn_templates.contains(fn_key) and call_redirect_contains(&gmod, inst.base_name):
-            fn_key = call_redirect_lookup(&gmod, inst.base_name)
         if not fn_templates.contains(fn_key) and gmod.call_redirects.contains(inst.base_name):
             fn_key = gmod.call_redirects.get(inst.base_name).unwrap()
         if fn_templates.contains(fn_key):

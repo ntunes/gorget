@@ -292,42 +292,6 @@ int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
         j += 1
     return -1
 
-# call_redirects / fn_sigs / type_subs accessors — thin wrappers over
-# the underlying Dict so call sites stay stable.
-bool call_redirect_contains(GirModule &gmod, String name):
-    return gmod.call_redirects.contains(name)
-
-String call_redirect_lookup(GirModule &gmod, String name):
-    if gmod.call_redirects.contains(name):
-        return gmod.call_redirects.get(name).unwrap().clone()
-    return ""
-
-bool fn_sig_contains(GirModule &gmod, String name):
-    return gmod.fn_sigs.contains(name)
-
-int fn_sig_lookup(GirModule &gmod, String name):
-    if gmod.fn_sigs.contains(name):
-        return gmod.fn_sigs.get(name).unwrap()
-    return I64_TYPE
-
-void fn_sig_register(GirModule &gmod, String name, int ret_tid):
-    gmod.fn_sigs.put(name.clone(), ret_tid)
-
-bool type_sub_contains(GirModule &gmod, String name):
-    return gmod.type_subs.contains(name)
-
-int type_sub_lookup(GirModule &gmod, String name):
-    if gmod.type_subs.contains(name):
-        return gmod.type_subs.get(name).unwrap()
-    return -1
-
-void type_sub_register(GirModule &gmod, String name, int tid):
-    gmod.type_subs.put(name.clone(), tid)
-
-void type_sub_clear(GirModule &gmod):
-    Dict[String, int] empty = {}
-    gmod.type_subs = !empty
-
 Vector[GirType] init_type_table():
     Vector[GirType] t = []
     t.push(GtBool())
