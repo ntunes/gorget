@@ -669,15 +669,20 @@ impl<'a> FuncLowering<'a> {
         let dst_type_id = self.effective_place_type(dst);
 
         // Check: source is Option__* or Result__*, destination is NOT.
+        // Read typed `enum_category` from TypeMetadata (Phase A) instead of
+        // matching the type name's prefix — same source of truth set at
+        // GIR type registration.
+        use crate::ir::types::EnumCategory;
+        let src_cat = self.gir_types.enum_category(src_type_id);
+        let is_option = match src_cat {
+            Some(EnumCategory::Option) => true,
+            Some(EnumCategory::Result) => false,
+            None => return None,
+        };
         let src_name = match self.gir_types.get(src_type_id) {
             Some(GirType::Named(n)) => n.clone(),
             _ => return None,
         };
-        let is_option = src_name.starts_with("Option__");
-        let is_result = src_name.starts_with("Result__");
-        if !is_option && !is_result {
-            return None;
-        }
 
         // Destination must not be the same enum type.
         let dst_is_same = match self.gir_types.get(dst_type_id) {
@@ -689,11 +694,7 @@ impl<'a> FuncLowering<'a> {
         }
 
         // Also skip if destination is another Option/Result.
-        let dst_is_enum = match self.gir_types.get(dst_type_id) {
-            Some(GirType::Named(n)) => n.starts_with("Option__") || n.starts_with("Result__"),
-            _ => false,
-        };
-        if dst_is_enum {
+        if self.gir_types.enum_category(dst_type_id).is_some() {
             return None;
         }
 
@@ -858,10 +859,14 @@ impl<'a> FuncLowering<'a> {
             LirType::Struct(sid) => *sid,
             _ => return false,
         };
-        let slot_name = self.module_structs.get(slot_sid.0 as usize)
-            .map(|s| s.name.as_str()).unwrap_or("");
-        let is_result = slot_name.starts_with("Result__");
-        let is_option = slot_name.starts_with("Option__");
+        // Read the LIR `enum_kind` flag (typed Phase A metadata propagated to
+        // the LIR StructDef in `lir/lower/mod.rs` from GIR's `enum_category`).
+        // Replaces a `slot_name.starts_with("Result__"/"Option__")` probe.
+        use crate::lir::EnumKind;
+        let slot_kind = self.module_structs.get(slot_sid.0 as usize)
+            .map(|s| s.enum_kind).unwrap_or(EnumKind::NotEnum);
+        let is_result = slot_kind == EnumKind::Result;
+        let is_option = slot_kind == EnumKind::Option;
         if !is_result && !is_option { return false; }
 
         // Check the source operand's GIR type — skip if already an Option/Result
@@ -874,10 +879,9 @@ impl<'a> FuncLowering<'a> {
             let src_idx = place.local.0 as usize;
             if place.projections.is_empty() && src_idx < self.gir_func.locals.len() {
                 let src_gir_ty = self.gir_func.locals[src_idx].type_id;
-                if let Some(GirType::Named(n)) = self.gir_types.get(src_gir_ty) {
-                    if n.starts_with("Option__") || n.starts_with("Result__") {
-                        return false;
-                    }
+                // Read typed `enum_category` from GIR TypeMetadata (Phase A).
+                if self.gir_types.enum_category(src_gir_ty).is_some() {
+                    return false;
                 }
                 // Source GIR type maps to I64/F64 but destination is an Option/Result
                 // with a narrower payload (e.g. Option__int8_t): the I64 is a sentinel-
