@@ -48,7 +48,7 @@ MatchArm get_arm_at(Vector[MatchArm] v, int i):
 String get_str_at(Vector[String] v, int i):
     return v.get(i).unwrap()
 
-# ── Typed len helpers (codegen workaround for pattern-destructured vectors) ──
+# ── Typed len helpers ──
 
 int else_vec_len(Vector[ElseBranch] v):
     return v.len()
@@ -59,7 +59,7 @@ int spat_vec_len(Vector[SpannedPattern] v):
 int sexpr_vec_len(Vector[SpannedExpr] v):
     return v.len()
 
-# ── Typed Option helpers (codegen workaround for pattern-destructured Options) ──
+# ── Typed Option helpers ──
 
 bool has_opt_sexpr(Option[SpannedExpr] opt):
     match opt:
@@ -81,14 +81,15 @@ bool has_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
 Box[SpannedExpr] unwrap_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
     return opt.unwrap()
 
-# ── Dict set helpers (codegen workaround for Dict.set through mutable borrows) ──
-
-void res_map_set(ResolveContext &ctx, int key, int val):
-    ctx.resolution_map.put(key, val)
+# ── Function-body scope register ────────────────────────────
+# The Dict gives O(1) lookup of the canonical (last-registered) body
+# scope for a name. The parallel Vectors preserve every registration so
+# `find_body_scope` can disambiguate by parent chain when a name is
+# shared (top-level fn `chain` vs `equip [T] VectorIter[T] with Iterable:
+# T chain(...)`). Mirrors Rust gg's similar dual structure.
 
 void fn_scope_set(ResolveContext &ctx, String name, int scope_id):
     ctx.function_body_scopes.put(name, scope_id)
-    # Also store in parallel vectors so all scopes are preserved (Dict overwrites)
     ctx.fn_scope_names.push(name)
     ctx.fn_scope_ids.push(scope_id)
 
@@ -511,7 +512,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             # Emit RES entry for bindings that captured their name span
             # (shared vars and select recv vars)
             if def_id >= 0 and name_span >= 0:
-                res_map_set(&ctx, name_span, def_id)
+                ctx.resolution_map.put(name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)
@@ -624,7 +625,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                         resolve_expr(channel, &scopes, &ctx)
                         int def_id = scopes.define(name, DkVariable(), Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
-                            res_map_set(&ctx, name_span, def_id)
+                            ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)
@@ -690,7 +691,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EIdentifier(name):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
-                res_map_set(&ctx, expr.span.start, def_id)
+                ctx.resolution_map.put(expr.span.start, def_id)
             elif not is_builtin(name):
                 pass
 
@@ -873,7 +874,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EStructLiteral(name, _, args):
             int def_id = scopes.lookup(name)
             if def_id >= 0:
-                res_map_set(&ctx, expr.span.start, def_id)
+                ctx.resolution_map.put(expr.span.start, def_id)
             int ai = 0
             while ai < sexpr_vec_len(args):
                 SpannedExpr arg = get_sexpr_at(args, ai)
@@ -924,7 +925,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             else:
                 def_id = scopes.define(name, DkVariable(), Span(0, 0))
             if sk > 0 and def_id >= 0 and name_span >= 0:
-                res_map_set(&ctx, name_span, def_id)
+                ctx.resolution_map.put(name_span, def_id)
 
         case SExpr(expr):
             resolve_expr(expr, &scopes, &ctx)
@@ -1026,7 +1027,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                         resolve_expr(channel, &scopes, &ctx)
                         int def_id = scopes.define(name, DkVariable(), Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
-                            res_map_set(&ctx, name_span, def_id)
+                            ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)
