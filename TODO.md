@@ -3,34 +3,6 @@
 ## High
 
 
-- **Snag #24 — Struct field of type `Option[Box[T]]` (or any `Option/Result[Resource]`) leaks at scope-exit; deeper recursion via `*box` deref crashes** [filed 2026-05-06; **Cluster 1 unblocker shipped 2026-05-07 commit 2f89aa78**].
-
-  **Status update 2026-05-08.** Tier 2a (consume-site discipline) is now complete — zero violations across all 1068 fixtures, validator promoted to fatal. However, the Option/Result skip in `lir/lower/mod.rs` (struct-field path ~412 and enum-variant path ~501) **still cannot be removed**: `self_host_bootstrap_fixed_point` double-frees with the skip removed. The root cause has shifted: it is no longer a consume-site violation (Tier 2a is clean), but a FieldLoad / EnumFieldLoad issue — the self-host lowerer's match-scrutinee / unwrap paths still emit shallow copies of Option-payload resources through borrowed struct fields. The Tier 2a validator doesn't catch these because they go through FieldLoad (a read site, governed by Phase C), not a consume site. **Prerequisite for skip removal: the FieldLoad/EnumFieldLoad consumer paths must emit Borrow semantics uniformly for resource-type payloads accessed through borrowed containers.** This is Phase C's FieldLoad Borrow migration (listed separately in Phase D4).
-
-  **Root cause (single-layer view).** `lir/lower/mod.rs:412-430` skips Option/Result struct fields when populating `recursive_drop_structs`. The resolver's hot path (`v.get(i).unwrap()` over `Vector[Option[SpannedExpr]]`) shallow-copies the Option payload into a naked binding; both the binding and the collection element race to drop the interior strings/boxes at scope exit → double-free. The skip prevents the Option's drop from running, trading correctness for a leak. The correct fix requires the FieldLoad lowering to emit `Borrow` instead of `Copy` when reading through a borrowed container, so the drop doesn't fire on the alias side.
-
-  **What was tried (2026-05-06/2026-05-08):**
-  1. Remove skip + rely on `infer_drop_strategy` — Phase C fatal validator blocks this.
-  2. Inline-drop scheme (`__option_inline_drop:` marker) — fixed the leak but exposed `enum_init Node::VarDecl { copy _3 }` shallow-copy (Vector handle aliased without clone-on-consume). That specific gap is now closed by Tier 2a, but the FieldLoad shallow-copy issue remains.
-  3. Remove skip post-Tier-2a — self_host_bootstrap still double-frees (confirmed 2026-05-08); the remaining issue is FieldLoad-through-borrowed-container, not consume-site.
-
-  **Diff for the inline-drop prototype** is recoverable from the 2026-05-06 conversation history. The marker design extends `__clone_only:` / `__drop_then_clone:` already in place.
-
-  After the round-5 fix, the Rust typechecker treats `Expr::Block` whose last statement is divergent (return / throw / break / continue) as type `Never`, and the closure return-type inference falls back to `closure_ret_var` when `body_type == Never` (so the parser's destructure-desugar `Block { ..., Return(expr) }` doesn't mis-specialize tuple-destructured closures as `Closure[Never(...)]`). The self-host typechecker has no analogous rules — its parser stores match arm bodies as `Vector[Stmt]` directly (no `Expr::Block` wrapper to special-case), and walks them through normal statement-checking where `Stmt::Return` doesn't carry an upward "this block diverges" signal.
-
-  No current fixture exercises this divergence — `parser_comparison`, `resolver_comparison`, `type_comparison`, `check_comparison`, `lowerer_comparison` all stay green at HEAD. The gap will surface when a fixture has a VarDecl assignment from a match-expression with a diverging-tail arm AND a typed binding whose type the self-host needs to compute (e.g. `Frontmatter fm = match parsed: case Ok(f): f case Error(msg): print(msg); return`).
-
-  Two paths when it bites:
-
-  1. **Mirror the Rust rule on the self-host side** — add a "diverging tail" check in self-host's match-arm typechecking (it walks `Vector[Stmt]`, so the rule is "if the arm's last stmt is SReturn/SThrow/SBreak/SContinue, the arm produces no value-type contribution; let the other arms determine the match's overall type"). Closure return inference would also need a parallel "skip Never body_type" branch. Maybe ~30 lines across `typecheck.gg` + `infer.gg`.
-
-  2. **Restructure the self-host AST** — add an `EBlock(Vector[Stmt])` variant and route multi-line match arm bodies through it (matching the Rust shape). Bigger refactor; touches parser + AST + resolver + typecheck across all five driver dirs (parser, resolver, typechecker, check + lowerer via symlink). Right answer for self-host parity but multi-week.
-
-  Path 1 is the "fix when it bites" answer. Path 2 is the "self-host should mirror Rust's structure" answer; defer until other AST-shape divergences justify the cost.
-
-  Also: the self-host parser's `parse_match_expr` always wraps single-line arm bodies in a 1-element block (because it always calls `parse_block()`), so it over-introduces a block scope for single-line cases. Harmless today but technically over-scopes pattern bindings' shadowing relative to Rust. Same fix path as above (1 narrow / 2 structural). [added: 2026-05-06]
-
-- **Phase C extension: ALL 4 read-site classes promoted to fatal** [closed 2026-05-06]. CallArg (commit c6fedd4c, 2026-05-05), IndexLoad (commit ee161175), EnumFieldLoad (commit 9c23e7d0), FieldLoad (commit 87033468) — each lowering migration drove its violation count to 0 across the 1066-fixture sweep, then flipped the validator from `GG_VALIDATE_RESOURCE_READS`-gated warning to unconditional fatal panic. Phase C is now load-bearing for all four shallow-copy shapes — any future GIR lowering that emits a value-copy of a resource (field load, index load, enum payload extract, call arg) without a following move_zero halts the build instead of leaking past the validator.
 
 - **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, branches A/B/C/E/F/G shipped, D blocked on architectural change as of 2026-05-06). 6/7 branches now read typed predicates; only D retains `is_named_local` as genuine gating.
 

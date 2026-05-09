@@ -409,27 +409,6 @@ impl<'a> LoweringContext<'a> {
                     Some(GirType::Named(n)) => n.clone(),
                     _ => continue,
                 };
-                // Option/Result fields: skip for DROP (avoid double-free with
-                // match/unwrap and shallow-copy collection-get patterns).
-                // Include for CLONE only if they wrap resource types.
-                //
-                // Tier 2a closed consume-site violations (2026-05-08), but
-                // self_host_bootstrap still double-frees when this skip is
-                // removed — the root cause is FieldLoad / EnumFieldLoad of
-                // resource-typed payloads through borrowed Option/Result fields
-                // still producing shallow copies at use sites (Phase C's
-                // FieldLoad + EnumFieldLoad validators now stop those at compile
-                // time, but the self-host lowerer itself has paths that bypass
-                // that — Tier 2b is the prerequisite). Keep the skip until
-                // the FieldLoad consumer paths emit Borrow semantics uniformly.
-                if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
-                    let field_strat = self.infer_drop_strategy(&field_type_name);
-                    if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
-                        let clone_fn = format!("{field_type_name}__clone");
-                        field_drops.push((field.name.clone(), format!("__clone_only:{clone_fn}"), field_type_name));
-                    }
-                    continue;
-                }
                 let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
                 let drop_fn = match &field_drop_strategy {
                     DropStrategy::Trivial(fn_name) => fn_name.clone(),
@@ -478,19 +457,6 @@ impl<'a> LoweringContext<'a> {
                         Some(GirType::Named(n)) => n.clone(),
                         _ => continue,
                     };
-                    // Option/Result variant fields: skip for DROP, include for
-                    // CLONE if they wrap resource types. See matching struct-field
-                    // comment above for full root cause; Tier 2b is prerequisite
-                    // for removal.
-                    if field_type_name.starts_with("Option__") || field_type_name.starts_with("Result__") {
-                        let field_strat = self.infer_drop_strategy(&field_type_name);
-                        if matches!(field_strat, DropStrategy::Recursive | DropStrategy::Custom(_) | DropStrategy::Trivial(_)) {
-                            let clone_fn = format!("{field_type_name}__clone");
-                            let field_name = format!("{}_{fi}", variant.name);
-                            variant_drops.push((vi as u32, variant.name.clone(), field_name, format!("__clone_only:{clone_fn}"), field_type_name));
-                        }
-                        continue;
-                    }
                     let field_drop = self.infer_drop_strategy(&field_type_name);
                     let drop_fn = match &field_drop {
                         DropStrategy::Trivial(fn_name) => fn_name.clone(),

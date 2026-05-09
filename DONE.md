@@ -1,5 +1,9 @@
 # DONE
 
+- [2026-05-09] **Snag #24 — `Option/Result[Resource]` double-free on unwrap — root cause found and fixed; Option/Result skip removed from `populate_recursive_drop_structs`.** The double-free in `self_host_bootstrap_fixed_point` was caused by `__option_unwrap`/`__result_unwrap` LIR lowering performing a shallow `FieldPtr + Load` of the payload WITHOUT resetting the Option/Result tag afterward. When the source struct (e.g., a cloned `Stmt` with `SReturn(Option[SpannedExpr])`) was later dropped via the now-unblocked `Option__SpannedExpr__drop`, it tried to free already-freed memory. Fix: added `FieldPtr(field=0) + Store(i32 2)` after payload extraction in all three `__option_unwrap` code paths in `lir/lower/insts.rs`. Tag value 2 is out-of-range for both Option (2 variants: 0=Some, 1=None) and Result (2 variants: 0=Ok, 1=Err), so the drop switch falls through and skips the payload — effectively a consumed-sentinel. With the double-free fixed, the Option/Result skip in `populate_recursive_drop_structs` (`lir/lower/mod.rs`) was safely removed from both the struct-field path and the enum-variant path. Verified with valgrind (zero errors) and full suite (1068/1068 tests pass).
+
+  Files: `src/lir/lower/insts.rs` (3 locations: unwrap_or Some branch, plain unwrap path, fallback no-struct_id path), `src/lir/lower/mod.rs` (skip removal + indentation fix). `TODO.md` (Snag #24 entry removed).
+
 - [2026-05-08] **Tier 2a Phase 2B/2C — consume-site violations driven to zero; validator promoted to fatal.** Three classes of remaining violations (935 total after Phase 2A) closed by targeted writer-site and validator-site fixes. Zero violations confirmed by `GG_VALIDATE_CONSUME_SITES` full-suite sweep across all 1068 fixtures. Validator block at `src/ir/lowering/mod.rs` promoted from env-gated warning to unconditional fatal `panic!` (mirrors Phase C cadence).
 
   **Fixes shipped (this session):**
