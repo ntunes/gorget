@@ -149,6 +149,28 @@ pub(super) fn lower_assign(
                                     );
                                     operand = FunctionBuilder::copy(tmp);
                                 }
+                            } else if !matches!(ctx.type_registry.get(type_id), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
+                                // Ptr(T) → T (value type) where T is a resource with a clone function.
+                                // The pointer is a field borrow — the backing data is owned by the
+                                // parent struct. Materialise an independent owned copy now so that
+                                // dropping the parent doesn't invalidate this binding.
+                                // Without this, `match obj.field: case Variant(items):` followed
+                                // by `my_vec = items` shallow-copies the GorgetArray header while
+                                // the backing buffer is still owned by `obj`; `obj`'s drop then
+                                // frees the buffer, and subsequent clones or reads use-after-free.
+                                if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
+                                    if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                                        ctx.warn_implicit_clone(value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
+                                        let cloned = builder.call(
+                                            &clone_fn,
+                                            vec![crate::ir::builder::FunctionBuilder::copy(p.local)],
+                                            inner,
+                                        );
+                                        ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                                        ctx.set_owned(builder, cloned);
+                                        operand = crate::ir::builder::FunctionBuilder::copy(cloned);
+                                    }
+                                }
                             }
                         }
                     }
