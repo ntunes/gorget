@@ -204,6 +204,8 @@
 
 ## Medium
 
+- **Self-host codegen: nested `Vector[Vector[T]].get(i).unwrap().push(x)` silently breaks downstream codegen.** Surface symptom: Rust gg compiles `preds.get(succ).unwrap().push(bi)` correctly, but the self-host's emission of the same source triggers stage-2 cc errors in *unrelated* downstream functions (e.g., `parser___token_float_val` returning `void*` instead of `double`). The workaround pattern in `tests/fixtures/self_host_lowerer/lir_ssa.gg:60-79` (extract inner Vector to a fresh local, push, set back) IS load-bearing. Confirmed 2026-05-09 by replacing the workaround with the chained form — bootstrap_fixed_point regressed at stage-2 cc with type-mismatch errors. Same shape applies to lir_ssa.gg:486-508 (`Dict[int, Vector[int]].get(...).unwrap().push()` case). Investigation needed: the chained form likely emits incorrect type info during the implicit get → mutate → put/set writeback that pollutes type inference for some other expression. [added: 2026-05-09]
+
 - **Parser bug: `(method_call())` in boolean context parses as tuple start.** Reproduces with `if x and (d.contains("a")):` — parser emits "expected ',', found '.'" at the dot in `d.contains`. The `(...)` is read as a tuple-element list, hits the dot, fails. Workaround: drop the redundant parens (`if x and d.contains("a"):` parses fine). Affects ergonomics — perfectly natural-looking Gorget breaks. Likely in the recursive-descent expression parser's prefix handling for `(`. [added: 2026-05-09]
 
 - **Self-host codegen bug: `Option[int].unwrap_or(default)` skips the None-check.** When source is `dict.get(K)` returning `Option[int]`, the self-host's emission is:

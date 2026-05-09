@@ -200,31 +200,6 @@ struct GirModule:
 
 # ── Helpers ──────────────────────────────────────────────
 
-# const_decls accessors — kept as a thin layer over the Dict so call
-# sites stay stable if the storage shape changes again.
-bool const_contains(GirModule &gmod, String name):
-    return gmod.const_decls.contains(name)
-
-int const_lookup(GirModule &gmod, String name):
-    if gmod.const_decls.contains(name):
-        return gmod.const_decls.get(name).unwrap()
-    return 0
-
-void const_put(GirModule &gmod, String name, int val):
-    gmod.const_decls.put(name.clone(), val)
-
-# float_const accessors — thin wrappers over the Dict.
-bool float_const_contains(GirModule &gmod, String name):
-    return gmod.float_const_decls.contains(name)
-
-float float_const_lookup(GirModule &gmod, String name):
-    if gmod.float_const_decls.contains(name):
-        return gmod.float_const_decls.get(name).unwrap()
-    return 0.0
-
-void float_const_put(GirModule &gmod, String name, float val):
-    gmod.float_const_decls.put(name.clone(), val)
-
 # Module-level static (runtime-call init) accessors.
 bool static_contains(GirModule &gmod, String name):
     return gmod.statics.contains(name)
@@ -242,18 +217,7 @@ int static_lookup_type(GirModule &gmod, String name):
 void static_put(GirModule &gmod, String name, String init_expr, int type_id):
     gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id))
 
-# none_decls accessors.
-bool none_contains(GirModule &gmod, String name):
-    return gmod.none_decls.contains(name)
-
-void none_mark(GirModule &gmod, String name):
-    if not gmod.none_decls.contains(name):
-        gmod.none_decls.put(name.clone(), true)
-
 # enum registry accessors.
-bool enum_registered(GirModule &gmod, String enum_name):
-    return gmod.enum_registry.contains(enum_name)
-
 void register_enum(GirModule &gmod, String enum_name, Vector[String] variants):
     if not gmod.enum_registry.contains(enum_name):
         gmod.enum_registry.put(enum_name.clone(), variants)

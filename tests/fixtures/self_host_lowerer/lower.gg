@@ -583,10 +583,10 @@ int resolve_field_gir_type(String type_name, GirModule &gmod):
 # function's already-massive stack frame from growing further.
 # Returns the new local id on hit (>= 0); -1 on miss.
 int lower_float_const_ident(LowerCtx &ctx, GirModule &gmod, String name):
-    if not float_const_contains(&gmod, name):
+    if not gmod.float_const_decls.contains(name):
         return -1
     int fdst = add_local(&ctx, F64_TYPE, NO_NAME)
-    emit(&ctx, GIAssign(fdst, OpConstF64(float_const_lookup(&gmod, name))))
+    emit(&ctx, GIAssign(fdst, OpConstF64(gmod.float_const_decls.get(name).unwrap())))
     return fdst
 
 # Function-as-value: `filter(is_even)` / `map(double)` etc. — a bare
@@ -696,8 +696,8 @@ Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
         case EFloatLiteral(v):
             return Some(v)
         case EIdentifier(name):
-            if float_const_contains(&gmod, name):
-                return Some(float_const_lookup(&gmod, name))
+            if gmod.float_const_decls.contains(name):
+                return Some(gmod.float_const_decls.get(name).unwrap())
             return None
         case EUnaryOp(op, inner_box):
             Option[float] iv = eval_const_float_expr(*inner_box, &gmod)
@@ -718,8 +718,8 @@ Option[int] eval_const_int_expr(SpannedExpr spe, GirModule &gmod):
         case EIntLiteral(v):
             return Some(v)
         case EIdentifier(name):
-            if const_contains(&gmod, name):
-                return Some(const_lookup(&gmod, name))
+            if gmod.const_decls.contains(name):
+                return Some(gmod.const_decls.get(name).unwrap())
             return None
         case EBinaryOp(lhs_box, op, rhs_box):
             Option[int] lv = eval_const_int_expr(*lhs_box, &gmod)
@@ -1225,8 +1225,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Module-level `const int` — inline the evaluated value.
             # Without this, the self-compiled parser's KW_* / PREC_*
             # constants all become 0 and check_kw(0, 0) hangs.
-            if const_contains(&gmod, name):
-                int cv = const_lookup(&gmod, name)
+            if gmod.const_decls.contains(name):
+                int cv = gmod.const_decls.get(name).unwrap()
                 int cdst = add_local(&ctx, I64_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
@@ -1273,7 +1273,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Module-level `Option[T] X = None` — emit a Unit (None) value
             # rather than the int-0 EIdentifier fallback. Used in
             # `add_local(&ctx, type, NO_NAME)` and similar callsites.
-            if none_contains(&gmod, name):
+            if gmod.none_decls.contains(name):
                 int ndst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(ndst, OpConstUnit()))
                 return ndst
@@ -2602,7 +2602,7 @@ bool lower_is_ptr_type(int tid, GirModule &gmod):
 # enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".
 String match_enum_type(String type_name, GirModule &gmod):
     # Check the enum registry first (populated from EnumDef pass).
-    if enum_registered(&gmod, type_name):
+    if gmod.enum_registry.contains(type_name):
         return type_name
     if gmod.type_infos.contains(type_name):
         GirTypeInfo ti = gmod.type_infos.get(type_name).unwrap()
@@ -4792,28 +4792,28 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                 Option[int] cd_eval = eval_const_int_expr(cd_val, &gmod)
                 match cd_eval:
                     case Some(cv):
-                        const_put(&gmod, cd_name, cv)
+                        gmod.const_decls.put(cd_name.clone(), cv)
                     case None:
                         # Float fallback: `const float EPSILON = 0.000001`
                         # lands here when int eval fails.
                         Option[float] cd_feval = eval_const_float_expr(cd_val, &gmod)
                         match cd_feval:
                             case Some(cfv):
-                                float_const_put(&gmod, cd_name, cfv)
+                                gmod.float_const_decls.put(cd_name.clone(), cfv)
                             case None:
                                 pass
             case IStaticDecl(sd_ty, sd_name, sd_val):
                 Option[int] sd_eval = eval_const_int_expr(sd_val, &gmod)
                 match sd_eval:
                     case Some(sv):
-                        const_put(&gmod, sd_name, sv)
+                        gmod.const_decls.put(sd_name.clone(), sv)
                     case None:
                         # Float fallback: `float EPSILON = 0.000001`
                         # at module scope (e.g., lib/xtd/math3d.gg).
                         Option[float] sd_feval = eval_const_float_expr(sd_val, &gmod)
                         match sd_feval:
                             case Some(sfv):
-                                float_const_put(&gmod, sd_name, sfv)
+                                gmod.float_const_decls.put(sd_name.clone(), sfv)
                             case None:
                                 # Runtime-call fallback: `public static File
                                 # stdout = _stdout_handle()` etc. Mirrors Rust
@@ -4828,7 +4828,7 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                                     # emit OpConstUnit() instead of the int-0 fallback.
                                     match sd_val.expr:
                                         case ENoneLiteral():
-                                            none_mark(&gmod, sd_name)
+                                            gmod.none_decls.put(sd_name.clone(), true)
                                         else:
                                             pass
             else:
