@@ -449,6 +449,21 @@ struct LirModule:
     # Examples: "Mutex__int64_t" → "gorget_mutex",
     #           "ReadGuard__int64_t" → "gorget_read_guard".
     Dict[String, String] type_method_prefix_map
+    # Phase A — element type of Vector/Set/Deque/Heap collections.
+    # "Vector__int64_t" → "int64_t", "Set__GorgetString" → "GorgetString".
+    # Populated at registration time; avoids starts_with extraction downstream.
+    Dict[String, String] coll_elem_type_map
+    # Phase A — key type of Dict/HashMap collections.
+    # "Dict__String__int64_t" → "String", "HashMap__bool__String" → "bool".
+    Dict[String, String] coll_key_type_map
+    # Phase A — value type of Dict/HashMap collections.
+    # "Dict__String__int64_t" → "int64_t", "HashMap__bool__String" → "String".
+    Dict[String, String] coll_val_type_map
+    # Phase A — constructor base name for Dict/Set variants.
+    # "Dict__K__V" → "gorget_dict_new", "HashMap__K__V" → "gorget_map_new",
+    # "Set__T" → "gorget_ordered_set_new", "HashSet__T" → "gorget_set_new".
+    # Populated at registration time for O(1) lookup without starts_with.
+    Dict[String, String] coll_ctor_fn_map
 
 # ── LirFunction helpers ─────────────────────────────────────────
 
@@ -504,4 +519,8 @@ LirModule new_lir_module():
     Dict[String, int] evt = {}
     Dict[String, String] trt = {}
     Dict[String, String] tmpm = {}
-    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm)
+    Dict[String, String] cet = {}
+    Dict[String, String] ckt = {}
+    Dict[String, String] cvt = {}
+    Dict[String, String] ccf = {}
+    return LirModule(structs, globals, functions, externs, "", spawned, thread_spawned, tests, benches, false, false, SCHED_POOL, "", false, false, "", 0, false, rec_drop_s, rec_drop_e, drop_coll, type_drops, imported_t, evp, evt, trt, tmpm, cet, ckt, cvt, ccf)

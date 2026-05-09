@@ -73,6 +73,9 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     int str_id = lir_mod_add_struct(&m, LirStructDef("GorgetString", str_fields, 0, false, 32, -1))
     sr_register(&sr, "GorgetString", str_id)
     sr_register(&sr, "Str", str_id)
+    m.type_runtime_map.put("GorgetString", "GorgetString")
+    m.type_runtime_map.put("String", "GorgetString")
+    m.type_runtime_map.put("Str", "GorgetString")
 
     # GorgetArray: {data: Ptr, cap: I64, len: I64, elem_size: I64}
     Vector[StructField] arr_fields = []
@@ -82,6 +85,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     arr_fields.push(StructField("elem_size", LT_I64))
     int arr_id = lir_mod_add_struct(&m, LirStructDef("GorgetArray", arr_fields, 0, false, 64, -1))
     sr_register(&sr, "GorgetArray", arr_id)
+    m.type_runtime_map.put("GorgetArray", "GorgetArray")
 
     # GorgetClosure: {fn_ptr: Ptr, env: Ptr}
     Vector[StructField] cls_fields = []
@@ -121,6 +125,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     map_fields.push(StructField("eq_fn", LT_PTR))
     int map_id = lir_mod_add_struct(&m, LirStructDef("GorgetMap", map_fields, 0, false, 184, -1))
     sr_register(&sr, "GorgetMap", map_id)
+    m.type_runtime_map.put("GorgetMap", "GorgetMap")
 
     # GorgetSet: same layout as GorgetMap
     Vector[StructField] set_fields = []
@@ -139,6 +144,7 @@ void register_builtin_structs(LirModule &m, StructRegistry &sr):
     set_fields.push(StructField("eq_fn", LT_PTR))
     int set_id = lir_mod_add_struct(&m, LirStructDef("GorgetSet", set_fields, 0, false, 184, -1))
     sr_register(&sr, "GorgetSet", set_id)
+    m.type_runtime_map.put("GorgetSet", "GorgetSet")
 
     # GorgetRange: {start: I64, end: I64, step: I64}
     Vector[StructField] range_fields = []
@@ -483,6 +489,45 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                         if rt_sid >= 0:
                             sr_register(&sr, name, rt_sid)
                         m.type_runtime_map.put(name.clone(), rt.clone())
+                        # Phase A: extract and store elem/key/val types and ctor fn at
+                        # registration time so downstream code reads typed metadata.
+                        if name.starts_with("Vector__"):
+                            m.coll_elem_type_map.put(name.clone(), name.slice(8, name.len()))
+                        elif name.starts_with("Deque__") or name.starts_with("Heap__"):
+                            m.coll_elem_type_map.put(name.clone(), name.slice(7, name.len()))
+                        elif name.starts_with("Set__"):
+                            m.coll_elem_type_map.put(name.clone(), name.slice(5, name.len()))
+                            m.coll_ctor_fn_map.put(name.clone(), "gorget_ordered_set_new")
+                        elif name.starts_with("HashSet__") or name.starts_with("GorgetSet__"):
+                            m.coll_elem_type_map.put(name.clone(), name.slice(9, name.len()))
+                            m.coll_ctor_fn_map.put(name.clone(), "gorget_set_new")
+                        elif name.starts_with("Dict__") or name.starts_with("GorgetDict__"):
+                            m.coll_ctor_fn_map.put(name.clone(), "gorget_dict_new")
+                            String d_rest = name.slice(6, name.len())
+                            int d_i = 0
+                            while d_i + 1 < d_rest.byte_len():
+                                if d_rest.byte_at(d_i) == 0x5F and d_rest.byte_at(d_i + 1) == 0x5F:
+                                    String d_key = d_rest.slice(0, d_i)
+                                    String d_val_rest = d_rest.slice(d_i + 2, d_rest.len())
+                                    m.coll_key_type_map.put(name.clone(), d_key.clone())
+                                    m.coll_val_type_map.put(name.clone(), d_val_rest.clone())
+                                    break
+                                d_i += 1
+                        elif name.starts_with("HashMap__") or name.starts_with("GorgetMap__"):
+                            m.coll_ctor_fn_map.put(name.clone(), "gorget_map_new")
+                            int pfx_len = 9
+                            if name.starts_with("GorgetMap__"):
+                                pfx_len = 11
+                            String hm_rest = name.slice(pfx_len, name.len())
+                            int hm_i = 0
+                            while hm_i + 1 < hm_rest.byte_len():
+                                if hm_rest.byte_at(hm_i) == 0x5F and hm_rest.byte_at(hm_i + 1) == 0x5F:
+                                    String hm_key = hm_rest.slice(0, hm_i)
+                                    String hm_val_rest = hm_rest.slice(hm_i + 2, hm_rest.len())
+                                    m.coll_key_type_map.put(name.clone(), hm_key.clone())
+                                    m.coll_val_type_map.put(name.clone(), hm_val_rest.clone())
+                                    break
+                                hm_i += 1
                     elif is_opaque_pointer_type(name):
                         m.type_runtime_map.put(name.clone(), "Ptr")
                         String opm2 = opaque_ptr_method_prefix(name)
@@ -626,8 +671,11 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             int ek = 0
             if tname.starts_with("Option__"):
                 ek = 1
+                # Phase A: register in type_runtime_map for typed dispatch downstream.
+                m.type_runtime_map.put(tname.clone(), "Option")
             elif tname.starts_with("Result__"):
                 ek = 2
+                m.type_runtime_map.put(tname.clone(), "Result")
             elif tinfo.variants.len() > 0:
                 ek = 3
             # Both layouts pad to the struct's alignof (max of field
@@ -682,6 +730,8 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
             Vector[StructField] ofields = []
             ofields.push(StructField("tag", LT_I32))
             ofields.push(StructField("Some_0", inner_ty))
+            # Phase A: register for typed dispatch before pname moves into LirStructDef.
+            m.type_runtime_map.put(pname.clone(), "Option")
             LirStructDef opt_sdef = LirStructDef(pname, ofields, 1, false, -1, -1)
             m.structs.set(psi, opt_sdef)
         elif pname.starts_with("Result__"):
@@ -727,6 +777,8 @@ void lower_type_defs(GirModule &gmod, LirModule &m, StructRegistry &sr):
                 rfields.push(StructField("tag", LT_I32))
                 rfields.push(StructField("Ok_0", ok_ty))
                 rfields.push(StructField("Error_0", err_ty))
+                # Phase A: register for typed dispatch before pname moves into LirStructDef.
+                m.type_runtime_map.put(pname.clone(), "Result")
                 LirStructDef res_sdef = LirStructDef(pname, rfields, 2, false, -1, -1)
                 m.structs.set(psi, res_sdef)
         psi += 1
@@ -893,43 +945,26 @@ String map_runtime_name(String name, LirModule &m):
             return "gorget_semaphore_new"
         else:
             pass
-    # Collection-type wrapper methods: self-host sometimes lost the Vector/
-    # Dict/Set monomorphization and emits GorgetArray__len etc. directly.
-    # Route to the corresponding runtime fn so needs_ptr_arg can pick up
-    # the self-by-pointer convention.
-    if name.starts_with("GorgetArray__"):
-        String am = extract_method_name(name)
-        return map_array_method(am)
-    if name.starts_with("GorgetMap__"):
-        String mm = extract_method_name(name)
-        return map_dict_method(mm)
-    if name.starts_with("GorgetSet__"):
-        String sm = extract_method_name(name)
-        return map_set_method(sm)
-
     # Collection constructors (bare name, no method suffix).
-    # Phase A: dispatch on type_runtime_map category; Dict/HashMap and Set/HashSet
-    # still need starts_with only to pick the specific "new" function variant.
+    # Phase A: dispatch on type_runtime_map category + coll_ctor_fn_map.
     if is_collection_constructor(name, &m):
         String ctor_cat = type_category_for_name(name, &m)
         if ctor_cat == "GorgetArray":
             return "gorget_array_new"
         elif ctor_cat == "GorgetMap":
-            if is_string_keyed(name):
-                if name.starts_with("Dict__"):
-                    return "gorget_dict_new_str"
-                return "gorget_map_new_str"
-            if name.starts_with("Dict__"):
-                return "gorget_dict_new"
-            return "gorget_map_new"
+            String ctor_fn = coll_ctor_fn_for_name(name, &m)
+            if ctor_fn == "":
+                ctor_fn = "gorget_map_new"
+            if is_string_keyed(name, &m):
+                return ctor_fn + "_str"
+            return ctor_fn
         elif ctor_cat == "GorgetSet":
-            if is_string_keyed(name):
-                if name.starts_with("Set__"):
-                    return "gorget_ordered_set_new_str"
-                return "gorget_set_new_str"
-            if name.starts_with("Set__"):
-                return "gorget_ordered_set_new"
-            return "gorget_set_new"
+            String ctor_fn = coll_ctor_fn_for_name(name, &m)
+            if ctor_fn == "":
+                ctor_fn = "gorget_set_new"
+            if is_string_keyed(name, &m):
+                return ctor_fn + "_str"
+            return ctor_fn
         elif ctor_cat == "Ptr":
             # Channel/Shared constructors: look up prefix in type_method_prefix_map.
             int ci = 0
@@ -941,36 +976,33 @@ String map_runtime_name(String name, LirModule &m):
                 ci += 1
         return name
 
-    # Phase A: collection method dispatch via type_runtime_map category.
-    # Dict/HashMap and Set/HashSet still need starts_with for "new" disambiguation.
+    # Phase A: collection method dispatch via type_runtime_map + coll_ctor_fn_map.
     String coll_cat = type_category_for_name(name, &m)
     if coll_cat == "GorgetArray":
         return map_array_method(extract_method_name(name))
     if coll_cat == "GorgetMap":
         String method = extract_method_name(name)
         if method == "new":
-            if is_string_keyed(name):
-                if name.starts_with("Dict__"):
-                    return "gorget_dict_new_str"
-                return "gorget_map_new_str"
-            if name.starts_with("Dict__"):
-                return "gorget_dict_new"
-            return "gorget_map_new"
+            String ctor_fn = coll_ctor_fn_for_name(name, &m)
+            if ctor_fn == "":
+                ctor_fn = "gorget_map_new"
+            if is_string_keyed(name, &m):
+                return ctor_fn + "_str"
+            return ctor_fn
         return map_dict_method(method)
     if coll_cat == "GorgetSet":
         String method = extract_method_name(name)
         if method == "new":
-            if is_string_keyed(name):
-                if name.starts_with("Set__"):
-                    return "gorget_ordered_set_new_str"
-                return "gorget_set_new_str"
-            if name.starts_with("Set__"):
-                return "gorget_ordered_set_new"
-            return "gorget_set_new"
+            String ctor_fn = coll_ctor_fn_for_name(name, &m)
+            if ctor_fn == "":
+                ctor_fn = "gorget_set_new"
+            if is_string_keyed(name, &m):
+                return ctor_fn + "_str"
+            return ctor_fn
         return map_set_method(method)
 
-    # String methods
-    if name.starts_with("GorgetString__") or name.starts_with("String__") or name.starts_with("Str__"):
+    # String methods — Phase A: dispatch via type_runtime_map "GorgetString" category.
+    if type_category_for_name(name, &m) == "GorgetString":
         String method = extract_method_name(name)
         match method:
             case "push":
@@ -1068,25 +1100,25 @@ String map_runtime_name(String name, LirModule &m):
         # Option/Result methods on scalar-prefixed types
         return map_option_result_method(method)
 
-    # Option/Result variant methods: Some__map, Ok__map, Error__unwrap_error, etc.
-    if name.starts_with("Some__") or name.starts_with("None__"):
-        return "__option_" + extract_method_name(name)
-    if name.starts_with("Ok__") or name.starts_with("Error__") or name.starts_with("Err__"):
-        return "__result_" + extract_method_name(name)
-    # Option__T__method / Result__T__E__method → __option_method / __result_method
-    if name.starts_with("Option__"):
+    # Option/Result method dispatch — Phase A: detect via type_runtime_map + enum_variant_parent.
+    # Covers variant-prefixed calls (Some__T__method, None__T__method, Ok__T__method, etc.)
+    # and type-prefixed calls (Option__T__method, Result__T__E__method).
+    String or_cat = type_category_for_name(name, &m)
+    if or_cat == "Option":
         String method = extract_method_name(name)
         String opt_res = map_option_result_method(method)
         if opt_res != "":
             return opt_res
-    if name.starts_with("Result__"):
+        return "__option_" + method
+    if or_cat == "Result":
         String method = extract_method_name(name)
         String res_res = map_option_result_method(method)
         if res_res != "":
-            # Result methods use __result_ prefix
+            # Shared methods (unwrap, map, …) come back with __option_ prefix; convert.
             if res_res.starts_with("__option_"):
                 return "__result_" + res_res.slice(9, res_res.len())
             return res_res
+        return "__result_" + method
 
     # Standalone function mappings
     match name:
@@ -1258,10 +1290,13 @@ String map_option_result_method(String method):
 
 # Phase A — find the type_runtime_map category for a method name (or bare type name).
 # Scans __ split points from left to right to find the first registered type prefix.
+# Also checks enum_variant_parent to handle variant-prefixed names like Some__T__method.
 # Returns "" if no registered type prefix is found.
 # Examples: "Vector__int64_t__push" → "GorgetArray"
 #           "Box__Foo__clone" → "Box"
 #           "Guard__Mutex__int__deref" → "Guard"
+#           "Some__int64_t__unwrap" → "Option"  (via enum_variant_parent)
+#           "Option__int64_t__map" → "Option"
 #           "unknown_fn" → ""
 String type_category_for_name(String name, LirModule &m):
     if m.type_runtime_map.contains(name):
@@ -1272,6 +1307,63 @@ String type_category_for_name(String name, LirModule &m):
             String prefix = name.slice(0, i)
             if m.type_runtime_map.contains(prefix):
                 return m.type_runtime_map.get(prefix).unwrap_or("")
+            # Phase A — variant name → parent type lookup for Option/Result.
+            # enum_variant_parent maps e.g. "Some__int64_t" → "Option__int64_t".
+            if m.enum_variant_parent.contains(prefix):
+                String par = m.enum_variant_parent.get(prefix).unwrap_or("")
+                if m.type_runtime_map.contains(par):
+                    return m.type_runtime_map.get(par).unwrap_or("")
+        i += 1
+    return ""
+
+String coll_elem_type_for_name(String name, LirModule &m):
+    if m.coll_elem_type_map.contains(name):
+        return m.coll_elem_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_elem_type_map.contains(prefix):
+                return m.coll_elem_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+String coll_key_type_for_name(String name, LirModule &m):
+    if m.coll_key_type_map.contains(name):
+        return m.coll_key_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_key_type_map.contains(prefix):
+                return m.coll_key_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+String coll_val_type_for_name(String name, LirModule &m):
+    if m.coll_val_type_map.contains(name):
+        return m.coll_val_type_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_val_type_map.contains(prefix):
+                return m.coll_val_type_map.get(prefix).unwrap_or("")
+        i += 1
+    return ""
+
+# Return the base constructor fn name for Dict/HashMap/Set/HashSet.
+# "Dict__K__V" → "gorget_dict_new", "HashMap__K__V" → "gorget_map_new",
+# "Set__T" → "gorget_ordered_set_new", "HashSet__T" → "gorget_set_new".
+String coll_ctor_fn_for_name(String name, LirModule &m):
+    if m.coll_ctor_fn_map.contains(name):
+        return m.coll_ctor_fn_map.get(name).unwrap_or("")
+    int i = 0
+    while i < name.len() - 1:
+        if name.slice(i, i + 2) == "__":
+            String prefix = name.slice(0, i)
+            if m.coll_ctor_fn_map.contains(prefix):
+                return m.coll_ctor_fn_map.get(prefix).unwrap_or("")
         i += 1
     return ""
 
@@ -1522,88 +1614,29 @@ int collection_elem_size(String name, StructRegistry &sr):
 # sizes. Mirrors collection_elem_size; prefer this at call sites where
 # Vector[MyStruct] / Set[MyStruct] element size matters.
 int collection_elem_size_in_mod(String name, StructRegistry &sr, LirModule &m):
-    String elem = ""
-    if name.starts_with("Vector__"):
-        elem = name.slice(8, name.len())
-    elif name.starts_with("Deque__"):
-        elem = name.slice(7, name.len())
-    elif name.starts_with("Set__"):
-        elem = name.slice(5, name.len())
-    elif name.starts_with("HashSet__"):
-        elem = name.slice(9, name.len())
-    elif name.starts_with("Dict__") or name.starts_with("HashMap__"):
+    String cat = type_category_for_name(name, &m)
+    if cat == "GorgetMap" or cat == "Ptr":
         return 8
-    elif name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return 8
+    String elem = coll_elem_type_for_name(name, &m)
     return type_elem_size_in_mod(elem, &sr, &m)
 
-# Extract key type name from Dict__K__V or HashMap__K__V.
-String dict_key_type(String name):
-    String rest = ""
-    if name.starts_with("Dict__"):
-        rest = name.slice(6, name.len())
-    elif name.starts_with("HashMap__"):
-        rest = name.slice(9, name.len())
-    else:
-        return ""
-    # rest = "K__V" or "K__V__method" — find first "__"
-    int i = 0
-    while i < rest.len() - 1:
-        String c1 = rest.slice(i, i + 1)
-        String c2 = rest.slice(i + 1, i + 2)
-        if c1 == "_" and c2 == "_":
-            return rest.slice(0, i)
-        i += 1
-    return rest
+# Extract key type from Dict__K__V or HashMap__K__V (uses typed coll_key_type_map).
+String dict_key_type(String name, LirModule &m):
+    return coll_key_type_for_name(name, &m)
 
-# Extract value type name from Dict__K__V or HashMap__K__V.
-String dict_val_type(String name):
-    String key = dict_key_type(name)
-    if key == "":
-        return ""
-    String prefix = ""
-    if name.starts_with("Dict__"):
-        prefix = "Dict__"
-    elif name.starts_with("HashMap__"):
-        prefix = "HashMap__"
-    # rest after prefix + key + "__"
-    int start = prefix.len() + key.len() + 2
-    if start >= name.len():
-        return ""
-    String rest = name.slice(start, name.len())
-    # rest might be "V" or "V__method" — find first "__" for method separator
-    int i = 0
-    while i < rest.len() - 1:
-        String c1 = rest.slice(i, i + 1)
-        String c2 = rest.slice(i + 1, i + 2)
-        if c1 == "_" and c2 == "_":
-            return rest.slice(0, i)
-        i += 1
-    return rest
+# Extract value type from Dict__K__V or HashMap__K__V (uses typed coll_val_type_map).
+String dict_val_type(String name, LirModule &m):
+    return coll_val_type_for_name(name, &m)
 
-# Check if dict/set has string keys.
-bool is_string_keyed(String name):
-    String key = dict_key_type(name)
-    if key == "GorgetString" or key == "Str":
-        return true
-    # For Set__GorgetString, the "key" is the element type
-    if name.starts_with("Set__") or name.starts_with("HashSet__"):
-        String elem = ""
-        if name.starts_with("Set__"):
-            elem = name.slice(5, name.len())
-        elif name.starts_with("HashSet__"):
-            elem = name.slice(9, name.len())
-        # Strip method suffix
-        int i = 0
-        while i < elem.len() - 1:
-            String c1 = elem.slice(i, i + 1)
-            String c2 = elem.slice(i + 1, i + 2)
-            if c1 == "_" and c2 == "_":
-                elem = elem.slice(0, i)
-                break
-            i += 1
-        if elem == "GorgetString" or elem == "Str":
-            return true
+# Check if dict/set has string keys (uses typed coll_elem/key_type_map).
+bool is_string_keyed(String name, LirModule &m):
+    String cat = type_category_for_name(name, &m)
+    if cat == "GorgetMap":
+        String key = coll_key_type_for_name(name, &m)
+        return key == "GorgetString" or key == "Str"
+    if cat == "GorgetSet":
+        String elem = coll_elem_type_for_name(name, &m)
+        return elem == "GorgetString" or elem == "Str"
     return false
 
 # Check if a specific arg index of a runtime function needs pointer passing.
@@ -1797,31 +1830,7 @@ bool returns_ptr_to_element(String name):
     return false
 
 int extract_elem_size_from_name_in_mod(String name, StructRegistry &sr, LirModule &m):
-    String elem = ""
-    if name.starts_with("Vector__"):
-        String rest = name.slice(8, name.len())
-        int i = 0
-        while i < rest.len() - 1:
-            String c1 = rest.slice(i, i + 1)
-            String c2 = rest.slice(i + 1, i + 2)
-            if c1 == "_" and c2 == "_":
-                elem = rest.slice(0, i)
-                break
-            i += 1
-        if elem == "":
-            elem = rest
-    elif name.starts_with("Set__"):
-        String rest = name.slice(5, name.len())
-        int i = 0
-        while i < rest.len() - 1:
-            String c1 = rest.slice(i, i + 1)
-            String c2 = rest.slice(i + 1, i + 2)
-            if c1 == "_" and c2 == "_":
-                elem = rest.slice(0, i)
-                break
-            i += 1
-        if elem == "":
-            elem = rest
+    String elem = coll_elem_type_for_name(name, &m)
     if elem != "":
         return type_elem_size_in_mod(elem, &sr, &m)
     return 8
@@ -2251,11 +2260,13 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     call_name = mapped
                 # Collection constructors need element size argument(s)
                 if is_collection_constructor(func_name, &m):
-                    if func_name.starts_with("Dict__") or func_name.starts_with("HashMap__"):
+                    # Phase A: dispatch on type_runtime_map category; avoids starts_with.
+                    String coll_cat2 = type_category_for_name(func_name, &m)
+                    if coll_cat2 == "GorgetMap":
                         # Dict/Map: need key_size + val_size, or just val_size for _str variant
-                        String key_ty = dict_key_type(func_name)
-                        String val_ty = dict_val_type(func_name)
-                        if is_string_keyed(func_name):
+                        String key_ty = dict_key_type(func_name, &m)
+                        String val_ty = dict_val_type(func_name, &m)
+                        if is_string_keyed(func_name, &m):
                             # _str variant: only val_size
                             int val_size = type_elem_size_in_mod(val_ty, &sr, &m)
                             int vs = lir_fn_next_value(&f)
@@ -2276,9 +2287,9 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                             sblk2.insts.push(IIConst(vs, LT_I64, val_size))
                             f.blocks.set(bb, sblk2)
                             lir_args.push(vs)
-                    elif func_name.starts_with("Set__") or func_name.starts_with("HashSet__"):
+                    elif coll_cat2 == "GorgetSet":
                         # Set: _str variant takes 0 args, non-str takes 1 (elem_size)
-                        if not is_string_keyed(func_name):
+                        if not is_string_keyed(func_name, &m):
                             int elem_size = collection_elem_size_in_mod(func_name, &sr, &m)
                             int size_val = lir_fn_next_value(&f)
                             LirBlock sblk = f.blocks.get(bb).unwrap()
@@ -2300,7 +2311,8 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 # Replace existing lir_args [val, size] with [size, &val_slot].
                 # We cheat by reaching into the last arg emission's lower_operand
                 # result — it was a value, but we need its slot's address.
-                if func_name.starts_with("Shared__") and args.len() >= 1 and lir_args.len() >= 2:
+                # Phase A: use call_name (already mapped to gorget_shared_new) instead of starts_with.
+                if call_name == "gorget_shared_new" and args.len() >= 1 and lir_args.len() >= 2:
                     # Find the caller's user-arg 0 source (GIR arg 0, OpCopy/OpMove)
                     Operand user0 = args.get(0).unwrap()
                     int src_slot = -1
