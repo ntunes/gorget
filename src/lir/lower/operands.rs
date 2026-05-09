@@ -927,7 +927,6 @@ impl<'a> FuncLowering<'a> {
             dst: None,
             name: "memset".to_string(),
             args: vec![slot_addr, zero_byte, size_val],
-            original_name: None,
             arg_abis: abis,
         });
 
@@ -1311,7 +1310,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(heap_ptr),
             name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
-            original_name: None,
             arg_abis: alloc_abis,
         });
 
@@ -1459,7 +1457,6 @@ impl<'a> FuncLowering<'a> {
                             dst: Some(cloned),
                             name: "gorget_closure_clone_to_owned".to_string(),
                             args: vec![src_addr],
-                            original_name: None,
                             arg_abis: abis,
                         });
                         self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
@@ -1525,7 +1522,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(heap_ptr),
             name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
-            original_name: None,
             arg_abis: alloc_abis,
         });
 

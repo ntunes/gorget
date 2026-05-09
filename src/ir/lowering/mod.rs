@@ -3175,8 +3175,6 @@ mod tests {
             crate::lir::ssa::construct_ssa(func);
         }
         crate::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
-        crate::lir::runtime::promote_collection_ctors(&mut lir_module);
-        crate::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         crate::lir::types::wire_collection_bridges(&mut lir_module);
         crate::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         crate::lir::runtime::promote_runtime_calls(&mut lir_module);

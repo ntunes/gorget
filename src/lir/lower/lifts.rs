@@ -78,7 +78,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_void_ptr_option_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         opt_sid: StructId,
         arg_types: &[LirType],
@@ -100,7 +99,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
-            original_name: Some(original_name.to_string()),
             arg_abis: call_abis,
         });
 
@@ -154,7 +152,6 @@ impl<'a> FuncLowering<'a> {
                 dst: Some(cloned),
                 name: clone_fn,
                 args: vec![raw_in_some],
-                original_name: Some(original_name.to_string()),
                 arg_abis: abis,
             });
             if payload_ty.is_aggregate() {
@@ -207,7 +204,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_nullable_cstr_option_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         opt_sid: StructId,
         arg_types: &[LirType],
@@ -223,7 +219,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
-            original_name: Some(original_name.to_string()),
             arg_abis: call_abis,
         });
 
@@ -267,7 +262,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(wrapped),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![raw_ptr],
-            original_name: Some(original_name.to_string()),
             arg_abis: abis,
         });
         let wrapped_slot = self.lir_func.add_slot(str_ty.clone(), None);
@@ -301,7 +295,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_last_error_result_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         result_sid: StructId,
         err_fn_name: &str,
@@ -324,7 +317,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(raw_result),
             name: emit_name.to_string(),
             args: lir_args,
-            original_name: Some(original_name.to_string()),
             arg_abis: call_abis,
         });
 
@@ -336,7 +328,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(err_ptr),
             name: err_fn_name.to_string(),
             args: vec![],
-            original_name: Some(original_name.to_string()),
             arg_abis: err_abis,
         });
 
@@ -377,7 +368,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(err_str),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![err_ptr],
-            original_name: Some(original_name.to_string()),
             arg_abis: abis,
         });
         let err_slot = self.lir_func.add_slot(str_ty.clone(), None);
@@ -426,7 +416,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_sentinel_scalar_option_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         opt_sid: StructId,
         ext_ret_ty: LirType,
@@ -446,7 +435,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(raw_val),
             name: emit_name.to_string(),
             args: lir_args,
-            original_name: Some(original_name.to_string()),
             arg_abis: call_abis,
         });
 
@@ -508,7 +496,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_sentinel_struct_option_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         opt_sid: StructId,
         arg_types: &[LirType],
@@ -550,7 +537,6 @@ impl<'a> FuncLowering<'a> {
                 dst: Some(raw_val),
                 name: emit_name.to_string(),
                 args: call_args[..call_args.len()-1].to_vec(),
-                original_name: Some(original_name.to_string()),
                 arg_abis: abis,
             });
             self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
@@ -564,7 +550,6 @@ impl<'a> FuncLowering<'a> {
                 dst: None,
                 name: final_name,
                 args: final_args,
-                original_name: Some(original_name.to_string()),
                 arg_abis: final_abis,
             });
         }
@@ -633,7 +618,6 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn emit_nullable_ptr_option_wrap(
         &mut self,
         emit_name: &str,
-        original_name: &str,
         d: ir::types::LocalId,
         opt_sid: StructId,
         arg_types: &[LirType],
@@ -653,7 +637,6 @@ impl<'a> FuncLowering<'a> {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
-            original_name: Some(original_name.to_string()),
             arg_abis: call_abis,
         });
 
@@ -715,7 +698,6 @@ impl<'a> FuncLowering<'a> {
             dst: None,
             name: "memset".to_string(),
             args: vec![ptr, zero_byte, size_val],
-            original_name: None,
             arg_abis: abis,
         });
     }

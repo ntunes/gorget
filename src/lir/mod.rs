@@ -762,20 +762,10 @@ pub enum Inst {
     /// open-ended user-extern case (SDL, crypto bindings, etc.) where no
     /// typed signature is known at LIR-construction time.
     ///
-    /// `original_name` preserves the pre-mapping monomorphized GIR name
-    /// (`Vector__T__push`, `Dict__K__V__new`, …) — used today only by the
-    /// `promote_collection_ctors` pass to derive the typed
-    /// [`CollectionCtorKind`] / [`ElemMeta`] for `Inst::CollectionCtor`.
-    /// All three previous "downstream" readers (`wire_collection_bridges`,
-    /// `find_hashable_key_types`, `emit_hashable_key_bridges`) migrated to
-    /// `Inst::CollectionCtor` / `Inst::SetCollectionBridge` in A3 commit 2;
-    /// retire this field once the LIR construction site emits CollectionCtor
-    /// directly (planned alongside B1).
     CallExtern {
         dst: Option<ValueId>,
         name: String,
         args: Vec<ValueId>,
-        original_name: Option<String>,
         arg_abis: Vec<crate::ir::abi::AbiKind>,
     },
     /// Call to a known Gorget runtime function. Typed dispatch via

@@ -499,7 +499,6 @@ fn emit_sort_impl_body(
         dst: Some(aux),
         name: "malloc".to_string(),
         args: vec![bytes],
-        original_name: None,
         arg_abis: vec![AbiKind::Scalar],
     });
     let one = alloc_value(&mut next);
@@ -891,7 +890,6 @@ fn emit_sort_impl_body(
                     dst: Some(cmp_int),
                     name: "gorget_str_cmp".to_string(),
                     args: vec![ki, kj],
-                    original_name: None,
                     arg_abis: vec![AbiKind::GorgetString, AbiKind::GorgetString],
                 });
                 let zero_cp = alloc_value(&mut next);
@@ -945,7 +943,6 @@ fn emit_sort_impl_body(
                     dst: Some(cmp_int),
                     name: "memcmp".to_string(),
                     args: vec![ki_ptr, kj_ptr, size_v],
-                    original_name: None,
                     arg_abis: vec![AbiKind::Opaque, AbiKind::Opaque, AbiKind::Scalar],
                 });
                 let zero_cp = alloc_value(&mut next);
@@ -1199,7 +1196,6 @@ fn emit_sort_impl_body(
         dst: None,
         name: "free".to_string(),
         args: vec![aux],
-        original_name: None,
         arg_abis: vec![AbiKind::Opaque],
     });
     func.block_mut(free_bb).terminator = Term::Jump(done_bb, vec![]);

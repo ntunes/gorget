@@ -566,9 +566,9 @@ pub fn compute_module_value_types(module: &mut LirModule) {
 /// the user-hashable check (vector/deque/primitive-key cases trivially
 /// short-circuit).
 ///
-/// Must run after `lir::runtime::promote_collection_ctors` (so the typed
-/// CollectionCtor inst exists) and before BIR lowering (so the bridge
-/// instruction is in place when BIR lowers CollectionCtor → CallExtern).
+/// Must run after LIR construction (so the typed CollectionCtor insts exist)
+/// and before BIR lowering (so the bridge instruction is in place when BIR
+/// lowers CollectionCtor → CallExtern).
 pub fn wire_collection_bridges(module: &mut LirModule) {
     use crate::lir::{CollectionCtorKind, ElemMeta, Inst};
     use crate::lir::queries;

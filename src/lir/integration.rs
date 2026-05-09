@@ -41,8 +41,6 @@ mod tests {
         validate::assert_module_valid(&lir, "ssa-construction");
 
         // Run optimizer
-        crate::lir::runtime::promote_collection_ctors(&mut lir);
-        validate::assert_module_valid(&lir, "promote-collection-ctors");
         crate::lir::types::wire_collection_bridges(&mut lir);
         validate::assert_module_valid(&lir, "wire-collection-bridges");
         crate::lir::runtime::promote_runtime_calls(&mut lir);

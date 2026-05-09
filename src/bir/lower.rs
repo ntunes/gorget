@@ -264,7 +264,6 @@ fn expand_func(
                         dst: Some(dst),
                         name: call_name.to_string(),
                         args: vec![src],
-                        original_name: None,
                         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
                     });
                 }
@@ -342,7 +341,6 @@ fn expand_func(
                                     dst: Some(clone_val),
                                     name: "gorget_array_clone".to_string(),
                                     args: vec![coll],
-                                    original_name: None,
                                     arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
                                 });
                                 let slot =
@@ -769,7 +767,6 @@ fn expand_func(
                         dst: Some(dst),
                         name: "__gorget_alloc".to_string(),
                         args: vec![size_val],
-                        original_name: None,
                         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
                     });
                     // 3) Write the value into *dst. Plain `Store` lets each
@@ -786,7 +783,6 @@ fn expand_func(
                         dst,
                         name: callee.c_name().to_string(),
                         args,
-                        original_name: None,
                         arg_abis,
                     });
                 }
@@ -813,7 +809,6 @@ fn expand_func(
                         dst: Some(dst),
                         name: runtime_name.to_string(),
                         args,
-                        original_name: None,
                         arg_abis,
                     });
                 }
@@ -1863,7 +1858,6 @@ fn expand_filter(
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![elem_size_val],
-        original_name: None,
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
     func.block_mut(cur).insts.push(Inst::SlotStore {
@@ -1926,7 +1920,6 @@ fn expand_filter(
         dst: None,
         name: "gorget_array_push".to_string(),
         args: vec![result_addr, ctx.elem_ptr],
-        original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
@@ -1997,7 +1990,6 @@ fn expand_map(
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![ret_sz_val],
-        original_name: None,
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
     func.block_mut(cur).insts.push(Inst::SlotStore {
@@ -2044,7 +2036,6 @@ fn expand_map(
         dst: None,
         name: "gorget_array_push".to_string(),
         args: vec![result_addr, new_elem_ptr],
-        original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
@@ -2119,7 +2110,6 @@ fn expand_flat_map(
         dst: Some(arr_val),
         name: "gorget_array_new".to_string(),
         args: vec![elem_size_val],
-        original_name: None,
         arg_abis: vec![crate::ir::abi::AbiKind::Scalar],
     });
     func.block_mut(cur).insts.push(Inst::SlotStore {
@@ -2167,7 +2157,6 @@ fn expand_flat_map(
         dst: None,
         name: "gorget_array_extend".to_string(),
         args: vec![result_addr, sub_ptr],
-        original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
@@ -2826,7 +2815,6 @@ fn expand_dict_filter(
         dst: Some(map_val),
         name: "gorget_map_new_like".to_string(),
         args: vec![coll],
-        original_name: None,
         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
     });
     func.block_mut(cur).insts.push(Inst::SlotStore {
@@ -2890,7 +2878,6 @@ fn expand_dict_filter(
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
         args: vec![result_addr, ctx.key_ptr, ctx.val_ptr],
-        original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
@@ -3450,7 +3437,6 @@ fn expand_set_filter(
         dst: Some(set_val),
         name: "gorget_set_new_like".to_string(),
         args: vec![coll],
-        original_name: None,
         arg_abis: vec![crate::ir::abi::AbiKind::Ptr],
     });
     func.block_mut(cur).insts.push(Inst::SlotStore {
@@ -3514,7 +3500,6 @@ fn expand_set_filter(
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
         args: vec![result_addr, ctx.elem_ptr, null_val],
-        original_name: None,
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,

@@ -530,8 +530,6 @@ fn try_build_ir(
                 stats.drop_flags_inserted, stats.move_slots_removed);
             gorget::lir::validate::assert_module_valid(&lir_module, "optimize");
         }
-        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
@@ -566,8 +564,6 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
-        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
@@ -609,8 +605,6 @@ fn try_build_ir(
             gorget::lir::ssa::construct_ssa(func);
         }
         gorget::lir::validate::assert_module_valid(&lir_module, "ssa-construction");
-        gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
-        gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
         gorget::lir::types::wire_collection_bridges(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
@@ -1374,8 +1368,6 @@ fn try_profile(
 
     // Phase 8a: LIR value-types (pre-BIR) — optimize moves to post-BIR
     // so synth fns benefit from DCE/fold/CSE.
-    gorget::lir::runtime::promote_collection_ctors(&mut lir_module);
-    gorget::lir::validate::assert_module_valid(&lir_module, "promote-collection-ctors");
     gorget::lir::types::wire_collection_bridges(&mut lir_module);
     gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
     gorget::lir::runtime::promote_runtime_calls(&mut lir_module);

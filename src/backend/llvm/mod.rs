@@ -2796,7 +2796,6 @@ fn emit_inst(
             dst: *dst,
             name: callee.c_name().to_string(),
             args: args.clone(),
-            original_name: None,
             arg_abis: arg_abis.clone(),
         };
         &_synthesized_callextern
