@@ -1,5 +1,10 @@
 # Scope tree and definition table for name resolution.
-# Uses flat parallel vectors for scope names to avoid non-Copy codegen issues.
+#
+# The name table (`name_scope_ids` + `name_keys` + `name_def_ids`) is
+# intentionally a flat parallel-Vector (not a Dict) so that
+# `find_name_entry` can scan backwards through insertion order to
+# resolve shadowing — the most-recent define for a given (scope, name)
+# wins.
 
 from std.collections import Vector
 from ast import Span
@@ -49,30 +54,39 @@ struct Scope:
     ScopeKind kind
 
 # ── Scope table ─────────────────────────────────────────────
-# Flat parallel vectors for names avoid non-Copy type issues in codegen.
-# Extra is_import/is_trait/is_dummy flags avoid reading self.definitions
-# from &self methods (which triggers spurious memset in generated C).
 
 struct ScopeTable:
     Vector[Scope] scopes
     Vector[DefInfo] definitions
-    # Flat scope → name → def_id mapping
+    # Flat scope → name → def_id mapping. Parallel Vectors (not Dict)
+    # so `find_name_entry` can scan backwards through insertion order
+    # to resolve shadowing — most-recent define wins.
     Vector[int] name_scope_ids
     Vector[String] name_keys
     Vector[int] name_def_ids
-    # Replacement flags (avoid reading definitions from &self)
-    Vector[bool] name_is_import
-    Vector[bool] name_is_trait
-    Vector[bool] name_is_dummy
     int current
 
-# ── Typed accessors (only for immutable self or standalone use) ────
+# ── Typed accessors ────
 
 DefInfo get_def_at(Vector[DefInfo] v, int i):
     return v.get(i).unwrap()
 
 Scope get_scope_at(Vector[Scope] v, int i):
     return v.get(i).unwrap()
+
+bool def_kind_is_import(DefKind k):
+    match k:
+        case DkImport():
+            return true
+        else:
+            return false
+
+bool def_kind_is_trait(DefKind k):
+    match k:
+        case DkTrait():
+            return true
+        else:
+            return false
 
 # ── ScopeTable methods ──────────────────────────────────────
 
@@ -84,9 +98,6 @@ equip ScopeTable:
         Vector[int](),
         Vector[String](),
         Vector[int](),
-        Vector[bool](),
-        Vector[bool](),
-        Vector[bool](),
         NO_SCOPE
     )
 
@@ -117,53 +128,27 @@ equip ScopeTable:
 
     int define_with_mutability(&self, String name, DefKind kind, Span !span, bool is_mutable):
         # Check for existing definition in current scope using name table
-        bool span_is_dummy = span.start == 0 and span.end == 0
         int ni = self.find_name_entry(self.current, name.clone())
         if ni >= 0:
-            return self.define_replace_or_fail(ni, name, kind, span, is_mutable, span_is_dummy)
+            return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
         int def_id = self.definitions.len()
         DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false)
         self.definitions.push(info)
-        # Add new name entry with flags
         self.name_scope_ids.push(self.current)
         self.name_keys.push(name)
         self.name_def_ids.push(def_id)
-        bool is_import = false
-        match kind:
-            case DkImport():
-                is_import = true
-            else:
-                pass
-        self.name_is_import.push(is_import)
-        bool is_trait = false
-        match kind:
-            case DkTrait():
-                is_trait = true
-            else:
-                pass
-        self.name_is_trait.push(is_trait)
-        self.name_is_dummy.push(span_is_dummy)
         return def_id
 
     # Try to replace or fail for duplicate definition (extracted for borrow checker)
-    int define_replace_or_fail(&self, int ni, String name, DefKind kind, Span !span, bool is_mutable, bool span_is_dummy):
-        # Read replacement flags from name table (all Copy types)
-        bool existing_is_import = self.name_is_import.get(ni).unwrap()
-        bool existing_is_trait = self.name_is_trait.get(ni).unwrap()
-        bool existing_is_dummy = self.name_is_dummy.get(ni).unwrap()
+    int define_replace_or_fail(&self, int ni, String name, DefKind kind, Span !span, bool is_mutable):
+        int existing_def_id = self.name_def_ids.get(ni).unwrap()
+        DefInfo existing = get_def_at(self.definitions, existing_def_id)
+        bool existing_is_import = def_kind_is_import(existing.kind)
+        bool existing_is_trait = def_kind_is_trait(existing.kind)
+        bool existing_is_dummy = existing.span.start == 0 and existing.span.end == 0
 
-        bool new_is_import = false
-        match kind:
-            case DkImport():
-                new_is_import = true
-            else:
-                pass
-        bool new_is_trait = false
-        match kind:
-            case DkTrait():
-                new_is_trait = true
-            else:
-                pass
+        bool new_is_import = def_kind_is_import(kind)
+        bool new_is_trait = def_kind_is_trait(kind)
 
         bool allow_replace = false
         if existing_is_import and not new_is_import:
@@ -177,11 +162,7 @@ equip ScopeTable:
             int def_id = self.definitions.len()
             DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false)
             self.definitions.push(info)
-            # Update existing name entry to point to new def
             self.name_def_ids.set(ni, def_id)
-            self.name_is_import.set(ni, new_is_import)
-            self.name_is_trait.set(ni, new_is_trait)
-            self.name_is_dummy.set(ni, span_is_dummy)
             return def_id
         # Duplicate definition error — return NO_DEF to signal failure
         return NO_DEF
