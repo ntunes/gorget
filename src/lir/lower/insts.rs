@@ -3563,6 +3563,21 @@ impl<'a> FuncLowering<'a> {
                         let dst_gir_ty = self.gir_func.locals[d.0 as usize].type_id;
                         self.map_type(&dst_gir_ty)
                     });
+                    // Only resource-type payloads have drop functions that could
+                    // double-free after a shallow-copy unwrap. Primitives (I64,
+                    // F64, …) and trivial structs have no Option__T__drop.
+                    let payload_is_resource = match &payload_ty {
+                        LirType::Ptr | LirType::PtrTo(_) => true,
+                        LirType::Struct(sid) => {
+                            let sname = self.module_structs
+                                .get(sid.0 as usize)
+                                .map(|s| s.name.as_str())
+                                .unwrap_or("");
+                            self.recursive_drop_structs.contains_key(sname)
+                                || self.recursive_drop_enums.contains_key(sname)
+                        }
+                        _ => false,
+                    };
                     let arg_ptr = lir_args[0];
 
                     if let Some(sid) = opt_sid {
@@ -3607,17 +3622,19 @@ impl<'a> FuncLowering<'a> {
                             self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
                                 slot: result_slot, value: payload_val, is_move: false,
                             });
-                            // Set tag to a consumed sentinel (2 = past all valid variants)
-                            // so the source Option/Result won't double-drop the payload
-                            // when the struct containing it is later dropped.
-                            let tag_fptr = self.lir_func.next_value();
-                            self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
-                                dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
-                            });
-                            let consumed_tag = self.emit_i32_const(some_bb, 2);
-                            self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
-                                ptr: tag_fptr, value: consumed_tag,
-                            });
+                            if payload_is_resource {
+                                // Set tag to a consumed sentinel (2 = past all valid variants)
+                                // so the source Option/Result won't double-drop the payload
+                                // when the struct containing it is later dropped.
+                                let tag_fptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
+                                    dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
+                                });
+                                let consumed_tag = self.emit_i32_const(some_bb, 2);
+                                self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
+                                    ptr: tag_fptr, value: consumed_tag,
+                                });
+                            }
                             self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
 
                             // Merge: load result from slot
@@ -3639,17 +3656,19 @@ impl<'a> FuncLowering<'a> {
                                 dst: payload_val, ptr: fptr, ty: payload_ty,
                             });
                             self.store_to_local(d, payload_val, bb);
-                            // Set tag to a consumed sentinel (2 = past all valid variants)
-                            // so the source Option/Result won't double-drop the payload
-                            // when the struct containing it is later dropped.
-                            let tag_fptr = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
-                                dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
-                            });
-                            let consumed_tag = self.emit_i32_const(bb, 2);
-                            self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                                ptr: tag_fptr, value: consumed_tag,
-                            });
+                            if payload_is_resource {
+                                // Set tag to a consumed sentinel (2 = past all valid variants)
+                                // so the source Option/Result won't double-drop the payload
+                                // when the struct containing it is later dropped.
+                                let tag_fptr = self.lir_func.next_value();
+                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                    dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
+                                });
+                                let consumed_tag = self.emit_i32_const(bb, 2);
+                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                                    ptr: tag_fptr, value: consumed_tag,
+                                });
+                            }
                             self.emit_post_call_zeros(args, bb);
                             return bb;
                         }
@@ -3679,12 +3698,14 @@ impl<'a> FuncLowering<'a> {
                             dst: payload_val, ptr: payload_addr, ty: payload_ty,
                         });
                         self.store_to_local(d, payload_val, bb);
-                        // Set tag to consumed sentinel via direct store to arg_ptr
-                        // (tag is I32 at offset 0 of the Option/Result struct).
-                        let consumed_tag = self.emit_i32_const(bb, 2);
-                        self.lir_func.block_mut(bb).insts.push(Inst::Store {
-                            ptr: arg_ptr, value: consumed_tag,
-                        });
+                        if payload_is_resource {
+                            // Set tag to consumed sentinel via direct store to arg_ptr
+                            // (tag is I32 at offset 0 of the Option/Result struct).
+                            let consumed_tag = self.emit_i32_const(bb, 2);
+                            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                                ptr: arg_ptr, value: consumed_tag,
+                            });
+                        }
                         self.emit_post_call_zeros(args, bb);
                         return bb;
                     }
