@@ -71,7 +71,14 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// (snag #13's family — see commit `c7a652f0`). Cheap (~one pass over
 /// `module.structs`); per-pass invocation locks the contract under the
 /// invariant framework.
-const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type];
+///
+/// Tier 1a (`validate_drop_completeness`): every droppable field of a type with
+/// a registered `type_drop_fns` entry must appear in that entry's `field_drops`
+/// (or `enum_variants` for enums). Catches the snag #24 class — the validator
+/// would have rejected the original Option/Result-skip lines that silently left
+/// resource-payload Option/Result fields un-dropped at scope exit. See
+/// `docs/internals/structural-guards.md` §1a.
+const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_drop_completeness];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
 /// a descriptive message tagged by `after` (the name of the pass that just
@@ -820,6 +827,125 @@ pub fn validate_box_inner_type(module: &LirModule) -> Vec<LirError> {
     errors
 }
 
+/// Tier 1a — drop completeness. Per `docs/internals/structural-guards.md` §1a:
+/// every droppable field of a type with a registered `type_drop_fns` entry must
+/// appear in that entry's `field_drops` (or, for enums, in `enum_variants`).
+///
+/// Without this, a struct field of type `Option[Box[Resource]]` could silently
+/// leak the box at scope exit because the populating pass forgot to add the
+/// field to the drop table. The skip-line at `lir/lower/mod.rs:599/650` was
+/// exactly this class — it silently filtered Option/Result fields out of the
+/// table even when their payloads were resource types. The skip was removed in
+/// commit `ff8cf782` after Snag #24 + #25b/c/d closed the issues that masked
+/// it; this validator locks the rule so future regressions halt the build
+/// instead of leaking at runtime.
+///
+/// **Droppability** (LIR-level, no GIR access required):
+/// 1. The field's struct has its own `type_drop_fns` entry (recursive/custom).
+/// 2. The field's struct is a runtime resource: GorgetString / GorgetArray /
+///    GorgetMap / GorgetSet / GorgetClosure.
+/// 3. The field's struct has `c_runtime_alias` to one of those.
+/// 4. The field's struct is a `Box__T` (always heap-allocated).
+///
+/// Primitive LIR types (I64/Bool/Ptr/...) are non-droppable.
+pub fn validate_drop_completeness(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+
+    let is_droppable_type = |ty: &LirType| -> bool {
+        let sid = match ty {
+            LirType::Struct(sid) => *sid,
+            _ => return false,
+        };
+        let sd = match module.structs.get(sid.0 as usize) {
+            Some(s) => s,
+            None => return false,
+        };
+        if module.type_drop_fns.contains_key(&sd.name) {
+            return true;
+        }
+        if let Some(ref alias) = sd.c_runtime_alias {
+            if matches!(alias.as_str(),
+                "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure")
+            {
+                return true;
+            }
+        }
+        if matches!(sd.name.as_str(),
+            "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetClosure")
+        {
+            return true;
+        }
+        if sd.name.starts_with("Box__") {
+            return true;
+        }
+        false
+    };
+
+    for (type_name, info) in &module.type_drop_fns {
+        let sd = match module.structs.iter().find(|s| s.name == *type_name) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        if let Some(ref enum_variants) = info.enum_variants {
+            // Enum: each droppable variant payload (named e.g. `Some_0`,
+            // `Ok_0`, `Error_0`) must be in the enum_variants table by
+            // field-name match.
+            let recorded: HashSet<&str> = enum_variants.iter()
+                .map(|(_vi, _vn, fname, _df, _ft)| fname.as_str())
+                .collect();
+            // Skip field 0 (the `tag`).
+            for (fname, fty) in sd.fields.iter().skip(1) {
+                if !is_droppable_type(fty) {
+                    continue;
+                }
+                if !recorded.contains(fname.as_str()) {
+                    let field_ty_name = match fty {
+                        LirType::Struct(sid) => module.structs.get(sid.0 as usize)
+                            .map(|s| s.name.as_str()).unwrap_or("?"),
+                        _ => "?",
+                    };
+                    errors.push(LirError {
+                        func: String::new(),
+                        block: None,
+                        message: format!(
+                            "Drop completeness: enum {:?} has droppable variant payload {:?} (type {:?}) missing from type_drop_fns enum_variants — scope-exit drop will leak the payload",
+                            type_name, fname, field_ty_name,
+                        ),
+                    });
+                }
+            }
+        } else {
+            // Struct: every droppable field by name must appear in field_drops.
+            let recorded: HashSet<&str> = info.field_drops.iter()
+                .map(|(fname, _fn, _ft)| fname.as_str())
+                .collect();
+            for (fname, fty) in &sd.fields {
+                if !is_droppable_type(fty) {
+                    continue;
+                }
+                if !recorded.contains(fname.as_str()) {
+                    let field_ty_name = match fty {
+                        LirType::Struct(sid) => module.structs.get(sid.0 as usize)
+                            .map(|s| s.name.as_str()).unwrap_or("?"),
+                        _ => "?",
+                    };
+                    errors.push(LirError {
+                        func: String::new(),
+                        block: None,
+                        message: format!(
+                            "Drop completeness: struct {:?} has droppable field {:?} (type {:?}) missing from type_drop_fns field_drops — scope-exit drop will leak the field",
+                            type_name, fname, field_ty_name,
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    errors
+}
+
 /// Compute reverse postorder of blocks via DFS from block 0.
 fn compute_rpo(n: usize, blocks: &[Block]) -> Vec<usize> {
     let mut visited = vec![false; n];
@@ -1438,5 +1564,165 @@ mod tests {
         // Should not panic — the validator accepts the well-formed Box
         // alongside the rest of the registered validators.
         assert_module_valid(&module, "test");
+    }
+
+    // ── Tier 1a: validate_drop_completeness ──────────────────────────────
+
+    /// Helper: minimal module with a `GorgetString` runtime resource StructDef
+    /// (the validator's droppability check recognises this name as a resource).
+    fn drop_test_module() -> LirModule {
+        let mut module = LirModule::new();
+        module.add_struct(StructDef {
+            name: "GorgetString".into(),
+            fields: vec![],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        module
+    }
+
+    #[test]
+    fn drop_completeness_accepts_complete_struct() {
+        let mut module = drop_test_module();
+        let gs_sid = StructId(0);
+        module.add_struct(StructDef {
+            name: "User".into(),
+            fields: vec![
+                ("id".into(), LirType::I64),
+                ("name".into(), LirType::Struct(gs_sid)),
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        module.type_drop_fns.insert("User".into(), TypeDropInfo {
+            drop_fn_name: "User__drop".into(),
+            field_drops: vec![("name".into(), "gorget_string_free".into(), "GorgetString".into())],
+            user_drop_fn: None,
+            enum_variants: None,
+        });
+        let errors = validate_drop_completeness(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn drop_completeness_detects_missing_struct_field() {
+        let mut module = drop_test_module();
+        let gs_sid = StructId(0);
+        module.add_struct(StructDef {
+            name: "Leaky".into(),
+            fields: vec![
+                ("id".into(), LirType::I64),
+                ("name".into(), LirType::Struct(gs_sid)), // droppable, but not registered
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        // Drop info present but missing the `name` field — the violation.
+        module.type_drop_fns.insert("Leaky".into(), TypeDropInfo {
+            drop_fn_name: "Leaky__drop".into(),
+            field_drops: vec![],
+            user_drop_fn: None,
+            enum_variants: None,
+        });
+        let errors = validate_drop_completeness(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Leaky"));
+        assert!(errors[0].message.contains("name"));
+        assert!(errors[0].message.contains("GorgetString"));
+    }
+
+    #[test]
+    fn drop_completeness_accepts_complete_enum() {
+        let mut module = drop_test_module();
+        let gs_sid = StructId(0);
+        // Option__GorgetString: { tag, Some_0: GorgetString }
+        module.add_struct(StructDef {
+            name: "Option__GorgetString".into(),
+            fields: vec![
+                ("tag".into(), LirType::I32),
+                ("Some_0".into(), LirType::Struct(gs_sid)),
+            ],
+            enum_kind: EnumKind::Option,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
+            drop_fn_name: "Option__GorgetString__drop".into(),
+            field_drops: vec![],
+            user_drop_fn: None,
+            enum_variants: Some(vec![(0, "Some".into(), "Some_0".into(), "gorget_string_free".into(), "GorgetString".into())]),
+        });
+        let errors = validate_drop_completeness(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn drop_completeness_detects_missing_enum_variant_payload() {
+        let mut module = drop_test_module();
+        let gs_sid = StructId(0);
+        // Option__GorgetString: { tag, Some_0: GorgetString } — but enum_variants
+        // is empty. This is exactly the snag #24 class: the lowering pass forgot
+        // to register the droppable variant payload.
+        module.add_struct(StructDef {
+            name: "Option__GorgetString".into(),
+            fields: vec![
+                ("tag".into(), LirType::I32),
+                ("Some_0".into(), LirType::Struct(gs_sid)),
+            ],
+            enum_kind: EnumKind::Option,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
+            drop_fn_name: "Option__GorgetString__drop".into(),
+            field_drops: vec![],
+            user_drop_fn: None,
+            enum_variants: Some(vec![]), // empty — the violation
+        });
+        let errors = validate_drop_completeness(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("Option__GorgetString"));
+        assert!(errors[0].message.contains("Some_0"));
+    }
+
+    #[test]
+    fn drop_completeness_skips_non_droppable_fields() {
+        // Struct with all-trivial fields should not produce errors even if
+        // it has a (degenerate) type_drop_fns entry.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "Trivial".into(),
+            fields: vec![
+                ("a".into(), LirType::I64),
+                ("b".into(), LirType::Bool),
+                ("c".into(), LirType::Ptr),
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false,
+        });
+        module.type_drop_fns.insert("Trivial".into(), TypeDropInfo {
+            drop_fn_name: "Trivial__drop".into(),
+            field_drops: vec![],
+            user_drop_fn: Some("user_trivial_drop".into()),
+            enum_variants: None,
+        });
+        let errors = validate_drop_completeness(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
     }
 }
