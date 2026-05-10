@@ -529,7 +529,20 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
         m.type_runtime_map.put(tname.clone(), rt.clone())
         return
     # Box / Guard / opaque / prelude types we know how to stamp.
-    if tname.starts_with("Box__"):
+    # Phase A typed read: BkRegularBox identifies parameterised Box[T];
+    # the trait box (BkTraitBox) for bare `Box` doesn't reach this site
+    # (no monomorphisation suffix to register).
+    bool tname_is_box = false
+    match build_resource_metadata(tname):
+        case Some(rmeta):
+            match rmeta.box_kind:
+                case BkRegularBox():
+                    tname_is_box = true
+                else:
+                    pass
+        case None:
+            pass
+    if tname_is_box:
         Vector[StructField] box_fields = []
         box_fields.push(StructField("_0", LT_PTR))
         String box_name_ctor = tname.clone()
