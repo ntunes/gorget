@@ -242,10 +242,22 @@ fn infer_func(
                 // `join` default-method bodies and similar fresh-literal
                 // var-decls.
                 Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
-                    if let crate::ir::instructions::Operand::Constant(
-                        crate::ir::instructions::Constant::Str(_)
-                    ) = value {
+                    use crate::ir::instructions::{Constant, Operand, Projection};
+                    if let Operand::Constant(Constant::Str(_)) = value {
                         decisions.push((dst.local, LocalOwnership::Owned));
+                    } else if let Operand::Copy(p) | Operand::Move(p) = value {
+                        // Tier 2a Phase 3: auto-deref consume shape for
+                        // `!`-move params. `_dst = copy _ptr.*` followed
+                        // by `move_zero _ptr` later in this block means
+                        // the pointee was transferred OUT — dst owns the
+                        // value. Catches `lex_emit(&self, Token !tok)` →
+                        // `_7 = copy _2.*; move_zero _2;` shape.
+                        if p.projections.len() == 1
+                            && matches!(p.projections[0], Projection::Deref)
+                            && zeroed_locals.contains(&p.local.0)
+                        {
+                            decisions.push((dst.local, LocalOwnership::Owned));
+                        }
                     }
                 }
                 _ => {}
