@@ -963,8 +963,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
 
 fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &HashMap<u32, String>, string_lit_map: &HashMap<String, usize>) {
     // For main() with a Result return type (throws-int main), override to int.
+    // Read typed `enum_kind` (Phase A) — set at LIR struct registration.
     let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
-        module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
+        module.structs.get(sid.0 as usize).map_or(false, |s| s.enum_kind == crate::lir::EnumKind::Result)
     });
     let ret_type_str = if is_throws_main { "int".to_string() } else { c_type_named(&func.return_type, sn) };
 
@@ -2770,9 +2771,10 @@ fn emit_term(out: &mut String, term: &Term, func: &LirFunction, module: &LirModu
 
     match term {
         Term::Ret(val) => {
-            // For throws-int main, unwrap Result to exit code.
+            // For throws-int main, unwrap Result to exit code. Read typed
+            // `enum_kind` (Phase A) — set at LIR struct registration.
             let is_throws_main = func.name == "main" && matches!(&func.return_type, LirType::Struct(sid) if {
-                module.structs.get(sid.0 as usize).map_or(false, |s| s.name.starts_with("Result__"))
+                module.structs.get(sid.0 as usize).map_or(false, |s| s.enum_kind == crate::lir::EnumKind::Result)
             });
             if is_throws_main {
                 let val_ty = val_types.get(val.0 as usize).and_then(|t| t.as_ref());

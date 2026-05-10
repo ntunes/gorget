@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `c_lir/mod.rs` throws-main Result detection via typed `enum_kind`.** Two parallel sites in `src/backend/c_lir/mod.rs` (`:967` `emit_function`'s throws-main signature override; `:2776` `Term::Ret` arm's exit-code unwrap) had `s.name.starts_with("Result__")` checks. Migrated to `s.enum_kind == EnumKind::Result` — typed Phase A flag set at LIR struct registration. 2 prefix matches retired (322 → 320); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/backend/c_lir/mod.rs`, `tests/lints.rs` (BUDGET 322 → 320).
+
 - [2026-05-10] **Layering audit — `lower_index_access` builtin-collection check via typed `collection_kind`.** `src/ir/lowering/exprs/methods.rs::lower_index_access:2790` had a 4-arm `is_builtin_collection` check via name prefix (Vector__/Dict__/HashMap__/Set__ + GorgetArray equality). Migrated to a `matches!` over typed `td.metadata.collection_kind` (Array | OrderedMap | Map | OrderedSet) — Phase A typed dispatch. The arm set matches the original (HashSet excluded — it's part of `Set` kind variant). 4 prefix matches retired (326 → 322); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 326 → 322).
 
