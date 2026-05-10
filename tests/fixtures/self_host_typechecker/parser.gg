@@ -1534,6 +1534,29 @@ equip Parser:
             # Bare keyword without parens: treated as binding (matches Rust parser)
             return self.mk_pat(PBinding(name), start)
 
+        # Type-keyword tokens (`int`, `byte`, `float`, …) and other
+        # keywords with source spellings (`for`, `match`, `as`, …) are
+        # accepted as binding names in pattern position — Rust gg's
+        # parser accepts them, and the lexer's keyword promotion
+        # (`byte` → KwUint8) is context-free, so otherwise users
+        # couldn't write `case Foo(x, byte, z):` with `byte` as a
+        # middle binding. Surfaced 2026-05-10 by Phase A.4's lift port:
+        # `lir_ssa::substitute_inst::case IMemset(ptr, byte, sz):` had
+        # the middle binding silently wildcarded, breaking IMemset
+        # destructure when the lift fired.
+        match self.peek().lex_token:
+            case TkKeyword(kw):
+                String tk_name = type_keyword_name(kw)
+                if tk_name != "":
+                    self.advance()
+                    return self.mk_pat(PBinding(tk_name), start)
+                String ntk_name = non_type_keyword_name(kw)
+                if ntk_name != "":
+                    self.advance()
+                    return self.mk_pat(PBinding(ntk_name), start)
+            else:
+                pass
+
         self.errors.push("expected pattern")
         self.advance()
         return self.mk_pat(PWildcard(), start)

@@ -2024,18 +2024,7 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
     blk2.insts.push(ISlotAddr(slot_addr_pre, dst_slot))
     blk2.insts.push(IIConst(sz_val, LT_I64, sz_bytes))
     blk2.insts.push(IIConst(zero_byte, LT_I32, 0))
-    # Self-host has a destructure bug for `case IMemset(ptr, byte, sz)`
-    # where the middle binding (byte) reads as constant 0 instead of
-    # field IMemset_1 — the pattern is exercised in
-    # `lir_ssa::substitute_inst` (TODO #N: self-host IMemset destructure
-    # bug). Until that's fixed, route memset through ICallExtern which
-    # uses an enum-variant pattern self-host destructures correctly.
-    Vector[int] memset_args = []
-    memset_args.push(slot_addr_pre)
-    memset_args.push(zero_byte)
-    memset_args.push(sz_val)
-    Vector[int] memset_abis = []
-    blk2.insts.push(ICallExtern(-1, "memset", memset_args, "memset", memset_abis))
+    blk2.insts.push(IMemset(slot_addr_pre, zero_byte, sz_val))
     f.blocks.set(bb, blk2)
 
     int null_val = lir_fn_next_value(&f)
