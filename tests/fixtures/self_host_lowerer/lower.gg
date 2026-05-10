@@ -1958,7 +1958,21 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dsrc = lower_expr(&ctx, *inner_box, &gmod)
             int dsrc_tid = ctx.locals.get(dsrc).unwrap().type_id
             String dsrc_tname = type_id_to_name(dsrc_tid, &gmod)
-            if dsrc_tname.starts_with("Box__"):
+            # Phase A typed read: BkRegularBox identifies parameterised
+            # Box[T]; the bare trait Box's no-suffix name doesn't reach
+            # an EDeref site (a trait box deref goes through vtable
+            # dispatch, not raw pointer load).
+            bool dsrc_is_box = false
+            match build_resource_metadata(dsrc_tname):
+                case Some(rmeta):
+                    match rmeta.box_kind:
+                        case BkRegularBox():
+                            dsrc_is_box = true
+                        else:
+                            pass
+                case None:
+                    pass
+            if dsrc_is_box:
                 # Build the inner name byte-by-byte instead of using
                 # `.substring()` / `.byte_slice()`. Stage-1 self-host's
                 # runtime returns empty for `dsrc_tname.substring(5,
