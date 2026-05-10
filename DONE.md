@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `lir/lower/drops.rs` Option/Result fallback dispatch via typed `enum_category`.** Site at `:131-133` (force-registered Option/Result drop fallback) had `tn.starts_with("Option__") || tn.starts_with("Result__")` for type-name discrimination. Migrated to `self.gir_types.get_type_def(tn).map_or(false, |td| td.metadata.enum_category.is_some())` — typed Phase A dispatch. The `recursive_drop_enums.contains_key(tn)` AND-clause stays (it's the actual table presence check). 2 prefix matches retired (347 → 345); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/lir/lower/drops.rs`, `tests/lints.rs` (BUDGET 347 → 345).
+
 - [2026-05-10] **Layering audit — three more methods.rs Option/Result + array detection sites.** Three sites in `src/ir/lowering/exprs/methods.rs` migrated: (a) `:2086` `is_option_void_ptr_vector` predicate (Vector with Option-returning method) — `type_name.starts_with("Vector__"|"GorgetArray")` and `n.starts_with("Option__")` migrated to typed `collection_kind == Some(Array)` and `enum_category == Some(Option)`. (b) `:2273` `is_option_result` for combinator MoveZero — migrated to `enum_category.is_some()`. (c) `:2441` `try_lower_option_result_combinator` early-out — `is_option`/`is_result` migrated from name prefix to typed `enum_category` discrimination. 6 prefix matches retired (353 → 347); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 353 → 347).
 
