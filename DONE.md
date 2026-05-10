@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — Option/Result drop validator via typed `enum_category`.** `src/ir/validate.rs:564` `is_force_droppable` check (in DropOnNonDroppable validator) had `(name.starts_with("Option__") || name.starts_with("Result__"))` paired with the typed-walk for variant payload droppability. Migrated to `td.metadata.enum_category.is_some()` — typed Phase A discriminator. The variant-walk for payload-droppable check stays. 2 prefix matches retired (340 → 338); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/validate.rs`, `tests/lints.rs` (BUDGET 340 → 338).
+
 - [2026-05-10] **Layering audit — `auto_propagate` Result detection via typed `enum_category`.** Three sites in `src/ir/lowering/exprs/mod.rs::should_auto_propagate` and `maybe_auto_propagate` had `enum_category(...) == Some(EnumCategory::Result) || name.starts_with("Result__")` patterns. Removed dead `||` fallbacks and the now-orphaned `let type_name`/`let ret_name`/`let name = ctx.type_registry.type_name(...)` lines. Phase A invariant: every Result registration sets `enum_category`. 3 prefix matches retired (343 → 340); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/mod.rs`, `tests/lints.rs` (BUDGET 343 → 340).
 

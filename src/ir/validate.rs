@@ -560,10 +560,11 @@ fn check_drop_targets(
                 // and `needs_drop` is the wider predicate that subsumes
                 // `is_resource_type`. The single `type_needs_drop` call
                 // suffices.
+                // Read typed `enum_category` (Phase A) — Option/Result detection.
                 let is_force_droppable = if let Some(crate::ir::types::GirType::Named(name)) = registry.get(type_id) {
-                    (name.starts_with("Option__") || name.starts_with("Result__"))
-                    && registry.get_type_def(name).map_or(false, |td| {
-                        if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
+                    registry.get_type_def(name).map_or(false, |td| {
+                        td.metadata.enum_category.is_some()
+                        && if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
                             edef.variants.iter().any(|v| v.fields.iter().any(|f|
                                 type_needs_drop(f.type_id, registry)))
                         } else { false }
