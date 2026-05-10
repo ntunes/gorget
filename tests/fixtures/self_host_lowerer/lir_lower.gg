@@ -407,15 +407,16 @@ int map_gir_type(int type_id, GirModule &gmod, Dict[String, int] &sr):
             int sid = sr_lookup(&sr, name)
             if sid >= 0:
                 return lir_struct(sid)
-            # Check collection runtime types
-            String rt = collection_runtime_type(name)
-            if rt != "":
-                int rt_sid = sr_lookup(&sr, rt)
-                if rt_sid >= 0:
-                    return lir_struct(rt_sid)
-            # Opaque types → Ptr
-            if is_opaque_pointer_type(name):
-                return LT_PTR
+            # Phase A: typed read replaces collection_runtime_type +
+            # is_opaque_pointer_type prefix dispatch.
+            Option[GirResourceMetadata] rmeta_opt = build_resource_metadata(name)
+            match rmeta_opt:
+                case Some(rmeta):
+                    int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
+                    if rt_sid >= 0:
+                        return lir_struct(rt_sid)
+                case None:
+                    pass
             return LT_PTR
         case GtFnPtr(_, _):
             int cls_sid = sr_lookup(&sr, "GorgetClosure")
