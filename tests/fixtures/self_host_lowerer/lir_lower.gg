@@ -17,7 +17,7 @@ from lir import StructField, BlockParam, SwitchCase, FieldDrop, EnumVariantDrop,
 from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
-from lir import EK_NOT_ENUM
+from lir import EK_NOT_ENUM, EK_OPTION
 from lir import lir_ptr_to, lir_struct, lir_is_scalar, lir_is_aggregate
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
@@ -482,9 +482,9 @@ int map_gir_type(int type_id, GirModule &gmod, Dict[String, int] &sr):
             int sid = sr_lookup(&sr, name)
             if sid >= 0:
                 return lir_struct(sid)
-            # Phase A: typed read replaces collection_runtime_type +
-            # is_opaque_pointer_type prefix dispatch.
-            Option[GirResourceMetadata] rmeta_opt = build_resource_metadata(name)
+            # Phase A: typed accessor — read populated metadata from
+            # the GirModule (populated once at lower_gir_to_lir entry).
+            Option[GirResourceMetadata] rmeta_opt = resource_meta_for(&gmod, name)
             match rmeta_opt:
                 case Some(rmeta):
                     int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
@@ -1950,6 +1950,174 @@ bool returns_ptr_to_element(String name):
         return true
     return false
 
+# ── Tier 1 lift: collection void* → Option wrap ─────────────────
+bool is_collection_void_return(String name):
+    if name == "gorget_array_get" or name == "gorget_array_pop":
+        return true
+    if name == "gorget_array_first" or name == "gorget_array_last":
+        return true
+    if name == "gorget_array_safe_get" or name == "gorget_array_safe_pop":
+        return true
+    if name == "gorget_array_safe_first" or name == "gorget_array_safe_last":
+        return true
+    if name == "gorget_array_remove_opt":
+        return true
+    if name == "gorget_map_get" or name == "gorget_map_remove_opt":
+        return true
+    if name == "gorget_heap_pop" or name == "gorget_heap_peek":
+        return true
+    if name == "gorget_shared_get" or name == "gorget_shared_get_ptr":
+        return true
+    if name == "gorget_channel_recv":
+        return true
+    return false
+
+bool is_consuming_collection_method(String name):
+    if name == "gorget_array_safe_pop" or name == "gorget_array_remove_opt":
+        return true
+    if name == "gorget_map_remove" or name == "gorget_map_remove_opt":
+        return true
+    if name == "gorget_set_remove":
+        return true
+    return false
+
+String resource_clone_fn(int payload_ty, LirModule &m):
+    if payload_ty < LT_STRUCT_BASE:
+        return ""
+    int sid = payload_ty - LT_STRUCT_BASE
+    if sid >= m.structs.len():
+        return ""
+    LirStructDef sdef = m.structs.get(sid).unwrap()
+    String name = sdef.name
+    if name == "GorgetArray":
+        return "gorget_array_clone"
+    if name == "GorgetMap":
+        return "gorget_map_clone"
+    if name == "GorgetSet":
+        return "gorget_set_clone"
+    if name == "GorgetString":
+        return "gorget_string_clone_to_owned"
+    if name == "GorgetClosure":
+        return "gorget_closure_clone_to_owned"
+    if m.recursive_drop_structs.contains(name) or m.recursive_drop_enums.contains(name):
+        return name + "__clone"
+    return ""
+
+int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] &local_to_slot, LirModule &m):
+    int raw_ptr = lir_fn_next_value(&f)
+    Vector[int] empty_abis = []
+    LirBlock blk0 = f.blocks.get(bb).unwrap()
+    blk0.insts.push(ICallExtern(raw_ptr, emit_name, lir_args, emit_name, empty_abis))
+    f.blocks.set(bb, blk0)
+
+    int raw_slot = lir_fn_add_slot(&f, LT_PTR, "")
+    LirBlock blk1 = f.blocks.get(bb).unwrap()
+    blk1.insts.push(ISlotStore(raw_slot, raw_ptr, false))
+    f.blocks.set(bb, blk1)
+
+    int dst_slot = local_to_slot.get(dst_local).unwrap()
+    int slot_addr_pre = lir_fn_next_value(&f)
+    int sz_val = lir_fn_next_value(&f)
+    int zero_byte = lir_fn_next_value(&f)
+    int sz_bytes = lir_type_byte_size_in_mod(LT_STRUCT_BASE + opt_sid, &m, 0)
+    LirBlock blk2 = f.blocks.get(bb).unwrap()
+    blk2.insts.push(ISlotAddr(slot_addr_pre, dst_slot))
+    blk2.insts.push(IIConst(sz_val, LT_I64, sz_bytes))
+    blk2.insts.push(IIConst(zero_byte, LT_I32, 0))
+    # Self-host has a destructure bug for `case IMemset(ptr, byte, sz)`
+    # where the middle binding (byte) reads as constant 0 instead of
+    # field IMemset_1 — the pattern is exercised in
+    # `lir_ssa::substitute_inst` (TODO #N: self-host IMemset destructure
+    # bug). Until that's fixed, route memset through ICallExtern which
+    # uses an enum-variant pattern self-host destructures correctly.
+    Vector[int] memset_args = []
+    memset_args.push(slot_addr_pre)
+    memset_args.push(zero_byte)
+    memset_args.push(sz_val)
+    Vector[int] memset_abis = []
+    blk2.insts.push(ICallExtern(-1, "memset", memset_args, "memset", memset_abis))
+    f.blocks.set(bb, blk2)
+
+    int null_val = lir_fn_next_value(&f)
+    int is_not_null = lir_fn_next_value(&f)
+    LirBlock blk3 = f.blocks.get(bb).unwrap()
+    blk3.insts.push(INullPtr(null_val))
+    blk3.insts.push(ICmp(is_not_null, CMP_NE, raw_ptr, null_val))
+    f.blocks.set(bb, blk3)
+
+    int some_bb = lir_fn_add_block(&f)
+    int none_bb = lir_fn_add_block(&f)
+    int merge_bb = lir_fn_add_block(&f)
+    Vector[int] empty_args0 = []
+    Vector[int] empty_args1 = []
+    LirBlock blk4 = f.blocks.get(bb).unwrap()
+    blk4.term = TBranch(is_not_null, some_bb, empty_args0, none_bb, empty_args1)
+    f.blocks.set(bb, blk4)
+
+    LirStructDef opt_def = m.structs.get(opt_sid).unwrap()
+    int payload_field_ty = LT_I64
+    if opt_def.fields.len() >= 2:
+        payload_field_ty = opt_def.fields.get(1).unwrap().ty
+    bool payload_is_ptr = (payload_field_ty == LT_PTR) or (payload_field_ty >= LT_PTR_TO_BASE and payload_field_ty < LT_STRUCT_BASE)
+    bool consuming = is_consuming_collection_method(emit_name)
+
+    int raw_in_some = lir_fn_next_value(&f)
+    LirBlock sblk0 = f.blocks.get(some_bb).unwrap()
+    sblk0.insts.push(ISlotLoad(raw_in_some, raw_slot, LT_PTR))
+    f.blocks.set(some_bb, sblk0)
+
+    int payload_val = -1
+    if payload_is_ptr:
+        payload_val = raw_in_some
+    elif lir_is_aggregate(payload_field_ty):
+        String clone_fn = ""
+        if not consuming:
+            clone_fn = resource_clone_fn(payload_field_ty, &m)
+        if clone_fn != "":
+            int cloned = lir_fn_next_value(&f)
+            Vector[int] cargs = []
+            cargs.push(raw_in_some)
+            Vector[int] cabis = []
+            LirBlock cblk0 = f.blocks.get(some_bb).unwrap()
+            cblk0.insts.push(ICallExtern(cloned, clone_fn, cargs, clone_fn, cabis))
+            f.blocks.set(some_bb, cblk0)
+            int cl_slot = lir_fn_add_slot(&f, payload_field_ty, "")
+            int cl_addr = lir_fn_next_value(&f)
+            LirBlock cblk1 = f.blocks.get(some_bb).unwrap()
+            cblk1.insts.push(ISlotStore(cl_slot, cloned, true))
+            cblk1.insts.push(ISlotAddr(cl_addr, cl_slot))
+            f.blocks.set(some_bb, cblk1)
+            payload_val = cl_addr
+        else:
+            payload_val = raw_in_some
+    else:
+        int loaded = lir_fn_next_value(&f)
+        LirBlock lblk = f.blocks.get(some_bb).unwrap()
+        lblk.insts.push(ILoad(loaded, raw_in_some, payload_field_ty))
+        f.blocks.set(some_bb, lblk)
+        payload_val = loaded
+
+    int some_slot_addr = lir_fn_next_value(&f)
+    Vector[FieldInit] some_fields = []
+    some_fields.push(FieldInit(1, payload_val))
+    LirBlock sblk = f.blocks.get(some_bb).unwrap()
+    sblk.insts.push(ISlotAddr(some_slot_addr, dst_slot))
+    sblk.insts.push(IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
+    Vector[int] empty_args_s = []
+    sblk.term = TJump(merge_bb, empty_args_s)
+    f.blocks.set(some_bb, sblk)
+
+    int none_slot_addr = lir_fn_next_value(&f)
+    Vector[FieldInit] none_fields = []
+    LirBlock nblk = f.blocks.get(none_bb).unwrap()
+    nblk.insts.push(ISlotAddr(none_slot_addr, dst_slot))
+    nblk.insts.push(IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
+    Vector[int] empty_args_n = []
+    nblk.term = TJump(merge_bb, empty_args_n)
+    f.blocks.set(none_bb, nblk)
+
+    return merge_bb
+
 int extract_elem_size_from_name_in_mod(String name, Dict[String, int] &sr, LirModule &m):
     String elem = coll_elem_type_for_name(name, &m)
     if elem != "":
@@ -2203,7 +2371,7 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
 
 # ── Instruction lowering ────────────────────────────────────
 
-void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
+int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &local_to_slot, Dict[String, int] &func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
     match inst:
         case GIAssign(local_id, operand):
             int val = lower_operand(operand, &f, bb, &local_to_slot)
@@ -2287,13 +2455,13 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
             # the dst slot in place via IEnumInit. Struct id comes from the
             # slot's type — no codegen-side name inference needed.
             if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
-                return
+                return bb
             # Canonical user struct constructors — emits IStructInit with
             # per-field memcpy for struct-typed fields, fixing the stage-1
             # SEGV where inline struct literals cast a by-pointer arg into
             # a struct-typed field.
             if try_lower_user_struct_ctor(func_name, dst_local, args, &f, bb, &local_to_slot, &sr, &m):
-                return
+                return bb
             # Canonical Box(x): emit IBoxAlloc with explicit inner_ty (unwrapped
             # from the operand's pointer-to-struct type if needed) so downstream
             # Some(Box(x)) resolves to Option__Box__T, not Option__GorgetString.
@@ -2309,7 +2477,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 LirBlock bblk2 = f.blocks.get(bb).unwrap()
                 bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
                 f.blocks.set(bb, bblk2)
-                return
+                return bb
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
@@ -2469,7 +2637,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
         case GICallExtern(dst_local, func_name, args):
             # Canonical prelude variants (same as GICall arm).
             if try_lower_prelude_variant(func_name, dst_local, args, &f, bb, &local_to_slot):
-                return
+                return bb
             # Function-as-value pseudo-intrinsic: `__fn_addr__<name>` —
             # emitted by `lower_expr`'s EIdentifier arm when the
             # identifier resolves to a known function. Convert into an
@@ -2490,7 +2658,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     LirBlock fa_blk2 = f.blocks.get(bb).unwrap()
                     fa_blk2.insts.push(ISlotStore(fa_dst_slot, fa_dst, false))
                     f.blocks.set(bb, fa_blk2)
-                    return
+                    return bb
             # Module-level static reference: `__global_ref__<name>` —
             # emitted by `lower_static_ref_ident` when the identifier is
             # registered in `gmod.static_keys`. Locate the matching
@@ -2517,7 +2685,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     LirBlock gr_blk2 = f.blocks.get(bb).unwrap()
                     gr_blk2.insts.push(ISlotStore(gr_dst_slot, gr_dst, false))
                     f.blocks.set(bb, gr_blk2)
-                    return
+                    return bb
             # Canonical Box(x): emit IBoxAlloc, same as in GICall.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 Operand box_arg = args.get(0).unwrap()
@@ -2531,7 +2699,7 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                 LirBlock bblk2 = f.blocks.get(bb).unwrap()
                 bblk2.insts.push(ISlotStore(box_dst_slot, box_dst, false))
                 f.blocks.set(bb, bblk2)
-                return
+                return bb
             String mapped_early = map_runtime_name(func_name, &m)
             String effective_name = func_name
             if mapped_early != "":
@@ -2636,6 +2804,18 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     cblk2.insts.push(ISlotStore(cl_dst_slot, cl_dst, false))
                     f.blocks.set(bb, cblk2)
             else:
+                # Tier 1 lift: collection void* → Option wrap. Mirrors
+                # src/lir/lower/lifts.rs::emit_void_ptr_option_wrap.
+                if dst_local >= 0 and is_collection_void_return(call_name):
+                    int lift_dst_slot = local_to_slot.get(dst_local).unwrap()
+                    int lift_slot_ty = f.slots.get(lift_dst_slot).unwrap().ty
+                    if lift_slot_ty >= LT_STRUCT_BASE:
+                        int lift_opt_sid = lift_slot_ty - LT_STRUCT_BASE
+                        if lift_opt_sid < m.structs.len():
+                            LirStructDef lift_opt_def = m.structs.get(lift_opt_sid).unwrap()
+                            if lift_opt_def.enum_kind == EK_OPTION:
+                                int new_bb = emit_void_ptr_option_wrap(call_name, dst_local, lift_opt_sid, lir_args, &f, bb, &local_to_slot, &m)
+                                return new_bb
                 int dst = -1
                 if dst_local >= 0:
                     # For channel recv, the result is written to the slot directly via &out.
@@ -2717,6 +2897,8 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
 
         case GINop():
             pass
+
+    return bb
 
 # ── Terminator lowering ─────────────────────────────────────
 
@@ -2810,7 +2992,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
         int ii = 0
         while ii < gir_blk.insts.len():
             Instruction gir_inst = gir_blk.insts.get(ii).unwrap()
-            lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
+            lir_bb = lower_instruction(gir_inst, &f, lir_bb, &local_to_slot, &func_index, &gmod, &sr, &m)
             ii += 1
 
         # Lower terminator. Move the local LirTerm into the block —

@@ -139,7 +139,9 @@ Likely surfaces:
 
 Each surface = a Gorget bug to fix in `src/`, not a workaround to ship in `tests/fixtures/`.
 
-#### 3.4.1 The Dict.get → Option[V] gap (probed 2026-05-10)
+#### 3.4.1 The Dict.get → Option[V] gap (closed 2026-05-10)
+
+**Status: SHIPPED.** All three changes below landed together; bootstrap_fixed_point passes; the typed accessor `resource_meta_for(&gmod, name)` is the live consumer. Section retained for historical context.
 
 The first prediction came true. Phase A.4's first consumer migration —
 `map_gir_type`'s `GtNamed` arm in `lir_lower.gg` — needs to call
