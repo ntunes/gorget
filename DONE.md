@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — bulk methods.rs ret-type dispatch via factored `recv_collection_kind`.** Six dispatch sites in `src/ir/lowering/exprs/methods.rs::lower_method_call` (`:1782` Vector get/first/last/remove/pop, `:1755` Vector zip, `:1805` Dict get, `:1830` Vector get fn_sig_ret arm, `:1842/1854` Dict get/remove fn_sig_ret arms, `:1866` Set/HashSet remove fn_sig_ret arm, `:1875` Vector zip fn_sig_ret arm) had parallel `type_name.starts_with("Vector__"|"GorgetArray"|"Dict__"|"HashMap__"|"Set__"|"HashSet__")` chains. Factored `recv_collection_kind` once at the top via `td.metadata.collection_kind` read; derived `recv_is_array` / `recv_is_map` / `recv_is_set` flags. Each call site reuses the appropriate flag instead of repeating the multi-arm prefix check. The downstream `strip_prefix("Vector__")` / `strip_prefix("Dict__"|"HashMap__")` for K/V name extraction stays — that's the C-mangling boundary contract. 12 prefix matches retired (338 → 326); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 338 → 326).
+
 - [2026-05-10] **Layering audit — Option/Result drop validator via typed `enum_category`.** `src/ir/validate.rs:564` `is_force_droppable` check (in DropOnNonDroppable validator) had `(name.starts_with("Option__") || name.starts_with("Result__"))` paired with the typed-walk for variant payload droppability. Migrated to `td.metadata.enum_category.is_some()` — typed Phase A discriminator. The variant-walk for payload-droppable check stays. 2 prefix matches retired (340 → 338); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/validate.rs`, `tests/lints.rs` (BUDGET 340 → 338).
 

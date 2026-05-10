@@ -1752,7 +1752,7 @@ pub(super) fn lower_method_call(
         ctx.func_state.expected_type = prev_expected;
 
         // For Vector.zip(other_vec), register tuple and result vector types
-        if method_name == "zip" && type_name.starts_with("Vector__") {
+        if method_name == "zip" && recv_is_array {
             let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             // Get the other vector's element type from the first explicit arg
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
@@ -1779,8 +1779,20 @@ pub(super) fn lower_method_call(
         // used to diverge (IR said Option[T], typechecker said Option[Ref[T]]).
         // Consuming methods (pop/remove) keep `Option__T` with a value payload.
         let fn_sig_ret = ctx.fn_sigs.get(&effective_name).map(|(_, ret)| *ret);
-        if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
-            && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
+        // Read typed `collection_kind` once (Phase A) and reuse the
+        // discriminator for every dispatch arm in this block. Vector/Deque/
+        // GorgetArray → Array; Dict → OrderedMap; HashMap/GorgetMap → Map;
+        // Set → OrderedSet; HashSet/GorgetSet → Set.
+        let recv_collection_kind = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.collection_kind);
+        let recv_is_array = recv_collection_kind == Some(crate::ir::types::CollectionKind::Array);
+        let recv_is_map = matches!(recv_collection_kind,
+            Some(crate::ir::types::CollectionKind::OrderedMap)
+            | Some(crate::ir::types::CollectionKind::Map));
+        let recv_is_set = matches!(recv_collection_kind,
+            Some(crate::ir::types::CollectionKind::OrderedSet)
+            | Some(crate::ir::types::CollectionKind::Set));
+        if matches!(method_name, "get" | "first" | "last" | "remove" | "pop") && recv_is_array
         {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let inner_type = resolve_inner_type(ctx, elem_type_name);
@@ -1802,9 +1814,7 @@ pub(super) fn lower_method_call(
         // Dict.get() uses value payload (not Ptr) because the GIR→LIR struct pipeline
         // doesn't yet propagate Ptr payload types to the C backend's Option wrapping.
         // dict[key] (IndexLoad) already returns Ptr for resource values via a separate path.
-        if method_name == "get"
-            && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
-        {
+        if method_name == "get" && recv_is_map {
             let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
             if let Some(rest) = type_name.strip_prefix(prefix) {
                 if let Some(pos) = rest.find("__") {
@@ -1827,9 +1837,7 @@ pub(super) fn lower_method_call(
             }
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
-            if matches!(method_name, "get" | "first" | "last" | "remove" | "pop")
-                && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
-            {
+            if matches!(method_name, "get" | "first" | "last" | "remove" | "pop") && recv_is_array {
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let _inner_type = resolve_inner_type(ctx, elem_type_name);
                 let is_borrowing = matches!(method_name, "get" | "first" | "last");
@@ -1839,9 +1847,7 @@ pub(super) fn lower_method_call(
                     format!("Option__{elem_type_name}")
                 };
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
-            } else if method_name == "get"
-                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
-            {
+            } else if method_name == "get" && recv_is_map {
                 // Dict/HashMap.get() returns Option[V]
                 let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                 if let Some(rest) = type_name.strip_prefix(prefix) {
@@ -1851,9 +1857,7 @@ pub(super) fn lower_method_call(
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }
-            } else if method_name == "remove"
-                && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__"))
-            {
+            } else if method_name == "remove" && recv_is_map {
                 // Dict/HashMap.remove(key) → Option[V !]
                 let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                 if let Some(rest) = type_name.strip_prefix(prefix) {
@@ -1863,9 +1867,7 @@ pub(super) fn lower_method_call(
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }
-            } else if method_name == "remove"
-                && (type_name.starts_with("Set__") || type_name.starts_with("HashSet__"))
-            {
+            } else if method_name == "remove" && recv_is_set {
                 BOOL_TYPE
             } else if is_sentinel_wrapped {
                 // Stdlib sentinel-to-Option wrapping for find/index_of
@@ -1873,7 +1875,7 @@ pub(super) fn lower_method_call(
             } else {
                 ret
             }
-        } else if method_name == "zip" && type_name.starts_with("Vector__") {
+        } else if method_name == "zip" && recv_is_array {
             // zip return type: look up the Vector__Tuple__A__B type we just registered
             let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
