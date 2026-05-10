@@ -31,14 +31,68 @@ const MANGLED_PREFIXES: &[&str] = &[
 /// known mangled-type prefix. These are the layering-discipline violations
 /// the ratchet locks against.
 fn count_name_prefix_sites() -> usize {
+    count_name_prefix_in_tree("src", "rs")
+}
+
+/// Walk `tests/fixtures/self_host_*/**/*.gg` and count the same pattern in
+/// self-host source. Phase A migrated self-host's classification consumers
+/// to read through `build_resource_metadata` (the single source of truth);
+/// this ratchet locks in those gains so a regression is caught at lint time.
+///
+/// See `docs/internals/self-host-resource-model.md` §3.3 step 4 (the
+/// "promote" step) and §6.1 (Tier E.1 lints ratchet).
+fn count_name_prefix_sites_self_host() -> usize {
     let alternation = MANGLED_PREFIXES.join("|");
     let pattern = regex::Regex::new(
         &format!(r#"starts_with\("({alternation})__"\)"#)
     ).unwrap();
-
     let mut count = 0;
-    visit("src", &mut |path| {
-        if path.extension().map_or(true, |e| e != "rs") {
+    let entries = match fs::read_dir("tests/fixtures") {
+        Ok(e) => e,
+        Err(_) => return 0,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("self_host_") {
+            continue;
+        }
+        // Walk the dir's own .gg files; skip symlinks so shared
+        // parser.gg / lexer.gg / ast.gg aren't double-counted across
+        // self_host_lowerer (symlinked into self_host_typechecker), etc.
+        let dir_entries = match fs::read_dir(&path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for de in dir_entries.flatten() {
+            let p = de.path();
+            if p.is_symlink() {
+                continue;
+            }
+            if p.extension().map_or(true, |e| e != "gg") {
+                continue;
+            }
+            let content = match fs::read_to_string(&p) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            count += pattern.find_iter(&content).count();
+        }
+    }
+    count
+}
+
+fn count_name_prefix_in_tree(root: &str, ext: &str) -> usize {
+    let alternation = MANGLED_PREFIXES.join("|");
+    let pattern = regex::Regex::new(
+        &format!(r#"starts_with\("({alternation})__"\)"#)
+    ).unwrap();
+    let mut count = 0;
+    visit(root, &mut |path| {
+        if path.extension().map_or(true, |e| e != ext) {
             return;
         }
         let content = match fs::read_to_string(path) {
@@ -94,7 +148,10 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 fn no_growth_in_name_prefix_routing() {
     /// Maximum allowed count of name-prefix routing sites in src/. Decrease
     /// when you migrate sites to typed metadata.
-    const BUDGET: usize = 304;
+    /// Bumped 304 → 305 (2026-05-10): Tier 2a Phase 3 FATAL promotion
+    /// (`082f26e9`) added a `starts_with("Task__")` predicate in the
+    /// validator's Result-fallback path — single-site, registrar-adjacent.
+    const BUDGET: usize = 305;
 
     let count = count_name_prefix_sites();
     assert!(
@@ -110,6 +167,55 @@ fn no_growth_in_name_prefix_routing() {
          grep -rEn 'starts_with(\"({}|...)__\")' src/ | grep -v target/\n\n\
          If the count went DOWN (great!), drop BUDGET in this file to lock in \
          the new floor.",
+        MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    );
+}
+
+/// Tier E.1 (per `docs/internals/self-host-resource-model.md` §6.1):
+/// the same ratchet applied to self-host's `.gg` source. Phase A migrated
+/// the classification consumers in `lir_lower.gg` and `lower.gg` to read
+/// through `build_resource_metadata` (the single source of truth); this
+/// test locks those gains in. Symlinked files (parser.gg, lexer.gg, ast.gg
+/// shared between self_host_lowerer and self_host_typechecker) are skipped
+/// so they aren't double-counted.
+///
+/// The remaining sites are intrinsic and load-bearing:
+///   - Inside `build_resource_metadata` itself (the prefix → metadata
+///     classifier — *the* place name-matching is allowed).
+///   - Inside Pass 1 dispatcher's typed match arms doing prefix-length
+///     slicing to extract `T` from `Vector__T` etc. (name parsing, not
+///     classification — the metadata doesn't carry parsed names).
+///   - `Option__` / `Result__` prelude variant detection (out of Phase A
+///     scope; tracked separately under prelude codegen).
+///   - Name-parsing helpers (`collection_element_type` and dict-literal
+///     hint extraction).
+///
+/// **If this fails**: a new `starts_with("Vector__"/...)` was added in
+/// self-host code outside `build_resource_metadata`. Either:
+///   1. Migrate it to read `build_resource_metadata(name)` / `resource_meta_for`.
+///   2. If it's necessary name parsing inside an already-migrated dispatcher
+///      arm, bump `BUDGET` deliberately with a comment.
+///
+/// Baseline 2026-05-10: 52 (after Phase A.1–A.4 + 12/N migrations).
+#[test]
+fn no_growth_in_self_host_name_prefix_routing() {
+    const BUDGET: usize = 52;
+
+    let count = count_name_prefix_sites_self_host();
+    assert!(
+        count <= BUDGET,
+        "Self-host name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
+         Phase A migrated the classification consumers in self-host's lir_lower.gg \
+         and lower.gg to read through `build_resource_metadata` (the single source \
+         of truth). Adding a new `starts_with(\"Vector__\"/\"Box__\"/...)` outside \
+         that function or its inner name-parsing dispatchers is a layering regression. \
+         Either:\n  \
+         1. Read the typed metadata: `match build_resource_metadata(name): case Some(rmeta): ...`\n  \
+         2. If it's a genuinely necessary name-parsing site (extracting T from Vector__T), \
+         add it to Pass 1 dispatcher's already-migrated arms.\n\n\
+         If the count went DOWN (great!), drop BUDGET in this file to lock the new floor.\n\n\
+         To find sites:\n  \
+         grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
         MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
     );
 }
