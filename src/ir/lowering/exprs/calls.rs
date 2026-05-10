@@ -426,15 +426,15 @@ pub(super) fn lower_call(
             let runtime_fn = if ctx.type_mapper.is_string_type(resolved) {
                 "gorget_str_codepoint_count"
             } else if ctx.type_registry.is_collection_type(resolved) {
-                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(resolved) {
-                    if n.starts_with("Dict__") || n.starts_with("HashMap__") || n == "GorgetMap" {
-                        "gorget_map_len"
-                    } else if n.starts_with("Set__") || n.starts_with("HashSet__") || n == "GorgetSet" {
-                        "gorget_set_len"
-                    } else {
-                        "gorget_array_len"
-                    }
-                } else { "gorget_array_len" }
+                // Read typed `collection_kind` (Phase A) — covers OrderedMap/Map
+                // (Dict/HashMap), OrderedSet/Set (Set/HashSet), and Array
+                // (default fall-through).
+                use crate::ir::types::CollectionKind;
+                match ctx.type_registry.collection_kind(resolved) {
+                    Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map) => "gorget_map_len",
+                    Some(CollectionKind::OrderedSet) | Some(CollectionKind::Set) => "gorget_set_len",
+                    _ => "gorget_array_len",
+                }
             } else {
                 // Check for user-defined Measurable.len() before falling back
                 if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(resolved) {
