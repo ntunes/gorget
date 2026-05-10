@@ -191,6 +191,63 @@ fn infer_func(
                         decisions.push((*dst, LocalOwnership::Owned));
                     }
                 }
+                // Tier 2a Phase 3 (Snag #28 follow-up): constructor
+                // instructions produce owned values by definition — the
+                // dst is a fresh aggregate built from the field/element
+                // operands. Without these decisions, downstream Inst::Assign
+                // sites consuming the aggregate (e.g.
+                // `Option[T] x = Some(...)`) see Untracked and trip the
+                // AssignIntoOwnedSlot validator. The aggregate's owned-
+                // ness is structural — not name-matched, not heuristic.
+                Instruction::EnumInit { dst, .. }
+                | Instruction::StructInit { dst, .. }
+                | Instruction::TupleInit { dst, .. } => {
+                    decisions.push((*dst, LocalOwnership::Owned));
+                }
+                // Tier 2a Phase 3: BinOp results on resource types are
+                // fresh by construction (e.g. `Vector[T] + Vector[T]`
+                // lowers to a concat producing a fresh array). Same for
+                // UnOp (unary negate / not — unlikely on resources but
+                // safe). `apply_decision` filters non-droppable dsts via
+                // its `needs_drop` check, so blanket tagging is sound.
+                // This catches the iterator default-method `acc = acc + x`
+                // shape in `sum`/`product` over `Vector[T]`-yielding
+                // iterators (WindowsIter, ChunksIter, etc).
+                Instruction::BinOp { dst, .. }
+                | Instruction::UnOp { dst, .. } => {
+                    decisions.push((*dst, LocalOwnership::Owned));
+                }
+                // Tier 2a Phase 3: `IndexLoad` with `ReadMode::Clone`
+                // returns a fresh clone of the element (the C runtime
+                // dispatches through the element's `__clone` fn). The
+                // `Borrow` mode is the zero-copy view path and is NOT
+                // tagged here. Catches the `Dict[K, V][k]` shape where
+                // the value is read by clone (default for resource Vs).
+                Instruction::IndexLoad { dst, read, .. } => {
+                    use crate::ir::instructions::ReadMode;
+                    if matches!(read, ReadMode::Clone) {
+                        decisions.push((*dst, LocalOwnership::Owned));
+                    }
+                }
+                // Tier 2a Phase 3: `Inst::Assign { dst, value: Constant::Str }`
+                // for a resource-typed dst materialises a fresh heap
+                // allocation at codegen (`String out = ""` → `_out = const ""`
+                // → C runtime allocates a fresh GorgetString). The dst owns
+                // its data immediately. Restricted to `Constant::Str` —
+                // other Constant variants either don't produce heap data
+                // (Bool/I*/U*/F*/Null/Unit/SizeOf/FuncRef/GlobalRef) or
+                // would be filtered by `apply_decision`'s `needs_drop` gate
+                // anyway; explicit narrowing makes the intent clear.
+                // Catches the empty-string-init pattern in iterator
+                // `join` default-method bodies and similar fresh-literal
+                // var-decls.
+                Instruction::Assign { dst, value, .. } if dst.projections.is_empty() => {
+                    if let crate::ir::instructions::Operand::Constant(
+                        crate::ir::instructions::Constant::Str(_)
+                    ) = value {
+                        decisions.push((dst.local, LocalOwnership::Owned));
+                    }
+                }
                 _ => {}
             }
         }

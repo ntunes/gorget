@@ -181,6 +181,14 @@ pub(super) fn lower_dict_literal(
                 if let Some(type_name) = ctx.type_registry.type_name(expected_type) {
                     let new_fn = format!("{type_name}__new");
                     let dict_local = builder.call_extern(&new_fn, vec![], expected_type);
+                    // Tier 2a Phase 3: tag the fresh dict as Owned so the
+                    // var_decl Move-mode picker sees a concrete state.
+                    // Without this, downstream Inst::Assign emits Move
+                    // mode but the source remains Untracked, which the
+                    // AssignIntoOwnedSlot validator flags. Mirrors
+                    // `lower_array_literal`'s `set_owned` at the
+                    // `gorget_array_new` call.
+                    ctx.set_owned(builder, dict_local);
                     return FunctionBuilder::copy(dict_local);
                 }
             }
@@ -209,6 +217,10 @@ pub(super) fn lower_dict_literal(
 
     // Create the dict
     let dict_local = builder.call_extern(&new_fn, vec![], dict_type);
+    // Tier 2a Phase 3: tag the fresh dict as Owned so var_decl /
+    // collection-element / call-arg consume sites see a concrete
+    // ownership state. Mirrors `lower_array_literal:61`.
+    ctx.set_owned(builder, dict_local);
 
     // Insert first pair
     let dict_ref = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
@@ -460,6 +472,9 @@ pub(super) fn lower_dict_comprehension(
         let put_fn = format!("{mangled}__put");
 
         let dict_local = builder.call_extern(&new_fn, vec![], dict_type);
+        // Tier 2a Phase 3: tag the fresh dict as Owned (mirrors
+        // lower_dict_literal + lower_set_comprehension at :543).
+        ctx.set_owned(builder, dict_local);
 
         // Create loop variable
         let loop_var = builder.add_local(I64_TYPE, Some(&var_name));

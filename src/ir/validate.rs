@@ -1916,6 +1916,20 @@ pub enum ConsumeSiteClass {
     /// `AbiKind::GorgetString` — same idea, ABI-routed through the
     /// extern decl's per-param annotation.
     CallExternByValueArg { callee: String, arg_index: usize },
+    /// `Inst::Assign { dst, value }` where `dst` is a resource-typed
+    /// owned-required slot (Owned/FreshOwned/Untracked ownership) and
+    /// `value` is a place operand. The motivating bug class is Snag #28
+    /// (commit `179202ed`): a Ptr-typed borrow source flows into a
+    /// resource-typed dst via `[Mv] _result = copy _ptr`, and the
+    /// codegen materialises that as a memcpy of the pointee struct
+    /// (data+cap+len+alloc) into the dst — both alias the same heap
+    /// data, double-drop at scope exit. Per the CoW spec table in
+    /// `AGENTS.md` *Ownership at Consuming Positions*, a borrow source
+    /// crossing into an owned destination requires a clone. This class
+    /// closes the gap left by the source-type-gated classes above:
+    /// they require source's TYPE to be resource (which Ptr<T> isn't),
+    /// missing exactly the Snag #28 shape.
+    AssignIntoOwnedSlot { dst_type: String },
 }
 
 /// A single consume-site finding. The Phase 1 sweep emits these as
@@ -1989,6 +2003,8 @@ impl std::fmt::Display for ConsumeSiteClass {
                 write!(f, "CallByValueArg({}, arg #{})", callee, arg_index),
             Self::CallExternByValueArg { callee, arg_index } =>
                 write!(f, "CallExternByValueArg({}, arg #{})", callee, arg_index),
+            Self::AssignIntoOwnedSlot { dst_type } =>
+                write!(f, "AssignIntoOwnedSlot(dst: {})", dst_type),
         }
     }
 }
@@ -2173,10 +2189,162 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                         }
                     }
                 }
+                Instruction::Assign { mode: _, dst, value } => {
+                    // Whole-local assigns only — projections (FieldStore-
+                    // like) are out of scope for this class.
+                    if !dst.projections.is_empty() { continue; }
+                    let dst_idx = dst.local.0 as usize;
+                    if dst_idx >= func.locals.len() { continue; }
+                    let dst_local = &func.locals[dst_idx];
+                    // Dst must be resource-typed (the slot owns heap data
+                    // that scope-exit drops will free). Non-resource dst
+                    // is trivially copyable.
+                    if !registry.needs_drop(dst_local.type_id) { continue; }
+                    // Dst must be an OWNED-required slot — i.e. one whose
+                    // ownership is `Owned` or `FreshOwned` post-assign,
+                    // meaning the lowering committed to drop-tracking it.
+                    // Snag #28's shape: a named result slot with `Owned`
+                    // ownership receiving a borrow source via an auto-
+                    // deref-and-memcpy. Excludes:
+                    //   * `Borrowed | View | SharedHeap`: alias slots
+                    //     (shape-preserving).
+                    //   * `Untracked`: transient temps (e.g. printf arg
+                    //     scratch, IndexLoad results) not drop-tracked
+                    //     at scope exit. The structural shape is the
+                    //     same as Owned, but runtime safety is preserved
+                    //     by the lack of drop registration. Flagging
+                    //     these is noise — they're not a CoW soundness
+                    //     issue today (though they're brittle: any
+                    //     downstream pass that promotes them to Owned
+                    //     would re-introduce the bug).
+                    //   * `MaybeOwned`: handled by conditional-drop
+                    //     discipline elsewhere; flagging Assign into it
+                    //     would duplicate that.
+                    use LocalOwnership::*;
+                    if !matches!(dst_local.ownership, Owned | FreshOwned) {
+                        continue;
+                    }
+                    // Trivial-copy types (Shared/Weak/Channel/Guard) are
+                    // bitwise-copyable at the GIR level — same skip as
+                    // validate_consume.
+                    if let Some(GirType::Named(name)) = registry.get(dst_local.type_id) {
+                        if let Some(td) = registry.get_type_def(name) {
+                            if td.metadata.copy_semantics == CopySemantics::Trivial {
+                                continue;
+                            }
+                            // Closure-env slots use lifetime-tied aliasing
+                            // (see StructInit case above for rationale).
+                            if td.metadata.is_closure_env {
+                                continue;
+                            }
+                        }
+                    }
+                    let dst_type = registry.type_name(dst_local.type_id)
+                        .unwrap_or_else(|| format!("ty{}", dst_local.type_id.0));
+                    let class = ConsumeSiteClass::AssignIntoOwnedSlot { dst_type };
+                    if let Some(w) = validate_assign_consume(
+                        func, registry, liveness, clone_fns, value, &bb.instructions, b, i,
+                        class,
+                    ) {
+                        emit(w);
+                    }
+                }
                 _ => {}
             }
         }
     }
+}
+
+/// Sibling of [`validate_consume`] specialised for the
+/// `AssignIntoOwnedSlot` class (Snag #28). The two helpers differ on
+/// **which side decides resource-ness**:
+///
+/// * [`validate_consume`] gates on the SOURCE type — needs_drop(source).
+///   Correct for call args / inits where the consumer takes ownership of
+///   the value passed in: if the source can't be dropped, the consume is
+///   trivially sound regardless of source ownership.
+/// * `validate_assign_consume` gates on the DST type at the caller.
+///   Correct for plain Assigns where the codegen may auto-deref a
+///   Ptr<T> source into a T dst (a memcpy of the pointee struct). The
+///   source's TYPE may be Ptr<T> (non-droppable) but its OWNERSHIP is
+///   Borrowed/View — the existing source-gated check would skip it.
+///
+/// Source-side ownership rules are identical to [`validate_consume`]:
+/// Borrowed/View → must be preceded by clone; Owned-live → invalid;
+/// Untracked → invalid (lowering didn't decide).
+fn validate_assign_consume(
+    func: &Function,
+    registry: &TypeRegistry,
+    liveness: &Liveness,
+    clone_fns: &rustc_hash::FxHashSet<String>,
+    operand: &Operand,
+    insts: &[Instruction],
+    block: usize,
+    inst_index: usize,
+    class: ConsumeSiteClass,
+) -> Option<ConsumeSiteWarning> {
+    let place = match operand {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(_) => return None,
+    };
+    if !place.projections.is_empty() { return None; }
+    let local_idx = place.local.0 as usize;
+    if local_idx >= func.locals.len() { return None; }
+    let local = &func.locals[local_idx];
+
+    // Skip Trivial-copy source types — same rationale as validate_consume.
+    if let Some(GirType::Named(name)) = registry.get(local.type_id) {
+        if let Some(td) = registry.get_type_def(name) {
+            if td.metadata.copy_semantics == CopySemantics::Trivial {
+                return None;
+            }
+        }
+    }
+
+    let live_after = liveness.is_live_after(place.local, BlockId(block as u32), inst_index);
+    let is_move = matches!(operand, Operand::Move(_));
+
+    use LocalOwnership::*;
+    let violation = match (&local.ownership, live_after, is_move) {
+        // VALID — Owned + dead source, classic transfer.
+        (Owned | FreshOwned | SharedHeap { .. }, false, _) => return None,
+
+        // INVALID — Owned but live: source still in use after assign.
+        (Owned, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+        (FreshOwned, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+        (SharedHeap { .. }, true, _) => ConsumeSiteViolation::OwnedLiveSourceConsumed,
+
+        (Borrowed { .. } | View { .. }, _, _) => {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
+                return None;
+            }
+            ConsumeSiteViolation::BorrowedSourceConsumed
+        }
+        (MaybeOwned, _, _) => {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
+                return None;
+            }
+            ConsumeSiteViolation::MaybeOwnedSourceConsumed
+        }
+        (Untracked, _, _) => {
+            if preceded_by_clone(insts, inst_index, place.local, clone_fns) {
+                return None;
+            }
+            ConsumeSiteViolation::UntrackedSourceConsumed
+        }
+    };
+
+    let source_type_name = registry.type_name(local.type_id)
+        .unwrap_or_else(|| format!("ty{}", local.type_id.0));
+    Some(ConsumeSiteWarning {
+        function: func.name.clone(),
+        block: BlockId(block as u32),
+        inst_index,
+        class,
+        source_local: place.local,
+        source_type_name,
+        violation,
+    })
 }
 
 /// The unified consume-site rule. Returns `Some(warning)` when the

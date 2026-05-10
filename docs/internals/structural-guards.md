@@ -153,7 +153,19 @@ Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `sr
 
 #### 2a. CoW consume-site discipline *(deeper class than #1a)*
 
-**Invariant.** At every consuming position (push / put / insert / send / `v[i] = x` / enum-init / struct-init / Box.new / function arg with `Ownership::Move`), the IR mode of the source matches its typed `LocalOwnership` state per the rules in `AGENTS.md`'s *Ownership at Consuming Positions*:
+**Phase 1 + 2A/B/C/E SHIPPED 2026-05-08.** Validator + non-fatal env-gate (`7ab736c0`), writer-site tagging (`81014df4`/`d0c2f2f6`/`6851c877`/`26145106`), and three migration commits (`e1214312`) drove violations for Calls/Inits/CollectionMutators/BoxNew to zero across all 1068 fixtures. Validator promoted to fatal (`9cd32876`). Phase 2E (`10abfbef`/`6242fc0a`) replaced `preceded_by_clone`'s name-list with typed `RuntimeFn::returns_fresh` + `clone_fn_names_set`. See DONE.md for the full chain.
+
+**Phase 3 IN PROGRESS 2026-05-10** (validator extension + tagging migration shipped, residual real-bug migration deferred). Snag #28's match-arm-result borrow-clone bug exposed a gap: the existing validator covers consume-site SHAPES (calls, inits, runtime mutators) but not plain `Inst::Assign` whose dst is an owned-required slot. The Snag #28 shape — `[Mv] _result = copy _ptr` materialising as memcpy of a borrowed pointee struct — passed silently. New `ConsumeSiteClass::AssignIntoOwnedSlot` (commit `2846baf4`) walks `Inst::Assign` and gates on dst-type resource-ness (the existing `validate_consume` gates on source-type, which Ptr<T> sources don't satisfy). Non-fatal pending sweep + migration.
+
+Phase 3 progress through 2026-05-10: **11,129 → 790 violations (-93%)** across 1073 fixtures, via four commits extending `tag_ownership::infer_fresh_owned` and one literal-tagging fix:
+- `2846baf4` — validator + non-fatal env-gate.
+- `2e8a38f7` — validator dst-filter narrowed to Owned/FreshOwned only; EnumInit/StructInit/TupleInit dst-tagging; dict-literal `set_owned`. 11,129 → 3,052.
+- `88c92eca` — BinOp/UnOp + `Constant::Str` dst-tagging. 3,052 → 1,639.
+- `79512b46` — `IndexLoad` ReadMode::Clone dst-tagging. 1,639 → 790.
+
+Residual 790 violations are dominantly real CoW boundary issues (412 borrowed-source — Snag #28 class proper; 303 owned-but-live; 75 untracked from minor producer patterns) that need actual migration via clone gates, not tagging. See `TODO.md` "Tier 2a Phase 3" for the per-class burn-down plan.
+
+**Invariant.** At every consuming position (push / put / insert / send / `v[i] = x` / enum-init / struct-init / Box.new / function arg with `Ownership::Move` / **plain `Inst::Assign` into a resource-typed Owned/FreshOwned slot**), the IR mode of the source matches its typed `LocalOwnership` state per the rules in `AGENTS.md`'s *Ownership at Consuming Positions*:
 
 | Source state | Required IR shape |
 |--------------|-------------------|
@@ -161,16 +173,17 @@ Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `sr
 | Borrow OR owned but live past this call | Clone (deep copy) |
 | Static literal | Runtime `*_materialize` |
 
-**Validator sketch.** For each `Inst::Call` / `Inst::CallExtern` / `Inst::EnumInit` / `Inst::StructInit` / push / put / insert / send / index-store, check the source operand's `LocalOwnership` against the IR mode. Mismatch is a violation.
+**Validator sketch.** For each `Inst::Call` / `Inst::CallExtern` / `Inst::EnumInit` / `Inst::StructInit` / push / put / insert / send / index-store / **`Inst::Assign`** (Phase 3), check the source operand's `LocalOwnership` against the IR mode. Mismatch is a violation. The two helpers `validate_consume` (source-type-gated) and `validate_assign_consume` (dst-type-gated) split the resource-ness check axis appropriately for each consume shape.
 
-**Why it matters.** This is the *deepest* layer of the snag #24 class. Today the IR emits `enum_init Node::VarDecl { copy _3 }` even when `_3 = decls` is owned and live past the call (read at scope exit). The "owned but live → clone" rule isn't enforced at the enum-constructor consume site. The skip in `recursive_drop_structs` was masking this; once drops fire correctly, the aliasing produces use-after-free.
+**Why it matters.** This is the *deepest* layer of the snag #24 class. Today the IR emits `enum_init Node::VarDecl { copy _3 }` even when `_3 = decls` is owned and live past the call (read at scope exit). The "owned but live → clone" rule isn't enforced at the enum-constructor consume site. The skip in `recursive_drop_structs` was masking this; once drops fire correctly, the aliasing produces use-after-free. Snag #28 is the same bug shape at a plain `Inst::Assign` boundary — Phase 3 closes the validator gap and is driving the remaining 3,052 violations to zero.
 
-**Burn-down.**
-1. Validator + gate. Initial sweep likely produces the largest migration of any Tier 1/2 item.
-2. Migrate consume sites one at a time (push first, then put, then enum-init, etc.) — the migration framework handles this.
-3. Promote.
+**Burn-down (Phase 3 remaining).**
+1. ✅ Validator + non-fatal gate (commit `2846baf4`).
+2. ✅ Constructor dst-tagging in inference pass + dict-literal `set_owned` + filter narrowing (commit `2e8a38f7`).
+3. Migrate remaining 3,052 violations: GorgetString (967 — mostly Borrowed-source / aliased shape), Vector__int64_t (412 — iterator default-method `acc + x` shape), Column (272 — dataframe), Borrowed-source (412 total — Snag #28 class proper, requires per-site clone gates), owned-but-live (303 — surviving-use cases needing clone-at-boundary).
+4. Promote AssignIntoOwnedSlot to fatal (fold into `validate_consume_sites`'s panic block at `src/ir/lowering/mod.rs:1789`).
 
-**Estimate.** 5-10 sessions. Worth the investment; this is the load-bearing invariant for the entire CoW system.
+**Estimate.** Phase 1/2 was ~6 sessions; Phase 3 likely 3-5 sessions for the remaining migration.
 
 #### 2b. Match-scrutinee discipline
 

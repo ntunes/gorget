@@ -6,6 +6,33 @@
 
 - **Cross-module global initialiser does NOT execute for stdlib-imported `static`/`public` declarations.** `src/ir/lowering/mod.rs:1196` skips StaticDecls with zero-length spans (`decl.span.start == decl.span.end`) — the dummy-span shape produced when stdlib statics enter via the import path. As a result, `lib/std/math.gg`'s `public float INFINITY = _math_infinity()` never runs its initialiser; the underlying global is left as `__lir_g0 = {0}`. Today this is masked by the IR-lowering hardcoding of `INFINITY`/`NAN` in `module_constants` (kept as a holdout when the `PI`/`E`/`TAU` removal shipped). Fix: stdlib import-side statics should produce real (non-dummy) spans OR the skip predicate should not gate on span shape. Once the global-init bug is fixed, the `INFINITY`/`NAN` hardcoding in `src/ir/lowering/mod.rs` (the residual auto-injection) drops out — `from std.math import INFINITY, NAN` becomes the single source of truth, completing the Layering rule 3 cleanup. [added: 2026-05-10, surfaced when removing the larger PI/E/TAU hardcoding for Snag #29 follow-up #1]
 
+### Tier 2a Phase 3 — `AssignIntoOwnedSlot` consume-site migration (in progress 2026-05-10)
+
+Snag #28's match-arm-result borrow-clone fix (commit `179202ed`) was a per-site patch for what `docs/internals/structural-guards.md` Tier 2a calls "the load-bearing invariant for the entire CoW system". The existing fatal consume-site validator covered Calls/Inits/CollectionMutators but **not plain `Inst::Assign`** — exactly where Snag #28's bug shape lived. Validator extended this session; migration ongoing.
+
+**Status update (sweep9, 2026-05-10):** initial sweep was 11,129 violations; current sweep is **790 (-93%)** after five inference-pass extensions and one literal-tagging fix. Validator non-fatal pending migration of the residual 790 (which are dominantly real CoW boundary bugs, not tagging gaps).
+
+**Current breakdown (sweep9, 1073 fixtures):**
+- `untracked source consumed`: 75 (9.5%) — small residual from Token/Expr/Type/Pattern construction at Lexer/Parser level
+- `borrowed source consumed`: 412 (52.2%) ← Snag #28 class proper
+- `owned-but-live source consumed`: 303 (38.4%)
+- Top source types: `Column` (272 — dataframe owned-live), `GorgetString` (22), `XmlNode` (12), small anonymous types (~80 cumulative).
+- Top functions: `xtd__http___request` (144 — borrowed-from-param), `MultiGroupBy__agg`/`GroupBy__agg` (136 each — Column owned-live), `xtd__p2p___p2p_poll_socket` (104), `xtd__p2p___p2p_hole_punch` (52), `main` (44 cumulative), `xtd__http___parse_url` (36), `std__fmt___pad_right`/`pad_left`/`center` (12 each — likely shared shape).
+
+**Burn-down plan (2-3 sessions for residual):**
+1. ✅ Validator + non-fatal gate.
+2. ✅ Constructor dst-tagging in inference pass + dict-literal `set_owned` + filter narrowing. 11,129 → 3,052.
+3. ✅ BinOp/UnOp + Constant::Str dst-tagging. 3,052 → 1,639.
+4. ✅ IndexLoad-Clone dst-tagging. 1,639 → 790.
+5. **Borrowed source migration (412 — Snag #28 class proper)** — per-site clone gates via `ensure_owned_at_boundary` or a sibling helper. Snag #28's `assign_match_arm_to_result` is the template. Top sites: `xtd__http___request` (144), `xtd__p2p___p2p_poll_socket` (104), `xtd__p2p___p2p_hole_punch` (52). Pattern: `String http_cur_url = http_url` where the param flows in as a borrow → var-decl creates a Ptr alias → downstream consumer auto-derefs into a value-typed slot. Fix: at the var-decl boundary, clone instead of CoW-aliasing when the source is Borrowed.
+6. **Owned-live migration (303)** — source is still live past the assign. Dominant: `MultiGroupBy__agg`/`GroupBy__agg` Column pattern (272 across 2 fns — likely identical shape, single fix). Also `Column` field assignments in dataframe code.
+7. **Untracked residual (75)** — small Token/Expr/Type/Pattern construction patterns at Parser/Lexer. Likely a few `mk_expr` / `mk_type` helpers needing tagging at struct construction.
+8. **Promote** — Once at zero, fold `AssignIntoOwnedSlot` into the unconditional fatal block at `src/ir/lowering/mod.rs:1789-1815`.
+
+**Investigation tools.** Re-run sweep: `SWEEP=/tmp/sweep-$RANDOM.log; GG_VALIDATE_CONSUME_SITES=$SWEEP cargo test --test integration -- --test-threads=4`. Per-class breakdown: `grep "class+viol AssignIntoOwnedSlot" $SWEEP | awk -F= '{c[$1]+=$2} END {for(k in c) print k, "=", c[k]}'`. Per-source-type: `grep "class+type AssignIntoOwnedSlot" $SWEEP | sed 's/.*class+type AssignIntoOwnedSlot | //' | awk -F= '{gsub(/^ +| +$/, "", $1); c[$1]+=$2} END {for(k in c) printf "%-50s %d\n", k, c[k]}' | sort -k2 -n -r | head -15`.
+
+Files: `src/ir/validate.rs` (validator), `src/ir/lowering/mod.rs` (split fatal/non-fatal), `src/ir/tag_ownership.rs` (inference), `src/ir/lowering/exprs/collections.rs` (literal tagging). [added: 2026-05-10, updated: 2026-05-10]
+
 ### Self-host showcase blockers
 
 These are Gorget bugs that surface as workarounds in self-host code. Per `docs/internals/self-host-resource-model.md` §0, every workaround in self-host *that exists because Gorget can't express the elegant shape today* is a goal regression: self-host is the demonstration of idiomatic Gorget, so a gap that forces it to be ugly is a blocker, not deferable. Each entry below names the workaround currently in tree, the Gorget-side fix needed, and the self-host re-implementation that follows. Closes when all three have shipped.

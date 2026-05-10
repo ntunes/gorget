@@ -1729,14 +1729,26 @@ pub fn lower_module(
     // See `docs/internals/structural-guards.md` Tier 2a for the full spec.
     {
         let warnings = crate::ir::validate::validate_consume_sites(&module);
-        if !warnings.is_empty() {
+        // Split into fatal (Phase 2A/2B/2C — promoted classes at zero) and
+        // non-fatal (Snag #28's AssignIntoOwnedSlot — env-logged only,
+        // pending sweep + migration). The split lets us extend the
+        // validator with a new class without breaking the build until
+        // its sweep is done.
+        let is_assign_class = |c: &crate::ir::validate::ConsumeSiteClass| matches!(
+            c, crate::ir::validate::ConsumeSiteClass::AssignIntoOwnedSlot { .. }
+        );
+        let (fatal_warnings, assign_warnings): (Vec<_>, Vec<_>) = warnings
+            .iter()
+            .cloned()
+            .partition(|w| !is_assign_class(&w.class));
+        if !fatal_warnings.is_empty() || !assign_warnings.is_empty() {
             use std::io::Write;
             use rustc_hash::FxHashMap;
             let mut by_class: FxHashMap<String, usize> = FxHashMap::default();
             let mut by_class_violation: FxHashMap<(String, String), usize> = FxHashMap::default();
             let mut by_class_type: FxHashMap<(String, String), usize> = FxHashMap::default();
             let mut by_function: FxHashMap<String, usize> = FxHashMap::default();
-            for w in &warnings {
+            for w in fatal_warnings.iter().chain(assign_warnings.iter()) {
                 let class_key = match &w.class {
                     crate::ir::validate::ConsumeSiteClass::CollectionMutator { .. }
                         => "CollectionMutator".to_string(),
@@ -1750,6 +1762,8 @@ pub fn lower_module(
                         => "CallByValueArg".to_string(),
                     crate::ir::validate::ConsumeSiteClass::CallExternByValueArg { .. }
                         => "CallExternByValueArg".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::AssignIntoOwnedSlot { .. }
+                        => "AssignIntoOwnedSlot".to_string(),
                 };
                 *by_class.entry(class_key.clone()).or_insert(0) += 1;
                 *by_class_violation
@@ -1796,17 +1810,20 @@ pub fn lower_module(
                     }
                 }
             }
-            // Always fatal: format the first violation for the panic message.
-            let first = &warnings[0];
-            panic!(
-                "Tier 2a consume-site violation: {} violation(s) in module '{}'. \
-                 First: fn @{} bb{} i{} — {} — {}. \
-                 Run with GG_VALIDATE_CONSUME_SITES=/tmp/violations.log for full report.",
-                warnings.len(),
-                module.source_filename.as_deref().unwrap_or("<unknown>"),
-                first.function, first.block.0, first.inst_index,
-                first.class, first.violation,
-            );
+            // Fatal classes: panic on first violation. AssignIntoOwnedSlot
+            // is held back as non-fatal pending sweep + migration (Snag #28
+            // class). Once that class hits zero, fold it into this branch.
+            if let Some(first) = fatal_warnings.first() {
+                panic!(
+                    "Tier 2a consume-site violation: {} violation(s) in module '{}'. \
+                     First: fn @{} bb{} i{} — {} — {}. \
+                     Run with GG_VALIDATE_CONSUME_SITES=/tmp/violations.log for full report.",
+                    fatal_warnings.len(),
+                    module.source_filename.as_deref().unwrap_or("<unknown>"),
+                    first.function, first.block.0, first.inst_index,
+                    first.class, first.violation,
+                );
+            }
         }
     }
 
