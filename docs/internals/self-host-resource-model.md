@@ -255,9 +255,15 @@ calls + comments. The populate pass becomes the sole source of truth.
 
 ---
 
-## 4. Phase D — Local-state consolidation (self-host)
+## 4. Phase D — Local-state consolidation (self-host)  *(SHIPPED 2026-05-10)*
 
 > **Rust counterpart:** `unified-resource-model.md` §6.
+>
+> **Status:** Steps 1–3 shipped in commits `d37bf72e`, `daa01a64`, `af687f3d`.
+> Phase D is complete; step 4 (validator consumption) is Phase C work.
+> No Gorget gaps surfaced — the enum-field-on-struct codegen and
+> widely-matched-enum-variant additions both worked first try, so the
+> "expected workarounds" listed in §4.4 weren't needed.
 
 ### 4.1 The starting state
 
@@ -295,10 +301,12 @@ struct GirLocal:
 
 ### 4.3 Migration plan
 
-1. Extend `GirLocal` with the new fields, defaulting `ownership = Owned`. Compile-clean baseline.
-2. Walk `lower.gg`'s emit sites and populate `ownership` correctly at every `add_local`. Param locals → `Param`. Locals bound to `.get(i)` results → `Borrowed` with `borrow_origin = CollectionElement`. Etc.
-3. Walk read sites and tag operands with the right mode. `OpCopy` only for trivial types; resource reads must be `OpMove`, `OpClone`, or `OpBorrow`.
+1. ✅ Extend `GirLocal` with the new fields, defaulting `ownership = Owned`. Compile-clean baseline. *(commit `d37bf72e`)*
+2. ✅ Walk `lower.gg`'s emit sites and populate `ownership` correctly at every `add_local`. Param locals → `LoParam` (2 sites). EMethodCall destinations for collection-getter methods (`.get / .pop / .first / .last / .remove / .safe_get` with collection receivers detected via `build_resource_metadata`) → `LoBorrowed/BoCollectionElement`. EFieldAccess result → `LoBorrowed/BoField`. *(commit `daa01a64`)*
+3. ✅ Walk read sites and tag operands with the right mode. Added `OpClone(int)` and `OpBorrow(int)` variants; explicit `.clone()` emits `OpClone(recv)`. Six match sites updated across `format_gir.gg` + `lir_lower.gg`. *(commit `af687f3d`)*
 4. Phase C's validators (§5) read these fields — the migration is what populates them.
+
+**What's left:** further read-site tagging (assignments of borrowed locals, identifier reads with last-use-move analysis) is incremental work that lights up as Phase C validators are written and start flagging violations. The foundation is in place; the validators drive what gets tagged next.
 
 ### 4.4 Gorget gaps to expect
 
