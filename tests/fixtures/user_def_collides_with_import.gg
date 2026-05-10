@@ -1,0 +1,12 @@
+# Companion to import_collides_with_user_def.gg — the reverse order
+# (user def first, then `from X import Y`) was already an error before
+# Snag #29 follow-up #2 shipped. This fixture pins the existing
+# behaviour so the symmetric error path stays symmetric.
+
+enum PI:
+    A
+
+from std.math import PI
+
+void main():
+    print("ok")

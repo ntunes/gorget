@@ -1,0 +1,18 @@
+# Snag #29 follow-up #2 regression: a user-written `from X import Y` that
+# collides with a same-named user definition in the same module is now an
+# error. Previously the user's definition silently shadowed the import,
+# matching the wrong-half of an asymmetric "first one loses" rule (the
+# reverse order — user def then import — already errored). The silent
+# shadow was the underlying mechanism behind Snag #29's wrong-codegen
+# failure mode for `enum E:` colliding with the `E` math constant.
+#
+# Both orders now fail the same way; this fixture covers the
+# import-then-def order (the case that previously passed silently).
+
+from std.math import PI
+
+enum PI:
+    A
+
+void main():
+    print("ok")

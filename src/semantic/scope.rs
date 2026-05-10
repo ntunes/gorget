@@ -220,19 +220,29 @@ impl ScopeTable {
         };
         for existing_opt in existing_ids.iter().copied().flatten() {
             let existing = &self.definitions[existing_opt.0 as usize];
-            // Allow a real definition to replace an import placeholder,
-            // a real import to replace a built-in placeholder (dummy span),
-            // a user definition to shadow a built-in trait (dummy span),
-            // or a user-defined variant to shadow a built-in prelude variant (dummy span).
-            let can_replace = (existing.kind == DefKind::Import && kind != DefKind::Import)
-                || (existing.kind == DefKind::Import && existing.span == Span::dummy())
+            // Replacement is allowed only against placeholders, never against
+            // user-written declarations:
+            //  - a dummy-span Import (built-in placeholder for Vector/Box/etc.,
+            //    or a prelude entry) can be replaced by anything;
+            //  - a dummy-span Trait or Variant (prelude placeholder) can be
+            //    shadowed by a user definition of the matching kind;
+            //  - an `import` can shadow any dummy-span prelude entry — the user
+            //    wrote `from X import Y` because they want the imported Y, not
+            //    the prelude placeholder.
+            //
+            // Snag #29 follow-up #2 (2026-05-10): the historical clause
+            // `(existing.kind == Import && kind != Import)` allowed a real
+            // user-written import to be silently replaced by a same-named user
+            // definition (`from std.math import PI; enum PI:` … and `PI` no
+            // longer pointed at the import). The reverse order — user def then
+            // import — already errored, so the asymmetric "first one loses"
+            // behaviour silently shadowed the import and produced wrong
+            // resolution at use sites. Now both orders error consistently:
+            // the user must rename one or remove one. Dummy-span built-in
+            // imports remain replaceable via clause 1.
+            let can_replace = (existing.kind == DefKind::Import && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Trait && existing.span == Span::dummy())
                 || (existing.kind == DefKind::Variant && existing.span == Span::dummy() && kind == DefKind::Variant)
-                // An Import can shadow any dummy-span prelude entry
-                // (prelude variant, built-in trait, etc.). The user
-                // wrote `from X import Y` because they want the
-                // imported Y — not the prelude placeholder with the
-                // same name.
                 || (kind == DefKind::Import && existing.span == Span::dummy());
             if !can_replace {
                 let original_span = existing.span;
