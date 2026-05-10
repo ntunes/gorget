@@ -190,6 +190,10 @@ struct GirResourceMetadata:
     CollectionKind collection_kind
     BoxKind box_kind
     bool opaque_handle              # Mutex / Channel / Thread / ...
+    Option[String] method_prefix    # C method-prefix for opaque/guard families
+                                    # ("gorget_mutex", "gorget_channel", ...)
+                                    # — None for collections that route through
+                                    # runtime_name (GorgetArray etc.).
 
 # Module-level static with a runtime-call initializer (lib/std/io.gg's
 # `public static File stdout = _stdout_handle()` etc.).
