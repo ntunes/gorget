@@ -477,27 +477,27 @@ String enum_variant_parent(String name, GirModule &gmod):
     return ""
 
 bool is_type_constructor(String name):
-    if name.starts_with("Vector__") or name.starts_with("Deque__"):
-        return true
-    if name.starts_with("Dict__") or name.starts_with("HashMap__"):
-        return true
-    if name.starts_with("Set__") or name.starts_with("HashSet__"):
-        return true
-    if name.starts_with("Channel__") or name.starts_with("Shared__"):
-        return true
-    if name.starts_with("Mutex__") or name.starts_with("RWLock__"):
-        return true
-    # Primitive type-constructor calls (e.g. String("x"), Int(1)) are coercions,
-    # not user struct instantiation — do not register as type constructors.
+    # Phase A typed read: parameterised resource families with the
+    # `T(args)` user-code constructor shape (Vector__T, Dict__K__V,
+    # Mutex__T, …) carry `is_typed_constructor=true` in their
+    # metadata. Built-in singletons / factory-shape opaques /
+    # Box / Heap / Atomic / etc. carry `false`.
+    match build_resource_metadata(name):
+        case Some(rmeta):
+            if rmeta.is_typed_constructor:
+                return true
+            return false
+        case None:
+            pass
+    # Primitive type-constructor calls (String("x"), Int(1)) and other
+    # bare names — coercions or runtime-helper construction, not
+    # user struct instantiation. build_resource_metadata returns None
+    # for the user-struct-name case, so we drop here.
     if name == "String" or name == "Int" or name == "Float" or name == "Bool":
         return false
-    if name == "GorgetString" or name == "Str" or name == "Char":
+    if name == "Char":
         return false
-    # Runtime-provided generic wrapper constructors — bare form maps to
-    # runtime fns (gorget_box_new, gorget_rc_new, etc.), not user structs.
-    if name == "Box" or name == "Rc" or name == "Arc" or name == "Weak":
-        return false
-    if name == "Shared" or name == "Mutex" or name == "RWLock":
+    if name == "Rc" or name == "Arc":
         return false
     if name == "Channel" or name == "Deque" or name == "Vector":
         return false
@@ -505,7 +505,8 @@ bool is_type_constructor(String name):
         return false
     if name == "Option" or name == "Result":
         return false
-    # Also check for user-defined struct names (capitalized, no __)
+    # User-defined struct names (capitalised, no __ suffix). The
+    # metadata path returned None for these, so they fall through here.
     if name.len() > 0:
         String first = name.slice(0, 1)
         if first >= "A" and first <= "Z" and not name.contains("__"):
