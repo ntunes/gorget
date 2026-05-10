@@ -2080,10 +2080,18 @@ pub(super) fn lower_method_call(
         // Option-returning Vector methods where the C runtime returns void*.
         // Generate null-check + Option.Some/None construction at GIR level so both
         // C and LLVM backends see truthful IR (extern returns Ptr, Option is explicit).
+        // Read typed `collection_kind` (recv must be an Array) and
+        // `enum_category` (return must be an Option) — Phase A typed
+        // dispatch instead of name-prefix probes.
+        let recv_is_array = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.collection_kind)
+            == Some(crate::ir::types::CollectionKind::Array);
+        let ret_is_option = ctx.type_registry.enum_category(ret_type)
+            == Some(crate::ir::types::EnumCategory::Option);
         let is_option_void_ptr_vector = matches!(method_name, "get" | "first" | "last" | "pop" | "remove")
-            && (type_name.starts_with("Vector__") || type_name == "GorgetArray")
+            && recv_is_array
             && ret_type != UNIT_TYPE
-            && ctx.type_name_for_id(ret_type).map_or(false, |n| n.starts_with("Option__"));
+            && ret_is_option;
 
         let result = if is_option_void_ptr_vector {
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
@@ -2262,8 +2270,10 @@ pub(super) fn lower_method_call(
         // MoveZero transfers ownership to the returned value.
         if !has_consuming_self {
             if let Some(recv_local) = recv_local_for_move_zero {
-                let is_option_result = type_name.starts_with("Option__")
-                    || type_name.starts_with("Result__");
+                // Read typed `enum_category` (Phase A) — Option/Result detection.
+                let is_option_result = ctx.type_registry.get_type_def(&type_name)
+                    .and_then(|td| td.metadata.enum_category)
+                    .is_some();
                 let is_combinator = matches!(method_name,
                     "map" | "and_then" | "or_else" | "filter" | "unwrap_or_else"
                     | "flat_map" | "or" | "flatten" | "map_err");
@@ -2428,8 +2438,12 @@ fn try_lower_option_result_combinator(
     recv: Operand,
     args: &[Spanned<ast::CallArg>],
 ) -> Option<Operand> {
-    let is_option = type_name.starts_with("Option__");
-    let is_result = type_name.starts_with("Result__");
+    // Read typed `enum_category` (Phase A) — Option/Result discriminator.
+    use crate::ir::types::EnumCategory;
+    let cat = ctx.type_registry.get_type_def(type_name)
+        .and_then(|td| td.metadata.enum_category);
+    let is_option = cat == Some(EnumCategory::Option);
+    let is_result = cat == Some(EnumCategory::Result);
     if !is_option && !is_result { return None; }
     if args.is_empty() { return None; }
 
