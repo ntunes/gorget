@@ -136,25 +136,6 @@ String stmt_kind(Stmt s):
             return "SMatch"
     return "?unknown_stmt?"
 
-# In-place insertion sort for Vector[String]. Used to stabilize Dict
-# iteration order across stages (the self-host's Dict.keys() returns
-# keys in hash-positional order which differs between runs).
-void sort_strings_in_place_l(Vector[String] &v):
-    int n = v.len()
-    int i = 1
-    while i < n:
-        String key = v.get(i).unwrap().clone()
-        int j = i - 1
-        while j >= 0:
-            String jv = v.get(j).unwrap()
-            if jv > key:
-                v.set(j + 1, jv.clone())
-                j -= 1
-            else:
-                break
-        v.set(j + 1, key)
-        i += 1
-
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
     ctx.locals.push(GirLocal(type_id, name))
@@ -2583,20 +2564,6 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     # collection pointer.
     Vector[Operand] set_args = [OpMove(base), OpCopy(idx), OpCopy(val)]
     emit(&ctx, GICallExtern(-1, setter, set_args))
-
-# Local copy of `is_ptr_type` from lir_lower.gg — needed for the
-# match/field-write paths that determine argument-passing ABI.
-bool lower_is_ptr_type(int tid, GirModule &gmod):
-    if tid < 0 or tid >= gmod.type_table.len():
-        return false
-    GirType ty = gmod.type_table.get(tid).unwrap()
-    match ty:
-        case GtPtr(_):
-            return true
-        case GtMutPtr(_):
-            return true
-        else:
-            return false
 
 # Look up the parent enum name for a type. If `type_name` itself is an
 # enum (GirTypeInfo.is_enum), returns it. Otherwise returns "".

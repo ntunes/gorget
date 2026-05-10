@@ -13,7 +13,7 @@ from lir import LT_I8, LT_I16, LT_I32, LT_I64, LT_U8, LT_U16, LT_U32, LT_U64
 from lir import LT_F32, LT_F64, LT_BOOL, LT_PTR, LT_VOID
 from lir import LT_PTR_TO_BASE, LT_STRUCT_BASE
 from lir import lir_is_scalar, lir_is_aggregate, lir_is_ptr, lir_is_integer, lir_is_float
-from lir import lir_struct_id, lir_pointee_struct
+from lir import lir_struct_id
 from lir import OVF_TRAP, OVF_WRAP
 from lir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from lir import EK_NOT_ENUM, EK_OPTION, EK_RESULT, EK_GENERAL
@@ -692,83 +692,6 @@ bool is_std_header_fn(String name):
     return false
 
 # ── Box allocator helpers ──────────────────────────────────
-# Scan the module for `__gorget_box_alloc_TYPE(x)` calls and emit one
-# static inline helper per unique suffix. Mirrors src/backend/c_lir's
-# emit_runtime_helpers box_allocs loop.
-String emit_box_allocators(LirModule &m, Vector[String] &sn):
-    Dict[String, bool] seen = {}
-    String out = ""
-    int fi = 0
-    while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
-        int bi = 0
-        while bi < func.blocks.len():
-            LirBlock blk = func.blocks.get(bi).unwrap()
-            int ii = 0
-            while ii < blk.insts.len():
-                LirInst inst = blk.insts.get(ii).unwrap()
-                match inst:
-                    case ICallExtern(_, n, _):
-                        String alloc_name = ""
-                        if n.starts_with("__gorget_box_alloc_"):
-                            alloc_name = n
-                        elif m.type_runtime_map.contains(n) and m.type_runtime_map.get(n).unwrap_or("") == "Box":
-                            # Phase A — Box type detected via type_runtime_map "Box" category.
-                            alloc_name = "__gorget_box_alloc_" + n.slice(5, n.len())
-                        if alloc_name != "" and not seen.contains(alloc_name):
-                            seen.put(alloc_name, true)
-                            String suffix = alloc_name.slice(19, alloc_name.len())
-                            String c_ty = box_alloc_c_type(suffix)
-                            out = out + "static inline void* " + alloc_name + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
-                    else:
-                        pass
-                ii += 1
-            bi += 1
-        fi += 1
-    if out != "":
-        out = out + "\n"
-    return out
-
-# Scan an already-emitted body for `__gorget_box_alloc_<SUFFIX>(` patterns
-# and emit one static inline helper per unique suffix. Uses a simple scan
-# (String doesn't have index_of_from, so we slice+index_of per step).
-String emit_box_allocators_scan(String &body):
-    Dict[String, bool] seen = {}
-    String out = ""
-    String prefix = "__gorget_box_alloc_"
-    int plen = prefix.len()
-    int pos = 0
-    int blen = body.len()
-    while pos < blen:
-        String tail = body.slice(pos, blen)
-        Option[int] hit_opt = tail.index_of(prefix)
-        int hit = -1
-        match hit_opt:
-            case Some(h):
-                hit = h
-            case None:
-                pass
-        if hit < 0:
-            break
-        int start = pos + hit + plen
-        int end = start
-        while end < blen:
-            String ch = body.slice(end, end + 1)
-            if ch == "(":
-                break
-            end += 1
-        if end >= blen:
-            break
-        String suffix = body.slice(start, end)
-        if not seen.contains(suffix):
-            seen.put(suffix.clone(), true)
-            String c_ty = box_alloc_c_type(suffix)
-            out = out + "static inline void* " + prefix + suffix + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
-        pos = end + 1
-    if out != "":
-        out = out + "\n"
-    return out
-
 # LIR-based scanner for box allocators. Walks every ICallExtern and
 # ICall instruction across all functions, collecting unique Box__*
 # constructor names. The codegen rewrites `Box__T(x)` →
@@ -1946,13 +1869,6 @@ int find_struct_type(String name, LirModule &m):
     return LT_PTR
 
 # Infer the result type of an LIR instruction.
-int infer_inst_type(LirInst &inst, LirModule &m):
-    Dict[int, int] empty_types = {}
-    return infer_inst_type_with(&inst, &m, &empty_types)
-
-int infer_inst_type_with(LirInst &inst, LirModule &m, Dict[int, int] &val_types):
-    return infer_inst_type_with_ret(&inst, &m, &val_types, LT_VOID)
-
 int infer_inst_type_with_ret(LirInst &inst, LirModule &m, Dict[int, int] &val_types, int func_ret_ty):
     match inst:
         case ISlotLoad(_, _, ty):
@@ -3274,11 +3190,6 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
 
     # Fallback: unknown combinator, emit as regular call (will link-fail)
     return name + "(" + src + "); /* unknown combinator */"
-
-String emit_call_extern(int dst, String raw_name, Vector[int] &args,
-                        Vector[String] &sn, Dict[int, int] &val_types, LirModule &m):
-    # Forward to the extended helper with no function-return-type hint.
-    return emit_call_extern_with(dst, raw_name, &args, &sn, &val_types, &m, LT_VOID)
 
 String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                              Vector[String] &sn, Dict[int, int] &val_types, LirModule &m,

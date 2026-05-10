@@ -1499,22 +1499,6 @@ int lir_type_byte_size_in_mod(int ty, LirModule &m, int depth):
             return round_up_to(total, align_fb)
     return 8
 
-# Back-compat wrapper kept for any call site that lacks module access.
-int lir_type_byte_size(int ty):
-    if ty == LT_I8 or ty == LT_U8 or ty == LT_BOOL:
-        return 1
-    if ty == LT_I16 or ty == LT_U16:
-        return 2
-    if ty == LT_I32 or ty == LT_U32 or ty == LT_F32:
-        return 4
-    if ty == LT_I64 or ty == LT_U64 or ty == LT_F64:
-        return 8
-    if ty == LT_PTR:
-        return 8
-    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
-        return 8
-    return 8
-
 # Get the element size for a type name. Uses m.structs when available to
 # sum actual field sizes for user structs; falls back to pointer size when
 # the struct can't be resolved.
@@ -1553,24 +1537,6 @@ int type_elem_size_in_mod(String elem, Dict[String, int] &sr, LirModule &m):
         if rem != 0:
             total = total + (8 - rem)
         return total
-    return 8
-
-# Backwards-compatible wrapper — kept because some sites lack LirModule
-# access; prefer `type_elem_size_in_mod` wherever `m` is in scope.
-int type_elem_size(String elem, Dict[String, int] &sr):
-    if elem == "int64_t" or elem == "double":
-        return 8
-    elif elem == "int32_t" or elem == "float":
-        return 4
-    elif elem == "int16_t" or elem == "uint16_t":
-        return 2
-    elif elem == "int8_t" or elem == "uint8_t" or elem == "bool" or elem == "byte":
-        return 1
-    elif elem == "GorgetString" or elem == "Str":
-        return 32
-    int sid = sr_lookup(&sr, elem)
-    if sid >= 0:
-        return 8
     return 8
 
 # Get element size for a collection constructor using LirModule metadata.

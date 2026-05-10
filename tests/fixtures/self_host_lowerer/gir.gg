@@ -204,11 +204,6 @@ struct GirModule:
 bool static_contains(GirModule &gmod, String name):
     return gmod.statics.contains(name)
 
-String static_lookup_init(GirModule &gmod, String name):
-    if gmod.statics.contains(name):
-        return gmod.statics.get(name).unwrap().init_expr.clone()
-    return ""
-
 int static_lookup_type(GirModule &gmod, String name):
     if gmod.statics.contains(name):
         return gmod.statics.get(name).unwrap().type_id
@@ -216,11 +211,6 @@ int static_lookup_type(GirModule &gmod, String name):
 
 void static_put(GirModule &gmod, String name, String init_expr, int type_id):
     gmod.statics.put(name.clone(), GirStaticInfo(init_expr.clone(), type_id))
-
-# enum registry accessors.
-void register_enum(GirModule &gmod, String enum_name, Vector[String] variants):
-    if not gmod.enum_registry.contains(enum_name):
-        gmod.enum_registry.put(enum_name.clone(), variants)
 
 # Scan registered enums to find one that declares a given variant.
 # Mirrors Rust's `resolve_enum_variant` fallback used by the pattern

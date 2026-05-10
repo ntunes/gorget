@@ -52,50 +52,10 @@ bool lir_is_float(int ty):
 bool lir_is_ptr(int ty):
     return ty == LT_PTR or (ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE)
 
-int lir_pointee_struct(int ty):
-    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
-        return ty - LT_PTR_TO_BASE
-    return -1
-
 int lir_struct_id(int ty):
     if ty >= LT_STRUCT_BASE:
         return ty - LT_STRUCT_BASE
     return -1
-
-String lir_type_name(int ty):
-    if ty == LT_I8:
-        return "i8"
-    elif ty == LT_I16:
-        return "i16"
-    elif ty == LT_I32:
-        return "i32"
-    elif ty == LT_I64:
-        return "i64"
-    elif ty == LT_U8:
-        return "u8"
-    elif ty == LT_U16:
-        return "u16"
-    elif ty == LT_U32:
-        return "u32"
-    elif ty == LT_U64:
-        return "u64"
-    elif ty == LT_F32:
-        return "f32"
-    elif ty == LT_F64:
-        return "f64"
-    elif ty == LT_BOOL:
-        return "bool"
-    elif ty == LT_PTR:
-        return "ptr"
-    elif ty == LT_VOID:
-        return "void"
-    elif ty >= LT_STRUCT_BASE:
-        return "struct." + int_to_str(ty - LT_STRUCT_BASE)
-    elif ty >= LT_PTR_TO_BASE:
-        return "ptr." + int_to_str(ty - LT_PTR_TO_BASE)
-    return "?"
-
-from std.conv import int_to_str
 
 # ── Overflow semantics ──────────────────────────────────────────
 
