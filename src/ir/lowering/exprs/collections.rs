@@ -31,10 +31,10 @@ pub(super) fn lower_array_literal(
     let saved_expected = ctx.func_state.expected_type;
     let nonempty_expected_override = if !elems.is_empty() {
         if let Some(outer) = saved_expected {
-            let outer_is_vector = matches!(ctx.type_registry.get(outer),
-                Some(GirType::Named(n))
-                    if n.starts_with("Vector__") || n == "GorgetArray"
-                        || n.starts_with("Deque__"));
+            // Read typed `collection_kind` (Phase A) — Vector/Deque/GorgetArray
+            // all carry `Array` from the protocol registration.
+            let outer_is_vector = ctx.type_registry.collection_kind(outer)
+                == Some(crate::ir::types::CollectionKind::Array);
             if outer_is_vector {
                 Some(infer_collection_element_type(ctx, outer))
             } else { None }
@@ -169,10 +169,16 @@ pub(super) fn lower_dict_literal(
     pairs: &[(Spanned<Expr>, Spanned<Expr>)],
 ) -> Operand {
     if pairs.is_empty() {
-        // Use expected type from VarDecl context to determine dict type
+        // Use expected type from VarDecl context to determine dict type.
+        // Read typed `collection_kind` (Phase A) — Dict (OrderedMap) and
+        // HashMap (Map) both qualify; Set/HashSet/Vector don't have
+        // pair-element constructors.
         if let Some(expected_type) = ctx.func_state.expected_type {
-            if let Some(type_name) = ctx.type_registry.type_name(expected_type) {
-                if type_name.starts_with("Dict__") || type_name.starts_with("HashMap__") {
+            use crate::ir::types::CollectionKind;
+            let is_map = matches!(ctx.type_registry.collection_kind(expected_type),
+                Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map));
+            if is_map {
+                if let Some(type_name) = ctx.type_registry.type_name(expected_type) {
                     let new_fn = format!("{type_name}__new");
                     let dict_local = builder.call_extern(&new_fn, vec![], expected_type);
                     return FunctionBuilder::copy(dict_local);
