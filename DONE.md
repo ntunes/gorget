@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `auto_propagate` Result detection via typed `enum_category`.** Three sites in `src/ir/lowering/exprs/mod.rs::should_auto_propagate` and `maybe_auto_propagate` had `enum_category(...) == Some(EnumCategory::Result) || name.starts_with("Result__")` patterns. Removed dead `||` fallbacks and the now-orphaned `let type_name`/`let ret_name`/`let name = ctx.type_registry.type_name(...)` lines. Phase A invariant: every Result registration sets `enum_category`. 3 prefix matches retired (343 → 340); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/lowering/exprs/mod.rs`, `tests/lints.rs` (BUDGET 343 → 340).
+
 - [2026-05-10] **Layering audit — unwrap/expect/unwrap_or Option/Result detection via typed `enum_category`.** Two sites in `src/ir/lowering/exprs/methods.rs::lower_method_call`: (a) `:560-561` outer `is_option_or_result` predicate had a dead `n.starts_with("Option") || n.starts_with("Result")` fallback (Phase A invariant: every Option/Result registration sets `enum_category`); removed. (b) `:569-570` Option vs Result discrimination for inner-type extraction migrated from name prefix to typed `enum_category` discrimination. The downstream inner-name slicing (`Option__T` → T, `Result__Ok__Err` → Ok via suffix-strip) stays — that's the C-mangling boundary contract. 2 prefix matches retired (345 → 343); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 345 → 343).
 

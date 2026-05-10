@@ -2419,9 +2419,7 @@ fn extract_result_field_types(ctx: &LoweringContext, result_type: TypeId) -> (Ty
 /// 1. The operand type is `Result__*`, AND
 /// 2. The current function can propagate: has `throws` OR returns `Result`
 pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, type_id: TypeId) -> Option<TypeId> {
-    let type_name = ctx.type_registry.type_name(type_id)?;
-    let is_result = ctx.type_registry.enum_category(type_id) == Some(EnumCategory::Result)
-        || type_name.starts_with("Result__");
+    let is_result = ctx.type_registry.enum_category(type_id) == Some(EnumCategory::Result);
     if !is_result {
         return None;
     }
@@ -2430,9 +2428,7 @@ pub fn should_auto_propagate(ctx: &LoweringContext, builder: &FunctionBuilder, t
         return Some(type_id);
     }
     let ret_type = builder.locals[0].type_id;
-    let ret_name = ctx.type_registry.type_name(ret_type)?;
-    let ret_is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result)
-        || ret_name.starts_with("Result__");
+    let ret_is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result);
     if ret_is_result {
         return Some(type_id);
     }
@@ -2451,12 +2447,9 @@ pub fn maybe_auto_propagate(
 ) -> Operand {
     // If the destination expects a Result, don't unwrap
     if let Some(expected) = ctx.func_state.expected_type {
-        if let Some(name) = ctx.type_registry.type_name(expected) {
-            let is_result = ctx.type_registry.enum_category(expected) == Some(EnumCategory::Result)
-                || name.starts_with("Result__");
-            if is_result {
-                return operand;
-            }
+        let is_result = ctx.type_registry.enum_category(expected) == Some(EnumCategory::Result);
+        if is_result {
+            return operand;
         }
     }
     let op_type = infer_operand_type_full(ctx, &operand, builder);
