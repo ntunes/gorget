@@ -127,11 +127,18 @@ pub(super) fn emit_call_extern(
                     // Determine if closure params need & prefix (Ptr ABI for resource types)
                     let comb_needs_ref = closure_params_need_ref(module, &call_fn);
                     let cr = if comb_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
+                    // Read typed `enum_kind` from the source struct (set at LIR
+                    // struct registration from GIR's `enum_category`) instead
+                    // of name-prefix matching at every site.
+                    let is_result = module.structs.iter()
+                        .find(|s| s.name == type_prefix)
+                        .map(|s| s.enum_kind == crate::lir::EnumKind::Result)
+                        .unwrap_or(false);
 
                     match method {
                         "map" => {
                             // For map result type, also look up the result struct's ok field
-                            let result_ok = if name.starts_with("Result__") {
+                            let result_ok = if is_result {
                                 // Result map result type prefix may differ from source
                                 let rp = name.rsplitn(2, "__").nth(1).unwrap_or(name);
                                 enum_payload_fields(rp, module).0
@@ -139,7 +146,7 @@ pub(super) fn emit_call_extern(
                                 ok_f.clone()
                             };
                             // For Result types, the Error branch must copy the error payload
-                            let err_copy = if name.starts_with("Result__") {
+                            let err_copy = if is_result {
                                 format!(" __om_r.{err_f} = __om_src.{err_f};")
                             } else { String::new() };
                             if result_ty != src_ty {
@@ -162,7 +169,7 @@ pub(super) fn emit_call_extern(
                                 v(*d)).unwrap();
                         }
                         "and_then" => {
-                            if name.starts_with("Result__") {
+                            if is_result {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {result_ty} __om_r; \
                                     if (__om_src.tag == 0) {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{ok_f}); }} \
                                     else {{ __om_r.tag = 1; __om_r.{err_f} = __om_src.{err_f}; }} __om_r; }});",
@@ -175,7 +182,7 @@ pub(super) fn emit_call_extern(
                             }
                         }
                         "or_else" => {
-                            if name.starts_with("Result__") {
+                            if is_result {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; {src_ty} __om_r; \
                                     if (__om_src.tag == 0) {{ __om_r = __om_src; }} \
                                     else {{ __om_r = {call_fn}({closure_v}, {cr}__om_src.{err_f}); }} __om_r; }});",
@@ -249,7 +256,7 @@ pub(super) fn emit_call_extern(
                                 v(*d)).unwrap();
                         }
                         "unwrap_or_else" => {
-                            if name.starts_with("Result__") {
+                            if is_result {
                                 write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
                                     (__om_src.tag == 0) ? __om_src.{ok_f} : {call_fn}({closure_v}, {cr}__om_src.{err_f}); }});",
                                     v(*d)).unwrap();
@@ -448,7 +455,9 @@ pub(super) fn emit_call_extern(
                 let dst_ty = val_types.get(d.0 as usize).and_then(|t| t.as_ref());
                 if let Some(LirType::Struct(sid)) = dst_ty {
                     let sdef = &module.structs[sid.0 as usize];
-                    if sdef.name.starts_with("Option__") {
+                    // Read typed `enum_kind` set at LIR struct registration
+                    // from GIR's `enum_category`.
+                    if sdef.enum_kind == crate::lir::EnumKind::Option {
                         let opt_c = c_type_named(dst_ty.unwrap(), sn);
                         let payload_fname = sdef.fields.get(1)
                             .map(|(n, _)| c_field_name(n)).unwrap_or_else(|| "Some_0".to_string());

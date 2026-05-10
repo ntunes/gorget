@@ -2314,9 +2314,16 @@ fn emit_function(
             let needs_zero = match &slot.ty {
                 LirType::Struct(sid) => {
                     let sname = snames.get(&sid.0).map(|s| s.as_str()).unwrap_or("");
-                    sname == "GorgetString" || sname == "GorgetArray" || sname == "GorgetMap"
-                        || sname == "GorgetSet" || sname.starts_with("Result__")
-                        || sname.starts_with("Option__")
+                    let is_runtime_resource = matches!(sname,
+                        "GorgetString" | "GorgetArray" | "GorgetMap" | "GorgetSet");
+                    // Read typed `enum_kind` (set at LIR struct registration
+                    // from GIR's `enum_category`) instead of name-prefix
+                    // matching to detect Option/Result slots.
+                    let kind = module.structs.get(sid.0 as usize)
+                        .map(|s| s.enum_kind).unwrap_or(crate::lir::EnumKind::NotEnum);
+                    let is_opt_or_result = matches!(kind,
+                        crate::lir::EnumKind::Option | crate::lir::EnumKind::Result);
+                    is_runtime_resource || is_opt_or_result
                 }
                 _ => false,
             };
@@ -3624,8 +3631,14 @@ fn emit_inst(
             // inline the construction: alloca + store field 0.
             if let Some(d) = dst {
                 let newtype_sid = module.structs.iter().enumerate().find_map(|(i, s)| {
+                    // Newtype: 1-field struct that is not an Option/Result
+                    // (those are 2-3 field flat enums whose name happens to
+                    // match a generated extern; read the typed `enum_kind`
+                    // instead of name-prefix matching).
+                    let is_enum = matches!(s.enum_kind,
+                        crate::lir::EnumKind::Option | crate::lir::EnumKind::Result);
                     if (s.name == *name || snames.get(&(i as u32)).map_or(false, |n| n == name))
-                        && s.fields.len() == 1 && !s.name.starts_with("Option__") && !s.name.starts_with("Result__") {
+                        && s.fields.len() == 1 && !is_enum {
                         Some(StructId(i as u32))
                     } else { None }
                 });
