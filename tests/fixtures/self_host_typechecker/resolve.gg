@@ -16,36 +16,13 @@ from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkFor
 from scope import get_def_at
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
 
-# ── Typed accessors ─────────────────────────────────────────
-
+# ── get_item_at: load-bearing pass-by-value wrapper ─────────
+# `module.items.get(i).unwrap()` inlined directly in module-walking
+# loops silently breaks stage-1 binary execution. Same edge as in
+# typecheck.gg — see TODO.md. Routing through this wrapper passes
+# `module.items` by value, implicitly cloning once and stabilising
+# the iteration. Other accessors are inlined.
 Item get_item_at(Vector[Item] v, int i):
-    return v.get(i).unwrap()
-
-Stmt get_stmt_at(Vector[Stmt] v, int i):
-    return v.get(i).unwrap()
-
-Param get_param_at(Vector[Param] v, int i):
-    return v.get(i).unwrap()
-
-FunctionDef get_fndef_at(Vector[FunctionDef] v, int i):
-    return v.get(i).unwrap()
-
-EnumVariant get_variant_at(Vector[EnumVariant] v, int i):
-    return v.get(i).unwrap()
-
-SpannedExpr get_sexpr_at(Vector[SpannedExpr] v, int i):
-    return v.get(i).unwrap()
-
-SpannedPattern get_spat_at(Vector[SpannedPattern] v, int i):
-    return v.get(i).unwrap()
-
-ElseBranch get_else_at(Vector[ElseBranch] v, int i):
-    return v.get(i).unwrap()
-
-MatchArm get_arm_at(Vector[MatchArm] v, int i):
-    return v.get(i).unwrap()
-
-String get_str_at(Vector[String] v, int i):
     return v.get(i).unwrap()
 
 # ── Typed Option helpers ──
@@ -172,7 +149,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     trait_names.push("Numeric")
     int ti = 0
     while ti < trait_names.len():
-        String tname = get_str_at(trait_names, ti)
+        String tname = trait_names.get(ti).unwrap()
         scopes.define(tname, DkTrait(), Span(0, 0))
         ti = ti + 1
 
@@ -198,7 +175,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     col_names.push("FxHasher")
     int ci = 0
     while ci < col_names.len():
-        String cname = get_str_at(col_names, ci)
+        String cname = col_names.get(ci).unwrap()
         scopes.define(cname, DkImport(), Span(0, 0))
         ci = ci + 1
 
@@ -236,7 +213,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
             bool is_generic = e.type_params.len() > 0
             int vi = 0
             while vi < e.variants.len():
-                EnumVariant v = get_variant_at(e.variants, vi)
+                EnumVariant v = e.variants.get(vi).unwrap()
                 if is_generic:
                     # Generic enum: keep variant in scope (bare name works)
                     scopes.define(v.name, DkVariant(), Span(0, 0))
@@ -252,7 +229,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
             scopes.push_scope(SkEquipBlock())
             int mi = 0
             while mi < eq.methods.len():
-                FunctionDef m = get_fndef_at(eq.methods, mi)
+                FunctionDef m = eq.methods.get(mi).unwrap()
                 scopes.define(m.name, DkFunction(), Span(0, 0))
                 mi = mi + 1
             scopes.pop_scope()
@@ -291,7 +268,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
         case IExternBlock(fns):
             int fi = 0
             while fi < fns.len():
-                FunctionDef f = get_fndef_at(fns, fi)
+                FunctionDef f = fns.get(fi).unwrap()
                 scopes.define(f.name, DkFunction(), Span(0, 0))
                 fi = fi + 1
 
@@ -326,7 +303,7 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
         return
     int i = 0
     while i < imp.names.len():
-        String name = get_str_at(imp.names, i)
+        String name = imp.names.get(i).unwrap()
         scopes.define(name, DkImport(), Span(0, 0))
         i = i + 1
 
@@ -372,7 +349,7 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
         case IExternBlock(fns):
             int fi = 0
             while fi < fns.len():
-                FunctionDef f = get_fndef_at(fns, fi)
+                FunctionDef f = fns.get(fi).unwrap()
                 resolve_extern_fn_generics(f, &scopes, &ctx)
                 fi = fi + 1
 
@@ -419,7 +396,7 @@ void resolve_extern_fn_generics(FunctionDef f, ScopeTable &scopes, ResolveContex
     fn_scope_set(&ctx, f.name, body_scope)
     int gi = 0
     while gi < f.type_params.len():
-        String gp = get_str_at(f.type_params, gi)
+        String gp = f.type_params.get(gi).unwrap()
         scopes.define(gp, DkGenericParam(), Span(0, 0))
         gi = gi + 1
     scopes.pop_scope()
@@ -434,14 +411,14 @@ void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, Resol
     # Define generic type params
     int gi = 0
     while gi < f.type_params.len():
-        String gp = get_str_at(f.type_params, gi)
+        String gp = f.type_params.get(gi).unwrap()
         scopes.define(gp, DkGenericParam(), Span(0, 0))
         gi = gi + 1
 
     # Define parameters (always mutable — can reassign params in body)
     int pi = 0
     while pi < f.params.len():
-        Param p = get_param_at(f.params, pi)
+        Param p = f.params.get(pi).unwrap()
         int def_id = scopes.define_with_mutability(p.param_name, DkVariable(), Span(0, 0), true)
         if def_id >= 0:
             scopes.set_def_param(def_id, true)
@@ -459,14 +436,14 @@ void resolve_equip_block(EquipBlock eq, ScopeTable &scopes, TypeTable &types, Re
     # Define equip generic params
     int gi = 0
     while gi < eq.type_params.len():
-        String gp = get_str_at(eq.type_params, gi)
+        String gp = eq.type_params.get(gi).unwrap()
         scopes.define(gp, DkGenericParam(), Span(0, 0))
         gi = gi + 1
 
     # Resolve each method
     int mi = 0
     while mi < eq.methods.len():
-        FunctionDef m = get_fndef_at(eq.methods, mi)
+        FunctionDef m = eq.methods.get(mi).unwrap()
         resolve_function(m, &scopes, &types, &ctx)
         mi = mi + 1
 
@@ -476,7 +453,7 @@ void resolve_equip_block(EquipBlock eq, ScopeTable &scopes, TypeTable &types, Re
 void resolve_block(Vector[Stmt] stmts, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     int i = 0
     while i < stmts.len():
-        Stmt stmt = get_stmt_at(stmts, i)
+        Stmt stmt = stmts.get(i).unwrap()
         resolve_stmt(stmt, &scopes, &types, &ctx)
         i = i + 1
 
@@ -567,7 +544,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
 
             int ei = 0
             while ei < elif_branches.len():
-                ElseBranch branch = get_else_at(elif_branches, ei)
+                ElseBranch branch = elif_branches.get(ei).unwrap()
                 scopes.push_scope(SkBlock())
                 if has_opt_sexpr(branch.condition):
                     SpannedExpr cond = unwrap_opt_sexpr(branch.condition)
@@ -583,7 +560,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_expr(scrutinee, &scopes, &ctx)
             int ai = 0
             while ai < arms.len():
-                MatchArm arm = get_arm_at(arms, ai)
+                MatchArm arm = arms.get(ai).unwrap()
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
                 if has_opt_sexpr(arm.guard):
@@ -647,7 +624,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             scopes.pop_scope()
             int ei = 0
             while ei < elif_branches.len():
-                ElseBranch branch = get_else_at(elif_branches, ei)
+                ElseBranch branch = elif_branches.get(ei).unwrap()
                 scopes.push_scope(SkBlock())
                 resolve_block(branch.body, &scopes, &types, &ctx)
                 scopes.pop_scope()
@@ -695,7 +672,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*callee, &scopes, &ctx)
             int ai = 0
             while ai < args.len():
-                SpannedExpr arg = get_sexpr_at(args, ai)
+                SpannedExpr arg = args.get(ai).unwrap()
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
@@ -703,7 +680,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*receiver, &scopes, &ctx)
             int ai = 0
             while ai < args.len():
-                SpannedExpr arg = get_sexpr_at(args, ai)
+                SpannedExpr arg = args.get(ai).unwrap()
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
@@ -747,7 +724,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_block_expr(then_body, &scopes, &ctx)
             int ei = 0
             while ei < elif_branches.len():
-                ElseBranch branch = get_else_at(elif_branches, ei)
+                ElseBranch branch = elif_branches.get(ei).unwrap()
                 if has_opt_sexpr(branch.condition):
                     resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
                 resolve_block_expr(branch.body, &scopes, &ctx)
@@ -757,7 +734,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*scrutinee, &scopes, &ctx)
             int ai = 0
             while ai < arms.len():
-                MatchArm arm = get_arm_at(arms, ai)
+                MatchArm arm = arms.get(ai).unwrap()
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
                 if has_opt_sexpr(arm.guard):
@@ -797,7 +774,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkFunction())
             int pi = 0
             while pi < params.len():
-                Param p = get_param_at(params, pi)
+                Param p = params.get(pi).unwrap()
                 scopes.define(p.param_name, DkVariable(), Span(0, 0))
                 pi = pi + 1
             resolve_block_expr(body, &scopes, &ctx)
@@ -840,23 +817,23 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EArrayLiteral(elements):
             int ei = 0
             while ei < elements.len():
-                SpannedExpr elem = get_sexpr_at(elements, ei)
+                SpannedExpr elem = elements.get(ei).unwrap()
                 resolve_expr(elem, &scopes, &ctx)
                 ei = ei + 1
 
         case ETupleLiteral(elements):
             int ei = 0
             while ei < elements.len():
-                SpannedExpr elem = get_sexpr_at(elements, ei)
+                SpannedExpr elem = elements.get(ei).unwrap()
                 resolve_expr(elem, &scopes, &ctx)
                 ei = ei + 1
 
         case EDictLiteral(keys, values):
             int di = 0
             while di < keys.len():
-                SpannedExpr k = get_sexpr_at(keys, di)
+                SpannedExpr k = keys.get(di).unwrap()
                 resolve_expr(k, &scopes, &ctx)
-                SpannedExpr v = get_sexpr_at(values, di)
+                SpannedExpr v = values.get(di).unwrap()
                 resolve_expr(v, &scopes, &ctx)
                 di = di + 1
 
@@ -866,14 +843,14 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 ctx.resolution_map.put(expr.span.start, def_id)
             int ai = 0
             while ai < args.len():
-                SpannedExpr arg = get_sexpr_at(args, ai)
+                SpannedExpr arg = args.get(ai).unwrap()
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
         case EDotShorthand(_, args):
             int ai = 0
             while ai < args.len():
-                SpannedExpr arg = get_sexpr_at(args, ai)
+                SpannedExpr arg = args.get(ai).unwrap()
                 resolve_expr(arg, &scopes, &ctx)
                 ai = ai + 1
 
@@ -882,7 +859,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             # closures inside `{...}` get resolved.
             int fi = 0
             while fi < exprs.len():
-                SpannedExpr fe = get_sexpr_at(exprs, fi)
+                SpannedExpr fe = exprs.get(fi).unwrap()
                 resolve_expr(fe, &scopes, &ctx)
                 fi = fi + 1
 
@@ -892,7 +869,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
 void resolve_block_expr(Vector[Stmt] stmts, ScopeTable &scopes, ResolveContext &ctx):
     int i = 0
     while i < stmts.len():
-        Stmt stmt = get_stmt_at(stmts, i)
+        Stmt stmt = stmts.get(i).unwrap()
         resolve_stmt_expr(stmt, &scopes, &ctx)
         i = i + 1
 
@@ -973,7 +950,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.pop_scope()
             int ei = 0
             while ei < elif_branches.len():
-                ElseBranch branch = get_else_at(elif_branches, ei)
+                ElseBranch branch = elif_branches.get(ei).unwrap()
                 scopes.push_scope(SkBlock())
                 if has_opt_sexpr(branch.condition):
                     resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
@@ -985,7 +962,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(scrutinee, &scopes, &ctx)
             int ai = 0
             while ai < arms.len():
-                MatchArm arm = get_arm_at(arms, ai)
+                MatchArm arm = arms.get(ai).unwrap()
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
                 if has_opt_sexpr(arm.guard):
@@ -1047,7 +1024,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.pop_scope()
             int ei = 0
             while ei < elif_branches.len():
-                ElseBranch branch = get_else_at(elif_branches, ei)
+                ElseBranch branch = elif_branches.get(ei).unwrap()
                 scopes.push_scope(SkBlock())
                 resolve_block_expr(branch.body, &scopes, &ctx)
                 scopes.pop_scope()
@@ -1067,27 +1044,27 @@ void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
         case PConstructor(_, fields):
             int i = 0
             while i < fields.len():
-                SpannedPattern field = get_spat_at(fields, i)
+                SpannedPattern field = fields.get(i).unwrap()
                 define_pattern_bindings(field, &scopes)
                 i = i + 1
 
         case PDotShorthand(_, fields):
             int i = 0
             while i < fields.len():
-                SpannedPattern field = get_spat_at(fields, i)
+                SpannedPattern field = fields.get(i).unwrap()
                 define_pattern_bindings(field, &scopes)
                 i = i + 1
 
         case PTuple(elements):
             int i = 0
             while i < elements.len():
-                SpannedPattern elem = get_spat_at(elements, i)
+                SpannedPattern elem = elements.get(i).unwrap()
                 define_pattern_bindings(elem, &scopes)
                 i = i + 1
 
         case POr(alternatives):
             if alternatives.len() > 0:
-                SpannedPattern first = get_spat_at(alternatives, 0)
+                SpannedPattern first = alternatives.get(0).unwrap()
                 define_pattern_bindings(first, &scopes)
 
         case PWildcard():
