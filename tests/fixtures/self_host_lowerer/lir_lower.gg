@@ -133,51 +133,45 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
 
 # ── Type mapping: GIR type ID → LIR type ───────────────────
 
-# Map a collection name pattern to its runtime struct name.
+# Map a collection name pattern to its runtime struct name. Phase A
+# typed-metadata read; the prefix cascade lives in
+# `build_resource_metadata` (single source of truth).
 String collection_runtime_type(String name):
-    if name.starts_with("Vector__"):
-        return "GorgetArray"
-    elif name.starts_with("Dict__") or name.starts_with("GorgetDict__"):
-        return "GorgetMap"
-    elif name.starts_with("HashMap__") or name.starts_with("GorgetMap__"):
-        return "GorgetMap"
-    elif name.starts_with("Set__") or name.starts_with("GorgetSet__"):
-        return "GorgetSet"
-    elif name.starts_with("HashSet__"):
-        return "GorgetSet"
-    elif name.starts_with("Heap__"):
-        return "GorgetArray"
-    elif name.starts_with("Deque__"):
-        return "GorgetArray"
+    match build_resource_metadata(name):
+        case Some(rmeta):
+            match rmeta.collection_kind:
+                case CkNotCollection():
+                    return ""
+                else:
+                    return rmeta.runtime_name
+        case None:
+            return ""
     return ""
 
+# Phase A typed-metadata read; the prefix cascade lives in
+# `build_resource_metadata` (single source of truth). The
+# `Heap__` prefix that the legacy cascade marked as opaque is
+# now classified as a Vector-family collection (see
+# `build_resource_metadata`); every caller of this helper checks
+# `collection_runtime_type` first, so the previous Heap__→true
+# branch never fired in practice.
 bool is_opaque_pointer_type(String name):
-    if name.starts_with("Mutex__") or name.starts_with("Shared__"):
-        return true
-    if name.starts_with("Weak__") or name.starts_with("Channel__"):
-        return true
-    if name.starts_with("RWLock__") or name.starts_with("Thread__"):
-        return true
-    if name.starts_with("Heap__"):
-        return true
-    if name.starts_with("AtomicInt__") or name.starts_with("AtomicBool__"):
-        return true
-    if name.starts_with("Semaphore__") or name.starts_with("Barrier__"):
-        return true
-    if name.starts_with("OnceFlag__") or name.starts_with("WaitGroup__"):
-        return true
-    if name.starts_with("TaskGroup__"):
-        return true
-    if name == "Barrier" or name == "CondVar" or name == "AtomicInt":
-        return true
-    if name == "AtomicBool" or name == "Process" or name == "Thread":
-        return true
-    if name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
-        return true
+    match build_resource_metadata(name):
+        case Some(rmeta):
+            return rmeta.opaque_handle
+        case None:
+            return false
     return false
 
+# Phase A typed-metadata read; the prefix cascade lives in
+# `build_resource_metadata` (Guard family → runtime_name "Guard").
 bool is_guard_struct_type(String name):
-    return name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__")
+    match build_resource_metadata(name):
+        case Some(rmeta):
+            return rmeta.runtime_name == "Guard"
+        case None:
+            return false
+    return false
 
 # ── Phase A — typed resource-metadata builder ──────────────────
 # Single source of truth for `is this type a Vector / Dict / Set / Box /
