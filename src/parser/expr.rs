@@ -1293,7 +1293,17 @@ impl Parser {
                 | Some(Token::LtEq)
                 | Some(Token::GtEq)
                 | Some(Token::Lt)
-                | Some(Token::Gt) => return false,
+                | Some(Token::Gt)
+                // Member access. Closure param types are simple-or-
+                // generic (`int`, `Dict[K, V]`, `Vector[T]`) — never
+                // dotted. A `.` inside the parens proves this is an
+                // expression. Without this, the bare paren-wrapped
+                // method-call shape `(d.contains(x))` followed by a
+                // trailing `:` (e.g., the if-statement's colon) is
+                // misclassified as a closure and the parser tries to
+                // consume `d` as a type-name + `.` as something it can't
+                // parse, producing `expected ',', found '.'`.
+                | Some(Token::Dot) => return false,
                 Some(Token::Eof) | None => return false,
                 _ => {}
             }

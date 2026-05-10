@@ -1,0 +1,26 @@
+# Regression: `(method_call())` in boolean context used to parse as
+# tuple-start because `looks_like_closure` mistook `(d.contains("a"))`'s
+# trailing `:` (the if-statement's own colon) for a closure marker.
+# Fix: closure-detection excludes `.` from the param-scan since closure
+# param lists never contain member access.
+
+from std.collections import Dict
+
+void main():
+    Dict[String, int] d = {"a": 1, "b": 2}
+    bool flag = true
+    # Parenthesised method-call in `and` chain — the canonical shape.
+    if flag and (d.contains("a")):
+        print("a-yes")
+    else:
+        print("a-no")
+    # Same with `or`.
+    if (d.contains("z")) or flag:
+        print("z-or-yes")
+    # Nested parens.
+    if ((d.contains("a"))):
+        print("nested-yes")
+    # Field access (also `.`-bearing) in parens.
+    Dict[String, Dict[String, int]] nested = {"outer": {"inner": 42}}
+    if flag and (nested.get("outer").unwrap().contains("inner")):
+        print("nested-method-yes")
