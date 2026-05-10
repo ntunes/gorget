@@ -106,6 +106,30 @@ pub(super) fn lower_call_arg(
             }
         }
     }
+    // Snag #26: `mutate(&*box)` should pass a pointer to the heap data,
+    // not a pointer to a stack copy of the heap data. Without this, the
+    // callee mutates the discarded copy and the user's heap value is
+    // unchanged. Build the borrow through a Deref-projected place when
+    // the call arg is `&`-sigil + Deref expr — same lvalue treatment as
+    // standalone `Expr::MutableBorrow { Expr::Deref { ... } }` in mod.rs.
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+        if let Expr::Deref { expr: deref_inner } = &arg.node.value.node {
+            let inner_op = lower_expr(ctx, builder, deref_inner);
+            if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
+                let mut deref_place = inner_place.clone();
+                deref_place.projections.push(crate::ir::instructions::Projection::Deref);
+                let local_idx = inner_place.local.0 as usize;
+                let pointee = if local_idx < builder.locals.len() {
+                    let t = builder.local_type(inner_place.local);
+                    ctx.deref_inner_type(t).unwrap_or(t)
+                } else { UNIT_TYPE };
+                let ptr_type = ctx.register_mut_ptr_type(pointee);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, deref_place);
+                return FunctionBuilder::copy(dst);
+            }
+        }
+    }
     let val = lower_expr(ctx, builder, &arg.node.value);
     match arg.node.ownership {
         Ownership::MutableBorrow => {

@@ -315,6 +315,29 @@ fn lower_expr_inner(
                     }
                 }
             }
+            // Snag #26: `&*box` and `&*ptr` should produce a pointer to the
+            // heap (Box) or pointee (Ptr), not a pointer to a stack copy.
+            // Without this, `mutate(&*b)` would mutate a discarded local copy
+            // and the user's heap value would be unchanged. Build the borrow
+            // through a Deref-projected place so the resulting pointer
+            // addresses the underlying data, mirroring the lvalue path
+            // taken by field-assign-through-deref.
+            if let Expr::Deref { expr: deref_inner } = &inner.node {
+                let inner_op = lower_expr(ctx, builder, deref_inner);
+                if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
+                    let mut deref_place = inner_place.clone();
+                    deref_place.projections.push(Projection::Deref);
+                    let local_idx = inner_place.local.0 as usize;
+                    let pointee = if local_idx < builder.locals.len() {
+                        let t = builder.local_type(inner_place.local);
+                        ctx.deref_inner_type(t).unwrap_or(t)
+                    } else { UNIT_TYPE };
+                    let ptr_type = ctx.register_mut_ptr_type(pointee);
+                    let dst = builder.add_local(ptr_type, None);
+                    builder.emit_borrow_mut(dst, deref_place);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
             let val = lower_expr(ctx, builder, inner);
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
@@ -2011,6 +2034,22 @@ pub(super) fn try_resolve_field_place(
                 return None;
             }
         }
+        // Snag #26: lvalue through deref. `(*box).field = val` and
+        // `(*ptr).field = val` need a write-through-pointer Place, not a
+        // copy-of-deref. Recurse into the inner expression and append
+        // Deref to its projections so the field-store at the call site
+        // writes to the heap (Box) or pointee (Ptr) rather than a stack
+        // temp.
+        Expr::Deref { expr: inner } => {
+            let inner_op = lower_expr(ctx, builder, inner);
+            if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
+                let mut deref_place = inner_place.clone();
+                deref_place.projections.push(Projection::Deref);
+                Operand::Copy(deref_place)
+            } else {
+                return None;
+            }
+        }
         _ => return None,
     };
 
@@ -2023,7 +2062,13 @@ pub(super) fn try_resolve_field_place(
             for proj in &place.projections {
                 match proj {
                     Projection::Deref => {
-                        if let Some(pointee) = ctx.pointee_type(current_type) {
+                        // deref_inner_type covers both raw Ptr/MutPtr and
+                        // Box[T] (a Named struct with a single `_0` field).
+                        // Snag #26: pointee_type alone returns None for Box,
+                        // so the walk left current_type as Box__T and field
+                        // lookup for the user-visible field name failed,
+                        // sending the assignment down the value-copy path.
+                        if let Some(pointee) = ctx.deref_inner_type(current_type) {
                             current_type = pointee;
                         }
                     }

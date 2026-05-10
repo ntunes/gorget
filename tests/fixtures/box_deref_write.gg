@@ -1,0 +1,24 @@
+# Snag #26 regression: writing through *box must mutate the heap, not a
+# stack copy. All three forms below silently no-op'd before the fix —
+# (*b).field = X discarded into a temp, mutate(&*b) borrowed a temp, and
+# *b = T(...) was unhandled by lower_assign and skipped entirely.
+from std.collections import Box
+
+struct Inner:
+    int n
+
+void mutate(Inner &i):
+    i.n = 99
+
+void main():
+    Box[Inner] b1 = Box.new(Inner(10))
+    (*b1).n = 99
+    print(f"{(*b1).n}")
+
+    Box[Inner] b2 = Box.new(Inner(10))
+    mutate(&*b2)
+    print(f"{(*b2).n}")
+
+    Box[Inner] b3 = Box.new(Inner(10))
+    *b3 = Inner(99)
+    print(f"{(*b3).n}")

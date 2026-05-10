@@ -390,6 +390,42 @@ pub(super) fn lower_assign(
         Expr::Index { object, index } => {
             lower_index_assign(ctx, builder, object, index, value);
         }
+        // Snag #26: `*box = val` and `*ptr = val` write through the
+        // pointer to the heap (Box) or pointee (Ptr). Without this arm
+        // the assignment was silently dropped — `_` did nothing, and
+        // `lower_expr(*box)` would have produced a value-copy in the
+        // RHS-only sense rather than an lvalue place.
+        Expr::Deref { expr: inner } => {
+            let inner_op = lower_expr(ctx, builder, inner);
+            if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
+                let mut deref_place = inner_place.clone();
+                deref_place.projections.push(Projection::Deref);
+                let pointee_type = {
+                    let local_idx = inner_place.local.0 as usize;
+                    let mut t = if local_idx < builder.locals.len() {
+                        builder.local_type(inner_place.local)
+                    } else { UNIT_TYPE };
+                    for proj in &inner_place.projections {
+                        if let Projection::Deref = proj {
+                            t = ctx.deref_inner_type(t).unwrap_or(t);
+                        } else if let Projection::Field(idx) = proj {
+                            if let Some(tn) = ctx.type_name_for_id(t).map(|s| s.to_string()) {
+                                if let Some(td) = ctx.type_registry.get_type_def(&tn) {
+                                    if let crate::ir::types::TypeDefKind::Struct(ref s) = td.kind {
+                                        if (*idx as usize) < s.fields.len() {
+                                            t = s.fields[*idx as usize].type_id;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ctx.deref_inner_type(t).unwrap_or(t)
+                };
+                let rhs = lower_expr(ctx, builder, value);
+                emit_field_store_with_cleanup(ctx, builder, &deref_place, pointee_type, &rhs);
+            }
+        }
         _ => {
             // Other target types not yet supported
         }

@@ -2795,6 +2795,17 @@ hello",
 }
 
 #[test]
+fn box_deref_write() {
+    run_gg(
+        "box_deref_write.gg",
+        "\
+99
+99
+99",
+    );
+}
+
+#[test]
 fn drop_raii() {
     run_gg(
         "drop_raii.gg",
