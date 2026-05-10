@@ -157,13 +157,17 @@ Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `sr
 
 **Phase 3 IN PROGRESS 2026-05-10** (validator extension + tagging migration shipped, residual real-bug migration deferred). Snag #28's match-arm-result borrow-clone bug exposed a gap: the existing validator covers consume-site SHAPES (calls, inits, runtime mutators) but not plain `Inst::Assign` whose dst is an owned-required slot. The Snag #28 shape — `[Mv] _result = copy _ptr` materialising as memcpy of a borrowed pointee struct — passed silently. New `ConsumeSiteClass::AssignIntoOwnedSlot` (commit `2846baf4`) walks `Inst::Assign` and gates on dst-type resource-ness (the existing `validate_consume` gates on source-type, which Ptr<T> sources don't satisfy). Non-fatal pending sweep + migration.
 
-Phase 3 progress through 2026-05-10: **11,129 → 790 violations (-93%)** across 1073 fixtures, via four commits extending `tag_ownership::infer_fresh_owned` and one literal-tagging fix:
-- `2846baf4` — validator + non-fatal env-gate.
-- `2e8a38f7` — validator dst-filter narrowed to Owned/FreshOwned only; EnumInit/StructInit/TupleInit dst-tagging; dict-literal `set_owned`. 11,129 → 3,052.
-- `88c92eca` — BinOp/UnOp + `Constant::Str` dst-tagging. 3,052 → 1,639.
-- `79512b46` — `IndexLoad` ReadMode::Clone dst-tagging. 1,639 → 790.
+Phase 3 progress through 2026-05-10: **11,129 → 764 violations (-93%)** across 1077 fixtures, via six inference-pass extensions and one literal-tagging fix:
+- Validator + non-fatal env-gate (commit `2c0d53e9` after squashed rebase onto main).
+- Validator dst-filter narrowed to Owned/FreshOwned only.
+- EnumInit/StructInit/TupleInit dst-tagging.
+- Dict-literal `set_owned` (mirrors array-literal pattern).
+- BinOp/UnOp dst-tagging (resource-typed binary ops produce fresh values).
+- `Inst::Assign { dst, value: Constant::Str }` dst-tagging (string-literal init materialises fresh heap).
+- `IndexLoad { read: ReadMode::Clone }` dst-tagging (collection element clone).
+- Deref-then-MoveZero dst-tagging (`!`-move param consume shape, commit `9e706783`).
 
-Residual 790 violations are dominantly real CoW boundary issues (412 borrowed-source — Snag #28 class proper; 303 owned-but-live; 75 untracked from minor producer patterns) that need actual migration via clone gates, not tagging. See `TODO.md` "Tier 2a Phase 3" for the per-class burn-down plan.
+Residual 764 violations are dominantly real CoW boundary issues (412 borrowed-source — Snag #28 class proper, requires `lower_var_decl` bare-param-branch gating per TODO; 303 owned-but-live — needs per-site clone gates in `MultiGroupBy/GroupBy.agg` Column shape; 49 untracked from minor remaining producer patterns) that need actual migration via clone gates or lowering changes, not more tagging. See `TODO.md` "Tier 2a Phase 3" for the per-class burn-down plan.
 
 **Invariant.** At every consuming position (push / put / insert / send / `v[i] = x` / enum-init / struct-init / Box.new / function arg with `Ownership::Move` / **plain `Inst::Assign` into a resource-typed Owned/FreshOwned slot**), the IR mode of the source matches its typed `LocalOwnership` state per the rules in `AGENTS.md`'s *Ownership at Consuming Positions*:
 
