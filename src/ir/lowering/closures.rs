@@ -910,9 +910,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                 if (name == "Ok" || name == "Error") && args.len() == 1 {
                     // Check expected_type from context
                     if let Some(et) = ctx.func_state.expected_type {
-                        let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                        let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
-                            || tn.starts_with("Result__");
+                        let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result);
                         if is_result {
                             return et;
                         }
@@ -935,9 +933,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
             // None() call
             if matches!(callee.node, Expr::NoneLiteral) {
                 if let Some(et) = ctx.func_state.expected_type {
-                    let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                    let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
-                        || tn.starts_with("Option__");
+                    let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option);
                     if is_option {
                         return et;
                     }
@@ -948,9 +944,7 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
         Expr::NoneLiteral => {
             // Bare `None` — check expected_type for Option context
             if let Some(et) = ctx.func_state.expected_type {
-                let tn = ctx.type_registry.type_name(et).unwrap_or_default();
-                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
-                    || tn.starts_with("Option__");
+                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option);
                 if is_option {
                     return et;
                 }
