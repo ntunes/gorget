@@ -12605,6 +12605,98 @@ fn self_host_bootstrap_fixed_point() {
     let _ = std::fs::remove_file(&stage2_bin);
 }
 
+// Phase C fatal-promotion (`docs/internals/self-host-resource-model.md`
+// §5.2 step 5): once a validator class's count is zero, the check
+// promotes to "fatal on any violation." On the Rust side, this is
+// the unconditional panic in lowering. On the self-host side it
+// can't be a panic yet (the `noreturn void exit(int)` extern signature
+// doesn't round-trip through self-host's cstr emit; tracked in §7).
+//
+// Until the cstr emit gap closes, fatal-promotion uses the same
+// pattern as Tier E.1 lints: a Rust test that runs the validator
+// across a representative fixture set and asserts zero violations.
+// The fixtures chosen are the ones that exercised this class most
+// heavily at the baseline sweep (the burn-down candidates that
+// would have flagged a regression).
+//
+// Field-reads class (the LoBorrowed/BoField tagging at
+// `emit_payload_read` in `lower.gg`): baseline 4,365 violations,
+// closed in commit `<step-5a>` by tagging the payload-read dst.
+// Regression check sniffs the same fixtures to catch any new
+// emit site that adds a field-read without tagging properly.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn phase_c_field_reads_at_zero_self_host() {
+    if skip_under_llvm() { return; }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    // Representative fixtures from the baseline sweep — the ones with
+    // the most field-read activity. If a regression sneaks in via a
+    // new emit site that forgets the LoBorrowed/BoField tag, these
+    // are the fixtures most likely to surface it.
+    let fixtures = [
+        "dataframe_groupby.gg",   // 91 baseline violations
+        "dataframe_join.gg",
+        "json_parse.gg",
+        "httpserver_router.gg",
+        "p2p_handshake.gg",
+        "exec_builtin.gg",
+        "cli_args.gg",
+        "hello.gg",
+    ];
+
+    let mut total = 0usize;
+    let mut details = String::new();
+    for fname in fixtures.iter() {
+        let fixture = manifest_dir.join("tests/fixtures").join(fname);
+        if !fixture.exists() {
+            continue;
+        }
+        let out = Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--validate-resource-field-reads")
+            .output()
+            .expect("failed to spawn self-host driver");
+        if !out.status.success() {
+            // Skip fixtures the driver itself can't lower (e.g.
+            // pre-existing crashes); not what this test is checking.
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // The validator emits: `# validate_resource_field_reads: N violation(s)`
+        // followed by one violation per line. Find the header.
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("# validate_resource_field_reads: ") {
+                let n: usize = rest
+                    .trim_end_matches(" violation(s)")
+                    .parse()
+                    .unwrap_or(0);
+                if n > 0 {
+                    details.push_str(&format!("  {fname}: {n} violation(s)\n"));
+                    total += n;
+                }
+                break;
+            }
+        }
+    }
+    assert!(
+        total == 0,
+        "Phase C field-reads class regressed — {total} new violations.\n\n\
+         The validate_resource_field_reads validator (per \
+         docs/internals/self-host-resource-model.md §5) was burned \
+         down to zero in commit <step-5a> by tagging emit_payload_read's \
+         destination LoBorrowed/BoField in lower.gg. A new violation \
+         means some emit site added a __field_read_* GICallExtern \
+         without tagging its destination local. Fix: tag the dst with \
+         add_local_with(..., LoBorrowed(), BoField()) at the new \
+         emit site.\n\n\
+         Per-fixture breakdown:\n{details}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Self-host End-to-End — every fixture, compiled+run via stage-1
 // ═══════════════════════════════════════════════════════════════

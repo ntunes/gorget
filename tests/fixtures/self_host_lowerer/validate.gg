@@ -21,13 +21,23 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from std.fs import append_file, write_file
-from std.os import getenv
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Operand
 from gir import GirType, GirResourceMetadata
 from gir import LocalOwnership
 from gir import PRIM_COUNT
 from lir_lower import build_resource_metadata
+
+# Phase C validators are activated via flags passed to `run_validators`
+# from `driver.gg`. The Rust-side framework uses `GG_VALIDATE_<NAME>`
+# env vars (`structural-guards.md` Tier 1b); self-host's emit of
+# `getenv` currently has an unfinished cstr→String wrap that makes
+# the env-var path miscompile. Until that gap is closed (TODO entry,
+# §7 of the resource model doc), pass configuration by argument
+# from driver's argv parsing instead.
+struct ValidateConfig:
+    bool run_moves
+    bool run_field_reads
+    bool run_call_args
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -278,24 +288,36 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction &func, Gir
 # gate is set — the call from `driver.gg` is free when nobody asked
 # for validation.
 
-void run_validators(GirModule &gmod):
-    String moves_path = getenv("GG_VALIDATE_RESOURCE_MOVES")
-    if moves_path.len() > 0:
+void run_validators(GirModule &gmod, ValidateConfig cfg):
+    if cfg.run_moves:
         Vector[String] vs = validate_resource_moves(&gmod)
-        write_violations(moves_path, "validate_resource_moves", vs)
-    String field_reads_path = getenv("GG_VALIDATE_RESOURCE_FIELD_READS")
-    if field_reads_path.len() > 0:
+        print_violations("validate_resource_moves", vs)
+    if cfg.run_field_reads:
         Vector[String] vs2 = validate_resource_field_reads(&gmod)
-        write_violations(field_reads_path, "validate_resource_field_reads", vs2)
-    String call_args_path = getenv("GG_VALIDATE_RESOURCE_CALL_ARGS")
-    if call_args_path.len() > 0:
+        print_violations("validate_resource_field_reads", vs2)
+    if cfg.run_call_args:
         Vector[String] vs3 = validate_resource_call_args(&gmod)
-        write_violations(call_args_path, "validate_resource_call_args", vs3)
+        print_violations("validate_resource_call_args", vs3)
 
-void write_violations(String path, String name, Vector[String] vs):
-    String hdr = "# " + name + ": " + int_to_str(vs.len()) + " violation(s)\n"
-    write_file(path, hdr)
+# Phase C step 5a: validate_resource_field_reads is CLOSED (commit
+# `<step-5a>`) — single emit site `emit_payload_read` tags LoBorrowed/
+# BoField; baseline sweep is 0 across 1030 fixtures. Promotion to
+# "fatal-on-violation" lives at the Rust-harness level (a lints-style
+# test that runs the validator across the fixture suite and asserts
+# zero violations), not inside self-host: `exit()` and the
+# `noreturn void` extern signature don't yet round-trip through
+# self-host's emit (cstr/void boundary gap, TODO in §7 of the resource
+# model doc). Until that's fixed, fatal-promotion uses the same
+# pattern as Tier E.1 lints — a Rust test, BUDGET=0.
+
+# Emit violations to stdout. The driver runs validators after the
+# GIR-print / LIR-print, so the lines arrive at the end of the stream
+# and don't corrupt the format_module / generate_c body. The header
+# line `# <name>: N violation(s)` is the parse-anchor for sweep
+# scripts.
+void print_violations(String name, Vector[String] vs):
+    print("# " + name + ": " + int_to_str(vs.len()) + " violation(s)")
     int i = 0
     while i < vs.len():
-        append_file(path, vs.get(i).unwrap() + "\n")
+        print(vs.get(i).unwrap())
         i += 1

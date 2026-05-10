@@ -325,9 +325,21 @@ If self-host's enum-field-on-struct-read codegen has issues that force the int-c
 
 ---
 
-## 5. Phase C — Strict move/clone validation (self-host)
+## 5. Phase C — Strict move/clone validation (self-host)  *(IN PROGRESS 2026-05-10)*
 
 > **Rust counterpart:** `unified-resource-model.md` §7 + `structural-guards.md` Tier 1c/2a.
+>
+> **Status:**
+> - Validators shipped (commits `cb605a21` / `ced97820` / `b285fc91`):
+>   `validate_resource_moves`, `validate_resource_field_reads`,
+>   `validate_resource_call_args`.
+> - Baseline sweep (commit `92c41362`): 100,170 / 4,365 / 10,144.
+> - Burn-down 5a (commit `<step-5a>`): field_reads → 0 (closed).
+>   Regression test `phase_c_field_reads_at_zero_self_host`
+>   in `tests/integration.rs`. Fatal-promotion via Rust harness
+>   (rather than in-process `exit()`) because of the cstr/void
+>   emit gap noted in §7.
+> - Open: burn-down 5b (call_args), 5c (moves).
 
 ### 5.1 Validator design (`validate.gg`)
 
@@ -388,6 +400,7 @@ The session 2026-05-09 → 2026-05-10 entries (currently in `TODO.md`) seed this
 | `Option[int].unwrap_or(default)` skips None-check in self-host emit | `sr_lookup` helper (`8d944ddc`) | (open) | (open) |
 | Nested `Vec[Vec[T]].get(i).unwrap().push(x)` silently breaks downstream codegen | Rebuild-and-set in lir_ssa.gg:60-79 | (open) | (open) |
 | `(method_call())` in boolean context parses as tuple-start | Drop redundant parens at call site | (open) | (open) |
+| `extern cstr X()` returners + `extern void Y(cstr)` args + `noreturn void exit()` lack cstr/String/void emit conversions in self-host | Phase C validators read cmdline flags + stdout instead of env vars + file writes (`validate.gg`, commits `cb605a21`/`ced97820`/`b285fc91`) | (open) | (open) — migrate validate.gg + driver wiring back to `GG_VALIDATE_<NAME>` env vars + file-based logging |
 | Reading a struct field's Vector[T] from `&self` previously triggered spurious memset | (long fixed) | (long fixed) | comment scrub `1e9989bb` |
 | `Dict[String, _]` state-loss claim across many parallel-Vector workarounds | (long fixed by Dict insertion-order fix 2026-05-08) | (long fixed) | the cleanup series 2026-05-09 |
 

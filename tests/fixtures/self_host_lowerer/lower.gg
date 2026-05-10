@@ -2790,7 +2790,14 @@ int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
     Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(field_idx)]
-    int dst = add_local(&ctx, dst_type, NO_NAME)
+    # Phase C step 5a: the payload is owned by the scrutinee, not by
+    # this read. Tag the destination as LoBorrowed/BoField so
+    # validate_resource_field_reads doesn't flag this site (and so
+    # downstream Phase C validators see the correct shape). Whether the
+    # scrutinee is being consumed (move semantics for `.unwrap()`) vs
+    # peeked (borrow semantics for match-arm bindings) is a flow-level
+    # question the caller resolves — the read itself is always a borrow.
+    int dst = add_local_with(&ctx, dst_type, NO_NAME, LoBorrowed(), BoField())
     emit(&ctx, GICallExtern(dst, read_fn, args))
     return dst
 

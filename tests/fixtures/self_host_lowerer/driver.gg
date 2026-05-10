@@ -10,7 +10,7 @@ from lower import lower_module
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
-from validate import run_validators
+from validate import run_validators, ValidateConfig
 from lir_lower import lower_gir_to_lir
 from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
@@ -26,12 +26,26 @@ void main():
     if cmd_args.len() > 2:
         lib_dir = cmd_args.get(2).unwrap()
     bool emit_lir_c = false
+    bool validate_moves = false
+    bool validate_field_reads = false
+    bool validate_call_args = false
     int ai = 2
     while ai < cmd_args.len():
         String arg = cmd_args.get(ai).unwrap()
         if arg == "--lir-c":
             emit_lir_c = true
+        elif arg == "--validate-resource-moves":
+            validate_moves = true
+        elif arg == "--validate-resource-field-reads":
+            validate_field_reads = true
+        elif arg == "--validate-resource-call-args":
+            validate_call_args = true
+        elif arg == "--validate-all":
+            validate_moves = true
+            validate_field_reads = true
+            validate_call_args = true
         ai += 1
+    ValidateConfig cfg = ValidateConfig(validate_moves, validate_field_reads, validate_call_args)
     String source = read_file(path)
     Module m = parse_source(source)
     Dict[String, bool] imported_fns = {}
@@ -47,13 +61,17 @@ void main():
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
-    run_validators(&gir)
     if emit_lir_c:
         LirModule lir = lower_gir_to_lir(&gir)
         run_ssa(&lir)
         print(generate_c(&lir))
     else:
         print(format_module(&gir))
+    # Validators run AFTER the GIR/LIR print so the header line `#
+    # <name>: N violation(s)` lands at the end of the stream and doesn't
+    # corrupt the format_module / generate_c body. Silent when no
+    # --validate-* flag is set; never panics.
+    run_validators(&gir, cfg)
 
 void run_ssa(LirModule &m):
     int fi = 0
