@@ -3,7 +3,7 @@
 
 from std.collections import Vector
 from std.conv import int_to_str
-from lexer import lex_tokenize, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
+from lexer import lex_tokenize_with_offset, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
 
 # ── Token tag constants ──────────────────────────────────────
@@ -588,32 +588,21 @@ bool token_has_interpolation(Token tok):
         else:
             return false
 
-String token_char_val(Token tok):
-    match tok:
-        else:
-            return ""
-
 # ── Helper: convert parsed type to name string ──────────────
-
-SpannedType stype_vec_get(Vector[SpannedType] v, int i):
-    return v.get(i).unwrap()
-
-int stype_vec_len(Vector[SpannedType] v):
-    return v.len()
 
 String type_to_name(SpannedType st):
     match st.ty:
         case TPrimitive(name):
             return "" + name
         case TNamed(name, args):
-            if stype_vec_len(args) == 0:
+            if args.len() == 0:
                 return "" + name
             String result = name + "["
             int i = 0
-            while i < stype_vec_len(args):
+            while i < args.len():
                 if i > 0:
                     result = result + ", "
-                SpannedType a = stype_vec_get(args, i)
+                SpannedType a = args.get(i).unwrap()
                 result = result + type_to_name(a)
                 i = i + 1
             result = result + "]"
@@ -2030,7 +2019,7 @@ equip Parser:
                 int ci = 0
                 while ci < comp_names.len():
                     String cname = comp_names.get(ci).unwrap()
-                    SpannedType cty = stype_vec_get(comp_types, ci)
+                    SpannedType cty = comp_types.get(ci).unwrap()
                     SpannedExpr dp_id = SpannedExpr(EIdentifier(dp_name), Span(0, 0))
                     String field_name = "_" + int_to_str(ci)
                     SpannedExpr field_acc = SpannedExpr(EFieldAccess(Box(dp_id), field_name), Span(0, 0))

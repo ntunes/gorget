@@ -749,16 +749,3 @@ String format_import(ImportStmt imp):
             i = i + 1
         return result
     return "import " + imp.module_path
-
-# ── Module formatting ────────────────────────────────────────
-
-String format_module(Module m):
-    String result = ""
-    int i = 0
-    while i < m.items.len():
-        if i > 0:
-            result = result + "\n"
-        Item item = m.items.get(i).unwrap()
-        result = result + format_item(item)
-        i = i + 1
-    return result

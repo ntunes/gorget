@@ -812,44 +812,6 @@ FunctionSig substitute_self_placeholders(FunctionSig sig, int self_tid, int err_
         ret = self_tid
     return FunctionSig(new_params, ret, sig.has_self, sig.self_ownership)
 
-# ── resolve_method: lookup by (TypeId, method name) ──────────
-# Phases: inherent impls → trait impls → trait default-method fallback
-# → intrinsic primitive satisfaction.
-
-MethodResolution resolve_method(TraitRegistry registry, int type_id, String method):
-    int i = 0
-    while i < registry.impls.len():
-        EquipInfo impl = registry.impls.get(i).unwrap()
-        if impl.self_type == type_id and impl.trait_def_id == NO_DEF:
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
-                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
-        i = i + 1
-    int j = 0
-    while j < registry.impls.len():
-        EquipInfo impl = registry.impls.get(j).unwrap()
-        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
-                return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
-        j = j + 1
-    int k = 0
-    while k < registry.impls.len():
-        EquipInfo impl = registry.impls.get(k).unwrap()
-        if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
-            int ti = 0
-            while ti < registry.traits.len():
-                TraitInfo tinfo = registry.traits.get(ti).unwrap()
-                if tinfo.def_id == impl.trait_def_id:
-                    int midx = find_method_index(tinfo.method_names, method)
-                    if midx >= 0:
-                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
-                        if has_default:
-                            return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
-                ti = ti + 1
-        k = k + 1
-    return not_found_resolution()
-
 # Lookup by self_type_name; fallback when TypeIds don't align across modules.
 
 MethodResolution resolve_method_by_name(TraitRegistry registry, String type_name, String method):
