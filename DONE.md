@@ -1,5 +1,14 @@
 # DONE
 
+- [2026-05-06] **Phase D4.5 — retire `func_state.local_ownership: FxHashMap` in favor of `Local.ownership` as the live store.** All five steps shipped:
+  - **5a** Added `LocalOwnership::Untracked` as the new `#[default]`, preserving the legacy "absent from FxHashMap" semantic for predicates like `is_owned_local`/`is_ref_local`. The previous default was `Owned`, which would have flipped every untracked local under naive migration.
+  - **5b** Migrated all readers (`is_owned_local`, `is_ref_local`, `is_bare_param`, `is_param_borrow_unique`, `is_cow_borrow`, `is_fresh_string`, `cow_is_alias`, `cow_resolve_root`, `collection_ref_source`, `has_string_borrowers`, `views_of_source`, `shared_heap_aliases_of_source`, `tuple_element_sources`, `cow_aliases_of`, `cow_collection_refs_for_id`, `cow_has_collection_refs`, `cow_has_aliases`, `field_borrows_of`, plus the case-1 alias-source check in `cow_before_mutation` and the SharedHeap match in `stmts/mod.rs`). All consult `builder.locals[i].ownership` directly. Threaded `&FunctionBuilder` through ~75 call sites across context.rs, exprs/, stmts/.
+  - **5c** Replaced `SavedScope`'s `local_ownership: FxHashMap` + `local_types_at_save: FxHashMap` with dense `Vec`s indexed by LocalId. `save_locals` walks `builder.locals` once; `restore_locals` writes through `builder.locals[i].ownership` directly.
+  - **5d** Deleted the `func_state.local_ownership: FxHashMap` field and the FxHashMap-write halves of every setter. `Local.ownership` is the sole live store.
+  - **5e** `flush_ownership_to_locals` retained for slot_kind derivation (its real purpose); the FxHashMap-coherence debug assert was dropped (no FxHashMap to drift from).
+
+  Self_host_bootstrap green throughout. Full integration sweep at end: 1066/1066 passed.
+
 - [2026-05-10] **Layering audit — `llvm/mod.rs` collection-ctor dispatch via typed `struct_aliases`.** Two sites in `src/backend/llvm/mod.rs::Inst::CallExtern` collection-constructor handler: (a) `:3670-3671` 5-arm `is_collection_ctor` discriminator (Vector__/Set__/Dict__/HashMap__/HashSet__) — replaced with `module.struct_aliases.contains_key(name)` (typed Phase A residual #2 map). (b) `:3700-3702` `ret_ty` selection — replaced 3-way name-prefix branch with `module.struct_aliases.get(name).and_then(...)` resolving the alias-target StructDef name (GorgetArray/GorgetMap/GorgetSet). The method-name exclusion list (`!name.contains("__map") && ...`) stays — it's the C-mangling boundary contract distinguishing constructors from methods. 8 prefix matches retired (312 → 304); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/backend/llvm/mod.rs`, `tests/lints.rs` (BUDGET 312 → 304).
 
