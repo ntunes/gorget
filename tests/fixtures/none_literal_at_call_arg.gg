@@ -1,0 +1,39 @@
+# Snag #29b runtime follow-up: a bare `None` literal at a call-argument
+# position lowered to `Operand::Constant(Constant::Null)` and the C
+# backend dereferenced it as `*(__gg_Option__T*)NULL` → SIGSEGV. The
+# parenthesised `None()` form already materialised the tagged Option
+# variant via `expected_type`; the bare `None` form skipped it. Both
+# surface forms now route through `materialise_none_for_expected_type`,
+# so the asymmetry is gone.
+#
+# Three shapes are exercised: single-arg, multi-arg-with-int, and
+# Option as the *first* arg followed by a struct/enum value (the form
+# Snag #29b's reproducer used: `run(E.A, None)`).
+
+public enum E:
+    A
+    B(int)
+
+void take_one(Option[int] o):
+    match o:
+        case Some(x):
+            print(f"some {x}")
+        case None:
+            print("none")
+
+void take_two(Option[int] o, int x):
+    match o:
+        case Some(v):
+            print(f"some {v} {x}")
+        case None:
+            print(f"none {x}")
+
+E take_after_enum(E _try, Option[int] _opt):
+    return E.A
+
+void main():
+    take_one(None)
+    take_two(None, 7)
+    take_two(Some(42), 7)
+    E _r = take_after_enum(E.A, None)
+    print("ok")

@@ -156,40 +156,11 @@ fn lower_expr_inner(
         }
 
         Expr::Call { callee, args, generic_args } => {
-            // None() call. When the expected type is a known `Option[T]`,
-            // construct the Option[T]::None variant directly — otherwise the
-            // bare `Constant::Null` is passed to the callsite, which the C
-            // backend treats as NULL and later dereferences (`*(Option[T]*)NULL`)
-            // → null-pointer deref / SEGV. The Assign handler already converts
-            // Null → tagged struct for VarDecl / StoreSlot, but function args
-            // don't flow through Assign, so they need this call-site
-            // conversion.
+            // None() call. The materialise-into-Option-struct logic is shared
+            // with the bare `Expr::NoneLiteral` arm below — see
+            // `materialise_none_for_expected_type` for the rationale.
             if matches!(callee.node, Expr::NoneLiteral) {
-                if let Some(expected) = ctx.func_state.expected_type {
-                    if let Some(name) = ctx.type_registry.type_name(expected) {
-                        if name.starts_with("Option__") && !name.starts_with("Option__Ref__") {
-                            // Register the Option's enum TypeDef if it isn't
-                            // already — Weak.upgrade's upgrade handler does
-                            // the same dance; the helper short-circuits when
-                            // already registered.
-                            let inner = ctx.type_registry
-                                .get_type_def(&name)
-                                .and_then(|td| match &td.kind {
-                                    crate::ir::types::TypeDefKind::Enum(e) => {
-                                        e.variants.iter().find(|v| v.name == "Some")
-                                            .and_then(|v| v.fields.first().map(|f| f.type_id))
-                                    }
-                                    _ => None,
-                                });
-                            if let Some(inner_type) = inner {
-                                ctx.ensure_option_type_registered(&name, inner_type);
-                                let dst = builder.enum_init(&name, "None", expected, vec![]);
-                                return FunctionBuilder::copy(dst);
-                            }
-                        }
-                    }
-                }
-                return Operand::Constant(Constant::Null);
+                return materialise_none_for_expected_type(ctx, builder);
             }
             // Check if this is a blocking call that should trigger with-shared refresh
             let is_blocking = is_blocking_call_name(&callee.node);
@@ -387,7 +358,15 @@ fn lower_expr_inner(
         // -- P3.4: Miscellaneous expressions --
 
         Expr::NoneLiteral => {
-            Operand::Constant(Constant::Null)
+            // Materialise into a tagged Option struct when expected_type is an
+            // Option[T] — call args, return values, struct-field inits set
+            // expected_type and never flow through the Assign handler that
+            // would otherwise rewrite Null → tagged struct downstream. Without
+            // this, `f(None)` lowered to `f(*(Option[T]*)NULL)` → SEGV at the
+            // call site (Snag #29b runtime follow-up). VarDecl-style sites
+            // continue to work because the Assign handler still catches the
+            // bare-Null fallback when expected_type isn't set / isn't Option.
+            materialise_none_for_expected_type(ctx, builder)
         }
 
         Expr::SelfExpr => {
@@ -2263,6 +2242,45 @@ pub fn resolve_none_tag(ctx: &LoweringContext, type_id: TypeId) -> i32 {
 /// Used by both the per-arm site and the else-arm site of `lower_match_expr`
 /// — encoding the boundary discipline in one place so the two structural
 /// branches can't drift.
+/// Materialise a `None` literal into a properly-tagged Option struct when
+/// `expected_type` is a known `Option[T]`. Falls back to `Constant::Null` only
+/// when there's no usable expected type — the Assign handler on `VarDecl` /
+/// `StoreSlot` rewrites the null into a tagged struct downstream for that
+/// case. Used by both `Expr::NoneLiteral` and `Expr::Call { callee:
+/// NoneLiteral }` (the parenthesised `None()` form) so the two surface forms
+/// can't disagree.
+///
+/// NOTE: the `name.starts_with("Option__")` test is the conventional GIR-layer
+/// shape for Option-detection at this boundary — the IR layer doesn't yet
+/// carry the `EnumKind::Option` typed flag that LIR has. Switching this to a
+/// typed flag is filed under the layering audit.
+fn materialise_none_for_expected_type(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+) -> Operand {
+    if let Some(expected) = ctx.func_state.expected_type {
+        if let Some(name) = ctx.type_registry.type_name(expected) {
+            if name.starts_with("Option__") && !name.starts_with("Option__Ref__") {
+                let inner = ctx.type_registry
+                    .get_type_def(&name)
+                    .and_then(|td| match &td.kind {
+                        crate::ir::types::TypeDefKind::Enum(e) => {
+                            e.variants.iter().find(|v| v.name == "Some")
+                                .and_then(|v| v.fields.first().map(|f| f.type_id))
+                        }
+                        _ => None,
+                    });
+                if let Some(inner_type) = inner {
+                    ctx.ensure_option_type_registered(&name, inner_type);
+                    let dst = builder.enum_init(&name, "None", expected, vec![]);
+                    return FunctionBuilder::copy(dst);
+                }
+            }
+        }
+    }
+    Operand::Constant(Constant::Null)
+}
+
 fn assign_match_arm_to_result(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,

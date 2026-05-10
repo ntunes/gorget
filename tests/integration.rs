@@ -2840,6 +2840,18 @@ fn nested_match_expr_enum_result() {
 }
 
 #[test]
+fn none_literal_at_call_arg() {
+    run_gg(
+        "none_literal_at_call_arg.gg",
+        "\
+none
+none 7
+some 42 7
+ok",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
