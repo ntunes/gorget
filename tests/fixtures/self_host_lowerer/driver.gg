@@ -10,6 +10,7 @@ from lower import lower_module
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
+from validate import run_validators
 from lir_lower import lower_gir_to_lir
 from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
@@ -46,6 +47,7 @@ void main():
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
+    run_validators(&gir)
     if emit_lir_c:
         LirModule lir = lower_gir_to_lir(&gir)
         run_ssa(&lir)
