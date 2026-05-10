@@ -18,9 +18,6 @@ from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
 
 # ── Typed accessors ─────────────────────────────────────────
 
-Item get_item_at(Vector[Item] v, int i):
-    return v.get(i).unwrap()
-
 Stmt get_stmt_at(Vector[Stmt] v, int i):
     return v.get(i).unwrap()
 
@@ -221,7 +218,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     # Collect all top-level items
     int i = 0
     while i < module.items.len():
-        Item item = get_item_at(module.items, i)
+        Item item = module.items.get(i).unwrap().clone()
         collect_item(item, &scopes, &types)
         i = i + 1
 
@@ -342,7 +339,7 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
 void resolve_bodies(Module module, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     int i = 0
     while i < module.items.len():
-        Item item = get_item_at(module.items, i)
+        Item item = module.items.get(i).unwrap().clone()
         resolve_item_body(item, &scopes, &types, &ctx)
         i = i + 1
 

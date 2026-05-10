@@ -36,16 +36,6 @@ bool has_opt_sexpr(Option[SpannedExpr] opt):
 SpannedExpr unwrap_opt_sexpr(Option[SpannedExpr] opt):
     return opt.unwrap()
 
-# ── get_item_at: load-bearing pass-by-value wrapper ─────────
-# `module.items.get(i).unwrap()` inlined directly at the
-# `type_check_item(item, ...)` call site at line ~1404 silently
-# breaks stage-1 binary execution (no compile error, no stack trace).
-# Routing through this wrapper passes module.items by value, which
-# implicitly clones the Vector once and stabilises the iteration.
-# Tracked in TODO.md. The other typed accessors are inlined.
-Item get_item_at(Vector[Item] v, int i):
-    return v.get(i).unwrap()
-
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
 # Returns the first match or NO_DEF.
@@ -1390,6 +1380,6 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
         rs = rs + 1
     int i = 0
     while i < module.items.len():
-        Item item = get_item_at(module.items, i)
+        Item item = module.items.get(i).unwrap().clone()
         type_check_item(item, module_scope, &scopes, &types, ctx)
         i = i + 1
