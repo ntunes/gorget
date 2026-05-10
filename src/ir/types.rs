@@ -186,6 +186,12 @@ pub struct TypeMetadata {
     /// typed-metadata form of the "closure alias" ownership pattern —
     /// contrast with user struct inits where the struct independently owns its fields.
     pub is_closure_env: bool,
+    /// Set for `Box__T` types registered via `register_collection_alias`.
+    /// Distinguishes a heap-allocated single-element wrapper (Box) from
+    /// other 1-field newtype-shaped structs. Replaces downstream
+    /// downstream name-prefix probes — readers that need to know
+    /// "is this a Box wrapper?" check this flag instead of the name.
+    pub is_box: bool,
 }
 
 impl Default for TypeMetadata {
@@ -202,6 +208,7 @@ impl Default for TypeMetadata {
             enum_category: None,
             c_runtime_alias: None,
             is_closure_env: false,
+            is_box: false,
         }
     }
 }
@@ -618,6 +625,28 @@ impl TypeRegistry {
             }
         }
         None
+    }
+
+    /// Whether the named type is a `Box__T` heap-allocated wrapper.
+    /// Reads the typed `metadata.is_box` flag set at registration in
+    /// `register_collection_alias`. Replaces downstream
+    /// downstream name-prefix probes — typed dispatch is correct
+    /// even if a future user struct happens to share the `Box__` prefix.
+    pub fn is_box(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.is_box;
+            }
+        }
+        false
+    }
+
+    /// Whether the named type is a `Box__T` heap-allocated wrapper, by name.
+    /// Useful for sites that already have a name string (e.g. from
+    /// extracting from a mangled function name).
+    pub fn is_box_name(&self, name: &str) -> bool {
+        self.get_type_def(name).map_or(false, |td| td.metadata.is_box)
     }
 
     /// Check if a named type is an Option or Result enum.

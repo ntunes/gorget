@@ -2954,6 +2954,7 @@ impl<'a> LoweringContext<'a> {
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                         is_closure_env: false,
+                        is_box: false,
                     },
                 });
             }

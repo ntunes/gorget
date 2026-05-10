@@ -272,6 +272,7 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                is_box: false,
             },
         });
         let array_type_id = module.type_registry.insert(GirType::Named("GorgetArray".to_string()));
@@ -294,6 +295,7 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                is_box: false,
             },
         });
         let map_type_id = module.type_registry.insert(GirType::Named("GorgetMap".to_string()));
@@ -316,6 +318,7 @@ pub fn lower_module(
                 enum_category: None,
                 c_runtime_alias: None,
                 is_closure_env: false,
+                is_box: false,
             },
         });
         let set_type_id = module.type_registry.insert(GirType::Named("GorgetSet".to_string()));
@@ -387,6 +390,7 @@ pub fn lower_module(
                         enum_category: None,
                         c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                         is_closure_env: false,
+                is_box: false,
                     },
                 });
                 let tid = module.type_registry.insert(GirType::Named(mangled_name.clone()));
@@ -428,6 +432,7 @@ pub fn lower_module(
                             enum_category: None,
                             c_runtime_alias: vector_protocol.c_runtime_alias.map(String::from),
                             is_closure_env: false,
+                is_box: false,
                         },
                     });
                 }

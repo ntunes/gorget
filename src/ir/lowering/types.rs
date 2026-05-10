@@ -749,6 +749,7 @@ pub(super) fn register_collection_alias(
                 align: None,
                 copy_semantics: CopySemantics::Resource,
                 drop_strategy: DropStrategy::Trivial("free".to_string()),
+                is_box: true,
                 ..Default::default()
             },
         };
@@ -775,6 +776,7 @@ pub(super) fn register_collection_alias(
                 enum_category: None,
                 c_runtime_alias: protocol.c_runtime_alias.map(String::from),
                 is_closure_env: false,
+                is_box: false,
             },
         };
         registry.add_type_def(type_def);
@@ -879,6 +881,7 @@ pub(super) fn register_callable_alias(
             enum_category: None,
             c_runtime_alias: protocol.c_runtime_alias.map(String::from),
             is_closure_env: false,
+                is_box: false,
         },
     };
     registry.add_type_def(type_def);
