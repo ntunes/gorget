@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — collection-constructor call dispatch via typed `struct_aliases`.** `c_lir/emit_call_extern.rs:309` had a 5-arm `name.starts_with("Vector__"|"Set__"|"Dict__"|"HashMap__"|"HashSet__")` check to detect collection-constructor CallExtern calls. Replaced with `module.struct_aliases.contains_key(name)` — typed Phase A residual #2 map populated when monomorphized collection aliases register their alias-target StructDef. The `is_collection_type_constructor(last_part)` inner check (which detects type-name suffix like "int64_t" vs method names like "new") stays — it's the disambiguator between constructor vs method calls. 5 prefix matches retired (358 → 353); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/backend/c_lir/emit_call_extern.rs`, `tests/lints.rs` (BUDGET 358 → 353).
+
 - [2026-05-10] **Layering audit — `ir/lowering/exprs/collections.rs` array-literal + dict-literal dispatch via typed `collection_kind`.** Two sites: (a) `:34-37` outer-Vector detection for nested `[[1,2,3], ...]` literals — `n.starts_with("Vector__"|"Deque__")||n=="GorgetArray"` migrated to `ctx.type_registry.collection_kind(outer) == Some(Array)`. (b) `:175` empty-dict-literal `{}` detection from `expected_type` — `type_name.starts_with("Dict__"|"HashMap__")` migrated to `matches!(ctx.type_registry.collection_kind(expected_type), Some(OrderedMap)|Some(Map))`. The downstream `format!("{type_name}__new")` stays — it's the runtime-mangling spelling at the C-emit boundary. 4 prefix matches retired (362 → 358); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/collections.rs`, `tests/lints.rs` (BUDGET 362 → 358).
 

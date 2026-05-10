@@ -306,8 +306,13 @@ pub(super) fn emit_call_extern(
             // Vector__int64_t(cap) → gorget_array_with_capacity(sizeof(int64_t), cap)
             // Vector__int64_t() → gorget_array_new(sizeof(int64_t))
             // Set__T(cap) / Dict__K__V(cap) → gorget_set_new(sizeof(T), cap) etc.
-            if name.starts_with("Vector__") || name.starts_with("Set__") || name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("HashSet__") {
-                // Check if it's a constructor (name is just a type, no method suffix)
+            //
+            // Read typed `struct_aliases` (Phase A residual #2) — a
+            // monomorphized collection alias name is registered when its
+            // alias-target StructDef is registered. Replaces five
+            // `name.starts_with("Vector__"|"Set__"|"Dict__"|"HashMap__"|
+            // "HashSet__")` arms with one typed map lookup.
+            if module.struct_aliases.contains_key(name) {
                 let last_part = name.rsplit("__").next().unwrap_or("");
                 if is_collection_type_constructor(last_part) {
                     emit_collection_constructor(out, name, dst, args, val_types, sn, module);
