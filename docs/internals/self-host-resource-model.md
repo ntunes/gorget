@@ -121,6 +121,8 @@ struct GirResourceMetadata:
 
 If self-host's emit of any of these patterns trips a codegen bug — `Option[String]` field reads, enum-discriminant matches at high call-frequency, struct-with-many-enum-fields construction — that bug gets a TODO entry and a Gorget-side fix before this Phase A migration proceeds. No conceding to int-coding "for now."
 
+(Implementation note: `meta` is a Gorget keyword, so match-arm bindings use `rmeta` or similar — `case Some(rmeta): ...`. This is by-design language convention, not a codegen bug.)
+
 ### 3.3 Migration plan
 
 1. Define `GirResourceMetadata` struct + populate at every type-registration site (already a small set: `register_type`, `lookup_or_register_named`, `register_ptr`, the prelude pre-registration in `lower.gg`'s startup).

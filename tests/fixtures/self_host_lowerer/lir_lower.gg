@@ -179,6 +179,111 @@ bool is_opaque_pointer_type(String name):
 bool is_guard_struct_type(String name):
     return name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__")
 
+# ── Phase A — typed resource-metadata builder ──────────────────
+# Single source of truth for `is this type a Vector / Dict / Set / Box /
+# opaque handle / ...`. Returns Some(meta) for categorised resource
+# types; None for trivial / user-defined types. Populated once at
+# `lower_gir_to_lir` entry; consumers read instead of re-deriving.
+#
+# When migrating a `name.starts_with("X__")` site, the right shape is:
+#     match resource_meta_for(&gmod, name):
+#         case Some(rmeta):
+#             match rmeta.collection_kind:
+#                 case CkVector(): ...
+#                 ...
+# (`meta` is a Gorget keyword; binding name avoids the parser conflict.)
+# (See `docs/internals/self-host-resource-model.md` §3.)
+Option[GirResourceMetadata] build_resource_metadata(String name):
+    # Built-in runtime structs by exact name.
+    if name == "GorgetString" or name == "String" or name == "Str":
+        return Some(GirResourceMetadata(
+            "GorgetString", 32, LT_STRUCT_BASE,
+            Some("gorget_string_free"), Some("gorget_string_clone"),
+            Some("gorget_string_materialize_inplace"),
+            CsResource(), CkNotCollection(), BkNotBox(), false))
+    if name == "GorgetArray":
+        return Some(GirResourceMetadata(
+            "GorgetArray", 64, LT_STRUCT_BASE,
+            Some("gorget_array_free"), Some("gorget_array_clone"), None,
+            CsResource(), CkVector(), BkNotBox(), false))
+    if name == "GorgetMap":
+        return Some(GirResourceMetadata(
+            "GorgetMap", 184, LT_STRUCT_BASE,
+            Some("gorget_map_free"), Some("gorget_map_clone"), None,
+            CsResource(), CkDict(), BkNotBox(), false))
+    if name == "GorgetSet":
+        return Some(GirResourceMetadata(
+            "GorgetSet", 184, LT_STRUCT_BASE,
+            Some("gorget_set_free"), Some("gorget_set_clone"), None,
+            CsResource(), CkSet(), BkNotBox(), false))
+    if name == "GorgetClosure":
+        return Some(GirResourceMetadata(
+            "GorgetClosure", 16, LT_STRUCT_BASE,
+            Some("gorget_closure_free"), Some("gorget_closure_clone"), None,
+            CsResource(), CkNotCollection(), BkNotBox(), false))
+
+    # Parameterised collections: Vector__T / Deque__T / Heap__T → GorgetArray.
+    if name.starts_with("Vector__") or name.starts_with("Deque__") or name.starts_with("Heap__"):
+        return Some(GirResourceMetadata(
+            "GorgetArray", 64, LT_STRUCT_BASE,
+            Some("gorget_array_free"), Some("gorget_array_clone"), None,
+            CsResource(), CkVector(), BkNotBox(), false))
+
+    # Dict__K__V / HashMap__K__V / GorgetDict__/GorgetMap__ → GorgetMap.
+    if name.starts_with("Dict__") or name.starts_with("HashMap__") or name.starts_with("GorgetDict__") or name.starts_with("GorgetMap__"):
+        return Some(GirResourceMetadata(
+            "GorgetMap", 184, LT_STRUCT_BASE,
+            Some("gorget_map_free"), Some("gorget_map_clone"), None,
+            CsResource(), CkDict(), BkNotBox(), false))
+
+    # Set__T / HashSet__T / GorgetSet__ → GorgetSet.
+    if name.starts_with("Set__") or name.starts_with("HashSet__") or name.starts_with("GorgetSet__"):
+        return Some(GirResourceMetadata(
+            "GorgetSet", 184, LT_STRUCT_BASE,
+            Some("gorget_set_free"), Some("gorget_set_clone"), None,
+            CsResource(), CkSet(), BkNotBox(), false))
+
+    # Box[T] — owned heap pointer.
+    if name.starts_with("Box__"):
+        return Some(GirResourceMetadata(
+            "Box", 8, LT_PTR,
+            None, None, None,
+            CsResource(), CkNotCollection(), BkRegularBox(), false))
+
+    # Opaque handles (ref-counted runtime types). Method prefix is
+    # captured by `opaque_ptr_method_prefix` for now; consumers that
+    # need it migrate via that helper. Phase A subsequent commit
+    # extends GirResourceMetadata with method_prefix.
+    if name.starts_with("Mutex__") or name.starts_with("RWLock__") or name.starts_with("Channel__") or name.starts_with("Shared__") or name.starts_with("Weak__") or name.starts_with("Thread__") or name.starts_with("AtomicInt__") or name.starts_with("AtomicBool__") or name.starts_with("Semaphore__") or name.starts_with("Barrier__") or name.starts_with("OnceFlag__") or name.starts_with("WaitGroup__") or name.starts_with("TaskGroup__"):
+        return Some(GirResourceMetadata(
+            "Ptr", 8, LT_PTR,
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(), true))
+
+    # Bare-name opaque handles (not parameterised, not __-suffixed).
+    if name == "Barrier" or name == "CondVar" or name == "AtomicInt" or name == "AtomicBool" or name == "Process" or name == "Thread" or name == "Semaphore" or name == "WaitGroup" or name == "OnceFlag":
+        return Some(GirResourceMetadata(
+            "Ptr", 8, LT_PTR,
+            None, None, None,
+            CsRefCounted(), CkNotCollection(), BkNotBox(), true))
+
+    # Guard structs.
+    if name.starts_with("Guard__") or name.starts_with("ReadGuard__") or name.starts_with("WriteGuard__"):
+        return Some(GirResourceMetadata(
+            "Guard", 16, LT_STRUCT_BASE,
+            None, None, None,
+            CsResource(), CkNotCollection(), BkNotBox(), false))
+
+    # Trait box: bare name (no monomorphisation suffix).
+    if name == "Box":
+        return Some(GirResourceMetadata(
+            "Box", 8, LT_PTR,
+            None, None, None,
+            CsResource(), CkNotCollection(), BkTraitBox(), false))
+
+    # User struct/enum or unknown — caller treats as None.
+    return None
+
 # Phase A — source-of-truth C method prefix for opaque pointer types.
 # Returns "" for types that have per-method special cases (Channel/Shared/Thread).
 # Called at type-registration time to populate type_method_prefix_map.
@@ -2718,6 +2823,23 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
 LirModule lower_gir_to_lir(GirModule &gmod):
     LirModule m = new_lir_module()
     Dict[String, int] sr = {}
+
+    # ── Phase A — populate typed resource metadata ─────────────
+    # Walk every named type and tag its resource shape. Downstream
+    # passes read this Dict instead of re-deriving from
+    # `name.starts_with("Vector__")` etc. See
+    # docs/internals/self-host-resource-model.md §3.
+    Vector[String] nt_keys = gmod.named_types.keys()
+    int nti = 0
+    while nti < nt_keys.len():
+        String tname = nt_keys.get(nti).unwrap()
+        if not gmod.resource_metadata.contains(tname):
+            match build_resource_metadata(tname):
+                case Some(rmeta):
+                    gmod.resource_metadata.put(tname.clone(), rmeta)
+                case None:
+                    pass
+        nti += 1
 
     # Copy imported-type flags from GirModule (loader stores imported struct
     # and enum names with "__imported_type__NAME" keys). Used downstream to
