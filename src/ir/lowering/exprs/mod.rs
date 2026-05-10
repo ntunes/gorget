@@ -2359,8 +2359,16 @@ fn lower_match_expr(
         if !builder.is_terminated() {
             if !result_type_refined {
                 let arm_ty = infer_operand_type_full(ctx, &arm_val, builder);
-                builder.locals[result_local.0 as usize].type_id = arm_ty;
-                result_type_refined = true;
+                // Skip refinement when the arm produces Unit — refining the
+                // result_local to Unit makes its slot lower to LirType::Void
+                // (declared as `void *` in C), and the next arm storing a
+                // primitive value triggers `assignment to 'void *' from
+                // 'int32_t'`. Unit-arm matches are statement-form; the result
+                // is unused, so leaving it at the I64 default is harmless.
+                if arm_ty != UNIT_TYPE {
+                    builder.locals[result_local.0 as usize].type_id = arm_ty;
+                    result_type_refined = true;
+                }
             }
             assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
@@ -2376,7 +2384,9 @@ fn lower_match_expr(
         if !builder.is_terminated() {
             if !result_type_refined {
                 let else_ty = infer_operand_type_full(ctx, &else_val, builder);
-                builder.locals[result_local.0 as usize].type_id = else_ty;
+                if else_ty != UNIT_TYPE {
+                    builder.locals[result_local.0 as usize].type_id = else_ty;
+                }
             }
             assign_match_arm_to_result(ctx, builder, result_local, else_val, else_expr.span);
             builder.jump(merge_bb);
@@ -2854,8 +2864,16 @@ fn lower_match_stmt_as_expr(
         if !builder.is_terminated() {
             if !result_type_refined {
                 let arm_ty = infer_operand_type_full(ctx, &arm_val, builder);
-                builder.locals[result_local.0 as usize].type_id = arm_ty;
-                result_type_refined = true;
+                // Skip refinement when the arm produces Unit — refining the
+                // result_local to Unit makes its slot lower to LirType::Void
+                // (declared as `void *` in C), and a sibling arm storing a
+                // primitive value triggers `assignment to 'void *' from
+                // 'int32_t'`. Unit-arm matches are statement-form; the
+                // result is unused so the I64 default is harmless.
+                if arm_ty != UNIT_TYPE {
+                    builder.locals[result_local.0 as usize].type_id = arm_ty;
+                    result_type_refined = true;
+                }
             }
             assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
@@ -2871,7 +2889,9 @@ fn lower_match_stmt_as_expr(
         if !builder.is_terminated() {
             if !result_type_refined {
                 let else_ty = infer_operand_type_full(ctx, &else_val, builder);
-                builder.locals[result_local.0 as usize].type_id = else_ty;
+                if else_ty != UNIT_TYPE {
+                    builder.locals[result_local.0 as usize].type_id = else_ty;
+                }
             }
             // Use a synthetic span — block expressions don't carry one,
             // and the helper only consults span for the implicit-clone

@@ -2,6 +2,18 @@
 
 ## High
 
+- **VarDecl from owned function-call result double-drops via aliased intermediate temp slot (Snag #29c runtime).** Surface symptom: `gorget-js`'s `eval_test.gg` test "try/catch: catches a throw" double-frees on the catch param. Valgrind shows `pname` (allocated by `gorget_str_cat` from `catch_clause.param + ""`) freed twice from successive instructions inside `eval_try`. LIR diagnosis (eval_try):
+  ```
+  v86 = call_runtime StrCat(...)     ; fresh owned String → temp slot s33
+  slot_store s33, v86
+  v87: ptr = slot_addr s33
+  slot_store s30, v87                ; struct memcpy s33 → s30 (pname VarDecl slot)
+  ; ... use s30 ...
+  call_runtime StringFree(s33)       ; ← drop the temp
+  call_runtime StringFree(s30)       ; ← invalid free, same heap block
+  ```
+  The intermediate temp `s33` (the StrCat call's result slot) is NOT being deregistered after the byte-copy into `s30`, so both slots end up drop-registered and aliased to the same heap data. This is a CoW-boundary slip at the var-decl-from-function-call-result site. The `String pname = catch_clause.param + ""` shape doesn't repro standalone — needs the surrounding eval_try shape (multi-pname-use across consume sites + return-Result-via-match-arm + nested arm body), which suggests the bug is in how a specific composition of liveness + `ensure_owned_at_boundary` + drop tracking interact rather than in the generic VarDecl path. Likely overlaps with Tier 2a Phase 3 work (412 borrowed-source consume sites). The minimal-repros from this session (`/tmp/strcat_dup*.gg`) all worked, so the trigger is composite. [added: 2026-05-10, surfaced via gorget-js Snag #29c]
+
 - **Cross-module global initialiser does NOT execute for stdlib-imported `static`/`public` declarations.** `src/ir/lowering/mod.rs:1196` skips StaticDecls with zero-length spans (`decl.span.start == decl.span.end`) — the dummy-span shape produced when stdlib statics enter via the import path. As a result, `lib/std/math.gg`'s `public float INFINITY = _math_infinity()` never runs its initialiser; the underlying global is left as `__lir_g0 = {0}`. Today this is masked by the IR-lowering hardcoding of `INFINITY`/`NAN` in `module_constants` (kept as a holdout when the `PI`/`E`/`TAU` removal shipped). Fix: stdlib import-side statics should produce real (non-dummy) spans OR the skip predicate should not gate on span shape. Once the global-init bug is fixed, the `INFINITY`/`NAN` hardcoding in `src/ir/lowering/mod.rs` (the residual auto-injection) drops out — `from std.math import INFINITY, NAN` becomes the single source of truth, completing the Layering rule 3 cleanup. [added: 2026-05-10, surfaced when removing the larger PI/E/TAU hardcoding for Snag #29 follow-up #1]
 
 ### Tier 2a Phase 3 — `AssignIntoOwnedSlot` consume-site migration (in progress 2026-05-10)
