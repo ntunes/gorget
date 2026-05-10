@@ -1,0 +1,31 @@
+# Snag #29b regression: a nested match-as-expression returning a non-trivial
+# enum (struct-shaped, with payload variant defined) miscompiled. The inner
+# match's `result_local` was hardcoded to I64; arms wrote `&__sNN` (Ptr to
+# the enum struct) into the I64-sized slot, and the outer match's boundary
+# path then assigned an int64_t into the surrounding enum struct, producing
+# a `incompatible types when assigning to type '__gg_E' from type 'int64_t'`
+# C codegen error.
+#
+# Fix: lower_match_stmt_as_expr now mirrors lower_match_expr — it sizes the
+# result slot from `expected_type` if available (set by the enclosing
+# VarDecl/Assign/Return), otherwise refines from the first non-divergent arm.
+
+public enum E:
+    A
+    B(int)
+
+E run(E try_c, Option[int] opt):
+    E result = match try_c:
+        case E.B(_):
+            match opt:
+                case Some(_):
+                    E.A
+                case None:
+                    E.A
+        else:
+            E.A
+    return result
+
+void main():
+    E _e = run(E.B(7), Some(1))
+    print("ok")

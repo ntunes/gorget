@@ -2832,6 +2832,14 @@ fn enum_name_collision_with_constant() {
 }
 
 #[test]
+fn nested_match_expr_enum_result() {
+    run_gg(
+        "nested_match_expr_enum_result.gg",
+        "ok",
+    );
+}
+
+#[test]
 fn drop_raii() {
     run_gg(
         "drop_raii.gg",

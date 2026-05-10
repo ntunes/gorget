@@ -2803,7 +2803,16 @@ fn lower_match_stmt_as_expr(
     } else { false };
     let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
 
-    let result_local = builder.add_local(I64_TYPE, None);
+    // Mirror lower_match_expr: size the result slot from expected_type when
+    // available (set by an enclosing VarDecl/Assign/Return/arg), otherwise
+    // refine from the first non-divergent arm. Snag #29b: previously hardcoded
+    // I64 here, so a nested `match` returning a struct/enum miscompiled — the
+    // arms wrote `&__sNN` (Ptr) into an I64-sized slot, and the outer match's
+    // boundary path then assigned an int64_t into the surrounding enum struct,
+    // producing `incompatible types` C errors.
+    let result_type_init = ctx.func_state.expected_type.unwrap_or(I64_TYPE);
+    let result_local = builder.add_local(result_type_init, None);
+    let mut result_type_refined = ctx.func_state.expected_type.is_some();
     let merge_bb = builder.new_block();
 
     let concrete_arms: Vec<&ast::MatchArm> = arms.iter().filter_map(|i| i.arm()).collect();
@@ -2825,6 +2834,11 @@ fn lower_match_stmt_as_expr(
         let arm_val = lower_expr(ctx, builder, &arm.body);
         // Don't overwrite return/break/continue terminators with jump
         if !builder.is_terminated() {
+            if !result_type_refined {
+                let arm_ty = infer_operand_type_full(ctx, &arm_val, builder);
+                builder.locals[result_local.0 as usize].type_id = arm_ty;
+                result_type_refined = true;
+            }
             assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
         }
@@ -2837,6 +2851,10 @@ fn lower_match_stmt_as_expr(
     if let Some(else_block) = else_arm {
         let else_val = lower_block_expr(ctx, builder, else_block);
         if !builder.is_terminated() {
+            if !result_type_refined {
+                let else_ty = infer_operand_type_full(ctx, &else_val, builder);
+                builder.locals[result_local.0 as usize].type_id = else_ty;
+            }
             // Use a synthetic span — block expressions don't carry one,
             // and the helper only consults span for the implicit-clone
             // diagnostic (which the else branch rarely triggers anyway).
