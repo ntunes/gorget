@@ -68,7 +68,20 @@ pub(super) fn register_tuple_type(ctx: &mut LoweringContext, elem_types: &[TypeI
 
 /// Resolve the element type at a given index from a tuple TypeDef.
 pub fn resolve_tuple_field_type(ctx: &LoweringContext, tuple_type_id: TypeId, index: usize) -> TypeId {
-    if let Some(type_name) = ctx.type_name_for_id(tuple_type_id) {
+    // Peel Ptr/MutPtr — closure tuple-destructure params arrive as
+    // `*Tuple__T__U` (the closure's `Tuple` arg is passed by Ptr ABI).
+    // Without this peel, the lookup falls through to the I64 fallback
+    // and the field-load result is mis-typed, producing a Tier 2a
+    // `AssignIntoOwnedSlot` violation at the desugared `T name =
+    // __dp_0._0` VarDecl. The mismatch is also a structural type bug
+    // — the GIR slot was sized for i64 but received a memcpy of a
+    // GorgetString-shape struct.
+    use crate::ir::types::GirType;
+    let resolved = match ctx.type_registry.get(tuple_type_id) {
+        Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+        _ => tuple_type_id,
+    };
+    if let Some(type_name) = ctx.type_name_for_id(resolved) {
         if let Some(type_def) = ctx.type_registry.get_type_def(type_name) {
             if let TypeDefKind::Struct(ref s) = type_def.kind {
                 if let Some(field) = s.fields.get(index) {

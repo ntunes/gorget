@@ -97,6 +97,7 @@ These structural guards exist today and are load-bearing:
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
+| `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
@@ -151,11 +152,11 @@ Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `sr
 
 ### Tier 2 — invariants we should have, designed but not yet built
 
-#### 2a. CoW consume-site discipline *(deeper class than #1a)*
+#### 2a. CoW consume-site discipline *(deeper class than #1a)* — **FULLY SHIPPED 2026-05-10**
 
 **Phase 1 + 2A/B/C/E SHIPPED 2026-05-08.** Validator + non-fatal env-gate (`7ab736c0`), writer-site tagging (`81014df4`/`d0c2f2f6`/`6851c877`/`26145106`), and three migration commits (`e1214312`) drove violations for Calls/Inits/CollectionMutators/BoxNew to zero across all 1068 fixtures. Validator promoted to fatal (`9cd32876`). Phase 2E (`10abfbef`/`6242fc0a`) replaced `preceded_by_clone`'s name-list with typed `RuntimeFn::returns_fresh` + `clone_fn_names_set`. See DONE.md for the full chain.
 
-**Phase 3 IN PROGRESS 2026-05-10** (validator extension + tagging migration shipped, residual real-bug migration deferred). Snag #28's match-arm-result borrow-clone bug exposed a gap: the existing validator covers consume-site SHAPES (calls, inits, runtime mutators) but not plain `Inst::Assign` whose dst is an owned-required slot. The Snag #28 shape — `[Mv] _result = copy _ptr` materialising as memcpy of a borrowed pointee struct — passed silently. New `ConsumeSiteClass::AssignIntoOwnedSlot` (commit `2846baf4`) walks `Inst::Assign` and gates on dst-type resource-ness (the existing `validate_consume` gates on source-type, which Ptr<T> sources don't satisfy). Non-fatal pending sweep + migration.
+**Phase 3 SHIPPED 2026-05-10.** Snag #28's match-arm-result borrow-clone bug exposed a gap: the existing validator covers consume-site SHAPES (calls, inits, runtime mutators) but not plain `Inst::Assign` whose dst is an owned-required slot. The Snag #28 shape — `[Mv] _result = copy _ptr` materialising as memcpy of a borrowed pointee struct — passed silently. New `ConsumeSiteClass::AssignIntoOwnedSlot` (commit `2846baf4`) walks `Inst::Assign` and gates on dst-type resource-ness (the existing `validate_consume` gates on source-type, which Ptr<T> sources don't satisfy). **Migration: 11,129 → 0 violations across 1078 fixtures, validator promoted to fatal alongside the Phase 1/2 classes.** All AssignIntoOwnedSlot violations now halt the build on first hit.
 
 Phase 3 progress through 2026-05-10: **11,129 → 64 violations (-99.4%)** across 1078 fixtures, via six inference-pass extensions, one literal-tagging fix, and three lowering-level fixes:
 - Validator + non-fatal env-gate (commit `2c0d53e9` after squashed rebase onto main).
@@ -169,8 +170,9 @@ Phase 3 progress through 2026-05-10: **11,129 → 64 violations (-99.4%)** acros
 - **Bare-param Ptr-alias optimization retired** (commit `bca88f29`): the historical `lower_var_decl` branch silently changed `String x = some_param` declarations into `*String x = &some_param`, causing downstream auto-deref-and-memcpy bugs at consume sites. Removing it (flow falls through to the sound `clone_fn_for_ptr` clone branch) closed 412 → 216 Borrowed violations and the new fixture `vardecl_owned_call_double_drop.gg` (Snag #29c repro) passes.
 - **Match-scrutinee Move-mode gated on `source_at_last_use` + validator skips Borrow-mode assigns** (commit `a3380c96`): the staging assign emitted Move on a source that `tag_of` and pattern extraction would re-read; gating Move on liveness routes those to Borrow mode, and the validator's added Borrow-skip recognizes Borrow as the alias contract. **Owned-but-live class closed (303 → 0).**
 - **Field_origin propagation retired** (commit `edd8bf9e`): same architectural bug as bare-param at a different propagation path. Bisected via probes (cow_borrow stays load-bearing for self-host's CoW alias optimization; field_origin was not load-bearing for any test). Closed 219 → 17 Borrowed.
+- **Residual closure (commits `6d1ca1f8`, `ec766c8b`, plus the strict-`safe_in_loop` cow-borrow tightening): five lowering / inference fixes drove 64 → 0.** `BinaryOp::Add` recursion in `infer_closure_return_type` (closes IIFE `ty4` cluster); `EnumFieldLoad`/`FieldLoad` self-zero rule in `tag_ownership` (`IoError`/`Frontmatter`/`Big`); bare-local Assign-then-MoveZero rule (match-arm-result merge); `lower_catch_expr` emits `move_zero(val_local)` after extract (`error_conditional_throw`); `resolve_tuple_field_type` peels `Ptr`/`MutPtr` (`closure_tuple_destructure`); Range-index returns base type for slice (`vector_capacity`); `interp_temp_mode` clones for `Borrowed`/`View` sources (`exec_output_captures_stderr`); Assign + dst-zeroed inference rule (`lower___lower_call`); strict `safe_in_loop` cow-borrow propagation in `lower_var_decl` (string-reassign-loop / cow-borrow-basic / self-host's `format_*_lines` and `join` defaults).
 
-Residual 64 violations are minor scattered patterns (47 untracked, 17 borrowed, 0 owned-live). Top sources: `ty4` (20 — anonymous closure-env types), `GorgetString` (17), small one-offs. Top fns: `main` (40 cumulative), `run`/`read_exact__Cursor`/`join_lines`/`__Closure_2__call` (4 each). Estimated ~1 session to close. See `TODO.md` "Tier 2a Phase 3" for per-class burn-down.
+**Status 2026-05-10**: 0 violations. Validator FATAL across all consume-site classes. Promoted at `src/ir/lowering/mod.rs` (folded `AssignIntoOwnedSlot` into the unconditional panic block).
 
 **Invariant.** At every consuming position (push / put / insert / send / `v[i] = x` / enum-init / struct-init / Box.new / function arg with `Ownership::Move` / **plain `Inst::Assign` into a resource-typed Owned/FreshOwned slot**), the IR mode of the source matches its typed `LocalOwnership` state per the rules in `AGENTS.md`'s *Ownership at Consuming Positions*:
 
@@ -184,13 +186,13 @@ Residual 64 violations are minor scattered patterns (47 untracked, 17 borrowed, 
 
 **Why it matters.** This is the *deepest* layer of the snag #24 class. Today the IR emits `enum_init Node::VarDecl { copy _3 }` even when `_3 = decls` is owned and live past the call (read at scope exit). The "owned but live → clone" rule isn't enforced at the enum-constructor consume site. The skip in `recursive_drop_structs` was masking this; once drops fire correctly, the aliasing produces use-after-free. Snag #28 is the same bug shape at a plain `Inst::Assign` boundary — Phase 3 closes the validator gap and is driving the remaining 3,052 violations to zero.
 
-**Burn-down (Phase 3 remaining).**
+**Burn-down (Phase 3 — COMPLETE 2026-05-10).**
 1. ✅ Validator + non-fatal gate (commit `2846baf4`).
 2. ✅ Constructor dst-tagging in inference pass + dict-literal `set_owned` + filter narrowing (commit `2e8a38f7`).
-3. Migrate remaining 3,052 violations: GorgetString (967 — mostly Borrowed-source / aliased shape), Vector__int64_t (412 — iterator default-method `acc + x` shape), Column (272 — dataframe), Borrowed-source (412 total — Snag #28 class proper, requires per-site clone gates), owned-but-live (303 — surviving-use cases needing clone-at-boundary).
-4. Promote AssignIntoOwnedSlot to fatal (fold into `validate_consume_sites`'s panic block at `src/ir/lowering/mod.rs:1789`).
+3. ✅ Residual 64 → 0 across five lowering / inference fixes plus the strict-`safe_in_loop` cow-borrow tightening (commits `6d1ca1f8`, `ec766c8b`, plus this session's final commit).
+4. ✅ Promote `AssignIntoOwnedSlot` to fatal — folded into the unconditional panic block at `src/ir/lowering/mod.rs`.
 
-**Estimate.** Phase 1/2 was ~6 sessions; Phase 3 likely 3-5 sessions for the remaining migration.
+**Estimate (delivered).** Phase 1/2 was ~6 sessions; Phase 3 closed in 2 sessions.
 
 #### 2b. Match-scrutinee discipline
 

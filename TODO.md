@@ -16,36 +16,6 @@
 
 - **Cross-module global initialiser does NOT execute for stdlib-imported `static`/`public` declarations.** `src/ir/lowering/mod.rs:1196` skips StaticDecls with zero-length spans (`decl.span.start == decl.span.end`) — the dummy-span shape produced when stdlib statics enter via the import path. As a result, `lib/std/math.gg`'s `public float INFINITY = _math_infinity()` never runs its initialiser; the underlying global is left as `__lir_g0 = {0}`. Today this is masked by the IR-lowering hardcoding of `INFINITY`/`NAN` in `module_constants` (kept as a holdout when the `PI`/`E`/`TAU` removal shipped). Fix: stdlib import-side statics should produce real (non-dummy) spans OR the skip predicate should not gate on span shape. Once the global-init bug is fixed, the `INFINITY`/`NAN` hardcoding in `src/ir/lowering/mod.rs` (the residual auto-injection) drops out — `from std.math import INFINITY, NAN` becomes the single source of truth, completing the Layering rule 3 cleanup. [added: 2026-05-10, surfaced when removing the larger PI/E/TAU hardcoding for Snag #29 follow-up #1]
 
-### Tier 2a Phase 3 — `AssignIntoOwnedSlot` consume-site migration (in progress 2026-05-10)
-
-Snag #28's match-arm-result borrow-clone fix (commit `179202ed`) was a per-site patch for what `docs/internals/structural-guards.md` Tier 2a calls "the load-bearing invariant for the entire CoW system". The existing fatal consume-site validator covered Calls/Inits/CollectionMutators but **not plain `Inst::Assign`** — exactly where Snag #28's bug shape lived. Validator extended this session; migration ongoing.
-
-**Status update (sweep19, 2026-05-10):** initial sweep was 11,129 violations; current sweep is **64 (-99.4%)** after eight progressive fixes. Validator non-fatal pending migration of the residual 64 (minor scattered patterns).
-
-**Current breakdown (sweep19, 1078 fixtures):**
-- `untracked source consumed`: 47 (73%) — minor producer-shape patterns
-- `borrowed source consumed`: 17 (27%) — residual edge cases
-- `owned-but-live source consumed`: 0 (CLOSED)
-- Top source types: `ty4` (20 — anonymous closure-env types), `GorgetString` (17), `IoError`/`Frontmatter`/`Big` (4 each), `ty53`/`ty48`/`ty42` (4 each).
-- Top functions: `main` (40 cumulative — small per-fixture residuals), `run`/`read_exact__Cursor`/`join_lines`/`join`/`__Closure_2__call` (4 each).
-
-**Burn-down plan (1 session for residual):**
-1. ✅ Validator + non-fatal gate.
-2. ✅ Constructor dst-tagging + dict-literal `set_owned` + filter narrowing. 11,129 → 3,052.
-3. ✅ BinOp/UnOp + Constant::Str dst-tagging. 3,052 → 1,639.
-4. ✅ IndexLoad-Clone dst-tagging. 1,639 → 790.
-5. ✅ Deref-then-MoveZero dst-tagging (`!`-move param consume). 790 → 764.
-6. ✅ Bare-param Ptr-alias optimization retired (`bca88f29`). 764 → 570.
-7. ✅ Match-scrutinee Move-mode gated on `source_at_last_use` + validator skips Borrow-mode assigns (`a3380c96`). 571 → 268. **Owned-but-live class CLOSED (303 → 0).**
-8. ✅ Field_origin propagation retired (`edd8bf9e`). 268 → 64. cow_borrow propagation kept (load-bearing for self-host's CoW alias optimization).
-9. **Untracked residual (47)** — minor patterns: `ty4` anonymous closure-env types (20), GorgetString from internal calls (17), various 4-counts. Probably 1-2 more producer-shape rules in `tag_ownership::infer_fresh_owned` will close most. ~1 session.
-10. **Borrowed residual (17)** — small scattered cases after major sources retired. May need per-site investigation. ~1 session.
-11. **Promote** — Once at zero, fold `AssignIntoOwnedSlot` into the unconditional fatal block at `src/ir/lowering/mod.rs:1789-1815`.
-
-**Investigation tools.** Re-run sweep: `SWEEP=/tmp/sweep-$RANDOM.log; GG_VALIDATE_CONSUME_SITES=$SWEEP cargo test --test integration -- --test-threads=4`. Per-class breakdown: `grep "class+viol AssignIntoOwnedSlot" $SWEEP | awk -F= '{c[$1]+=$2} END {for(k in c) print k, "=", c[k]}'`. Per-source-type: `grep "class+type AssignIntoOwnedSlot" $SWEEP | sed 's/.*class+type AssignIntoOwnedSlot | //' | awk -F= '{gsub(/^ +| +$/, "", $1); c[$1]+=$2} END {for(k in c) printf "%-50s %d\n", k, c[k]}' | sort -k2 -n -r | head -15`.
-
-Files: `src/ir/validate.rs` (validator), `src/ir/lowering/mod.rs` (split fatal/non-fatal), `src/ir/tag_ownership.rs` (inference), `src/ir/lowering/exprs/collections.rs` (literal tagging). [added: 2026-05-10, updated: 2026-05-10]
-
 ### Self-host showcase blockers
 
 These are Gorget bugs that surface as workarounds in self-host code. Per `docs/internals/self-host-resource-model.md` §0, every workaround in self-host *that exists because Gorget can't express the elegant shape today* is a goal regression: self-host is the demonstration of idiomatic Gorget, so a gap that forces it to be ugly is a blocker, not deferable. Each entry below names the workaround currently in tree, the Gorget-side fix needed, and the self-host re-implementation that follows. Closes when all three have shipped.

@@ -2870,7 +2870,25 @@ pub(super) fn lower_index_access(
             Some(GirType::Named(n)) if n.starts_with("Task__"));
         // String character indexing: returns a new Str value (not a borrow).
         let is_string_base = ctx.type_mapper.is_string_type(resolved_base);
-        let result_type = if is_task || is_string_base {
+        // Range slicing (`v[a..b]`, `s[a..b]`) returns a fresh container
+        // of the same type as the base, NOT an element. Detect via the
+        // index's runtime type (`GorgetRange`) and use the base type so
+        // the GIR slot is sized correctly. Without this, the dst was
+        // typed `elem_type` (e.g. `i64` for a `Vector[int]` slice),
+        // causing a Tier 2a `AssignIntoOwnedSlot` violation at the
+        // downstream `[Mv] _result = copy _slice_dst` and a
+        // structural type mismatch (the GIR slot was sized for one
+        // element, but the LIR rewrites the call to
+        // `gorget_array_slice` which fills a full container).
+        let idx_type = infer_operand_type_full(ctx, &idx, builder);
+        let is_range_index = matches!(
+            ctx.type_name_for_id(idx_type),
+            Some(n) if n == "GorgetRange"
+        );
+        let result_type = if is_range_index && (is_string_base || ctx.type_registry.is_collection_type(resolved_base)) {
+            // Slice returns the same container type as the base.
+            resolved_base
+        } else if is_task || is_string_base {
             elem_type
         } else if ctx.type_registry.is_resource_type(elem_type) {
             ctx.register_ptr_type(elem_type)

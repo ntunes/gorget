@@ -2737,7 +2737,16 @@ fn lower_catch_expr(
 
     builder.branch(FunctionBuilder::copy(is_ok), ok_bb, err_bb);
 
-    // Ok path: extract Ok value, store into result
+    // Ok path: extract Ok value, store into result. Zero `val_local`
+    // after the variant payload is moved out — this turns the
+    // structural pattern into the canonical "EnumFieldLoad followed by
+    // MoveZero of base" shape recognised by `tag_ownership` (mirrors
+    // `lower_question_op`'s handling at `:2441`). Without this, the
+    // extracted slot stayed Untracked and the downstream Move-mode
+    // assign tripped Tier 2a's `AssignIntoOwnedSlot` validator. The
+    // base `val_local` was already going to be dead from this point
+    // (its tag is read once into `tag`; both branches consume the
+    // payload), so the zero is structurally sound.
     builder.switch_to(ok_bb);
     let ok_val = builder.enum_field_load_move(
         Place::local(val_local),
@@ -2745,12 +2754,14 @@ fn lower_catch_expr(
         0,
         ok_field_type,
     );
+    builder.move_zero(Place::local(val_local));
     let ok_op = FunctionBuilder::copy(ok_val);
     let ok_mode = mode_for(ctx, builder, &ok_op, ok_field_type);
     builder.assign_mode(ok_mode, Place::local(result_local), ok_op);
     builder.jump(merge_bb);
 
-    // Error path: bind error, evaluate recovery, store into result
+    // Error path: bind error, evaluate recovery, store into result.
+    // Same MoveZero of `val_local` as the Ok path — payload moved out.
     builder.switch_to(err_bb);
     let err_val = builder.enum_field_load_move(
         Place::local(val_local),
@@ -2758,6 +2769,7 @@ fn lower_catch_expr(
         0,
         err_field_type,
     );
+    builder.move_zero(Place::local(val_local));
     let err_local = builder.add_local(err_field_type, Some(&error_binding.node));
     let err_op = FunctionBuilder::copy(err_val);
     let err_mode = mode_for(ctx, builder, &err_op, err_field_type);

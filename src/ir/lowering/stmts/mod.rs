@@ -462,7 +462,28 @@ fn lower_var_decl(
                         // (`:494`) which emits the sound clone-then-Move
                         // shape.
                         let _ = source_is_bare_param;
-                        if source_is_cow_borrow && (!in_loop || safe_in_loop)
+                        // Tier 2a Phase 3 (residual): require strict
+                        // `safe_in_loop` for cow-borrow propagation —
+                        // even outside a loop, a later reassign of
+                        // `name` forces the assigns.rs writeback to
+                        // materialise (clone) the Ptr into the value
+                        // slot. The FIRST `String x =
+                        // lines.get(0).unwrap()` shape with `x`
+                        // reassigned later showed up as a borrowed-
+                        // source-into-owned-slot consume in
+                        // `string_reassign_loop`, `cow_borrow_basic`,
+                        // and self-host's `format_*_lines` / `join` /
+                        // `join_lines` defaults — the validator
+                        // (correctly) flagged the alias-before-clone
+                        // shape. The previous permissive
+                        // `(!in_loop || safe_in_loop)` allowed the
+                        // alias outside loops; tightening to strict
+                        // `safe_in_loop` routes those cases to the
+                        // `clone_fn_for_ptr` clone branch (`:494`)
+                        // which emits the sound clone-then-Move IR up
+                        // front and skips the reassign-time
+                        // materialise.
+                        if source_is_cow_borrow && safe_in_loop
                             && ctx.type_registry.is_resource_type(_inner)
                         {
                             // Propagate CowBorrow as CollectionRef — typed binding

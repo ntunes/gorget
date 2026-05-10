@@ -1513,15 +1513,39 @@ pub fn lower_print_call(
 /// expression's owned result) when the source is a place, or Clone when
 /// the source can't be moved. For non-resource types, Copy (bit-copy of
 /// a primitive) is correct.
-fn interp_temp_mode(ctx: &LoweringContext, val: &Operand, type_id: crate::ir::types::TypeId)
-    -> crate::ir::instructions::AssignMode
-{
+///
+/// Tier 2a Phase 3 (residual): when the source local has Borrowed /
+/// View ownership, Move is unsound — the source doesn't own its heap.
+/// `r.output.trim()` is the canonical case: `trim` returns a `View`-
+/// tagged GorgetString aliasing the receiver's buffer; the
+/// f-string-interp `[Mv] tmp = copy view_local` paired with `move_zero
+/// view_local` was a borrow-into-owned consume that the
+/// `AssignIntoOwnedSlot` validator (correctly) flagged. Fall back to
+/// Clone for borrow-shaped sources so the temp owns independent
+/// resources.
+fn interp_temp_mode(
+    ctx: &LoweringContext,
+    builder: &FunctionBuilder,
+    val: &Operand,
+    type_id: crate::ir::types::TypeId,
+) -> crate::ir::instructions::AssignMode {
     use crate::ir::instructions::AssignMode;
+    use crate::ir::LocalOwnership;
     if !ctx.type_registry.is_resource_type(type_id) {
         return AssignMode::Copy;
     }
     match val {
-        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => AssignMode::Move,
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+            // Borrow / View sources can't be moved — clone for
+            // independence. (`r.output.trim()` returns a `View`-tagged
+            // GorgetString; Move was a borrow-into-owned bug.)
+            if let Some(own) = ctx.source_ownership(val, builder) {
+                if matches!(own, LocalOwnership::Borrowed { .. } | LocalOwnership::View { .. }) {
+                    return AssignMode::Clone;
+                }
+            }
+            AssignMode::Move
+        }
         // Source has projections (field/index/deref) or is a constant/computation:
         // can't safely move. Clone gives us an owned independent copy.
         _ => AssignMode::Clone,
@@ -1606,7 +1630,7 @@ pub(super) fn lower_interp_segment(
         let val = lower_expr(ctx, builder, expr);
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
-        let mode = interp_temp_mode(ctx, &val, type_id);
+        let mode = interp_temp_mode(ctx, builder, &val, type_id);
         // Tier 1b Move follow-through: when the temp is staged with Move,
         // the source's ownership transfers to the temp. If the source is
         // a drop-registered bare local, retire its drop registration with
@@ -1640,7 +1664,7 @@ pub(super) fn lower_interp_segment(
         let val = lower_expr(ctx, builder, &parsed_expr);
         let type_id = infer_operand_type_full(ctx, &val, builder);
         let tmp = builder.add_local(type_id, None);
-        let mode = interp_temp_mode(ctx, &val, type_id);
+        let mode = interp_temp_mode(ctx, builder, &val, type_id);
         // Tier 1b Move follow-through: see branch (2) above.
         let move_source: Option<LocalId> = if mode == AssignMode::Move {
             match &val {

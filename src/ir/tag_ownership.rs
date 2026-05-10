@@ -169,6 +169,18 @@ fn infer_func(
                     // pattern-extract lowering uses both shapes (whole-
                     // base zero for `enum_field_load_move`, per-field
                     // zero for tuple destructure with FieldLoad).
+                    //
+                    // Tier 2a Phase 3 (residual): also tag when the
+                    // EXTRACTED slot itself is move-zeroed later in the
+                    // block. This is the `match Error(e): ...` clone-
+                    // and-rewrap shape: `_35 = enum_field_load _17,
+                    // Error, 0; [Mv] _36 = copy _35; move_zero _35;`.
+                    // The extracted `_35` is treated as owning the
+                    // extracted variant payload for the brief window
+                    // before it's transferred into `_36`. Without this,
+                    // `_35` stayed Untracked and the
+                    // `[Mv] _36 = copy _35` Assign tripped the
+                    // AssignIntoOwnedSlot validator.
                     if base_zeroed_in_block(base, &zeroed_locals, &zeroed_field_paths)
                         || enum_field_path_zeroed_in_block(
                             base.local,
@@ -176,6 +188,7 @@ fn infer_func(
                             *field,
                             &zeroed_field_paths,
                         )
+                        || zeroed_locals.contains(&dst.0)
                     {
                         decisions.push((*dst, LocalOwnership::Owned));
                     }
@@ -187,6 +200,7 @@ fn infer_func(
                             *field,
                             &zeroed_field_paths,
                         )
+                        || zeroed_locals.contains(&dst.0)
                     {
                         decisions.push((*dst, LocalOwnership::Owned));
                     }
@@ -256,6 +270,41 @@ fn infer_func(
                             && matches!(p.projections[0], Projection::Deref)
                             && zeroed_locals.contains(&p.local.0)
                         {
+                            decisions.push((dst.local, LocalOwnership::Owned));
+                        }
+                        // Tier 2a Phase 3 (residual): bare-local
+                        // assign-then-zero is an ownership transfer.
+                        // `_dst = copy _src` (or move) followed by
+                        // `move_zero _src` later in the same block
+                        // structurally moves the heap from src to dst —
+                        // this is the same shape `EnumFieldLoad +
+                        // MoveZero` handles a few rules above. Catches
+                        // the match-arm-result merge: `bb_arm_n: [Mv]
+                        // _result = copy _temp; move_zero _temp` where
+                        // _temp was filled by a clone or fresh
+                        // allocation in this block, then jumps to a
+                        // common merge block consuming _result.
+                        if p.projections.is_empty()
+                            && zeroed_locals.contains(&p.local.0)
+                        {
+                            decisions.push((dst.local, LocalOwnership::Owned));
+                        }
+                        // Tier 2a Phase 3 (residual): when the Assign's
+                        // dst is itself move-zeroed later in the block,
+                        // the lowering structurally treats this slot as
+                        // owning. Mirrors the EnumFieldLoad/FieldLoad
+                        // self-zero rule. Pattern:
+                        //   `_85 = copy _2.*` (auto-deref of borrow
+                        //   param)
+                        //   `[Mv] _84 = copy _85`
+                        //   `move_zero _85`
+                        // Without this, `_85` stayed Untracked and the
+                        // downstream `[Mv] _84 = copy _85` tripped the
+                        // AssignIntoOwnedSlot validator. The dst-zero
+                        // is the typed signal of "this slot is the
+                        // owning hand-off"; ownership tagging it makes
+                        // the validator's view match the lowering's.
+                        if zeroed_locals.contains(&dst.local.0) {
                             decisions.push((dst.local, LocalOwnership::Owned));
                         }
                     }

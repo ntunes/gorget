@@ -879,11 +879,29 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
         Expr::FloatLiteral(_) => F64_TYPE,
         Expr::BoolLiteral(_) => BOOL_TYPE,
         Expr::StringLiteral(_, _) => ctx.type_mapper.owned_string_type,
-        Expr::BinaryOp { op, .. } => {
+        Expr::BinaryOp { op, left, right } => {
             use crate::parser::ast::BinaryOp;
             match op {
                 BinaryOp::Eq | BinaryOp::Neq | BinaryOp::Lt | BinaryOp::Gt
                 | BinaryOp::LtEq | BinaryOp::GtEq | BinaryOp::And | BinaryOp::Or => BOOL_TYPE,
+                BinaryOp::Add => {
+                    // For Add, the result type follows the operands —
+                    // String + String → String, int + int → int. Recurse
+                    // into operands to discover the type. Without this,
+                    // string-concatenation closures (e.g.
+                    // `((String name): "hi " + name)`) were typed I64
+                    // and the IIFE call site ended up with an `i64` dst
+                    // memcpy'd into a `GorgetString` slot — a real but
+                    // backend-tolerated type mismatch that surfaced as
+                    // an `AssignIntoOwnedSlot` Tier 2a violation. The
+                    // resulting `_16: i64 = call __Closure_N__call(...);
+                    // _11: GorgetString = copy _16` shape is a
+                    // GIR-level type bug; recursing here straightens
+                    // the typing and removes the violation.
+                    let lty = infer_closure_return_type(ctx, left);
+                    if lty != I64_TYPE { return lty; }
+                    infer_closure_return_type(ctx, right)
+                }
                 _ => I64_TYPE, // Arithmetic → assume int
             }
         }

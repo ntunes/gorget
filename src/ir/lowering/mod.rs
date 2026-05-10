@@ -1729,18 +1729,15 @@ pub fn lower_module(
     // See `docs/internals/structural-guards.md` Tier 2a for the full spec.
     {
         let warnings = crate::ir::validate::validate_consume_sites(&module);
-        // Split into fatal (Phase 2A/2B/2C — promoted classes at zero) and
-        // non-fatal (Snag #28's AssignIntoOwnedSlot — env-logged only,
-        // pending sweep + migration). The split lets us extend the
-        // validator with a new class without breaking the build until
-        // its sweep is done.
-        let is_assign_class = |c: &crate::ir::validate::ConsumeSiteClass| matches!(
-            c, crate::ir::validate::ConsumeSiteClass::AssignIntoOwnedSlot { .. }
-        );
-        let (fatal_warnings, assign_warnings): (Vec<_>, Vec<_>) = warnings
-            .iter()
-            .cloned()
-            .partition(|w| !is_assign_class(&w.class));
+        // Tier 2a Phase 3 promoted (2026-05-10): all classes — including
+        // `AssignIntoOwnedSlot` (Snag #28's plain `Inst::Assign` shape) —
+        // are now fatal after the residual 64 violations were driven to
+        // zero across the 1078-fixture sweep. The split that previously
+        // held AssignIntoOwnedSlot back as non-fatal pending migration
+        // is gone; every consume class halts the build on first
+        // violation.
+        let fatal_warnings: Vec<_> = warnings.iter().cloned().collect();
+        let assign_warnings: Vec<crate::ir::validate::ConsumeSiteWarning> = Vec::new();
         if !fatal_warnings.is_empty() || !assign_warnings.is_empty() {
             use std::io::Write;
             use rustc_hash::FxHashMap;
