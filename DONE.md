@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — dead `Option__`/`Result__` name-prefix fallbacks retired in `exprs/mod.rs`.** Six sites in `src/ir/lowering/exprs/mod.rs` had a `enum_category(et) == Some(EnumCategory::Option/Result) || name.starts_with("Option__"/"Result__")` pattern. The fallback was dead under Phase A — every Option/Result registration sets `enum_category` (verified by registration sites in `lowering/types.rs:673,706,1098,1121` + `functions.rs:818` + `traits.rs:123`). Removed the `||` clauses; kept the typed `enum_category` reads. The unused `name` variable shadowed by the fallback in the `Some` branch (`:1267`) was also retired. 6 prefix matches retired (386 → 380); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/lowering/exprs/mod.rs`, `tests/lints.rs` (BUDGET 386 → 380).
+
 - [2026-05-10] **Layering audit — `methods.rs` array detection via typed `collection_kind`.** Three sites in `src/ir/lowering/exprs/methods.rs` migrated to `collection_kind == Some(CollectionKind::Array)` reads from `TypeMetadata`: (a) `:1210` Dict/HashMap `.items()` discriminator (with `OrderedMap | Map` for the map case); (b) `:1089` `GorgetArray | Vector__` `.len` field-load shortcut; (c) `:1377-1378` `sort` / `sorted` → `sort_by` / `sorted_by` dispatch in `effective_method` match — factored `recv_is_array` once at the top so both arms share. The K/V name-prefix-strip at `:1210` itself (Dict__/HashMap__ for K/V extraction) stays — it's the C-mangling boundary contract for collection method names. 7 prefix matches retired (393 → 386); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 393 → 386).
 

@@ -1264,9 +1264,7 @@ fn resolve_option_result_variant(
                 .or_else(|| {
                     // Fall back to expected type from context (e.g., VarDecl target)
                     ctx.func_state.expected_type.and_then(|et| {
-                        let name = ctx.type_registry.type_name(et)?;
-                        let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
-                            || name.starts_with("Option__");
+                        let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option);
                         if is_option {
                             Some(et)
                         } else {
@@ -1290,8 +1288,7 @@ fn resolve_option_result_variant(
             let (type_name, type_id) = if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et)
                     .unwrap_or_else(|| "Option__int64_t".to_string());
-                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option)
-                    || name.starts_with("Option__");
+                let is_option = ctx.type_registry.enum_category(et) == Some(EnumCategory::Option);
                 if is_option {
                     (name, et)
                 } else {
@@ -1312,8 +1309,7 @@ fn resolve_option_result_variant(
             let arg_span = args[0].span;
             if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
-                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
-                    || name.starts_with("Result__");
+                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result);
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", et, vec![field_op], Some(vec![Some(arg_span)]));
@@ -1323,8 +1319,7 @@ fn resolve_option_result_variant(
             // Also check current_throws_result_type
             if let Some(rt) = ctx.func_state.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
-                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
-                    || name.starts_with("Result__");
+                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result);
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Ok", rt, vec![field_op], Some(vec![Some(arg_span)]));
@@ -1340,8 +1335,7 @@ fn resolve_option_result_variant(
             let arg_span = args[0].span;
             if let Some(et) = ctx.func_state.expected_type {
                 let name = ctx.type_registry.type_name(et).unwrap_or_default();
-                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result)
-                    || name.starts_with("Result__");
+                let is_result = ctx.type_registry.enum_category(et) == Some(EnumCategory::Result);
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Error", et, vec![field_op], Some(vec![Some(arg_span)]));
@@ -1350,8 +1344,7 @@ fn resolve_option_result_variant(
             }
             if let Some(rt) = ctx.func_state.current_throws_result_type {
                 let name = ctx.type_registry.type_name(rt).unwrap_or_default();
-                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result)
-                    || name.starts_with("Result__");
+                let is_result = ctx.type_registry.enum_category(rt) == Some(EnumCategory::Result);
                 if is_result {
                     let field_op = lower_expr(ctx, builder, &args[0]);
                     let dst = ctx.emit_enum_init_owned(builder, &name, "Error", rt, vec![field_op], Some(vec![Some(arg_span)]));
