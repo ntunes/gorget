@@ -2788,11 +2788,17 @@ pub(super) fn lower_index_access(
         // Skip for built-in collection types — use direct index_load instead
         // (Vector.get() returns Option[T] but v[i] returns T directly)
         if let Some(type_name) = infer_type_name_from_operand_full(ctx, &obj, builder) {
-            let is_builtin_collection = type_name.starts_with("Vector__")
-                || type_name == "GorgetArray"
-                || type_name.starts_with("Dict__")
-                || type_name.starts_with("HashMap__")
-                || type_name.starts_with("Set__");
+            // Read typed `collection_kind` (Phase A) — covers Array (Vector/
+            // Deque/GorgetArray), OrderedMap/Map (Dict/HashMap), OrderedSet
+            // (Set). Skipping HashSet here matches the original arm set.
+            let is_builtin_collection = matches!(
+                ctx.type_registry.get_type_def(&type_name)
+                    .and_then(|td| td.metadata.collection_kind),
+                Some(crate::ir::types::CollectionKind::Array)
+                | Some(crate::ir::types::CollectionKind::OrderedMap)
+                | Some(crate::ir::types::CollectionKind::Map)
+                | Some(crate::ir::types::CollectionKind::OrderedSet)
+            );
             if !is_builtin_collection {
                 // Try Type__get (from equip Type with Index) or __getitem__
                 let candidates = [
