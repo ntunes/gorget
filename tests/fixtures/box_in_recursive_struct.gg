@@ -1,0 +1,22 @@
+# Snag #27 regression: a struct with `Option[Box[Self]]` alongside any
+# other droppable field tripped the LIR drop-completeness validator. Root
+# was coherence-at-construction (Tier 1c, structural-guards.md) — the
+# wrapper was registered with `drop: None` because its inner Box[T] type
+# resolved to UNIT_TYPE during pre-registration, before Box's TypeDef was
+# in the registry. The wrapper's metadata was never recomputed after the
+# remonomorphize pass fixed the field type.
+from std.collections import Box
+
+struct R:
+    String s
+    Option[Box[R]] outer
+
+void main():
+    R inner = R("inner", None())
+    R r = R("outer", Some(Box.new(inner)))
+    print(r.s)
+    match r.outer:
+        case Some(b):
+            print((*b).s)
+        case None:
+            print("none")

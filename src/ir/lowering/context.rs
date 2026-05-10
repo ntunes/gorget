@@ -2883,23 +2883,18 @@ impl<'a> LoweringContext<'a> {
     /// late-registered Options now have correct first-order metadata.
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
         use super::types::make_option_type_def;
-        use crate::ir::types::{CopySemantics, DropStrategy};
-        let was_already_registered = self.type_mapper.lookup_named(option_name).is_some();
-        self.type_mapper.get_or_register(option_name, &mut self.type_registry, |n| {
-            make_option_type_def(n, inner_type)
-        });
-        // Only upgrade on fresh registration; pre-existing entries already
-        // went through the upgrade scan or carry intentional metadata.
-        if !was_already_registered && self.type_registry.needs_drop(inner_type) {
-            if let Some(td) = self.type_registry.get_type_def_mut(option_name) {
-                if td.metadata.drop_strategy == DropStrategy::None {
-                    td.metadata.drop_strategy = DropStrategy::Recursive;
-                }
-                if td.metadata.copy_semantics != CopySemantics::Resource {
-                    td.metadata.copy_semantics = CopySemantics::Resource;
-                }
-            }
-        }
+        use crate::ir::types::GirType;
+        // Coherence-at-construction (Tier 1c, structural-guards.md):
+        // make_option_type_def now reads the inner type's drop status from
+        // the registry and writes Recursive + Resource into the wrapper's
+        // metadata directly, so the post-hoc fix-up that lived here is no
+        // longer needed. Bypassing get_or_register keeps its closure
+        // signature unchanged; the body mirrors get_or_register's caching.
+        if self.type_mapper.lookup_named(option_name).is_some() { return; }
+        let td = make_option_type_def(option_name, inner_type, &self.type_registry);
+        self.type_registry.add_type_def(td);
+        let type_id = self.type_registry.insert(GirType::Named(option_name.to_string()));
+        self.type_mapper.register_named(option_name.to_string(), type_id);
     }
 
     /// Phase A — auto-register a collection-family TypeDef + Named TypeId

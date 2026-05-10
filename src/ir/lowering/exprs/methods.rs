@@ -2567,9 +2567,15 @@ fn try_lower_option_result_combinator(
                     let result_name = format!("Result__{mapped_name}__{err_name}");
                     if ctx.lookup_type_by_name(&result_name).is_none() {
                         use super::super::types::make_result_type_def;
-                        ctx.type_mapper.get_or_register(&result_name, &mut ctx.type_registry, |n| {
-                            make_result_type_def(n, mapped_ret, none_err_type)
-                        });
+                        // Coherence-at-construction (Tier 1c): pass the registry
+                        // so payload drop-strategy propagates into the wrapper's
+                        // metadata at registration. Bypass get_or_register since
+                        // its `FnOnce(&str)` closure shape can't carry the
+                        // additional borrow.
+                        let td = make_result_type_def(&result_name, mapped_ret, none_err_type, &ctx.type_registry);
+                        ctx.type_registry.add_type_def(td);
+                        let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
+                        ctx.type_mapper.register_named(result_name.clone(), tid);
                     }
                     ctx.lookup_type_by_name(&result_name).unwrap_or(recv_type)
                 }
@@ -2586,9 +2592,11 @@ fn try_lower_option_result_combinator(
                 let result_name = format!("Result__{ok_name}__{mapped_name}");
                 if ctx.lookup_type_by_name(&result_name).is_none() {
                     use super::super::types::make_result_type_def;
-                    ctx.type_mapper.get_or_register(&result_name, &mut ctx.type_registry, |n| {
-                        make_result_type_def(n, some_ok_type, mapped_ret)
-                    });
+                    // Coherence-at-construction (Tier 1c): see twin site above.
+                    let td = make_result_type_def(&result_name, some_ok_type, mapped_ret, &ctx.type_registry);
+                    ctx.type_registry.add_type_def(td);
+                    let tid = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
+                    ctx.type_mapper.register_named(result_name.clone(), tid);
                 }
                 ctx.lookup_type_by_name(&result_name).unwrap_or(recv_type)
             } else {

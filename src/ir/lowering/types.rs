@@ -193,19 +193,69 @@ impl TypeMapper {
                             return id;
                         }
                     }
-                    // Auto-register Option[T] and Result[T, E] types
+                    // Auto-register Option[T] and Result[T, E] types.
+                    // Coherence-at-construction (Tier 1c, structural-guards.md):
+                    // make_option_type_def / make_result_type_def take the
+                    // registry so they read the inner type's drop-strategy
+                    // and propagate Recursive + Resource into the wrapper's
+                    // metadata at registration time. Bypassing get_or_register
+                    // here keeps its closure signature `FnOnce(&str)` for the
+                    // 11 other callers that don't need registry access.
                     if base == "Option" && generic_args.len() == 1 {
                         let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
-                        return self.get_or_register(&mangled, registry, |n| {
-                            make_option_type_def(n, inner_type)
-                        });
+                        if let Some(&id) = self.named_types.get(&mangled) { return id; }
+                        let td = make_option_type_def(&mangled, inner_type, registry);
+                        registry.add_type_def(td);
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
                     }
                     if base == "Result" && generic_args.len() == 2 {
                         let ok_type = self.map_ast_type_mut(&generic_args[0].node, registry);
                         let err_type = self.map_ast_type_mut(&generic_args[1].node, registry);
-                        return self.get_or_register(&mangled, registry, |n| {
-                            make_result_type_def(n, ok_type, err_type)
-                        });
+                        if let Some(&id) = self.named_types.get(&mangled) { return id; }
+                        let td = make_result_type_def(&mangled, ok_type, err_type, registry);
+                        registry.add_type_def(td);
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
+                    }
+                    // Box[T] auto-registration. Without this, Box[T] surfacing
+                    // inside another wrapper (e.g. struct field `Option[Box[R]]`,
+                    // collection element `Vector[Box[R]]`) falls through to
+                    // UNIT_TYPE here, and the wrapper is registered with
+                    // `Some._0: Unit`. A later remonomorphize pass fixes the
+                    // field type but DOES NOT recompute the wrapper's metadata
+                    // — so `Option__Box__R` ends up with `drop: None, copy:
+                    // Trivial`, and the Tier 1a drop-completeness validator
+                    // fires on any struct combining `Option[Box[T]]` with
+                    // another droppable field (Snag #27, 2026-05-10).
+                    // Coherence-at-construction: write Box's typed metadata
+                    // (Resource + Trivial("free") + is_box) here so any
+                    // wrapper computing its drop_strategy from inner.needs_drop
+                    // sees the true answer at first registration. Mirrors the
+                    // Box arm in `register_collection_alias`; the two paths
+                    // exist because field-type pre-registration takes a
+                    // different entry point than wrapper-arg recursion.
+                    if base == "Box" && generic_args.len() == 1 {
+                        let inner_type = self.map_ast_type_mut(&generic_args[0].node, registry);
+                        if let Some(&id) = self.named_types.get(&mangled) { return id; }
+                        let type_def = TypeDef {
+                            name: mangled.clone(),
+                            kind: TypeDefKind::Struct(StructDef {
+                                fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+                            }),
+                            metadata: TypeMetadata {
+                                copy_semantics: CopySemantics::Resource,
+                                drop_strategy: DropStrategy::Trivial("free".to_string()),
+                                is_box: true,
+                                ..Default::default()
+                            },
+                        };
+                        registry.add_type_def(type_def);
+                        let type_id = registry.insert(GirType::Named(mangled.clone()));
+                        self.named_types.insert(mangled, type_id);
+                        return type_id;
                     }
                     // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
                     // so locals declared as Callable[T(P)] get GorgetClosure C type and
@@ -646,6 +696,15 @@ pub fn ensure_generic_field_type_registered(
 }
 
 /// Register a monomorphized Option[T] type (built-in: Some(T) | None).
+///
+/// Routes through `make_option_type_def` so payload drop-strategy propagates
+/// into the wrapper's metadata at registration time (Tier 1c, structural-
+/// guards.md). Until 2026-05-10 this site inlined the TypeDef literal with
+/// `..Default::default()` metadata — a parallel registration path that
+/// silently bypassed the `make_option_type_def` helper. The result was
+/// `Option__Box__T` registered with `drop: None, copy: Trivial` even when
+/// the inner type was Resource, and the drop-completeness validator firing
+/// on any struct combining `Option[Box[T]]` with another droppable field.
 fn register_builtin_option(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
@@ -655,58 +714,25 @@ fn register_builtin_option(
     // Use map_ast_type_mut to ensure generic inner types (like Task[void])
     // get registered so the Option TypeDef references a valid TypeId.
     let inner_type = mapper.map_ast_type_mut(&type_args[0].node, registry);
-    let type_def = TypeDef {
-        name: mangled_name.to_string(),
-        kind: TypeDefKind::Enum(EnumDef {
-            variants: vec![
-                EnumVariant {
-                    name: "Some".to_string(),
-                    fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
-                },
-                EnumVariant {
-                    name: "None".to_string(),
-                    fields: vec![],
-                },
-            ],
-        }),
-        metadata: TypeMetadata {
-            enum_category: Some(EnumCategory::Option),
-            ..Default::default()
-        },
-    };
+    let type_def = make_option_type_def(mangled_name, inner_type, registry);
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
 }
 
 /// Register a monomorphized Result[T, E] type (built-in: Ok(T) | Error(E)).
+///
+/// Routes through `make_result_type_def` for the same coherence-at-construction
+/// reason as `register_builtin_option` above.
 fn register_builtin_result(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
     type_args: &[crate::span::Spanned<ast::Type>],
     mangled_name: &str,
 ) {
-    let ok_type = mapper.map_ast_type(&type_args[0].node);
-    let err_type = mapper.map_ast_type(&type_args[1].node);
-    let type_def = TypeDef {
-        name: mangled_name.to_string(),
-        kind: TypeDefKind::Enum(EnumDef {
-            variants: vec![
-                EnumVariant {
-                    name: "Ok".to_string(),
-                    fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
-                },
-                EnumVariant {
-                    name: "Error".to_string(),
-                    fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
-                },
-            ],
-        }),
-        metadata: TypeMetadata {
-            enum_category: Some(EnumCategory::Result),
-            ..Default::default()
-        },
-    };
+    let ok_type = mapper.map_ast_type_mut(&type_args[0].node, registry);
+    let err_type = mapper.map_ast_type_mut(&type_args[1].node, registry);
+    let type_def = make_result_type_def(mangled_name, ok_type, err_type, registry);
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
     mapper.named_types.insert(mangled_name.to_string(), type_id);
@@ -1082,7 +1108,33 @@ pub fn make_opaque_type_def(name: &str, copy_semantics: CopySemantics, drop_stra
 }
 
 /// Create an Option[T] enum TypeDef (Some(_0: T) | None).
-pub fn make_option_type_def(name: &str, inner_type: TypeId) -> TypeDef {
+/// Coherence-at-construction (Tier 1c, structural-guards.md): if any payload
+/// type already needs dropping, the wrapper enum's metadata reflects that
+/// at registration time — no reliance on the post-hoc `upgrade_types_from_fields`
+/// pass, which only runs once at module-start and misses lazily-registered
+/// types (e.g., `Option__Box__T` populated when struct field types are
+/// processed during AST→GIR lowering). The pass remains as defence-in-depth
+/// for older registration paths but is no longer load-bearing here.
+fn wrapper_metadata_for_payloads(
+    registry: &TypeRegistry,
+    payloads: &[TypeId],
+    enum_category: EnumCategory,
+) -> TypeMetadata {
+    let any_payload_needs_drop = payloads.iter().any(|t| registry.needs_drop(*t));
+    let (copy_semantics, drop_strategy) = if any_payload_needs_drop {
+        (CopySemantics::Resource, DropStrategy::Recursive)
+    } else {
+        (CopySemantics::Trivial, DropStrategy::None)
+    };
+    TypeMetadata {
+        enum_category: Some(enum_category),
+        copy_semantics,
+        drop_strategy,
+        ..Default::default()
+    }
+}
+
+pub fn make_option_type_def(name: &str, inner_type: TypeId, registry: &TypeRegistry) -> TypeDef {
     TypeDef {
         name: name.to_string(),
         kind: TypeDefKind::Enum(EnumDef {
@@ -1097,15 +1149,12 @@ pub fn make_option_type_def(name: &str, inner_type: TypeId) -> TypeDef {
                 },
             ],
         }),
-        metadata: TypeMetadata {
-            enum_category: Some(EnumCategory::Option),
-            ..Default::default()
-        },
+        metadata: wrapper_metadata_for_payloads(registry, &[inner_type], EnumCategory::Option),
     }
 }
 
 /// Create a Result[T, E] enum TypeDef (Ok(_0: T) | Error(_0: E)).
-pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId) -> TypeDef {
+pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId, registry: &TypeRegistry) -> TypeDef {
     TypeDef {
         name: name.to_string(),
         kind: TypeDefKind::Enum(EnumDef {
@@ -1120,10 +1169,7 @@ pub fn make_result_type_def(name: &str, ok_type: TypeId, err_type: TypeId) -> Ty
                 },
             ],
         }),
-        metadata: TypeMetadata {
-            enum_category: Some(EnumCategory::Result),
-            ..Default::default()
-        },
+        metadata: wrapper_metadata_for_payloads(registry, &[ok_type, err_type], EnumCategory::Result),
     }
 }
 

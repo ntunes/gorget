@@ -2806,6 +2806,16 @@ fn box_deref_write() {
 }
 
 #[test]
+fn box_in_recursive_struct() {
+    run_gg(
+        "box_in_recursive_struct.gg",
+        "\
+outer
+inner",
+    );
+}
+
+#[test]
 fn drop_raii() {
     run_gg(
         "drop_raii.gg",
