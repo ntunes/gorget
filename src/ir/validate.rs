@@ -2189,10 +2189,20 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                         }
                     }
                 }
-                Instruction::Assign { mode: _, dst, value } => {
+                Instruction::Assign { mode, dst, value } => {
                     // Whole-local assigns only — projections (FieldStore-
                     // like) are out of scope for this class.
                     if !dst.projections.is_empty() { continue; }
+                    // Borrow-mode assigns are the "this is an alias" contract,
+                    // not a consume. The dst is structurally aliased to the
+                    // source's heap data — drop accountant is supposed to
+                    // mark dst as Borrowed (set_ref / similar). Validator
+                    // skipping Borrow-mode here mirrors `validate_consume`'s
+                    // implicit assumption that Borrow assigns are non-
+                    // consuming. Worked example: `match src_col:` staging
+                    // emits `[Bw] scrut = copy src_col` when src_col is
+                    // owned + live (subsequent `tag_of` reads source again).
+                    if matches!(mode, ReadMode::Borrow) { continue; }
                     let dst_idx = dst.local.0 as usize;
                     if dst_idx >= func.locals.len() { continue; }
                     let dst_local = &func.locals[dst_idx];

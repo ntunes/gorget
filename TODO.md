@@ -20,27 +20,27 @@
 
 Snag #28's match-arm-result borrow-clone fix (commit `179202ed`) was a per-site patch for what `docs/internals/structural-guards.md` Tier 2a calls "the load-bearing invariant for the entire CoW system". The existing fatal consume-site validator covered Calls/Inits/CollectionMutators but **not plain `Inst::Assign`** — exactly where Snag #28's bug shape lived. Validator extended this session; migration ongoing.
 
-**Status update (sweep12, 2026-05-10):** initial sweep was 11,129 violations; current sweep is **764 (-93%)** after six inference-pass extensions and one literal-tagging fix. Validator non-fatal pending migration of the residual 764 (which are dominantly real CoW boundary bugs, not tagging gaps).
+**Status update (sweep19, 2026-05-10):** initial sweep was 11,129 violations; current sweep is **64 (-99.4%)** after eight progressive fixes. Validator non-fatal pending migration of the residual 64 (minor scattered patterns).
 
-**Current breakdown (sweep12, 1077 fixtures):**
-- `untracked source consumed`: 49 (6.4%) — minor producer-shape patterns
-- `borrowed source consumed`: 412 (53.9%) ← Snag #28 class proper
-- `owned-but-live source consumed`: 303 (39.7%)
-- Top source types: `Column` (272 — dataframe owned-live), `ty4` (20 — anonymous closure types), `GorgetString` (17), `IoError`/`Frontmatter`/`Big` (4 each).
-- Top functions: `xtd__http___request` (144 — borrowed-from-param), `MultiGroupBy__agg`/`GroupBy__agg` (136 each — Column owned-live), `xtd__p2p___p2p_poll_socket` (104), `xtd__p2p___p2p_hole_punch` (52), `main` (44 cumulative), `xtd__http___parse_url` (36), `std__fmt___pad_right`/`pad_left`/`center` (12 each — shared bare-param-into-named-slot shape).
+**Current breakdown (sweep19, 1078 fixtures):**
+- `untracked source consumed`: 47 (73%) — minor producer-shape patterns
+- `borrowed source consumed`: 17 (27%) — residual edge cases
+- `owned-but-live source consumed`: 0 (CLOSED)
+- Top source types: `ty4` (20 — anonymous closure-env types), `GorgetString` (17), `IoError`/`Frontmatter`/`Big` (4 each), `ty53`/`ty48`/`ty42` (4 each).
+- Top functions: `main` (40 cumulative — small per-fixture residuals), `run`/`read_exact__Cursor`/`join_lines`/`join`/`__Closure_2__call` (4 each).
 
-**Burn-down plan (2-3 sessions for residual):**
+**Burn-down plan (1 session for residual):**
 1. ✅ Validator + non-fatal gate.
-2. ✅ Constructor dst-tagging in inference pass + dict-literal `set_owned` + filter narrowing. 11,129 → 3,052.
+2. ✅ Constructor dst-tagging + dict-literal `set_owned` + filter narrowing. 11,129 → 3,052.
 3. ✅ BinOp/UnOp + Constant::Str dst-tagging. 3,052 → 1,639.
 4. ✅ IndexLoad-Clone dst-tagging. 1,639 → 790.
-5. ✅ Deref-then-MoveZero dst-tagging (`!`-move param consume shape). 790 → 764.
-6. **Borrowed source migration (412 — Snag #28 class proper)** — these are NOT tagging gaps; they're real lowering bugs where `lower_var_decl`'s bare-param Ptr-alias optimization (`stmts/mod.rs:447`) silently changes a value-typed declaration `String x = some_param` into a Ptr-alias `String *x = &some_param`, then downstream consumers auto-deref-and-memcpy. The fix is at the LOWERING level: gate the bare-param branch on `gir_type` being a Ptr type (i.e., the user explicitly accepted a borrow), and fall through to the `clone_fn_for_ptr` clone branch (`:494`) for value-type declarations. Top sites: `xtd__http___request` (144), `xtd__p2p___p2p_poll_socket` (104), `xtd__p2p___p2p_hole_punch` (52), `std__fmt___pad_left/right/center` (12 each). **Risk**: removing the optimization across the suite may regress the alias propagation other code relies on; needs careful probe-then-fix per the Phase D4 methodology (substitute, full sweep, decide).
-7. **Owned-live migration (303)** — source is still live past the assign. Dominant: `MultiGroupBy__agg`/`GroupBy__agg` Column pattern (272 across 2 fns — likely identical shape, single helper-extraction fix). Also `Column` field assignments in dataframe code.
-8. **Untracked residual (49)** — minor producer patterns. Top: `ty4` (20 — anonymous closure types, likely `__Closure_N` env field reads), `GorgetString` (17), `IoError`/`Frontmatter`/`Big` (4 each). Probably 2-3 more producer-shape rules in `tag_ownership::infer_fresh_owned`.
-9. **Promote** — Once at zero, fold `AssignIntoOwnedSlot` into the unconditional fatal block at `src/ir/lowering/mod.rs:1789-1815`.
-
-**The bare-param optimization investigation note (item 6).** The lowering at `stmts/mod.rs:425-528` has a Ptr-handling subtree that fires when `inferred = Ptr<T>` and `gir_type ≠ Ptr`. The bare-param branch at line 447 currently changes `local_id`'s type to Ptr via `builder.locals[local_id.0 as usize].type_id = inferred`. The siblings (cow_borrow at 453, field_origin at 474, clone_fn at 494) handle other Ptr shapes — clone_fn at 494 is the SOUND path (emits a clone call). The fix is: gate bare-param's predicate to only fire when the user explicitly declared a Ptr or auto type. For `auto x = some_param`, the resolution might propagate inferred → gir_type, so `gir_type == inferred == Ptr<T>` and the gate passes. For `String x = some_param`, gir_type stays `String`, gate fails, fall through to clone_fn branch.
+5. ✅ Deref-then-MoveZero dst-tagging (`!`-move param consume). 790 → 764.
+6. ✅ Bare-param Ptr-alias optimization retired (`bca88f29`). 764 → 570.
+7. ✅ Match-scrutinee Move-mode gated on `source_at_last_use` + validator skips Borrow-mode assigns (`a3380c96`). 571 → 268. **Owned-but-live class CLOSED (303 → 0).**
+8. ✅ Field_origin propagation retired (`edd8bf9e`). 268 → 64. cow_borrow propagation kept (load-bearing for self-host's CoW alias optimization).
+9. **Untracked residual (47)** — minor patterns: `ty4` anonymous closure-env types (20), GorgetString from internal calls (17), various 4-counts. Probably 1-2 more producer-shape rules in `tag_ownership::infer_fresh_owned` will close most. ~1 session.
+10. **Borrowed residual (17)** — small scattered cases after major sources retired. May need per-site investigation. ~1 session.
+11. **Promote** — Once at zero, fold `AssignIntoOwnedSlot` into the unconditional fatal block at `src/ir/lowering/mod.rs:1789-1815`.
 
 **Investigation tools.** Re-run sweep: `SWEEP=/tmp/sweep-$RANDOM.log; GG_VALIDATE_CONSUME_SITES=$SWEEP cargo test --test integration -- --test-threads=4`. Per-class breakdown: `grep "class+viol AssignIntoOwnedSlot" $SWEEP | awk -F= '{c[$1]+=$2} END {for(k in c) print k, "=", c[k]}'`. Per-source-type: `grep "class+type AssignIntoOwnedSlot" $SWEEP | sed 's/.*class+type AssignIntoOwnedSlot | //' | awk -F= '{gsub(/^ +| +$/, "", $1); c[$1]+=$2} END {for(k in c) printf "%-50s %d\n", k, c[k]}' | sort -k2 -n -r | head -15`.
 

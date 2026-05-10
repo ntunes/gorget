@@ -49,7 +49,18 @@ pub fn stage_match_scrutinee(
     let mode = if !ctx.type_registry.is_resource_type(scrut_type) {
         AssignMode::Copy
     } else if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
-        if p.projections.is_empty() && ctx.is_owned_local(builder, p.local) {
+        // Tier 2a Phase 3: Move-mode requires source-at-last-use too.
+        // The match scrutinee is read again by `tag_of` and pattern
+        // extraction; Move-mode at the staging assign without
+        // `source_at_last_use` made the source "owned-AND-live"
+        // (validator's `OwnedLiveSourceConsumed`). Borrow is the
+        // unconditional fallback when liveness isn't proven dead.
+        // Worked example: `GroupBy__agg`'s `match src_col:` shape
+        // (272 of 303 owned-but-live violations pre-fix).
+        if p.projections.is_empty()
+            && ctx.is_owned_local(builder, p.local)
+            && source_at_last_use
+        {
             AssignMode::Move
         } else {
             AssignMode::Borrow

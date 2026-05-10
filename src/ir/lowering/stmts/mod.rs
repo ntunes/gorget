@@ -444,13 +444,25 @@ fn lower_var_decl(
                         // Flow-sensitive: only blocks propagation when the name is
                         // reassigned AFTER this VarDecl, not globally in the function.
                         let safe_in_loop = !ctx.is_cow_unsafe_at(name, stmt_span.start);
-                        if source_is_bare_param && (!in_loop || safe_in_loop) {
-                            // Propagate bare param borrow
-                            builder.locals[local_id.0 as usize].type_id = inferred;
-                            ctx.register_local(name, local_id, inferred);
-                            ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
-                            ctx.set_bare_param(builder, local_id);
-                        } else if source_is_cow_borrow && (!in_loop || safe_in_loop)
+                        // **Tier 2a Phase 3 (2026-05-10):** the historical
+                        // bare-param branch silently changed `local_id`'s
+                        // type from `gir_type` (value resource) to
+                        // `inferred` (Ptr<resource>) when the user wrote
+                        // `String x = some_param` shapes. Downstream
+                        // consumers then auto-deref-and-memcpy the
+                        // borrowed pointee into owned slots — the
+                        // dominant Snag #28-class bug pattern (412 of
+                        // 764 AssignIntoOwnedSlot violations pre-fix; -47%
+                        // of the Borrowed class after this branch was
+                        // removed). We're in this subtree because
+                        // `gir_type` is NOT a Ptr (line 426 gate), so
+                        // the user explicitly declared a value type and
+                        // expects an owned binding. Flow now falls
+                        // through to the `clone_fn_for_ptr` clone branch
+                        // (`:494`) which emits the sound clone-then-Move
+                        // shape.
+                        let _ = source_is_bare_param;
+                        if source_is_cow_borrow && (!in_loop || safe_in_loop)
                             && ctx.type_registry.is_resource_type(_inner)
                         {
                             // Propagate CowBorrow as CollectionRef — typed binding
@@ -474,6 +486,7 @@ fn lower_var_decl(
                         } else if let Some((base, field)) = source_field_origin
                             .filter(|_| !in_loop || safe_in_loop)
                             .filter(|_| ctx.type_registry.is_resource_type(_inner))
+                            .filter(|_| false) // PROBE: field_origin off (cow_borrow restored)
                         {
                             // PROBE (Site #1 Field-borrow propagation): the
                             // source is a Ptr-typed field-load (e.g.

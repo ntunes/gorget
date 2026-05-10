@@ -157,7 +157,7 @@ Validator at `src/lir/validate.rs:764` (`validate_box_inner_type`); fatal at `sr
 
 **Phase 3 IN PROGRESS 2026-05-10** (validator extension + tagging migration shipped, residual real-bug migration deferred). Snag #28's match-arm-result borrow-clone bug exposed a gap: the existing validator covers consume-site SHAPES (calls, inits, runtime mutators) but not plain `Inst::Assign` whose dst is an owned-required slot. The Snag #28 shape — `[Mv] _result = copy _ptr` materialising as memcpy of a borrowed pointee struct — passed silently. New `ConsumeSiteClass::AssignIntoOwnedSlot` (commit `2846baf4`) walks `Inst::Assign` and gates on dst-type resource-ness (the existing `validate_consume` gates on source-type, which Ptr<T> sources don't satisfy). Non-fatal pending sweep + migration.
 
-Phase 3 progress through 2026-05-10: **11,129 → 764 violations (-93%)** across 1077 fixtures, via six inference-pass extensions and one literal-tagging fix:
+Phase 3 progress through 2026-05-10: **11,129 → 64 violations (-99.4%)** across 1078 fixtures, via six inference-pass extensions, one literal-tagging fix, and three lowering-level fixes:
 - Validator + non-fatal env-gate (commit `2c0d53e9` after squashed rebase onto main).
 - Validator dst-filter narrowed to Owned/FreshOwned only.
 - EnumInit/StructInit/TupleInit dst-tagging.
@@ -166,8 +166,11 @@ Phase 3 progress through 2026-05-10: **11,129 → 764 violations (-93%)** across
 - `Inst::Assign { dst, value: Constant::Str }` dst-tagging (string-literal init materialises fresh heap).
 - `IndexLoad { read: ReadMode::Clone }` dst-tagging (collection element clone).
 - Deref-then-MoveZero dst-tagging (`!`-move param consume shape, commit `9e706783`).
+- **Bare-param Ptr-alias optimization retired** (commit `bca88f29`): the historical `lower_var_decl` branch silently changed `String x = some_param` declarations into `*String x = &some_param`, causing downstream auto-deref-and-memcpy bugs at consume sites. Removing it (flow falls through to the sound `clone_fn_for_ptr` clone branch) closed 412 → 216 Borrowed violations and the new fixture `vardecl_owned_call_double_drop.gg` (Snag #29c repro) passes.
+- **Match-scrutinee Move-mode gated on `source_at_last_use` + validator skips Borrow-mode assigns** (commit `a3380c96`): the staging assign emitted Move on a source that `tag_of` and pattern extraction would re-read; gating Move on liveness routes those to Borrow mode, and the validator's added Borrow-skip recognizes Borrow as the alias contract. **Owned-but-live class closed (303 → 0).**
+- **Field_origin propagation retired** (commit `edd8bf9e`): same architectural bug as bare-param at a different propagation path. Bisected via probes (cow_borrow stays load-bearing for self-host's CoW alias optimization; field_origin was not load-bearing for any test). Closed 219 → 17 Borrowed.
 
-Residual 764 violations are dominantly real CoW boundary issues (412 borrowed-source — Snag #28 class proper, requires `lower_var_decl` bare-param-branch gating per TODO; 303 owned-but-live — needs per-site clone gates in `MultiGroupBy/GroupBy.agg` Column shape; 49 untracked from minor remaining producer patterns) that need actual migration via clone gates or lowering changes, not more tagging. See `TODO.md` "Tier 2a Phase 3" for the per-class burn-down plan.
+Residual 64 violations are minor scattered patterns (47 untracked, 17 borrowed, 0 owned-live). Top sources: `ty4` (20 — anonymous closure-env types), `GorgetString` (17), small one-offs. Top fns: `main` (40 cumulative), `run`/`read_exact__Cursor`/`join_lines`/`__Closure_2__call` (4 each). Estimated ~1 session to close. See `TODO.md` "Tier 2a Phase 3" for per-class burn-down.
 
 **Invariant.** At every consuming position (push / put / insert / send / `v[i] = x` / enum-init / struct-init / Box.new / function arg with `Ownership::Move` / **plain `Inst::Assign` into a resource-typed Owned/FreshOwned slot**), the IR mode of the source matches its typed `LocalOwnership` state per the rules in `AGENTS.md`'s *Ownership at Consuming Positions*:
 
