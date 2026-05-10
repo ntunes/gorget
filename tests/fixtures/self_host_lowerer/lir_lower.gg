@@ -2274,6 +2274,12 @@ int operand_lir_type(Operand op, LirFunction &f, Vector[int] &local_to_slot):
         case OpMove(local_id):
             int slot = local_to_slot.get(local_id).unwrap()
             return f.slots.get(slot).unwrap().ty
+        case OpClone(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            return f.slots.get(slot).unwrap().ty
+        case OpBorrow(local_id):
+            int slot = local_to_slot.get(local_id).unwrap()
+            return f.slots.get(slot).unwrap().ty
     return LT_VOID
 
 # Compute the `inner_ty` for IBoxAlloc from an arg operand. By-pointer
@@ -2349,6 +2355,34 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] &local_to_slot
         case OpMove(local_id):
             # OpMove: load value like OpCopy. The GICallExtern handler
             # converts to SlotAddr when needs_ptr_arg is true.
+            int slot = local_to_slot.get(local_id).unwrap()
+            int slot_ty = f.slots.get(slot).unwrap().ty
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotLoad(dst, slot, slot_ty))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpClone(local_id):
+            # Phase D step 3: OpClone tagged at the GIR layer for an
+            # explicit refcount-bump / deep-copy at this read. The LIR
+            # currently lowers it as a plain load; Phase 5 codegen may
+            # promote to an explicit ICallExtern("T__clone", ...) when
+            # the source slot's type is a resource. Treating-as-load is
+            # behaviourally identical to OpCopy/OpMove for trivial types,
+            # so this preserves correctness for non-resource locals.
+            int slot = local_to_slot.get(local_id).unwrap()
+            int slot_ty = f.slots.get(slot).unwrap().ty
+            int dst = lir_fn_next_value(&f)
+            LirBlock blk = f.blocks.get(bb).unwrap()
+            blk.insts.push(ISlotLoad(dst, slot, slot_ty))
+            f.blocks.set(bb, blk)
+            return dst
+        case OpBorrow(local_id):
+            # Phase D step 3: OpBorrow tagged at the GIR layer for an
+            # explicit non-owning alias. LIR currently lowers it as a
+            # plain load; the consumer (call arg / assign) decides
+            # whether to take a SlotAddr or load the value. Behavioural
+            # parity with OpCopy preserved for non-resource locals.
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
@@ -2508,6 +2542,35 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 ablk.insts.push(ISlotAddr(addr, slot))
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
+                        case OpClone(local_id):
+                            # Phase D step 3: same pass-by-ptr behaviour
+                            # as OpMove. Clone semantics (refcount bump
+                            # or deep copy) is for Phase 5 codegen.
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
+                        case OpBorrow(local_id):
+                            # Phase D step 3: borrow → always pass slot
+                            # address (the canonical borrow shape).
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
                         else:
                             int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
                             lir_args.push(arg_val)
@@ -2598,6 +2661,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                         case OpCopy(lid):
                             src_slot = local_to_slot.get(lid).unwrap()
                         case OpMove(lid):
+                            src_slot = local_to_slot.get(lid).unwrap()
+                        case OpClone(lid):
+                            src_slot = local_to_slot.get(lid).unwrap()
+                        case OpBorrow(lid):
                             src_slot = local_to_slot.get(lid).unwrap()
                         else:
                             pass
@@ -2725,6 +2792,34 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                                 f.blocks.set(bb, ablk)
                                 lir_args.push(addr)
                         case OpMove(local_id):
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
+                        case OpClone(local_id):
+                            # Phase D step 3: same shape as OpMove for the
+                            # pass-by-ptr path. Clone-specific codegen
+                            # belongs to Phase 5.
+                            int slot = local_to_slot.get(local_id).unwrap()
+                            int slot_ty = f.slots.get(slot).unwrap().ty
+                            if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):
+                                int arg_val = lower_operand(arg, &f, bb, &local_to_slot)
+                                lir_args.push(arg_val)
+                            else:
+                                int addr = lir_fn_next_value(&f)
+                                LirBlock ablk = f.blocks.get(bb).unwrap()
+                                ablk.insts.push(ISlotAddr(addr, slot))
+                                f.blocks.set(bb, ablk)
+                                lir_args.push(addr)
+                        case OpBorrow(local_id):
+                            # Phase D step 3: borrow → slot address shape.
                             int slot = local_to_slot.get(local_id).unwrap()
                             int slot_ty = f.slots.get(slot).unwrap().ty
                             if slot_ty == LT_PTR or (slot_ty >= LT_PTR_TO_BASE and slot_ty < LT_STRUCT_BASE):

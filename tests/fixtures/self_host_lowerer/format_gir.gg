@@ -71,6 +71,10 @@ String format_operand(Operand op, GirModule &gmod):
             return "copy _" + int_to_str(lid)
         case OpMove(lid):
             return "move _" + int_to_str(lid)
+        case OpClone(lid):
+            return "clone _" + int_to_str(lid)
+        case OpBorrow(lid):
+            return "borrow _" + int_to_str(lid)
         case OpConstBool(b):
             if b:
                 return "const true"

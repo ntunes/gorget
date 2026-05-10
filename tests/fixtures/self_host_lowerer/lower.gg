@@ -1791,8 +1791,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 return recv
             # clone() — return a copy of the receiver
             if mname == "clone":
+                # Phase D step 3: explicit `.clone()` produces an owned
+                # copy of the receiver. Emit OpClone so downstream layers
+                # (LIR codegen, Phase C validators) know this read is a
+                # deliberate refcount bump / deep copy, not an alias.
                 int clone_dst = add_local(&ctx, ctx.locals.get(recv).unwrap().type_id, NO_NAME)
-                emit(&ctx, GIAssign(clone_dst, OpCopy(recv)))
+                emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
                 return clone_dst
             # Detect mutating-method-on-field-access pattern *before*
             # lowering args, so we capture wb_base / wb_field while the

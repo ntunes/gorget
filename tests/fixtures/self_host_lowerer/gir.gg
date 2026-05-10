@@ -45,6 +45,14 @@ enum GirType:
 enum Operand:
     OpCopy(int)
     OpMove(int)
+    # Phase D: explicit clone — source survives the read with refcount
+    # bump (or deep copy for non-refcounted resource types). Mirrors
+    # Rust's `AssignMode::Clone` in `src/ir/types.rs`.
+    OpClone(int)
+    # Phase D: explicit borrow — produces a non-owning alias into the
+    # source local. The source must outlive every use of the borrow.
+    # Mirrors Rust's `AssignMode::Borrow`.
+    OpBorrow(int)
     OpConstBool(bool)
     OpConstI32(int)
     OpConstI64(int)
