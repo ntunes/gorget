@@ -156,6 +156,41 @@ struct GirTypeInfo:
     Vector[GirEnumVariantInfo] variants  # enum variants (empty for structs)
     bool is_enum
 
+# ── Phase A: typed resource metadata ────────────────────────
+# Companion to the Rust-side `TypeMetadata { drop_strategy, copy_semantics,
+# collection_kind, ... }` (see `docs/internals/unified-resource-model.md` §3).
+# Self-host scope is `docs/internals/self-host-resource-model.md` §3.
+# Populated at type-registration time; consumers read instead of
+# re-deriving from `name.starts_with("Vector__")` etc.
+
+enum CopySemantics:
+    CsTrivial      # primitives, Plain Old Data
+    CsResource     # owns heap data; needs drop + clone
+    CsRefCounted   # reference-counted (Shared / Channel / Thread / ...)
+
+enum CollectionKind:
+    CkNotCollection
+    CkVector       # Vector / Deque / Heap (all back-onto GorgetArray)
+    CkDict         # Dict / HashMap / GorgetMap
+    CkSet          # Set / HashSet / GorgetSet
+
+enum BoxKind:
+    BkNotBox
+    BkRegularBox   # Box[T] for owned T
+    BkTraitBox     # trait-object Box[dyn Trait]
+
+struct GirResourceMetadata:
+    String runtime_name             # "GorgetString", "GorgetArray", ...
+    int size_bytes                  # C ABI byte size
+    int lir_type                    # LirType the GtNamed lowers to
+    Option[String] drop_fn          # runtime symbol; None for non-droppable
+    Option[String] clone_fn         # runtime symbol; None for trivial
+    Option[String] materialize_fn   # CoW view→owned; None if no view distinction
+    CopySemantics copy_semantics
+    CollectionKind collection_kind
+    BoxKind box_kind
+    bool opaque_handle              # Mutex / Channel / Thread / ...
+
 # Module-level static with a runtime-call initializer (lib/std/io.gg's
 # `public static File stdout = _stdout_handle()` etc.).
 struct GirStaticInfo:
@@ -197,6 +232,10 @@ struct GirModule:
     # references resolve through `__global_ref__<name>` in lir_lower
     # against a parallel name→gid map populated by `lir_mod_add_global`.
     Dict[String, GirStaticInfo] statics
+    # Phase A: typed resource metadata, keyed by type name. Populated at
+    # registration; consumed by lir_lower / lower in place of
+    # `name.starts_with("Vector__")` and friends.
+    Dict[String, GirResourceMetadata] resource_metadata
 
 # ── Helpers ──────────────────────────────────────────────
 
