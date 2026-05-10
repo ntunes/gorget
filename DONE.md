@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `llvm/mod.rs` combinator inline expansion `is_result` factored.** Five sites in the LLVM backend's combinator inline expansion (`:4980, :4988, :5058, :5085, :5121`) had repeated `name.starts_with("Result__")` checks (sometimes paired with `&& err_ty.is_some()`). Factored a single `is_result` boolean at the top of the combinator block via `src_sdef.map_or(false, |s| s.enum_kind == EnumKind::Result)` — typed Phase A flag set at LIR struct registration. The 5 downstream checks all read the factored variable. The `parse_option_result_combinator` helper at `:218`/`:226` still uses name parsing — that's the C-emit boundary contract (extern names ARE the contract with the runtime). 4 prefix matches retired (316 → 312); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/backend/llvm/mod.rs`, `tests/lints.rs` (BUDGET 316 → 312).
+
 - [2026-05-10] **Layering audit — `backend/llvm/mod.rs` Option/Result detection via typed `enum_kind`.** Three sites in `src/backend/llvm/mod.rs` migrated to `s.enum_kind == EnumKind::Option/Result` reads: `:4286` Map-get Option/Result wrapping detection (Option | Result via matches!), `:4394` Channel `__recv_timeout` Option-slot lookup, `:5398` extern-call Option-slot lookup. All three were checking `s.name.starts_with("Option__")` / `"Result__"` — typed Phase A flag set at LIR struct registration. 4 prefix matches retired (320 → 316); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/backend/llvm/mod.rs`, `tests/lints.rs` (BUDGET 320 → 316).
 

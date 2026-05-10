@@ -4728,6 +4728,11 @@ fn emit_inst(
                     // Resolve source Option/Result struct
                     let src_sid = find_struct_by_prefix(type_prefix, module);
                     let src_sdef = src_sid.map(|s| &module.structs[s.0 as usize]);
+                    // Read typed `enum_kind` (Phase A) — set at LIR struct
+                    // registration. Replaces five downstream
+                    // `name.starts_with("Result__")` probes.
+                    let is_result = src_sdef
+                        .map_or(false, |s| s.enum_kind == crate::lir::EnumKind::Result);
 
                     // Get payload type from field 1 (ok/Some) and field 2 (err/None) if present
                     let payload_ty = src_sdef.and_then(|d| d.fields.get(1))
@@ -4972,7 +4977,7 @@ fn emit_inst(
                                             writeln!(out, "  store {ret_llvm_ty} {call_result}, ptr {rp}").unwrap();
                                         }
                                         // Copy error payload for Result types
-                                        if name.starts_with("Result__") {
+                                        if is_result {
                                             // Not needed — on the Some/Ok branch there's no error to copy
                                         }
                                         writeln!(out, "  br label %{done_l}").unwrap();
@@ -4980,7 +4985,7 @@ fn emit_inst(
                                         // None branch: tag=1, copy error for Result
                                         writeln!(out, "{else_l}:").unwrap();
                                         writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
-                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                        if is_result && err_ty.is_some() {
                                             // Copy error payload from source
                                             let src_err = format!("%{pfx}.src_err");
                                             let dst_err = format!("%{pfx}.dst_err");
@@ -5050,7 +5055,7 @@ fn emit_inst(
                                         writeln!(out, "{else_l}:").unwrap();
                                         writeln!(out, "  call void @llvm.memset.p0.i64(ptr %v{}, i8 0, i64 {result_size}, i1 false)", d.0).unwrap();
                                         writeln!(out, "  store i32 1, ptr %v{}", d.0).unwrap();
-                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                        if is_result && err_ty.is_some() {
                                             let err_size = err_ty.as_ref().map(|t| sizeof_lir_type(t, &module.structs, snames)).unwrap_or(8);
                                             let result_err_off = result_sid.and_then(|s| {
                                                 let rdef = &module.structs[s.0 as usize];
@@ -5077,7 +5082,7 @@ fn emit_inst(
 
                                         // None/Error branch: call closure
                                         writeln!(out, "{else_l}:").unwrap();
-                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                        if is_result && err_ty.is_some() {
                                             // Result or_else: pass error payload to closure
                                             let err_ptr_name = format!("%{pfx}.err_ptr");
                                             writeln!(out, "  {err_ptr_name} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
@@ -5113,7 +5118,7 @@ fn emit_inst(
 
                                         // None/Error branch: call closure
                                         writeln!(out, "{else_l}:").unwrap();
-                                        if name.starts_with("Result__") && err_ty.is_some() {
+                                        if is_result && err_ty.is_some() {
                                             let err_ptr_name = format!("%{pfx}.err_ptr2");
                                             writeln!(out, "  {err_ptr_name} = getelementptr i8, ptr %v{}, i64 {err_off}", args[0].0).unwrap();
                                             let call_result = emit_err_closure_call(out, "uoe", &err_ptr_name);
