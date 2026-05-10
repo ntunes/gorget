@@ -494,11 +494,19 @@ impl<'a> FuncLowering<'a> {
                     let mut len_handled = false;
                     let emit_name = if func == "len" && args.len() == 1 {
                         let arg_type = self.operand_gir_type_name(&args[0]);
-                        if arg_type.as_deref().map_or(false, |n| n.starts_with("Vector__") || n == "GorgetArray") {
+                        // Read typed `collection_kind` (Phase A) — covers
+                        // Vector/Deque/GorgetArray (Array), Dict (OrderedMap),
+                        // HashMap/GorgetMap (Map), Set (OrderedSet), HashSet/
+                        // GorgetSet (Set). Replaces six name-prefix arms.
+                        let kind = arg_type.as_deref()
+                            .and_then(|n| self.gir_types.get_type_def(n))
+                            .and_then(|td| td.metadata.collection_kind);
+                        use crate::ir::types::CollectionKind;
+                        if kind == Some(CollectionKind::Array) {
                             "gorget_array_len".to_string()
-                        } else if arg_type.as_deref().map_or(false, |n| n.starts_with("Dict__") || n.starts_with("HashMap__") || n == "GorgetMap") {
+                        } else if matches!(kind, Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map)) {
                             "gorget_map_len".to_string()
-                        } else if arg_type.as_deref().map_or(false, |n| n.starts_with("Set__") || n.starts_with("HashSet__") || n == "GorgetSet") {
+                        } else if matches!(kind, Some(CollectionKind::OrderedSet) | Some(CollectionKind::Set)) {
                             "gorget_set_len".to_string()
                         } else if arg_type.as_deref().map_or(false, |n| n == "str" || n == "GorgetString") {
                             "gorget_str_codepoint_count".to_string()
