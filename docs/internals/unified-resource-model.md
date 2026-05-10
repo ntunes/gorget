@@ -725,6 +725,8 @@ Today's drop-flag instrumentation (commit `d28b8f86`) seeds `bb0 = false` and in
 
 Estimate: 1 commit + extended drop test fixtures.
 
+**GIR drop-emission contract — defensive-by-default (Snag #30, 2026-05-10).** The GIR drop accountant in `src/ir/lowering/drops.rs` emits `DropIfAlive` unconditionally for every resource-typed scope-exit drop. The LIR `drop_elab` pass statically elides the runtime drop-flag check when slot init is provably unconditional, so the always-conditional shape is free at runtime. Snag #30's bug class — `DropEntry::maybe_moved` producing a false negative across nested matches with early-return paths — motivated this contract: the per-arm `maybe_moved` flag in the GIR-level drop accountant is NOT a sound CFG-aware analysis. A local marked moved in one match's Some arm could appear as not-moved at a later match's None-arm `emit_early_exit_drops` callsite (because `lower_match_expr` doesn't `snapshot_moved`/`restore_moved`/`union_moved` between arms the way `lower_match_stmt` does). The always-`DropIfAlive` contract sidesteps the whole class. The `maybe_moved` sidecar persists for future invariant audits but is no longer load-bearing for soundness — the LIR pass is the source of truth for whether the runtime check fires. See `docs/internals/structural-guards.md` §"Drop-emission contract: defensive-by-default" for the full design + commit pointer.
+
 ### 8.2 Critical-edge splitting + post-SSA invariant validation
 
 SSA construction (`src/lir/ssa.rs`) uses a simplified Braun et al. algorithm that assumes no critical edges. There's no validator that asserts:

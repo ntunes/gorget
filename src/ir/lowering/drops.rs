@@ -470,11 +470,18 @@ fn emit_scope_drops_ordered(
         // Owning-`!`-param entries always use DropIfAlive — the LIR drop-flag
         // dataflow controls whether the drop actually fires (suppressed when
         // the body emitted a `MoveZero` on the param slot).
-        if entry.maybe_moved || entry.owning_param {
-            builder.drop_if_alive(place);
-        } else {
-            builder.drop(place);
-        }
+        // Defensive: always emit `DropIfAlive`. The LIR `drop_elab` pass
+        // statically elides the runtime check when slot init is provably
+        // unconditional, so we don't lose codegen quality. Snag #30
+        // (2026-05-10): the `maybe_moved` tracking across nested matches +
+        // early-return paths produced a false negative — `_11.maybe_moved`
+        // was true at the join point but the bb8 (None-arm) drop emission
+        // saw it as false, producing unconditional `drop _11` and a
+        // double-free. Always-conditional drop is the safe contract; the
+        // optimizer recovers the unconditional shape when flow proves it.
+        let _ = entry.maybe_moved; // kept for future invariant audits
+        let _ = entry.owning_param;
+        builder.drop_if_alive(place);
     }
 }
 
@@ -499,11 +506,18 @@ fn emit_scope_drops_excluding(
         }
 
         let place = drop_place_for(entry);
-        if entry.maybe_moved || entry.owning_param {
-            builder.drop_if_alive(place);
-        } else {
-            builder.drop(place);
-        }
+        // Defensive: always emit `DropIfAlive`. The LIR `drop_elab` pass
+        // statically elides the runtime check when slot init is provably
+        // unconditional, so we don't lose codegen quality. Snag #30
+        // (2026-05-10): the `maybe_moved` tracking across nested matches +
+        // early-return paths produced a false negative — `_11.maybe_moved`
+        // was true at the join point but the bb8 (None-arm) drop emission
+        // saw it as false, producing unconditional `drop _11` and a
+        // double-free. Always-conditional drop is the safe contract; the
+        // optimizer recovers the unconditional shape when flow proves it.
+        let _ = entry.maybe_moved; // kept for future invariant audits
+        let _ = entry.owning_param;
+        builder.drop_if_alive(place);
     }
 }
 
@@ -584,13 +598,15 @@ mod tests {
         let s_local = builder.add_local(owned_string_id, Some("s"));
         elab.register_local(s_local, owned_string_id, &reg); // Move — registered
 
-        // Pop scope should emit Drop for owned_string
+        // Pop scope should emit DropIfAlive for owned_string (Snag #30:
+        // all drops emit DropIfAlive defensively; LIR drop_elab elides
+        // when slot init is provably unconditional).
         elab.pop_scope(&mut builder, &reg);
 
         let block = &builder.blocks[0];
         assert!(
-            block.instructions.iter().any(|inst| matches!(inst, Instruction::Drop { .. })),
-            "Should emit Drop instruction for Move-type local"
+            block.instructions.iter().any(|inst| matches!(inst, Instruction::DropIfAlive { .. })),
+            "Should emit DropIfAlive instruction for Move-type local"
         );
     }
 
@@ -641,21 +657,21 @@ mod tests {
         let s2 = builder.add_local(owned_string_id, Some("s2"));
         elab.register_local(s2, owned_string_id, &reg);
 
-        // Pop inner scope — should drop s2
+        // Pop inner scope — should drop s2 (DropIfAlive after Snag #30 fix)
         elab.pop_scope(&mut builder, &reg);
 
         let drop_count_1 = builder.blocks[0].instructions.iter()
-            .filter(|inst| matches!(inst, Instruction::Drop { .. }))
+            .filter(|inst| matches!(inst, Instruction::DropIfAlive { .. }))
             .count();
-        assert_eq!(drop_count_1, 1, "Should drop s2 from inner scope");
+        assert_eq!(drop_count_1, 1, "Should DropIfAlive s2 from inner scope");
 
         // Pop outer scope — should drop s1
         elab.pop_scope(&mut builder, &reg);
 
         let drop_count_2 = builder.blocks[0].instructions.iter()
-            .filter(|inst| matches!(inst, Instruction::Drop { .. }))
+            .filter(|inst| matches!(inst, Instruction::DropIfAlive { .. }))
             .count();
-        assert_eq!(drop_count_2, 2, "Should drop both s1 and s2 total");
+        assert_eq!(drop_count_2, 2, "Should DropIfAlive both s1 and s2 total");
     }
 
     #[test]
@@ -674,13 +690,14 @@ mod tests {
         let s2 = builder.add_local(owned_string_id, Some("s2"));
         elab.register_local(s2, owned_string_id, &reg);
 
-        // Early return — should drop s2 (Block) + s1 (Function)
+        // Early return — should drop s2 (Block) + s1 (Function); DropIfAlive
+        // after Snag #30 defensive change.
         elab.emit_early_exit_drops(&mut builder, &reg, DropScopeKind::Function, None);
 
         let drop_count = builder.blocks[0].instructions.iter()
-            .filter(|inst| matches!(inst, Instruction::Drop { .. }))
+            .filter(|inst| matches!(inst, Instruction::DropIfAlive { .. }))
             .count();
-        assert_eq!(drop_count, 2, "Early return should drop both s2 and s1");
+        assert_eq!(drop_count, 2, "Early return should DropIfAlive both s2 and s1");
     }
 
     #[test]

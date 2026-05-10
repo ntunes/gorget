@@ -102,6 +102,16 @@ These structural guards exist today and are load-bearing:
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
+### Drop-emission contract: defensive-by-default (Snag #30, 2026-05-10)
+
+The GIR drop accountant (`src/ir/lowering/drops.rs`) emits **`DropIfAlive` unconditionally** for every resource-typed scope-exit drop, regardless of the local's `maybe_moved` flag. The LIR `drop_elab` pass then statically elides the runtime drop-flag check when slot init is provably unconditional, so codegen quality is preserved.
+
+**Why defensive-by-default:** Snag #30's minimal repro (struct-field alias from variant payload + trailing match on a separate Option → double-free) revealed that `maybe_moved` tracking across nested matches with early-return paths can produce false negatives. A local marked moved in the first match's Some arm (via `move_zero_and_mark`) appeared as not-moved at the second match's None-arm `emit_early_exit_drops` callsite, leading to unconditional `Drop` emission that double-freed the heap aliased between the move-zero'd source slot and the move'd destination slot. The `lower_match_expr` (expression-form) doesn't `snapshot_moved`/`restore_moved`/`union_moved` between arms the way `lower_match_stmt` does, so cross-match propagation has hidden correctness gaps the always-`DropIfAlive` contract sidesteps.
+
+The `DropEntry::maybe_moved` sidecar is preserved (with its setters) for future invariant audits, but it's no longer load-bearing for soundness — the LIR pass is the source of truth for whether the runtime check fires.
+
+**Litmus test:** if a future change wants to skip the runtime drop-flag check at GIR emission (emit raw `Drop` instead of `DropIfAlive`), the change MUST first prove the local is alive on EVERY incoming control-flow path — a CFG-aware analysis, not a per-arm `maybe_moved` flag. Until that exists, the always-conditional contract holds.
+
 ---
 
 ## Backlog

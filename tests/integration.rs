@@ -2824,18 +2824,22 @@ fn match_arm_borrow_clone() {
 }
 
 #[test]
-#[ignore = "Snag #30: still double-frees on HEAD; see TODO.md"]
 fn snag30_field_alias_in_match_arm() {
-    // Regression pin for Snag #30: pattern-match aliasing of a non-Copy
-    // struct field in a match arm (`String _pname = catch_clause.param`),
-    // followed by a second match on a separate Option, double-frees at
-    // scope exit. The expected output reflects what the language SHOULD
-    // do; the test is ignored until the bug is fixed.
+    // Snag #30: pattern-match aliasing of a non-Copy struct field in a
+    // match arm (`String _pname = catch_clause.param`), followed by a
+    // second match on a separate Option, used to double-free at scope
+    // exit. Closed by always-DropIfAlive defensive change in the drop
+    // accountant — the LIR `drop_elab` pass elides the runtime check
+    // when slot init is provably unconditional, so we don't lose
+    // codegen quality.
     //
-    // Cluster 1's `2f89aa78` (Some/None merge Move-mode) closes the
-    // option-from-Vector-method shape but NOT this struct-field-alias
-    // shape. Both pieces (field alias + trailing match) are required to
-    // trigger; either alone is silent.
+    // Root cause: the GIR drop accountant's `maybe_moved` tracking
+    // produced a false negative across nested matches with early-return
+    // paths — a local marked moved in the first match's Some arm
+    // appeared as not-moved at the second match's None-arm bb's
+    // emit_early_exit_drops callsite, leading to unconditional `drop`
+    // emission that double-freed the heap aliased between the move-
+    // zero'd source slot and the move'd destination slot.
     run_gg(
         "snag30_field_alias_in_match_arm.gg",
         "ok",
