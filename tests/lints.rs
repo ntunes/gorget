@@ -177,6 +177,133 @@ fn no_growth_in_name_prefix_routing() {
     );
 }
 
+/// Tier 2d — sidecar absence. Static check that no parallel
+/// `HashMap<key, value>` sidecar exists in the codebase tracking a fact
+/// already on a typed metadata field. Per `docs/internals/structural-
+/// guards.md` Tier 2d:
+///
+/// > **Why it matters.** Layering discipline rule 3: one source of truth
+/// > per axis. Sidecars accumulate quietly; the validator catches them
+/// > at introduction time. This is the discipline meta-rule with the
+/// > highest payoff because parallel sidecars are how multi-step
+/// > inconsistencies enter the codebase.
+///
+/// The watchlist below names value types whose ONE source of truth is
+/// already a typed field on `TypeMetadata` / `Local` / `Inst`. Any
+/// `HashMap<*, T>` / `FxHashMap<*, T>` / `BTreeMap<*, T>` declaration in
+/// `src/**/*.rs` for a watched T is a Rule 3 violation — the lookup
+/// should consult the typed field via the canonical accessor (e.g.
+/// `registry.get_type_def(name).map(|td| td.metadata.drop_strategy)`),
+/// not maintain a parallel registry.
+///
+/// **Baseline 2026-05-10: 0 sidecars across all watched types.** This
+/// is the post-Phase-D floor (sidecar maps from earlier eras —
+/// `mut_capture_locals`, `view_returning_temps`, `is_resource` callback,
+/// etc. — already retired). The lint locks the floor; new sidecars
+/// fail the test until either migrated to the typed field or
+/// explicitly allowlisted with a citation.
+///
+/// **If this fails**: a new `HashMap<*, DropStrategy>` (or another
+/// watched type) was introduced. Either:
+///   1. Migrate to read the typed field directly. If the lookup needs
+///      a different access pattern, expose a typed accessor on the
+///      owning struct.
+///   2. If genuinely independent (e.g., a per-pass scratch map computed
+///      from the typed field, NOT a parallel persistent registry),
+///      add an allowlist entry with file:line + comment justifying
+///      why it's not a sidecar.
+const SIDECAR_VALUE_TYPES: &[&str] = &[
+    // TypeMetadata fields — `src/ir/types.rs::TypeMetadata`
+    "DropStrategy",
+    "CopySemantics",
+    "CollectionKind",
+    "EnumKind",
+    "EnumCategory",
+    // Phase D Local field — `src/ir/mod.rs::Local`
+    "LocalOwnership",
+    "BorrowOrigin",
+];
+
+/// Canonical key types for IR/Type-system lookups. Sidecars take the
+/// shape `HashMap<{key}, {value}>` where key ∈ {LocalId, TypeId, String}.
+const SIDECAR_KEY_TYPES: &[&str] = &[
+    "LocalId",
+    "TypeId",
+    "String",
+];
+
+fn count_sidecar_declarations() -> usize {
+    let mut total = 0;
+    for value in SIDECAR_VALUE_TYPES {
+        for key in SIDECAR_KEY_TYPES {
+            // Match `HashMap<key, value>`, `FxHashMap<key, value>`,
+            // `BTreeMap<key, value>`. Tolerant of whitespace. Comment-
+            // line matches are ignored — a doc-comment that *describes*
+            // a retired sidecar (e.g. `/// replaces the legacy
+            // `FxHashMap<LocalId, LocalOwnership>` snapshot`) is not a
+            // sidecar.
+            // Accept optional `mod::path::` prefix on both key and value
+            // types so qualified-path declarations (e.g.
+            // `FxHashMap<crate::ir::types::TypeId, ::DropStrategy>`)
+            // still match.
+            let pattern_str = format!(
+                r"(?:Hash|FxHash|BTree)Map\s*<\s*(?:\w+::)*{key}\s*,\s*(?:\w+::)*{value}\s*>"
+            );
+            let pattern = regex::Regex::new(&pattern_str).unwrap();
+            visit("src", &mut |path| {
+                if path.extension().map_or(true, |e| e != "rs") {
+                    return;
+                }
+                let content = match fs::read_to_string(path) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                for line in content.lines() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") {
+                        continue;
+                    }
+                    total += pattern.find_iter(line).count();
+                }
+            });
+        }
+    }
+    total
+}
+
+/// Tier 2d ratchet: typed-metadata fields have ONE source of truth,
+/// not parallel sidecar maps. New sidecar declarations fail the test.
+///
+/// Baseline 2026-05-10: 0. The floor is clean — older sidecars
+/// (`mut_capture_locals`, `view_returning_temps`, `is_resource`
+/// callback) were retired during Phase D / Phase A migrations.
+#[test]
+fn no_typed_metadata_sidecars() {
+    const BUDGET: usize = 0;
+
+    let count = count_sidecar_declarations();
+    assert!(
+        count <= BUDGET,
+        "Tier 2d sidecar absence violated: {count} > {BUDGET}.\n\n\
+         A new `HashMap<key, value>` / `FxHashMap` / `BTreeMap` was \
+         introduced in src/ where the value type is a watched typed-\
+         metadata axis (DropStrategy / CopySemantics / CollectionKind / \
+         EnumKind / EnumCategory / LocalOwnership / BorrowOrigin). The \
+         canonical home for these facts is the typed field on \
+         TypeMetadata / Local / Inst; a parallel registry is a Layering \
+         discipline rule 3 violation (`docs/internals/layering-\
+         discipline.md`).\n\n\
+         To find new sites:\n  \
+         grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/\n\n\
+         Either:\n  \
+         1. Migrate the lookup to read the typed field directly via \
+            the canonical accessor.\n  \
+         2. If the map is a per-pass scratch computed from the typed \
+            field (not a parallel persistent registry), add an \
+            allowlist entry to SIDECAR_VALUE_TYPES with citation."
+    );
+}
+
 /// Tier E.1 (per `docs/internals/self-host-resource-model.md` §6.1):
 /// the same ratchet applied to self-host's `.gg` source. Phase A migrated
 /// the classification consumers in `lir_lower.gg` and `lower.gg` to read

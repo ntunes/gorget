@@ -99,6 +99,7 @@ These structural guards exist today and are load-bearing:
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 | `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
+| `no_typed_metadata_sidecars` (Tier 2d) | Parallel `HashMap<*, T>` sidecar where `T` is a typed `TypeMetadata` / `Local` field (DropStrategy / CopySemantics / CollectionKind / EnumKind / EnumCategory / LocalOwnership / BorrowOrigin) | `tests/lints.rs` | Fatal (BUDGET=0) |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
@@ -229,15 +230,21 @@ Recognition is typed: the validator reads `Module::heap_alloc_consumer_externs`,
 
 See DONE.md for the full commit chain.
 
-#### 2d. Sidecar absence
+#### 2d. Sidecar absence — **SHIPPED 2026-05-10**
 
 **Invariant.** For each typed metadata field on a TypeDef / StructDef / FunctionInfo, no parallel `HashMap<TypeId, X>` or `HashMap<String, X>` sidecar exists in the codebase tracking the same fact.
 
-**Validator sketch.** Static analysis at lint level (or a Rust test that grep-walks the source tree). Each typed field has a registered name; the validator catches new sidecars by scanning for `HashMap` declarations whose value type matches the typed field's value type AND whose key type matches the field's owner.
+**Validator at `tests/lints.rs::no_typed_metadata_sidecars`** — Rust test grep-walking `src/**/*.rs` for `HashMap<key, value>` / `FxHashMap<...>` / `BTreeMap<...>` declarations where `value` is in the watched set: `DropStrategy`, `CopySemantics`, `CollectionKind`, `EnumKind`, `EnumCategory`, `LocalOwnership`, `BorrowOrigin`. The watched set names every typed field whose canonical home is `TypeMetadata` (`src/ir/types.rs`) or `Local` (`src/ir/mod.rs`). Comment-line matches are skipped (a doc-comment that *describes* a retired sidecar is not a sidecar). The pattern accepts qualified-path prefixes (`crate::ir::types::TypeId`) so it catches both bare and fully-qualified declarations.
 
-**Why it matters.** *Layering discipline rule 3*: one source of truth per axis. Sidecars accumulate quietly; the validator catches them at introduction time. This is the discipline meta-rule with the highest payoff because parallel sidecars are how multi-step inconsistencies enter the codebase.
+**Initial sweep + post-sweep (1078 fixtures): 0 sidecars.** The post-Phase-D / post-Phase-A floor is clean — historical sidecars (`mut_capture_locals: FxHashMap<LocalId, TypeId>` retired 2026-05-04 commit `404c8716`; `view_returning_temps: FxHashSet<LocalId>` retired in commit `9dc2cf4d`; `is_resource: &Fn(TypeId) -> bool` callback retired in `ec31fc34`) were all closed during the typed-metadata migration sessions. The lint locks the floor at BUDGET=0.
 
-**Burn-down.** Designing the static check is the hard part. Once written, eliminating the existing sidecars is a sequence of typed-metadata-migration commits.
+**Why it matters.** *Layering discipline rule 3*: one source of truth per axis. Sidecars accumulate quietly and produce multi-step inconsistencies. The lint catches new sidecars at introduction time — a Rule 3 regression now fails CI before it lands.
+
+**If the lint fires:** the offending file:line names a `Map<key, T>` declaration where `T` is a typed-metadata axis. Fix is one of:
+1. Migrate the lookup to read the typed field directly via the canonical accessor (e.g. `registry.get_type_def(name).map(|td| td.metadata.drop_strategy)`).
+2. If the map is a per-pass scratch (computed from the typed field, not a parallel persistent registry), add an allowlist entry to `SIDECAR_VALUE_TYPES` with file:line + comment justifying why it's not a sidecar.
+
+**Coverage extensions.** Adding a new typed-metadata axis (e.g. a future `is_view_type: bool` field on TypeMetadata) requires adding the type to `SIDECAR_VALUE_TYPES` so the lint protects it. The watchlist is the explicit registry of what's protected; adding a field without watchlist entry leaves it un-locked.
 
 ### Tier 3 — discipline meta-invariants
 
