@@ -1085,8 +1085,13 @@ pub(super) fn lower_method_call(
         // Resolve through Ptr for field-load refs (Ptr(Vector__T) → Vector__T)
         let resolved_type = ctx.pointee_type(recv_type).unwrap_or(recv_type);
         let is_ptr_recv = resolved_type != recv_type;
-        if let Some(GirType::Named(name)) = ctx.type_registry.get(resolved_type) {
-            if name.starts_with("GorgetArray") || name.starts_with("Vector__") {
+        if let Some(GirType::Named(name)) = ctx.type_registry.get(resolved_type).cloned() {
+            // Read typed `collection_kind` (Phase A) — Vector/Deque/GorgetArray
+            // all carry `Array` from the protocol registration.
+            let is_array = ctx.type_registry.get_type_def(&name)
+                .and_then(|td| td.metadata.collection_kind)
+                == Some(crate::ir::types::CollectionKind::Array);
+            if is_array {
                 if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
                     let mut len_place = place.clone();
                     if is_ptr_recv {
@@ -1207,8 +1212,15 @@ pub(super) fn lower_method_call(
         }
 
         // Dict/HashMap .items() → register tuple type for (K, V) and return Vector[tuple]
-        if method_name == "items" && (type_name.starts_with("Dict__") || type_name.starts_with("HashMap__")) {
-            // Extract key and value type names from Dict__K__V
+        let items_kind = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.collection_kind);
+        let items_is_map = matches!(items_kind,
+            Some(crate::ir::types::CollectionKind::OrderedMap)
+            | Some(crate::ir::types::CollectionKind::Map));
+        if method_name == "items" && items_is_map {
+            // Extract key and value type names from Dict__K__V or HashMap__K__V.
+            // The strip-prefix here is at the C-mangling boundary — the K/V slice
+            // names are how the runtime address the elements.
             let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
             let rest = &type_name[prefix.len()..];
             // Split at first __ to get key type
@@ -1357,13 +1369,18 @@ pub(super) fn lower_method_call(
         // split(sep) → GorgetString__split (2-arg), split(sep, limit) → GorgetString__splitn (3-arg)
         // replace(old, new) → GorgetString__replace, replace(old, new, limit) → GorgetString__replacen
         // sort()/sorted() → default compare, sort(by)/sorted(by) → closure compare
+        // Read typed `collection_kind` once for the array discriminator below
+        // (Vector/Deque/GorgetArray all map to Array via Phase A protocol).
+        let recv_is_array = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.collection_kind)
+            == Some(crate::ir::types::CollectionKind::Array);
         let effective_method = match (type_name.as_str(), method_name, args.len()) {
             ("GorgetString", "split", 2) => "splitn",
             ("GorgetString", "replace", 3) => "replacen",
             ("GorgetString", "find", 2) => "find_from",
             ("GorgetString", "find", 3) => "find_ext",
-            (tn, "sort", 1) if tn.starts_with("Vector__") || tn.starts_with("Deque__") => "sort_by",
-            (tn, "sorted", 1) if tn.starts_with("Vector__") || tn.starts_with("Deque__") => "sorted_by",
+            (_, "sort", 1) if recv_is_array => "sort_by",
+            (_, "sorted", 1) if recv_is_array => "sorted_by",
             _ => method_name,
         };
         // Per-call-site method instance for method-level-generic equip methods:
