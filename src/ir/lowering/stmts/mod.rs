@@ -728,22 +728,22 @@ fn lower_var_decl(
 /// - `source_live`: is the source's underlying local live AFTER `stmt_span`?
 /// - `source_own`: the source local's typed `LocalOwnership`, if any.
 ///
-/// The seven branches now read typed predicates (six fully migrated
-/// 2026-05-06; D still gated on `is_named_local`, see comments):
+/// All seven branches read typed predicates — `is_named_local`
+/// fully retired from this function (D 2026-05-10, F 2026-05-10):
 /// - **A** (Owned + live GorgetString same-type, value-aliasing
 ///   `String b = a`) → `Borrow` + `set_shared_heap`.
 /// - **B** (Owned + live non-resource source with cross-type
 ///   `clone_fn`, e.g. Str → GorgetString) → emit clone, `Move`.
 /// - **C** (live resource source, CoW-safe; transitive aliases
 ///   permitted) → CoW alias via `Borrow` + Ptr retype + `set_ref`.
-/// - **D** (named resource source, CoW-unsafe) → emit clone,
-///   `Move`. `is_named_local` retained — see branch comment for
-///   the probe regression and the architectural blockers.
+/// - **D** (live resource source, CoW-unsafe + non-Borrowed) →
+///   emit clone, `Move`. Typed via `source_live && !Borrowed`.
 /// - **E** (View source, GorgetString same-type) → emit
 ///   clone-to-owned, `Move`. Typed via `LocalOwnership::View`.
-/// - **F** (unnamed droppable temp OR Owned + dead with droppable
-///   target) → `Move`. Typed; the legacy `drops.is_registered`
-///   sidecar was retired this session as fully subsumed.
+/// - **F** (dead droppable source OR Owned + dead with droppable
+///   target) → `Move`. Fully typed via `!source_live` + ownership
+///   probes; legacy `drops.is_registered` and `is_named_local`
+///   proxies both retired.
 /// - **G** (safety net: target_resource fell through to Copy) →
 ///   `Move`.
 fn lower_var_decl_assign_mode(
@@ -804,7 +804,6 @@ fn lower_var_decl_assign_mode(
             AssignMode::Move
         };
 
-    let source_is_named = ctx.is_named_local(source_place.local);
     let owned_string = ctx.type_mapper.owned_string_type;
     let same_type_string =
         rhs_type == owned_string && actual_var_type == owned_string;
@@ -908,19 +907,21 @@ fn lower_var_decl_assign_mode(
             ctx, builder, operand, rhs_type, rhs_type,
         );
     }
-    // Branch F — Owned + dead source + droppable target → Move.
-    // Two typed clauses (probed 2026-05-06, retired the legacy
-    // `drops.is_registered(source_place.local)` proxy as fully
-    // subsumed by the second clause):
-    // - **unnamed-droppable-temp**: `!source_is_named` proxies for
-    //   "source dies at end-of-stmt" and `needs_drop(rhs_type)` is
-    //   the broader (resource OR enum-with-resource-payload) test.
-    // - **typed**: `source_own.is_owned() && !source_live` is the
-    //   principled liveness query; `needs_drop(actual_var_type)`
-    //   covers Option/Result wrapper types where
-    //   `is_resource_type` returns false but the variant payload
-    //   still requires ownership transfer.
-    else if (!source_is_named && ctx.type_registry.needs_drop(rhs_type))
+    // Branch F — dead source + droppable type → Move. Two typed
+    // clauses (probed 2026-05-06 + 2026-05-10, retired both legacy
+    // proxies — `drops.is_registered` and `is_named_local`):
+    // - **rhs-droppable**: `!source_live && needs_drop(rhs_type)`
+    //   covers unnamed temps (which always die at end-of-stmt) AND
+    //   named locals at last use whose own type needs dropping. The
+    //   former was the original `!source_is_named` shape; the latter
+    //   widening is safe because Borrowed-source rhs_type is Ptr
+    //   (not droppable) and Owned-named-at-last-use is what the
+    //   second clause already moved.
+    // - **target-droppable**: `source_own.is_owned() && !source_live
+    //   && needs_drop(actual_var_type)` covers Option/Result wrapper
+    //   targets where `is_resource_type(rhs_type)` returns false but
+    //   the variant payload still requires ownership transfer.
+    else if (!source_live && ctx.type_registry.needs_drop(rhs_type))
         || (source_own.as_ref().map_or(false, |s| s.is_owned())
             && !source_live
             && ctx.type_registry.needs_drop(actual_var_type))

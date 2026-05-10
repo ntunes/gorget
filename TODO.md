@@ -27,17 +27,18 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 
 
-- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, branches A/B/C/D/E/G shipped). All 7 decision-tree branches now read typed predicates from `(target_resource, source_live, source_own)`. Only Branch F's clause 1 (`!source_is_named && needs_drop(rhs_type)`) retains the legacy `is_named_local` predicate as a strict subset of clause 2 — documented at the site as a deferred retirement target (clause 2's typed `Owned + !source_live + needs_drop(actual_var_type)` covers most cases but the cross-type `needs_drop(rhs_type)` coverage in clause 1 isn't fully subsumed).
+- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, **all branches shipped 2026-05-10**). All 7 decision-tree branches read typed predicates from `(target_resource, source_live, source_own)`; `is_named_local` is fully retired from `lower_var_decl_assign_mode`.
 
-  **Status update 2026-05-06:** the 7-branch chain was extracted into a dedicated helper `lower_var_decl_assign_mode` (commit b61ee152) shaped as a typed match on `(target_resource, source_live, source_own)` per `docs/internals/unified-resource-model.md` §6.7. Migration history:
+  **Status update 2026-05-10:** the 7-branch chain was extracted into a dedicated helper `lower_var_decl_assign_mode` (commit b61ee152) shaped as a typed match on `(target_resource, source_live, source_own)` per `docs/internals/unified-resource-model.md` §6.7. Migration history:
   - **A** (`530f5a56`) — `is_named_local` → `source_live && source_own.is_owned()`.
   - **B** (`2702753e`) — same substitution.
   - **C** (`1357f07e`) — `is_named_local` → `source_live`.
   - **F clause 2** (`fe65b99b`) — legacy `drops.is_registered(source_place.local)` proxy retired.
   - **D probe (`7d60ccaa`, 2026-05-06)** — substituting `source_live` alone regressed self-host bootstrap (clone failure → G's Move zeroed a Borrowed transitive alias).
-  - **D retirement (2026-05-10)** — `source_live && !matches!(source_own, Some(Borrowed { .. }))` predicate combo SHIPPED. Probed in two stages: (1) literal option (b) with `source_is_named` + Borrowed bail (1072/1072 green); (2) full retirement combining `source_live` + Borrowed bail (1072/1072 green). The Borrowed bail prevents D's clone-failure path → G's Move from zeroing transitive alias data; `source_live` substitution + clean fallthrough to F's Move for Owned-named-at-last-use is the typed shape.
+  - **D retirement (`b7cc5093`, 2026-05-10)** — `source_live && !matches!(source_own, Some(Borrowed { .. }))` predicate combo SHIPPED. Probed in two stages: (1) literal option (b) with `source_is_named` + Borrowed bail (1072/1072 green); (2) full retirement combining `source_live` + Borrowed bail (1072/1072 green). The Borrowed bail prevents D's clone-failure path → G's Move from zeroing transitive alias data.
+  - **F clause 1 retirement (2026-05-10)** — `!source_is_named` → `!source_live`. Single-stage probe (1072/1072 green). Widening is safe because (a) Borrowed-source rhs_type is `Ptr` (not droppable, so `needs_drop(rhs_type) = false`); (b) Owned-named-at-last-use → already covered by clause 2's `Owned + !source_live + needs_drop(actual_var_type)`; (c) untracked-named-at-last-use with droppable rhs_type now correctly Moves (was Copy, falling through to G's safety net for resource targets). The `let source_is_named = ...` declaration was removed; `is_named_local` no longer called from this function.
 
-  **Remaining work:** F clause 1's `!source_is_named` proxy. Less urgent now that D is migrated; the function still calls `is_named_local(source_place.local)` once for F. Retiring requires verifying that clause 2's `Owned + !source_live + needs_drop(actual_var_type)` covers the cross-type cases clause 1 catches via `needs_drop(rhs_type)`.
+  **Status: complete.** `is_named_local` survives elsewhere in the codebase (`stmts/assigns.rs`, `context.rs` internals) but is fully retired from `lower_var_decl_assign_mode`'s typed decision tree.
 
 
   **Refined plan (2026-05-04):**
