@@ -94,7 +94,7 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 fn no_growth_in_name_prefix_routing() {
     /// Maximum allowed count of name-prefix routing sites in src/. Decrease
     /// when you migrate sites to typed metadata.
-    const BUDGET: usize = 312;
+    const BUDGET: usize = 304;
 
     let count = count_name_prefix_sites();
     assert!(

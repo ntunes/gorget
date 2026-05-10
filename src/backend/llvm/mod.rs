@@ -3667,8 +3667,12 @@ fn emit_inst(
             // Vector__int64_t() → gorget_array_new(sizeof(int64_t))
             // Vector__int64_t(cap) → gorget_array_with_capacity(sizeof(int64_t), cap)
             if let Some(d) = dst {
-                let is_collection_ctor = (name.starts_with("Vector__") || name.starts_with("Set__")
-                    || name.starts_with("Dict__") || name.starts_with("HashMap__") || name.starts_with("HashSet__"))
+                // Read typed `struct_aliases` (Phase A residual #2) — a
+                // monomorphized collection alias name is registered when its
+                // alias-target StructDef is registered. Replaces five
+                // `name.starts_with("Vector__"|"Set__"|"Dict__"|"HashMap__"|
+                // "HashSet__")` arms with one typed map lookup.
+                let is_collection_ctor = module.struct_aliases.contains_key(name)
                     && !name.contains("__map") && !name.contains("__filter") && !name.contains("__get")
                     && !name.contains("__put") && !name.contains("__push") && !name.contains("__len")
                     && !name.contains("__pop") && !name.contains("__remove") && !name.contains("__contains")
@@ -3697,9 +3701,18 @@ fn emit_inst(
                         else { 8 }; // default
                     // For GorgetString elements, use 32 (Str struct size)
                     let elem_size: i64 = if name.contains("GorgetString") { 32 } else { elem_size };
-                    let ret_ty = if name.starts_with("Vector__") { "%GorgetArray" }
-                        else if name.starts_with("Set__") || name.starts_with("HashSet__") { "%GorgetSet" }
-                        else { "%GorgetMap" };
+                    // Resolve the alias target's name to pick the runtime
+                    // C type (GorgetArray/GorgetMap/GorgetSet) — typed via
+                    // struct_aliases (Phase A residual #2).
+                    let ret_ty = module.struct_aliases.get(name)
+                        .and_then(|sid| module.structs.get(sid.0 as usize))
+                        .map(|s| match s.name.as_str() {
+                            "GorgetArray" => "%GorgetArray",
+                            "GorgetMap" => "%GorgetMap",
+                            "GorgetSet" => "%GorgetSet",
+                            _ => "%GorgetMap",
+                        })
+                        .unwrap_or("%GorgetMap");
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     if args.is_empty() {
                         writeln!(out, "  call void @gorget_array_new(ptr sret({ret_ty}) %v{}, i64 {elem_size})", d.0).unwrap();
