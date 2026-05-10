@@ -54,7 +54,25 @@ pub(super) fn lower_method_call(
             name.clone()
         };
         let name = &resolved_name;
-        if ctx.lookup_local(name).is_none() && !ctx.module_constants.contains_key(name) {
+        // Snag #29: in qualified-path position (`E.method(...)`), prefer the
+        // TYPE interpretation when `name` resolves to a registered type or
+        // enum-variant — but locals still take priority over types (Rust-
+        // style: `let MyType = ...; MyType.x()` calls method on the local).
+        // The parallel `module_constants` lookup was masking user-defined
+        // types that collide with stdlib constants — e.g., `enum E` (user)
+        // vs `const float E` (math.gg, hardcoded into every module's
+        // constants at `mod.rs:486-493`). The collision turned `E.A` into
+        // a method call on the float `e = 2.718…`, generating
+        // `call @double__A()` and assigning the void result to an `__gg_E`
+        // struct slot — type mismatch in C codegen. Type-position priority
+        // matches Rust's separate type/value namespace convention.
+        let is_type_name = matches!(name.as_str(),
+                "int" | "float" | "bool" | "uint8" | "uint16" | "uint32" | "uint64"
+                | "int8" | "int16" | "int32" | "str" | "String" | "char" | "byte")
+            || ctx.type_mapper.lookup_named(name).is_some()
+            || ctx.resolve_enum_variant(name).is_some();
+        let is_local = ctx.lookup_local(name).is_some();
+        if !is_local && (is_type_name || !ctx.module_constants.contains_key(name)) {
             // Box.new(value) → heap allocation
             if name == "Box" && method_name == "new" && !args.is_empty() {
                 let mut val = lower_expr(ctx, builder, &args[0].node.value);

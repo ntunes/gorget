@@ -2824,6 +2824,14 @@ fn match_arm_borrow_clone() {
 }
 
 #[test]
+fn enum_name_collision_with_constant() {
+    run_gg(
+        "enum_name_collision_with_constant.gg",
+        "ok",
+    );
+}
+
+#[test]
 fn drop_raii() {
     run_gg(
         "drop_raii.gg",

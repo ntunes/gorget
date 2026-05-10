@@ -1,0 +1,33 @@
+# Snag #29 regression: a user-defined `enum E` collided with the
+# hardcoded `module_constants["E"] = 2.718…` (math constant) injected
+# at lowering startup. In qualified-path position (`E.A` / `E.B(42)`),
+# the resolver checked `!module_constants.contains_key(name)` BEFORE
+# checking `lookup_named` — so it treated `E.A` as method call on the
+# float constant, generating `call @double__A()` and assigning the
+# void result into an `__gg_E` struct slot. C codegen failed with
+# "incompatible types when assigning to type '__gg_E' from type
+# 'int32_t'". Triggered by enums with at least one payload variant
+# (all-unit enums happened to render to int32, masking the type
+# mismatch in C).
+#
+# Fix: in qualified-path position, type-name resolution takes priority
+# over module_constants lookup (Rust-style separate type/value
+# namespaces). The two parallel resolution sites — `methods.rs` (for
+# `E.method(args)`) and `mod.rs::lower_field_access` (for `E.X` without
+# parens) — now both check `lookup_named` / `resolve_enum_variant`
+# first.
+
+public enum E:
+    A
+    B(int)
+
+void main():
+    E e1 = E.A
+    E e2 = E.B(42)
+    int x = 1
+    E e3 = match x:
+        case 1:
+            E.A
+        else:
+            E.B(99)
+    print("ok")

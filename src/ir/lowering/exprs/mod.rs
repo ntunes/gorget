@@ -1754,7 +1754,14 @@ fn lower_field_access(
     // Check for qualified enum variant without parens: Color.Red
     // If the object is a type name (not a local) and the field is a variant, emit EnumInit.
     if let Expr::Identifier(name) = &object.node {
-        if ctx.lookup_local(name).is_none() && !ctx.module_constants.contains_key(name) {
+        // Snag #29 mirror of methods.rs site: type-position priority over
+        // module_constants. Without this, `enum E` shadowed by hardcoded
+        // `E = 2.718…` constant turned `E.A` into a field access on a
+        // float local. See full justification at the methods.rs call.
+        let is_type_name = ctx.type_mapper.lookup_named(name).is_some()
+            || ctx.resolve_enum_variant(name).is_some();
+        let is_local = ctx.lookup_local(name).is_some();
+        if !is_local && (is_type_name || !ctx.module_constants.contains_key(name)) {
             if let Some(type_id) = ctx.type_mapper.lookup_named(name) {
                 if let Some(type_def) = ctx.type_registry.get_type_def(name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {
