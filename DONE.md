@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — unwrap/expect/unwrap_or Option/Result detection via typed `enum_category`.** Two sites in `src/ir/lowering/exprs/methods.rs::lower_method_call`: (a) `:560-561` outer `is_option_or_result` predicate had a dead `n.starts_with("Option") || n.starts_with("Result")` fallback (Phase A invariant: every Option/Result registration sets `enum_category`); removed. (b) `:569-570` Option vs Result discrimination for inner-type extraction migrated from name prefix to typed `enum_category` discrimination. The downstream inner-name slicing (`Option__T` → T, `Result__Ok__Err` → Ok via suffix-strip) stays — that's the C-mangling boundary contract. 2 prefix matches retired (345 → 343); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/lowering/exprs/methods.rs`, `tests/lints.rs` (BUDGET 345 → 343).
+
 - [2026-05-10] **Layering audit — `lir/lower/drops.rs` Option/Result fallback dispatch via typed `enum_category`.** Site at `:131-133` (force-registered Option/Result drop fallback) had `tn.starts_with("Option__") || tn.starts_with("Result__")` for type-name discrimination. Migrated to `self.gir_types.get_type_def(tn).map_or(false, |td| td.metadata.enum_category.is_some())` — typed Phase A dispatch. The `recursive_drop_enums.contains_key(tn)` AND-clause stays (it's the actual table presence check). 2 prefix matches retired (347 → 345); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/lir/lower/drops.rs`, `tests/lints.rs` (BUDGET 347 → 345).
 

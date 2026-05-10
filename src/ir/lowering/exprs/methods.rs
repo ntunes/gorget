@@ -556,9 +556,11 @@ pub(super) fn lower_method_call(
     // On non-Option/Result types → pass-through (unwrap is a no-op)
     if matches!(method_name, "unwrap" | "expect" | "unwrap_or") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        // Read typed `enum_category` (Phase A) — the dead `n.starts_with`
+        // fallbacks are no longer needed: Phase A registration sets the
+        // category for every Option/Result.
         let is_option_or_result = type_name.as_ref()
-            .map(|n| ctx.type_registry.is_option_or_result(n)
-                || n.starts_with("Option") || n.starts_with("Result"))
+            .map(|n| ctx.type_registry.is_option_or_result(n))
             .unwrap_or(false);
         if !is_option_or_result {
             // Not an Option/Result — unwrap is a no-op
@@ -566,8 +568,15 @@ pub(super) fn lower_method_call(
         }
         // For Option/Result, extract the inner value via extern call that C backend handles
         if let Some(ref tn) = type_name {
-            let is_result = tn.starts_with("Result__");
-            let inner_type = if tn.starts_with("Option__") {
+            // Read typed `enum_category` (Phase A) for Option vs Result
+            // discrimination. The downstream inner-name slicing
+            // (`Option__T`/`Result__Ok__Err` → T or Ok) is the C-mangling
+            // boundary and stays — only the discriminator is migrated.
+            use crate::ir::types::EnumCategory;
+            let cat = ctx.type_registry.get_type_def(tn)
+                .and_then(|td| td.metadata.enum_category);
+            let is_result = cat == Some(EnumCategory::Result);
+            let inner_type = if cat == Some(EnumCategory::Option) {
                 let inner_name = &tn["Option__".len()..];
                 // Option__Ref__T → Ptr(T) (borrowed reference from collection)
                 if let Some(pointee_name) = inner_name.strip_prefix("Ref__") {
