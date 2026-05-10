@@ -304,6 +304,121 @@ fn no_typed_metadata_sidecars() {
     );
 }
 
+/// Tier 3b — Phase D state coherence. Per `docs/internals/structural-
+/// guards.md` Tier 3b:
+///
+/// > **Rule.** `LocalOwnership` is the source of truth for ownership and
+/// > borrow tracking. Any consumer reading `drops.is_registered`,
+/// > `is_named_local`, `is_owned_local`, etc. as proxies for ownership
+/// > is a discipline violation that should migrate to the typed
+/// > accessor.
+///
+/// The proxies — `is_named_local`, `is_owned_local`, `drops.is_registered`,
+/// `drops.is_moved` — predate Phase D's typed `Local.ownership` field
+/// and have been retired site-by-site over the past sessions (Phase D4
+/// closed `is_named_local` from `lower_var_decl_assign_mode`'s decision
+/// tree). The full retirement is multi-session; this ratchet locks the
+/// current floor so further migration is one-way.
+///
+/// **What counts as a proxy read:**
+///   - `<expr>.is_named_local(...)` — duplicates `Local.ownership ==
+///     Owned/Borrowed{Param}` (named locals get a Borrowed-Param
+///     ownership slot at fn entry).
+///   - `<expr>.is_owned_local(builder, local)` — duplicates
+///     `Local.ownership == Owned | FreshOwned`.
+///   - `drops.is_registered(local)` — duplicates "is the local
+///     drop-tracked" which Phase D's `LocalOwnership` axis already
+///     encodes (Borrowed/View slots aren't drop-tracked; Owned/
+///     FreshOwned/Untracked-resource slots are).
+///   - `drops.is_moved(local)` — duplicates `LocalOwnership` post-
+///     move-zero state (the move-zero is the source of truth in the IR
+///     shape, not a sidecar flag).
+///
+/// **Comment-line matches are skipped** so doc-comments that *describe*
+/// the proxies (e.g. when documenting their retirement) don't trip the
+/// lint. Definition lines (`fn is_named_local(...)`, `fn is_registered(...)`)
+/// are excluded — they're the canonical implementations, not proxy
+/// reads.
+///
+/// **Baseline 2026-05-10: 64 proxy reads** (across `src/ir/lowering/...`).
+/// Each future migration that retires a site decreases the budget; a
+/// new proxy read fails the test.
+const PHASE_D_PROXY_PATTERNS: &[&str] = &[
+    r"\.is_named_local\s*\(",
+    r"\.is_owned_local\s*\(",
+    r"\.drops\s*\.\s*is_registered\s*\(",
+    r"\.drops\s*\.\s*is_moved\s*\(",
+];
+
+fn count_phase_d_proxy_reads() -> usize {
+    let mut total = 0;
+    for pat_str in PHASE_D_PROXY_PATTERNS {
+        let pattern = regex::Regex::new(pat_str).unwrap();
+        visit("src", &mut |path| {
+            if path.extension().map_or(true, |e| e != "rs") {
+                return;
+            }
+            let content = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            for line in content.lines() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                // Skip the function definition lines themselves —
+                // `pub fn is_named_local(...)`, etc.
+                if trimmed.contains("fn is_named_local")
+                    || trimmed.contains("fn is_owned_local")
+                    || trimmed.contains("fn is_registered")
+                    || trimmed.contains("fn is_moved")
+                {
+                    continue;
+                }
+                total += pattern.find_iter(line).count();
+            }
+        });
+    }
+    total
+}
+
+/// Tier 3b ratchet: Phase D state coherence. Proxy reads of
+/// `is_named_local` / `is_owned_local` / `drops.is_registered` /
+/// `drops.is_moved` should migrate to typed `Local.ownership` reads.
+/// New proxy reads fail the test.
+///
+/// Baseline 2026-05-10: 64 proxy reads. Lower as Phase D migration
+/// proceeds.
+#[test]
+fn no_growth_in_phase_d_proxy_reads() {
+    /// Maximum allowed proxy-read count. Lower as Phase D migrates
+    /// `is_named_local`/`is_owned_local`/`drops.is_registered`/
+    /// `drops.is_moved` callsites to typed `Local.ownership` reads.
+    const BUDGET: usize = 64;
+
+    let count = count_phase_d_proxy_reads();
+    assert!(
+        count <= BUDGET,
+        "Phase D proxy-read count grew beyond budget: {count} > {BUDGET}.\n\n\
+         Tier 3b (`docs/internals/structural-guards.md`) bars new proxy \
+         reads of ownership state. The typed source of truth is \
+         `Local.ownership` (Phase D's `LocalOwnership` field). Proxies \
+         duplicate the same fact and drift from each other under \
+         complex CFG paths.\n\n\
+         To find new sites:\n  \
+         grep -rnE '\\.(is_named_local|is_owned_local)\\s*\\(|drops\\s*\\.\\s*(is_registered|is_moved)\\s*\\(' src/ | grep -v '//'\n\n\
+         Either:\n  \
+         1. Migrate to read `builder.locals[local.0 as usize].ownership` \
+            (or `ctx.source_ownership(...)` for operands).\n  \
+         2. If the proxy is genuinely needed (e.g. inside the proxy's \
+            own implementation), exclude its file/line via the \
+            comment-skip / fn-def-skip already in this lint.\n\n\
+         If the count went DOWN, lower BUDGET in this file to lock the \
+         new floor."
+    );
+}
+
 /// Tier E.1 (per `docs/internals/self-host-resource-model.md` §6.1):
 /// the same ratchet applied to self-host's `.gg` source. Phase A migrated
 /// the classification consumers in `lir_lower.gg` and `lower.gg` to read

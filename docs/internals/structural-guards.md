@@ -100,6 +100,7 @@ These structural guards exist today and are load-bearing:
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 | `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
 | `no_typed_metadata_sidecars` (Tier 2d) | Parallel `HashMap<*, T>` sidecar where `T` is a typed `TypeMetadata` / `Local` field (DropStrategy / CopySemantics / CollectionKind / EnumKind / EnumCategory / LocalOwnership / BorrowOrigin) | `tests/lints.rs` | Fatal (BUDGET=0) |
+| `no_growth_in_phase_d_proxy_reads` (Tier 3b) | Proxy reads of `is_named_local` / `is_owned_local` / `drops.is_registered` / `drops.is_moved` (sidecar to Phase D's `Local.ownership`) | `tests/lints.rs` | Ratchet (BUDGET=64, decreases as migration proceeds) |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
@@ -258,15 +259,19 @@ See DONE.md for the full commit chain.
 
 **Burn-down.** One-off lint pass. Allowlist starts small; grows as legitimate registrar sites are discovered.
 
-#### 3b. Phase D state coherence
+#### 3b. Phase D state coherence — **SHIPPED 2026-05-10** (ratchet locks current floor)
 
-**Rule.** `LocalOwnership` is the source of truth for ownership and borrow tracking. Any consumer reading `drops.is_registered`, `is_named_local`, `is_owned_local`, etc. as proxies for ownership is a discipline violation that should migrate to the typed accessor.
+**Rule.** `LocalOwnership` is the source of truth for ownership and borrow tracking. Any consumer reading `drops.is_registered`, `is_named_local`, `is_owned_local`, `drops.is_moved`, etc. as proxies for ownership is a discipline violation that should migrate to the typed accessor.
 
-**Validator sketch.** Same shape as 3a: a lint pass identifying remaining proxy reads.
+**Validator at `tests/lints.rs::no_growth_in_phase_d_proxy_reads`** — Rust test grep-walking `src/**/*.rs` for proxy callsites: `\.is_named_local\s*\(`, `\.is_owned_local\s*\(`, `drops\s*\.\s*is_registered\s*\(`, `drops\s*\.\s*is_moved\s*\(`. Comment-line and `fn`-definition-line matches are skipped (the proxies' own implementations are the canonical site, not violations).
 
-**Why it matters.** Phase D4 / D4.5 work has been migrating these proxies for months. The endpoint is "Phase D is the only ownership signal." A validator locks the rule once the migration is complete.
+**Baseline 2026-05-10: 64 proxy reads** across `src/ir/lowering/...`. The ratchet locks the floor; new proxy reads fail the test until either:
+1. The new site is migrated to `builder.locals[local.0 as usize].ownership` (or `ctx.source_ownership(...)` for operands).
+2. The proxy is genuinely needed (e.g. inside the proxy's own `fn` definition), excluded via the comment-skip / fn-def-skip already in the lint.
 
-**Burn-down.** Already in progress under existing Phase D TODOs. The validator is the closing artefact.
+**Burn-down.** Phase D4 retired `is_named_local` from `lower_var_decl_assign_mode`'s decision tree (2026-05-10). The remaining 64 sites are scattered across pattern lowering, drop accountant interactions, branch handling. Each migration that retires a site decreases the budget — one-way ratchet. Full retirement is multi-session.
+
+**Coverage extensions.** New proxy methods that read Phase D state (a hypothetical `is_borrowed_local`, `drops.was_alias_at`, etc.) need to be added to `PHASE_D_PROXY_PATTERNS` so the lint protects them. The watchlist is the explicit registry of what's banned.
 
 ---
 
