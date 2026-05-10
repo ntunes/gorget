@@ -9,7 +9,7 @@ use crate::parser::Parser;
 use crate::span::Spanned;
 
 use super::super::context::{LoweringContext, ParamABI};
-use super::{lower_expr, infer_operand_type_full, is_resource_type_local,
+use super::{lower_expr, infer_operand_type_full,
             ensure_box_type_def, ensure_mutex_type_def, ensure_shared_type_def,
             ensure_task_group_type_def, get_or_register_type,
             resolve_option_result_variant, lower_string_interpolation};
@@ -703,9 +703,22 @@ pub(super) fn lower_call(
                     let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
                     // Shared[T](v) takes ownership of v's data. Mark Move-type locals
                     // as moved so the drop elaborator skips them (avoids dangling ptr).
+                    //
+                    // Cluster 5 widening (2026-05-10): the gate is `needs_drop`
+                    // (via is_resource_or_contains_resource), not the narrow
+                    // is_resource_type_local. For `Shared[Option[Vector[int]]](v)`
+                    // where v is Option[Vector[int]], the wrapper contains a heap
+                    // pointer transitively — without MoveZero, the caller's drop
+                    // at scope-exit and Shared's drop of the consumed payload
+                    // race on the same heap allocation. Mirrors the same widening
+                    // at the post-call MoveZero collection (this file:~1080).
+                    // No fixture currently exercises Shared/Mutex with
+                    // Option/Result-of-resource — correctness-driven for future
+                    // code (mirrors spawn.rs:450 Cluster 3).
                     if let Operand::Copy(place) = &val_op {
                         if place.projections.is_empty()
-                            && is_resource_type_local(place.local, builder, &ctx.type_registry)
+                            && ctx.type_registry.is_resource_or_contains_resource(
+                                builder.local_type(place.local))
                         {
                             builder.move_zero(place.clone());
                             ctx.drops.mark_moved(place.local);
@@ -1151,12 +1164,24 @@ pub(super) fn lower_call(
         // Collect Move-ownership Move-type arg locals for post-call MoveZero.
         // Resolve the original source local from the arg expression (not the
         // lowered MutPtr, which is_resource_type_local doesn't recognize).
+        //
+        // Cluster 5 widening (2026-05-10): the gate is `needs_drop` (via
+        // is_resource_or_contains_resource), not the narrow is_resource_type.
+        // For `f(!opt_vec)` where opt_vec is Option[Vector[int]], the wrapper
+        // contains a heap pointer transitively — without MoveZero, the
+        // caller's drop at scope-exit and the callee's drop of the consumed
+        // arg race on the same heap allocation. Mirrors the spawn.rs:450
+        // Cluster 3 widening (`is_resource_or_contains_resource` on closure
+        // captures). No fixture currently exercises an Option/Result-of-
+        // resource via `!arg` ownership — the widening is correctness-
+        // driven for future code.
         let move_zero_locals: Vec<Place> = resolved_args.iter()
             .filter_map(|arg| {
                 if !matches!(arg.node.ownership, Ownership::Move) { return None; }
                 if let Expr::Identifier(name) = &arg.node.value.node {
                     if let Some((local_id, _)) = ctx.lookup_local(name) {
-                        if is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                        let local_ty = builder.local_type(local_id);
+                        if ctx.type_registry.is_resource_or_contains_resource(local_ty) {
                             return Some(Place::local(local_id));
                         }
                     }

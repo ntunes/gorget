@@ -969,6 +969,11 @@ fn lower_trait_method_body(
             use crate::ir::instructions::AssignMode;
             let ret_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                 let local_ty = builder.local_type(p.local);
+                // Cluster 5 probe (2026-05-10): the disjunction
+                // `needs_drop || is_resource_type` is NOT redundant.
+                // See functions.rs:28 for the full reasoning. Disjunction
+                // retained — load-bearing for trait-default iterator
+                // adapter Move-mode staging (stdlib_iter_collect etc.).
                 if p.projections.is_empty()
                     && (ctx.type_registry.needs_drop(local_ty)
                         || ctx.type_registry.is_resource_type(local_ty))
@@ -1524,6 +1529,11 @@ fn lower_static_trait_method(
             use crate::ir::instructions::AssignMode;
             let ret_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                 let local_ty = builder.local_type(p.local);
+                // Cluster 5 probe (2026-05-10): the disjunction
+                // `needs_drop || is_resource_type` is NOT redundant.
+                // See functions.rs:28 for the full reasoning. Disjunction
+                // retained — load-bearing for trait-default iterator
+                // adapter Move-mode staging (stdlib_iter_collect etc.).
                 if p.projections.is_empty()
                     && (ctx.type_registry.needs_drop(local_ty)
                         || ctx.type_registry.is_resource_type(local_ty))

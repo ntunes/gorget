@@ -24,6 +24,18 @@ fn assign_to_return_slot(
     use crate::ir::instructions::AssignMode;
     let mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
         let local_ty = builder.local_type(p.local);
+        // Cluster 5 probe (2026-05-10): the disjunction
+        // `needs_drop || is_resource_type` is NOT redundant. `needs_drop`
+        // depends on TypeDef metadata set by `upgrade_types_from_fields`,
+        // which may not have run at the point this code executes (or for
+        // late-registered types). `is_resource_type` does a per-call
+        // transitive struct-field scan that doesn't depend on upgrade scan.
+        // For VectorIter[T] (struct containing Vector[T]), `is_resource_type`
+        // returns true via the transitive scan, while `needs_drop` returns
+        // false until the upgrade scan sets DropStrategy::Recursive.
+        // Collapse to either alone regresses ~22 stdlib_iter / tensor /
+        // vector_userspace_hofs fixtures with `[resource-moves]` violations
+        // (shallow copy of resource _0 : VectorIter__int64_t).
         if p.projections.is_empty()
             && (ctx.type_registry.needs_drop(local_ty)
                 || ctx.type_registry.is_resource_type(local_ty))

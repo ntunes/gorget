@@ -1433,6 +1433,9 @@ fn lower_return(
                 // (rare on this path — see lower_var_decl ownership propagation)
                 // would benefit from Clone instead, but that's a C3 audit
                 // refinement and the current move_zero behavior is unchanged.
+                // Cluster 5 probe (2026-05-10): the disjunction
+                // `needs_drop || is_resource_type` is NOT redundant. See
+                // `lowering/functions.rs:28` for the full reasoning.
                 let use_move = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     let local_ty = builder.local_type(p.local);
                     p.projections.is_empty()
@@ -1894,6 +1897,9 @@ fn lower_assert(
                 // mode matches the move-to-temp semantic. Primitives
                 // stay Copy.
                 use crate::ir::instructions::AssignMode;
+                // Cluster 5 probe (2026-05-10): the disjunction
+                // `is_resource_type || needs_drop` is NOT redundant.
+                // See `lowering/functions.rs:28` for the full reasoning.
                 let lhs_local = builder.add_local(lhs_type, None);
                 let lhs_mode = if ctx.type_registry.is_resource_type(lhs_type)
                     || ctx.type_registry.needs_drop(lhs_type)
@@ -2365,6 +2371,9 @@ fn lower_with(
         // Phase C: pick Move for resource types (with-binding takes ownership
         // of the result; e.g. `with Resource(...) as r:` constructs a fresh
         // owned local). Primitives stay Copy.
+        // Cluster 5 probe (2026-05-10): the disjunction
+        // `is_resource_type || needs_drop` is NOT redundant. See
+        // `lowering/functions.rs:28` for the full reasoning.
         let with_mode = if ctx.type_registry.is_resource_type(type_id)
             || ctx.type_registry.needs_drop(type_id)
         {

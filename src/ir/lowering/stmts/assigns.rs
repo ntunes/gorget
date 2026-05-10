@@ -17,16 +17,6 @@ use super::super::exprs::{
     infer_collection_element_type,
 };
 
-/// Local helper mirroring `exprs::type_reg::is_resource_type_local` —
-/// the crate-private visibility on the original prevented direct use here.
-fn is_resource_type_local(
-    local: LocalId,
-    builder: &FunctionBuilder,
-    registry: &TypeRegistry,
-) -> bool {
-    registry.is_resource_type(builder.local_type(local))
-}
-
 /// Lower an assignment.
 pub(super) fn lower_assign(
     ctx: &mut LoweringContext,
@@ -745,12 +735,21 @@ pub(super) fn lower_index_assign(
     // collection — zeroing the source prevents the scope-exit drop from
     // double-freeing. Skips Ptr-wrapped locals (already materialized) and
     // primitives.
+    //
+    // Cluster 5 widening (2026-05-10): the gate is `needs_drop` (via
+    // is_resource_or_contains_resource), not the narrow is_resource_type.
+    // For `v[i] = opt_vec` where opt_vec is Option[Vector[int]], the wrapper
+    // contains a heap pointer transitively — without MoveZero, the caller's
+    // drop at scope-exit and the collection's drop of the inserted payload
+    // race on the same heap allocation. Mirrors the same widening at
+    // exprs/calls.rs sites 678/1080 and exprs/spawn.rs:450 Cluster 3.
     let maybe_move_zero = |ctx: &mut LoweringContext,
                            builder: &mut FunctionBuilder,
                            op: &Operand| {
         if let Operand::Copy(place) | Operand::Move(place) = op {
             if place.projections.is_empty()
-                && is_resource_type_local(place.local, builder, &ctx.type_registry)
+                && ctx.type_registry.is_resource_or_contains_resource(
+                    builder.local_type(place.local))
             {
                 let ty = builder.local_type(place.local);
                 let is_ptr = matches!(
@@ -1036,6 +1035,11 @@ pub(super) fn lower_compound_assign(
             };
             // Phase C: tmp is fresh op-result (binop or overload call), dead
             // after this assign. Move for resource types, Copy for primitives.
+            // Cluster 5 probe (2026-05-10): the disjunction
+            // `is_resource_type || needs_drop` is NOT redundant. See
+            // `lowering/functions.rs:28` for the full reasoning
+            // (upgrade-scan-dependent `needs_drop` vs upgrade-scan-independent
+            // transitive `is_resource_type`).
             let cmp_mode = if ctx.type_registry.is_resource_type(value_type)
                 || ctx.type_registry.needs_drop(value_type)
             {
@@ -1172,6 +1176,9 @@ pub(super) fn lower_compound_assign(
             let idx_local = builder.add_local(idx_type, None);
             let idx_mode = if let Operand::Copy(ref p) | Operand::Move(ref p) = idx_raw {
                 let src_ty = builder.local_type(p.local);
+                // Cluster 5 probe (2026-05-10): the disjunction
+                // `is_resource_type || needs_drop` is NOT redundant. See
+                // `lowering/functions.rs:28` for the full reasoning.
                 if p.projections.is_empty()
                     && (ctx.type_registry.is_resource_type(src_ty)
                         || ctx.type_registry.needs_drop(src_ty))

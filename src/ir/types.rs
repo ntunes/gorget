@@ -505,6 +505,32 @@ impl TypeRegistry {
     ///   payloads. About 3-5 callsites should migrate to this predicate;
     ///   tracked in TODO.md "is_resource_type widening" Phase 2 plan.
     ///
+    /// **Cluster 5 finding (2026-05-10).** The disjunction
+    /// `is_resource_type(t) || needs_drop(t)` is **NOT redundant** at
+    /// most sites and **must not be collapsed**. The two predicates read
+    /// from different sources:
+    /// - `needs_drop` is metadata-driven: checks `copy_semantics ==
+    ///   Resource` and `drop_strategy != None` on the type's `TypeDef`.
+    ///   Returns `true` only after `upgrade_types_from_fields` has
+    ///   propagated `DropStrategy::Recursive` to structs/enums whose
+    ///   fields transitively contain resources.
+    /// - `is_resource_type` is structural-and-metadata: checks the same
+    ///   metadata AND walks `is_resource_name`'s per-call transitive
+    ///   struct-field scan. The scan does not depend on the upgrade pass
+    ///   having run, so `is_resource_type(VectorIter[T])` returns true
+    ///   immediately on registration (via its `Vector[T] source` field),
+    ///   while `needs_drop(VectorIter[T])` returns false until the
+    ///   upgrade scan completes.
+    ///
+    /// Lowering sites that emit `AssignMode` decisions during trait
+    /// default body lowering, generic monomorphization templates, and
+    /// other paths whose execution interleaves with type-def
+    /// registration must keep the disjunction. The probe history is the
+    /// 22-fixture regression on Cluster 5 (stdlib_iter / tensor /
+    /// vector_userspace_hofs / test_deque / test_tuples /
+    /// vector_each_userspace) when the disjunction was collapsed to
+    /// just `needs_drop`.
+    ///
     /// Implementation is a thin alias over `needs_drop`. Calling this
     /// vs. `needs_drop` is purely a readability choice for the call site:
     /// pick whichever name makes the intent clear.
