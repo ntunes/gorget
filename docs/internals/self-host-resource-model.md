@@ -339,14 +339,18 @@ If self-host's enum-field-on-struct-read codegen has issues that force the int-c
 >   in `tests/integration.rs`. Fatal-promotion via Rust harness
 >   (rather than in-process `exit()`) because of the cstr/void
 >   emit gap noted in §7.
-> - Burn-down 5b (commit `<step-5b>`): call_args → 0 (closed).
+> - Burn-down 5b (commit `988ce1c3`): call_args → 0 (closed).
 >   Five emit sites in `lower.gg` migrated to pick OpBorrow vs
 >   OpMove based on the source local's ownership tag — EMethodCall
 >   receiver, EFieldAccess non-ptr base (chained field load),
 >   lower_field_write base, emit_field_write_from_local base,
 >   lower_index_assign base (gorget_array_set), ECall borrow-arg.
 >   Regression test `phase_c_call_args_at_zero_self_host`.
-> - Open: burn-down 5c (moves, 100,170 baseline).
+> - Burn-down 5c (partial, commit `<step-5c-partial>`): moves
+>   100,170 → 89,678 (-10%) by excluding pointer-typed locals from
+>   the validator's resource-detection. Full burn-down to zero
+>   needs flow-sensitive liveness analysis or uniform OpClone with
+>   clone codegen at every read site; tracked in TODO.
 
 ### 5.1 Validator design (`validate.gg`)
 
