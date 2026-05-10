@@ -2234,6 +2234,57 @@ pub fn resolve_none_tag(ctx: &LoweringContext, type_id: TypeId) -> i32 {
 /// When the callee has a resource-type param, it's passed by pointer (const Ptr for bare,
 /// MutPtr for &). We use the callee's param type (not the caller's local type) to decide,
 /// avoiding mismatches like passing String to a function taking str.
+
+/// Single-source-of-truth for "arm value crosses the match-result boundary"
+/// (Snag #28; consume-site discipline, structural-guards.md Tier 2a).
+///
+/// Three semantic gates fire here, in order:
+/// 1. **Borrow → owned clone** (`ensure_owned_at_boundary`): when the arm
+///    value is a Ptr<T> binding (e.g., a variant binding bound as Ref because
+///    the scrutinee was a Ptr) and the result slot expects owned T, clone
+///    the pointee. Without this, `[Mv] result = copy ptr` memcpys the
+///    pointee struct (a resource like GorgetString) into the result and
+///    both alias the same heap data — double-free at scope exit.
+/// 2. **Move-mode assign** (Phase C): the arm produces a fresh single-use
+///    value flowing into the result slot — Move avoids a shallow-copy
+///    flagging from the resource-moves validator.
+/// 3. **Move follow-through** (drop-registered source → `move_zero_and_mark`):
+///    transfers ownership so the source slot logically dies and scope-exit
+///    drops don't double-free the heap allocation that now lives in the
+///    result slot.
+///
+/// Used by both the per-arm site and the else-arm site of `lower_match_expr`
+/// — encoding the boundary discipline in one place so the two structural
+/// branches can't drift.
+fn assign_match_arm_to_result(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    result_local: LocalId,
+    arm_val: Operand,
+    span: crate::span::Span,
+) {
+    let arm_val = ctx.ensure_owned_at_boundary(
+        builder,
+        arm_val,
+        span,
+        crate::ir::ImplicitCloneReason::ConsumingArg,
+    );
+    let move_source: Option<LocalId> = match &arm_val {
+        Operand::Copy(p) | Operand::Move(p)
+            if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
+            Some(p.local),
+        _ => None,
+    };
+    builder.assign_mode(
+        crate::ir::instructions::AssignMode::Move,
+        Place::local(result_local),
+        arm_val,
+    );
+    if let Some(src) = move_source {
+        ctx.move_zero_and_mark(builder, src);
+    }
+}
+
 fn lower_match_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -2286,35 +2337,7 @@ fn lower_match_expr(
                 builder.locals[result_local.0 as usize].type_id = arm_ty;
                 result_type_refined = true;
             }
-            // Phase C: arm value flows into the match's result slot. Each arm
-            // body produces a fresh single-use value (the result of its tail
-            // expression) — Move is the correct mode for resource types so
-            // the validator doesn't flag a shallow copy of the arm's owned
-            // value into the result slot.
-            //
-            // When the arm's tail is just a drop-registered local (e.g.
-            // `case Ok(ts): ts` where `emit_pattern_bindings` cloned the
-            // payload into `ts`'s slot to give it independent ownership),
-            // Move mode means transfer-of-ownership: the source's drop
-            // registration must be retired and the slot logically dead so
-            // scope-exit drops don't double-free the heap allocation that
-            // now lives in `result_local`. Without this follow-through,
-            // both the pattern binding and the match's result slot end
-            // up holding the same pointer and both fire at scope exit.
-            let move_source: Option<LocalId> = match &arm_val {
-                Operand::Copy(p) | Operand::Move(p)
-                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
-                    Some(p.local),
-                _ => None,
-            };
-            builder.assign_mode(
-                crate::ir::instructions::AssignMode::Move,
-                Place::local(result_local),
-                arm_val,
-            );
-            if let Some(src) = move_source {
-                ctx.move_zero_and_mark(builder, src);
-            }
+            assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
         }
 
@@ -2330,23 +2353,7 @@ fn lower_match_expr(
                 let else_ty = infer_operand_type_full(ctx, &else_val, builder);
                 builder.locals[result_local.0 as usize].type_id = else_ty;
             }
-            // See arm-loop comment above: Move-into-result follow-through
-            // (zero + unregister drop) when the source is a drop-registered
-            // local — keeps the result_local as the sole owner.
-            let else_move_source: Option<LocalId> = match &else_val {
-                Operand::Copy(p) | Operand::Move(p)
-                    if p.projections.is_empty() && ctx.drops.is_registered(p.local) =>
-                    Some(p.local),
-                _ => None,
-            };
-            builder.assign_mode(
-                crate::ir::instructions::AssignMode::Move,
-                Place::local(result_local),
-                else_val,
-            );
-            if let Some(src) = else_move_source {
-                ctx.move_zero_and_mark(builder, src);
-            }
+            assign_match_arm_to_result(ctx, builder, result_local, else_val, else_expr.span);
             builder.jump(merge_bb);
         }
     }
@@ -2811,7 +2818,7 @@ fn lower_match_stmt_as_expr(
         let arm_val = lower_expr(ctx, builder, &arm.body);
         // Don't overwrite return/break/continue terminators with jump
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_local), arm_val);
+            assign_match_arm_to_result(ctx, builder, result_local, arm_val, arm.body.span);
             builder.jump(merge_bb);
         }
 
@@ -2823,7 +2830,11 @@ fn lower_match_stmt_as_expr(
     if let Some(else_block) = else_arm {
         let else_val = lower_block_expr(ctx, builder, else_block);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_local), else_val);
+            // Use a synthetic span — block expressions don't carry one,
+            // and the helper only consults span for the implicit-clone
+            // diagnostic (which the else branch rarely triggers anyway).
+            let span = crate::span::Span { start: 0, end: 0 };
+            assign_match_arm_to_result(ctx, builder, result_local, else_val, span);
             builder.jump(merge_bb);
         }
     } else if !concrete_arms.is_empty() {

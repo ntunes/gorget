@@ -1,0 +1,33 @@
+# Snag #28 regression: a match arm body returning a variant binding that's
+# bound as `Ptr<T>` (because the scrutinee is a Ptr — e.g. a struct field
+# accessed via FieldLoad) was assigned to the match's value-typed result
+# slot via `[Mv] _result = copy _ptr`. The codegen materialises that as
+# a memcpy of the pointee struct (e.g. GorgetString) into the result —
+# both the match result AND the variant payload alias the same heap
+# data. Both fire scope-exit drops → double-free. Per CoW spec, borrow
+# → owned-destination requires a clone (consume-site discipline). The
+# fix routes arm/else values through `ensure_owned_at_boundary` before
+# the result-slot assign.
+from std.collections import Box
+
+enum Node:
+    Ident(String)
+    NumberLit(float)
+
+struct Spanned:
+    Node node
+    int line
+
+void consume(String s):
+    print(f"consumed: {s}")
+
+void main():
+    Spanned id = Spanned(Node.Ident("hello"), 1)
+    Box[Spanned] boxed = Box.new(id)
+    Spanned lhs = *boxed
+    String name = match lhs.node:
+        case Node.Ident(n):
+            n
+        else:
+            ""
+    consume(name)

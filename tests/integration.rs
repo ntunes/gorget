@@ -2816,6 +2816,14 @@ inner",
 }
 
 #[test]
+fn match_arm_borrow_clone() {
+    run_gg(
+        "match_arm_borrow_clone.gg",
+        "consumed: hello",
+    );
+}
+
+#[test]
 fn drop_raii() {
     run_gg(
         "drop_raii.gg",
