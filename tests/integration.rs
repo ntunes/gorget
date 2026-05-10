@@ -12697,6 +12697,78 @@ fn phase_c_field_reads_at_zero_self_host() {
     );
 }
 
+// Phase C step 5b regression check — call_args class. Burned down
+// from 10,144 → 0 by threading recv/base ownership through four
+// emit sites in lower.gg (EMethodCall receiver, EFieldAccess base
+// in non-ptr load, two __field_write_* paths, gorget_array_set base,
+// borrow-arg in ECall). The pattern at each site is identical:
+// borrowed source → OpBorrow, owned/param source → OpMove.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn phase_c_call_args_at_zero_self_host() {
+    if skip_under_llvm() { return; }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    // Fixtures that had the heaviest call_args activity at baseline,
+    // plus a few that exercised specific emit sites the burn-down
+    // touched (LinkedList → gorget_array_set; p2p → user-fn borrow
+    // arg; nested field access → __field_write_).
+    let fixtures = [
+        "dataframe_groupby.gg",
+        "json_parse.gg",
+        "p2p_handshake.gg",
+        "httpserver_router.gg",
+        "cli_args.gg",
+        "hello.gg",
+    ];
+
+    let mut total = 0usize;
+    let mut details = String::new();
+    for fname in fixtures.iter() {
+        let fixture = manifest_dir.join("tests/fixtures").join(fname);
+        if !fixture.exists() {
+            continue;
+        }
+        let out = Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--validate-resource-call-args")
+            .output()
+            .expect("failed to spawn self-host driver");
+        if !out.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            if let Some(rest) = line.strip_prefix("# validate_resource_call_args: ") {
+                let n: usize = rest
+                    .trim_end_matches(" violation(s)")
+                    .parse()
+                    .unwrap_or(0);
+                if n > 0 {
+                    details.push_str(&format!("  {fname}: {n} violation(s)\n"));
+                    total += n;
+                }
+                break;
+            }
+        }
+    }
+    assert!(
+        total == 0,
+        "Phase C call_args class regressed — {total} new violations.\n\n\
+         The validate_resource_call_args validator was burned down to \
+         zero in commit <step-5b>. A new violation means an emit site \
+         in lower.gg added an OpMove(local) at a call-arg position \
+         where the source local's ownership is LoBorrowed. Moving from \
+         a borrow is a use-after-free shape. Fix: check the source's \
+         ownership at the emit site and switch to OpBorrow when \
+         LoBorrowed.\n\n\
+         Per-fixture breakdown:\n{details}"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Self-host End-to-End — every fixture, compiled+run via stage-1
 // ═══════════════════════════════════════════════════════════════

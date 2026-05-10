@@ -1823,10 +1823,24 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         pass
             # Method call: lower receiver as first arg (&self), then args.
             # Most collection/object methods take self by pointer.
-            # We pass OpMove(recv) — the LIR lowerer will use SlotAddr for
-            # the first arg of collection methods that expect a pointer.
+            #
+            # Phase C step 5b: pick operand mode from the receiver's
+            # ownership tag. A LoBorrowed receiver (most commonly a
+            # field-loaded local — `self.columns.get(...)`) must be
+            # passed as OpBorrow, not OpMove — moving a borrow is a
+            # use-after-free shape. OpMove stays for LoOwned and
+            # LoParam (the caller already owns the slot in both
+            # cases; the method call may consume or alias as it
+            # likes). At the LIR layer OpBorrow lowers identically
+            # to OpMove for the pass-by-ptr method-arg shape (commit
+            # `af687f3d`); validators downstream get the typed signal.
             Vector[Operand] call_args = []
-            call_args.push(OpMove(recv))
+            GirLocal recv_loc = ctx.locals.get(recv).unwrap()
+            match recv_loc.ownership:
+                case LoBorrowed():
+                    call_args.push(OpBorrow(recv))
+                else:
+                    call_args.push(OpMove(recv))
             int mi2 = 0
             while mi2 < margs.len():
                 SpannedExpr ma = margs.get(mi2).unwrap()
@@ -1930,7 +1944,16 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if base_is_ptr:
                     field_args.push(OpCopy(base))
                 else:
-                    field_args.push(OpMove(base))
+                    # Phase C step 5b: chained field access (a.b.c.d)
+                    # produces a LoBorrowed `base` for the inner reads.
+                    # OpMove on a borrow is a use-after-free; emit
+                    # OpBorrow to pass the alias through.
+                    GirLocal base_loc = ctx.locals.get(base).unwrap()
+                    match base_loc.ownership:
+                        case LoBorrowed():
+                            field_args.push(OpBorrow(base))
+                        else:
+                            field_args.push(OpMove(base))
                 field_args.push(OpConstI64(found_fi))
                 gmod.fn_sigs.put(field_fn, field_type)
                 emit(&ctx, GICallExtern(fdst, field_fn, field_args))
@@ -2331,7 +2354,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             if not is_borrow and ai < borrow_flags.len():
                 is_borrow = borrow_flags.get(ai).unwrap()
             if is_borrow:
-                gir_args.push(OpMove(arg_local))
+                # Phase C step 5b: when the source is already a borrow,
+                # propagate as OpBorrow. When the source is owned, the
+                # caller's borrow is constructed by-move and the local
+                # stays alive past the call — OpMove preserves the
+                # existing shape for owned sources.
+                GirLocal arg_loc = ctx.locals.get(arg_local).unwrap()
+                match arg_loc.ownership:
+                    case LoBorrowed():
+                        gir_args.push(OpBorrow(arg_local))
+                    else:
+                        gir_args.push(OpMove(arg_local))
             else:
                 gir_args.push(OpCopy(arg_local))
             ai = ai + 1
@@ -2602,7 +2635,13 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
-        write_args.push(OpMove(base))
+        # Phase C step 5b: borrowed base → OpBorrow, owned → OpMove.
+        GirLocal fw_base_loc = ctx.locals.get(base).unwrap()
+        match fw_base_loc.ownership:
+            case LoBorrowed():
+                write_args.push(OpBorrow(base))
+            else:
+                write_args.push(OpMove(base))
     write_args.push(OpCopy(val))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
@@ -2627,7 +2666,13 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
-        write_args.push(OpMove(base))
+        # Phase C step 5b: borrowed base → OpBorrow, owned → OpMove.
+        GirLocal fwf_base_loc = ctx.locals.get(base).unwrap()
+        match fwf_base_loc.ownership:
+            case LoBorrowed():
+                write_args.push(OpBorrow(base))
+            else:
+                write_args.push(OpMove(base))
     write_args.push(OpCopy(value_local))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
@@ -2709,9 +2754,17 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
         return
     # gorget_array_set / gorget_map_put take self by pointer (&base),
     # key/index by value, and value by pointer-or-value depending on
-    # element type. Use OpMove so needs_ptr_arg emits SlotAddr for the
-    # collection pointer.
-    Vector[Operand] set_args = [OpMove(base), OpCopy(idx), OpCopy(val)]
+    # element type. Use OpMove / OpBorrow so needs_ptr_arg emits
+    # SlotAddr for the collection pointer (Phase C step 5b: borrowed
+    # base → OpBorrow, owned → OpMove).
+    Operand base_op = OpMove(base)
+    GirLocal idx_base_loc = ctx.locals.get(base).unwrap()
+    match idx_base_loc.ownership:
+        case LoBorrowed():
+            base_op = OpBorrow(base)
+        else:
+            pass
+    Vector[Operand] set_args = [base_op, OpCopy(idx), OpCopy(val)]
     emit(&ctx, GICallExtern(-1, setter, set_args))
 
 # Look up the parent enum name for a type. If `type_name` itself is an
