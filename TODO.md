@@ -27,16 +27,17 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 
 
-- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, branches A/B/C/E/F/G shipped, D blocked on architectural change as of 2026-05-06). 6/7 branches now read typed predicates; only D retains `is_named_local` as genuine gating.
+- **Phase D4 — `lower_var_decl` decision tree refactor** (deferred 2026-05-01, plan refined 2026-05-04, branches A/B/C/D/E/G shipped). All 7 decision-tree branches now read typed predicates from `(target_resource, source_live, source_own)`. Only Branch F's clause 1 (`!source_is_named && needs_drop(rhs_type)`) retains the legacy `is_named_local` predicate as a strict subset of clause 2 — documented at the site as a deferred retirement target (clause 2's typed `Owned + !source_live + needs_drop(actual_var_type)` covers most cases but the cross-type `needs_drop(rhs_type)` coverage in clause 1 isn't fully subsumed).
 
-  **Status update 2026-05-06:** the 7-branch chain was extracted into a dedicated helper `lower_var_decl_assign_mode` (commit b61ee152) shaped as a typed match on `(target_resource, source_live, source_own)` per `docs/internals/unified-resource-model.md` §6.7. Subsequent commits migrated:
+  **Status update 2026-05-06:** the 7-branch chain was extracted into a dedicated helper `lower_var_decl_assign_mode` (commit b61ee152) shaped as a typed match on `(target_resource, source_live, source_own)` per `docs/internals/unified-resource-model.md` §6.7. Migration history:
   - **A** (`530f5a56`) — `is_named_local` → `source_live && source_own.is_owned()`.
   - **B** (`2702753e`) — same substitution.
   - **C** (`1357f07e`) — `is_named_local` → `source_live`.
-  - **F** (`fe65b99b`) — legacy `drops.is_registered(source_place.local)` proxy retired.
-  - **D probe (`7d60ccaa`)** — substituting `source_live` regressed self-host bootstrap. Filed.
+  - **F clause 2** (`fe65b99b`) — legacy `drops.is_registered(source_place.local)` proxy retired.
+  - **D probe (`7d60ccaa`, 2026-05-06)** — substituting `source_live` alone regressed self-host bootstrap (clone failure → G's Move zeroed a Borrowed transitive alias).
+  - **D retirement (2026-05-10)** — `source_live && !matches!(source_own, Some(Borrowed { .. }))` predicate combo SHIPPED. Probed in two stages: (1) literal option (b) with `source_is_named` + Borrowed bail (1072/1072 green); (2) full retirement combining `source_live` + Borrowed bail (1072/1072 green). The Borrowed bail prevents D's clone-failure path → G's Move from zeroing transitive alias data; `source_live` substitution + clean fallthrough to F's Move for Owned-named-at-last-use is the typed shape.
 
-  **Remaining work for D:** retiring requires either (a) widening `is_resource_type` to enum-with-resource-payload (sibling TODO, 112-fixture regression on naive widening); or (b) D explicitly bails out on Borrowed sources. Both are architectural changes.
+  **Remaining work:** F clause 1's `!source_is_named` proxy. Less urgent now that D is migrated; the function still calls `is_named_local(source_place.local)` once for F. Retiring requires verifying that clause 2's `Owned + !source_live + needs_drop(actual_var_type)` covers the cross-type cases clause 1 catches via `needs_drop(rhs_type)`.
 
 
   **Refined plan (2026-05-04):**

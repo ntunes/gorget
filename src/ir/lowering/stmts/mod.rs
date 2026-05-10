@@ -876,18 +876,24 @@ fn lower_var_decl_assign_mode(
         }
         assign_mode = AssignMode::Borrow;
     }
-    // Branch D — named resource source, CoW-unsafe → clone fallback.
-    // `is_named_local` retained as genuine gating. D-PROBE
-    // (2026-05-06): substituting `source_live` regressed self-host
-    // bootstrap (`is_cstr_returning_call` → "local _19 read after
-    // MoveZero in bb5"). Root cause: when D's `clone_fn_for_ptr`
-    // lookup fails, assign_mode stays Copy; the safety-net G then
-    // emits Move on the SOURCE, zeroing a Borrowed transitive
-    // alias's heap data. Retiring requires either (a) widening
-    // `is_resource_type` to enum-with-resource-payload (so clone_fn
-    // lookup is reliable) or (b) D explicitly bails out on
-    // Borrowed sources rather than falling through to G.
-    else if source_is_named && ctx.type_registry.is_resource_type(rhs_type) {
+    // Branch D — live resource source, CoW-unsafe → clone fallback.
+    // Migrated 2026-05-10 (D-PROBE-OPT-B+RETIRE): legacy `is_named_local`
+    // proxy replaced with the typed `source_live && !Borrowed`
+    // predicate. The 2026-05-06 D-probe substituted `source_live` alone
+    // and regressed self-host bootstrap (`is_cstr_returning_call` →
+    // "local _19 read after MoveZero in bb5"): when D's `clone_fn_for_ptr`
+    // lookup failed, assign_mode stayed Copy and the safety-net G's
+    // Move zeroed a Borrowed transitive alias's heap data. The added
+    // `!Borrowed` bail (option (b) per docs/internals/unified-resource-model.md
+    // §6.7) routes Borrowed sources to E/F/G with correct Borrowed-aware
+    // behavior instead of triggering the clone-failure → G-Move chain.
+    // Owned-named-at-last-use sources correctly fall through to F's Move
+    // path now (instead of the redundant clone D was emitting under the
+    // legacy predicate). Phase D4 — last `is_named_local` site retired.
+    else if source_live
+        && !matches!(source_own, Some(LocalOwnership::Borrowed { .. }))
+        && ctx.type_registry.is_resource_type(rhs_type)
+    {
         // Same-type clone (rhs_type → rhs_type).
         assign_mode = emit_clone_to_owned(
             ctx, builder, operand, rhs_type, rhs_type,
