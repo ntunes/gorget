@@ -2824,6 +2824,22 @@ fn match_arm_borrow_clone() {
 }
 
 #[test]
+fn snag31_match_arm_move_into_owned() {
+    // Snag #31: Tier 2a consume-site validator panicked on `Completion
+    // c = match … : case Ok(x): !x …` — the user-opt-in `!arg` move
+    // from a match-bound pattern variable into a named owned local.
+    // Pattern IS sound per CLAUDE.md "Ownership at Consuming Positions";
+    // the validator was over-eager because `assign_match_arm_to_result`
+    // didn't tag the match's result_local as Owned after the Move-mode
+    // arm-assign. Surfaced by gorget-js's eval_stmt_list / eval_try /
+    // eval_while / eval_for_c / eval_do_while / abstract_equals.
+    run_gg(
+        "snag31_match_arm_move_into_owned.gg",
+        "ok",
+    );
+}
+
+#[test]
 fn snag30_field_alias_in_match_arm() {
     // Snag #30: pattern-match aliasing of a non-Copy struct field in a
     // match arm (`String _pname = catch_clause.param`), followed by a

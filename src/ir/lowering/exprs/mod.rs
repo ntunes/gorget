@@ -2314,6 +2314,15 @@ fn assign_match_arm_to_result(
     if let Some(src) = move_source {
         ctx.move_zero_and_mark(builder, src);
     }
+    // Snag #31 (2026-05-10): tag result_local as Owned after the
+    // Move-mode assign. Without this, the merge-bb's `[Mv] user_var =
+    // copy result_local` shape (e.g. `Completion c = match … : case
+    // Ok(x): !x …`) sees result_local as Untracked → AssignIntoOwnedSlot
+    // validator fires on what the CoW spec considers a sound
+    // `!arg → Move → tagged Owned dst` chain. The Move-mode assign IS
+    // the writer-side commitment that result_local owns the data; the
+    // typed tag must follow.
+    ctx.set_owned(builder, result_local);
 }
 
 fn lower_match_expr(

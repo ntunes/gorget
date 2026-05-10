@@ -1,0 +1,52 @@
+# Regression pin for Snag #31: Tier 2a consume-site validator panicked
+# on `Completion c = match … : case Ok(x): !x …` shape — the user-opt-in
+# `!arg` move from a match-bound pattern variable into a named owned
+# local. The pattern IS sound per CLAUDE.md "Ownership at Consuming
+# Positions" (`!arg` is the first move-eligible shape); the validator
+# was over-eager because `assign_match_arm_to_result` didn't tag the
+# match's result_local as Owned after the Move-mode arm-assign.
+#
+# Surfaced 2026-05-10 by gorget-js's eval_stmt_list / eval_try /
+# eval_while / eval_for_c / eval_do_while / abstract_equals — every
+# loop-body and try/catch in the JS interpreter uses this idiom.
+#
+# Fix: `assign_match_arm_to_result` now calls `ctx.set_owned(result_local)`
+# after the Move-mode assign, completing the writer-side typed tagging
+# so downstream Move-mode assigns from the result_local see Owned.
+
+public enum Completion:
+    Normal(String)
+    Throw(String)
+
+Result[Completion, String] eval_stmt(int x):
+    if x > 0:
+        return Ok(Completion.Normal("ok"))
+    else:
+        return Error("err")
+
+Result[Completion, String] eval_stmt_list(Vector[int] stmts):
+    Completion last = Completion.Normal("init")
+    int i = 0
+    while i < stmts.len():
+        int s = stmts.get(i).unwrap()
+        Completion c = match eval_stmt(s):
+            case Ok(x):
+                !x                       # Snag #31 trigger: !move from match arm
+            case Error(e):
+                return Error(e)
+        match c:
+            case Completion.Normal(_):
+                last = !c
+            else:
+                return Ok(!c)
+        i = i + 1
+    return Ok(last)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    Result[Completion, String] r = eval_stmt_list(v)
+    match r:
+        case Ok(c):
+            print("ok")
+        case Error(_):
+            print("err")
