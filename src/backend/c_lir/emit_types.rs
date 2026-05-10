@@ -109,8 +109,9 @@ pub(super) fn enum_payload_fields(type_prefix: &str, module: &LirModule) -> (Str
 /// Generate static inline C helpers for Option/Result combinator methods.
 pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &LirModule, sn: &HashMap<u32, String>) {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // (full_name, src_c_type, result_c_type, method, closure_c_type, call_fn, ok_field, err_field)
-    let mut helpers: Vec<(String, String, String, String, String, String, String, String)> = Vec::new();
+    // (full_name, src_c_type, result_c_type, method, closure_c_type, call_fn,
+    //  ok_field, err_field, is_result)
+    let mut helpers: Vec<(String, String, String, String, String, String, String, String, bool)> = Vec::new();
 
     for func in &module.functions {
         for block in &func.blocks {
@@ -132,6 +133,14 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                         let src_c = find_struct_c_name_by_prefix(type_prefix, module, sn)
                             .unwrap_or_else(|| type_prefix.to_string());
 
+                        // Read typed `enum_kind` (set at LIR struct registration
+                        // from GIR's `enum_category`) to discriminate Option vs
+                        // Result without name-prefix matching.
+                        let is_result = module.structs.iter()
+                            .find(|s| s.name == type_prefix)
+                            .map(|s| s.enum_kind == crate::lir::EnumKind::Result)
+                            .unwrap_or(false);
+
                         // Result C type: read from the typed LirExtern field when available
                         // (set by the LIR post-pass for cross-type maps), otherwise same as source.
                         // For flatten: result is the Option/Result's inner payload type.
@@ -149,7 +158,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                             src_c.clone()
                         };
 
-                        helpers.push((name.clone(), src_c, result_c, method.to_string(), closure_c_type, call_fn, ok_field, err_field));
+                        helpers.push((name.clone(), src_c, result_c, method.to_string(), closure_c_type, call_fn, ok_field, err_field, is_result));
                     }
                 }
             }
@@ -161,7 +170,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
     }
 
     writeln!(out, "/* ── Option/Result combinator helpers ── */").unwrap();
-    for (full_name, src_c, result_c, method, closure_ty, call_fn, ok_field, err_field) in &helpers {
+    for (full_name, src_c, result_c, method, closure_ty, call_fn, ok_field, err_field, is_result) in &helpers {
         // Determine if closure params need & prefix (Ptr ABI for resource types)
         let comb_needs_ref = closure_params_need_ref(module, call_fn);
         let cr = if comb_needs_ref.first().copied().unwrap_or(false) { "&" } else { "" };
@@ -169,7 +178,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
             "map" => {
                 // map: if tag==0 (Some/Ok): apply closure to payload, wrap; else propagate
                 // For map on Result, we need the result type's ok field too
-                let result_ok = if full_name.starts_with("Result__") {
+                let result_ok = if *is_result {
                     let result_prefix = full_name.rsplitn(2, "__").nth(1).unwrap_or(full_name);
                     let (rok, _) = enum_payload_fields(result_prefix, module);
                     rok
@@ -213,7 +222,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "        return __src;").unwrap();
                 writeln!(out, "    }}").unwrap();
                 // Result or_else passes the error value; Option or_else takes no args
-                if full_name.starts_with("Result__") {
+                if *is_result {
                     writeln!(out, "    return {call_fn}(&__fn, {cr}__src.{err_field});").unwrap();
                 } else {
                     writeln!(out, "    return {call_fn}(&__fn);").unwrap();
@@ -315,7 +324,7 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "static inline {payload_ty} {full_name}(void* __opt_ptr, {closure_ty} __fn) {{").unwrap();
                 writeln!(out, "    {src_c} __src = *({src_c}*)__opt_ptr;").unwrap();
                 writeln!(out, "    if (__src.tag == 0) {{ return __src.{ok_field}; }}").unwrap();
-                if full_name.starts_with("Result__") {
+                if *is_result {
                     writeln!(out, "    return {call_fn}(&__fn, {cr}__src.{err_field});").unwrap();
                 } else {
                     writeln!(out, "    return {call_fn}(&__fn);").unwrap();

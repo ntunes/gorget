@@ -1337,7 +1337,9 @@ impl<'a> LoweringContext<'a> {
     pub fn unwrap_result_ok_type(&self, result_type: TypeId) -> Option<TypeId> {
         let name = self.type_registry.type_name(result_type)?;
         let td = self.type_registry.get_type_def(&name)?;
-        if td.metadata.enum_category != Some(EnumCategory::Result) && !name.starts_with("Result__") {
+        // Read typed `enum_category` (Phase A) — the dead `name.starts_with`
+        // fallback is no longer needed: every Result registration sets it.
+        if td.metadata.enum_category != Some(EnumCategory::Result) {
             return None;
         }
         if let TypeDefKind::Enum(e) = &td.kind {

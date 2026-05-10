@@ -2369,9 +2369,7 @@ pub fn emit_result_auto_propagate(
     // Re-wrap error in the *current* function's Result type and return.
     let fn_result_type = ctx.func_state.current_throws_result_type.or_else(|| {
         let ret_type = builder.locals[0].type_id;
-        let type_name = ctx.type_registry.type_name(ret_type)?;
-        let is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result)
-            || type_name.starts_with("Result__");
+        let is_result = ctx.type_registry.enum_category(ret_type) == Some(EnumCategory::Result);
         if is_result {
             Some(ret_type)
         } else {
