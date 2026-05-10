@@ -284,6 +284,12 @@ Option[GirResourceMetadata] build_resource_metadata(String name):
     # User struct/enum or unknown — caller treats as None.
     return None
 
+# Phase A — typed accessor. Consumers replace `name.starts_with("X__")`
+# dispatches with `match resource_meta_for(&gmod, name): case Some(rmeta): ...`
+# (See `docs/internals/self-host-resource-model.md` §3 / §3.4.)
+Option[GirResourceMetadata] resource_meta_for(GirModule &gmod, String name):
+    return gmod.resource_metadata.get(name)
+
 # Phase A — source-of-truth C method prefix for opaque pointer types.
 # Returns "" for types that have per-method special cases (Channel/Shared/Thread).
 # Called at type-registration time to populate type_method_prefix_map.
