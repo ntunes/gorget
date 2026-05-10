@@ -2824,6 +2824,21 @@ fn match_arm_borrow_clone() {
 }
 
 #[test]
+fn if_expr_resource_arms() {
+    // Snag #31 follow-up: `lower_if_expr` used raw Copy-mode at
+    // branch-result-assigns, which Phase C's validate_resource_moves
+    // (fatal) flagged as shallow-copy-of-resource for resource-typed
+    // arms. Fixed by routing branch-assigns through
+    // `assign_match_arm_to_result` (same helper as match-as-expression
+    // since Snag #28's consolidation): Move-mode + boundary clone +
+    // set_owned on result_local.
+    run_gg(
+        "if_expr_resource_arms.gg",
+        "pos",
+    );
+}
+
+#[test]
 fn snag31_match_arm_move_into_owned() {
     // Snag #31: Tier 2a consume-site validator panicked on `Completion
     // c = match … : case Ok(x): !x …` — the user-opt-in `!arg` move

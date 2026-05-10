@@ -2167,7 +2167,7 @@ fn lower_if_expr(
     if result_type != I64_TYPE {
         builder.set_local_type(result_id, result_type);
     }
-    builder.assign(Place::local(result_id), then_val);
+    assign_match_arm_to_result(ctx, builder, result_id, then_val, then_branch.span);
     builder.jump(merge_bb);
 
     // Elif branches — chain as nested if-else in the else block
@@ -2181,7 +2181,7 @@ fn lower_if_expr(
 
         builder.switch_to(elif_then_bb);
         let elif_val = lower_expr(ctx, builder, elif_body);
-        builder.assign(Place::local(result_id), elif_val);
+        assign_match_arm_to_result(ctx, builder, result_id, elif_val, elif_body.span);
         builder.jump(merge_bb);
 
         current_else_bb = next_else_bb;
@@ -2191,7 +2191,7 @@ fn lower_if_expr(
     builder.switch_to(current_else_bb);
     if let Some(else_expr) = else_branch {
         let else_val = lower_expr(ctx, builder, else_expr);
-        builder.assign(Place::local(result_id), else_val);
+        assign_match_arm_to_result(ctx, builder, result_id, else_val, else_expr.span);
     } else {
         builder.assign(Place::local(result_id), Operand::Constant(Constant::Unit));
     }

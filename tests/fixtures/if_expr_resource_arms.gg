@@ -1,0 +1,24 @@
+# Snag #31 follow-up audit: if-expression with resource-typed arms.
+# Pre-fix: `lower_if_expr` used raw `builder.assign` (Copy mode) at
+# branch-result assigns, which Phase C's `validate_resource_moves`
+# correctly flagged as shallow-copy-of-resource (fatal). The same
+# writer-side typed-tagging fix as Snag #31's match-as-expression case
+# applies — branch-result-assigns now route through
+# `assign_match_arm_to_result` which emits Move-mode + clones at
+# borrow boundaries + tags result_local as Owned.
+
+public enum Completion:
+    Normal(String)
+    Throw(String)
+
+Completion eval(int x):
+    Completion c = if x > 0: Completion.Normal("pos") else: Completion.Normal("zero")
+    return c
+
+void main():
+    Completion c = eval(42)
+    match c:
+        case Completion.Normal(s):
+            print(s)
+        else:
+            print("else")
