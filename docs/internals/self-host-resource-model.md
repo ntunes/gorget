@@ -139,6 +139,118 @@ Likely surfaces:
 
 Each surface = a Gorget bug to fix in `src/`, not a workaround to ship in `tests/fixtures/`.
 
+#### 3.4.1 The Dict.get → Option[V] gap (probed 2026-05-10)
+
+The first prediction came true. Phase A.4's first consumer migration —
+`map_gir_type`'s `GtNamed` arm in `lir_lower.gg` — needs to call
+`resource_meta_for(&gmod, name)` which is just `gmod.resource_metadata.get(name)`.
+That single call exposed three layered gaps in self-host's collection
+support; closing them is the dependency for **every** Phase A consumer
+migration that reads from the populated Dict.
+
+**Workaround in tree (until the gap closes):** the consumer at
+`lir_lower.gg:412` calls `build_resource_metadata(name)` directly,
+re-deriving the metadata on each read instead of going through the
+populated Dict. The populate pass at `lower_gir_to_lir` runs but its
+output isn't read. Future consumer migrations follow the same pattern.
+
+**The three coordinated changes needed:**
+
+1. **`lower.gg::infer_method_return_type` returns `Option__V` for
+   collection getters.** Currently the `get/unwrap/pop/last/first/remove`
+   arm at lines 864–914 explicitly returns the bare element type (with
+   an in-line comment at 891-894 acknowledging this as a workaround for
+   `dict.get(NULL, k)` segfaults that happen when the binding is typed
+   as I64 fallback). The fix: split unwrap from the rest, and have the
+   `get/pop/etc.` branches return `lookup_or_register_named(&gmod,
+   "Option__" + elem_norm)` where `elem_norm` maps `"Str"` to
+   `"GorgetString"` and leaves primitives in their C-typedef form
+   (`int64_t`, `double`).
+
+2. **`lower.gg::EMethodCall` unwrap handler recognises C-typedef inner
+   names.** At line 1693, `prim_name_to_type(inner_name_str)` only
+   matches surface forms (`"int"`, `"float"`); the monomorphised type
+   names use C-typedefs (`Option__int64_t`, `Option__double`). Without
+   this, unwrap on `Option__int64_t` falls through to
+   `lookup_or_register_named(&gmod, "int64_t")` which registers
+   `int64_t` as a *named* GIR type, breaking downstream codegen. Add a
+   parallel mapping table keyed on `"int64_t"` → `I64_TYPE`,
+   `"int32_t"` → `I32_TYPE`, …, `"double"` → `F64_TYPE`,
+   `"Str"` → `lookup_or_register_named(&gmod, "GorgetString")`, before
+   the `lookup_or_register_named` fallback.
+
+3. **LIR lift port** to `tests/fixtures/self_host_lowerer/lir_lower.gg`
+   (~250 lines mirroring `src/lir/lower/lifts.rs::emit_void_ptr_option_wrap`):
+   - Helpers `is_collection_void_return(name) -> bool`,
+     `is_consuming_collection_method(name) -> bool`,
+     `resource_clone_fn(payload_ty, &m) -> String`.
+   - Function
+     `int emit_void_ptr_option_wrap(emit_name, dst_local, opt_sid, lir_args, &f, bb, &local_to_slot, &m)`
+     that emits the 4-block diamond: entry (raw_ptr call, memset
+     dst slot, NullPtr+Cmp, branch) → some_bb (reload raw_ptr, build
+     payload via clone/deref/aliased-ptr, IEnumInit Some) → none_bb
+     (IEnumInit None) → merge_bb (returned to caller).
+   - Signature change of `lower_instruction` from `void` to `int`,
+     returning the (possibly new) bb to continue emitting into.
+   - Lift dispatch in the GICallExtern arm just before the regular
+     ICallExtern emit, gated on `is_collection_void_return(call_name)`
+     AND `slot.enum_kind == EK_OPTION`.
+   - Caller-loop update at `lir_lower_function` to thread the returned
+     bb back into `lir_bb`.
+
+**Why all three are needed simultaneously.** The Tier 1 lift (#3) fires
+conditionally on `slot.enum_kind == EK_OPTION` — without #1, the slot
+type arrives as bare `V` and the lift's discriminator misses. Without
+#2, even when #1 ships, `unwrap()` on `Option__int64_t` returns a value
+typed as a synthesized `int64_t` named type, which the codegen treats
+as opaque and corrupts downstream arithmetic. Verified in the 2026-05-10
+probe: #1 + #2 alone (without #3) produced the correct `Option[V]` type
+flow but stage-1's `gorget_str_to_cstr(path)` then mismatched its arg
+expectation because the Vector.get's val_type flipped from Ptr-aliased-
+as-Str to actual Str struct. #1 + #2 + #3 needed in the same commit.
+
+**Probe outcome 2026-05-10 (reverted; bridge restored).** Stage-0 → stage-1
+bootstrap PASSED with all three changes. Stage-1 → stage-2 cc FAILED
+with `aggregate value used where an integer was expected` at synthetic
+`memset(__v3798, (int)__v0, ...)` calls inside `infer___infer_expr_type`
+and similar lift firings. The lift's `IIConst(zero_byte, LT_I32, 0)` dst
+gets substituted to `__v0` (the function's first param, an aggregate
+`__gg_SpannedExpr`) by the SSA pass's `apply_value_substitutions`. Root
+cause not pinned in the probe window — `value_subst.put` only fires from
+`process_block`'s `ISlotLoad` arm at `lir_ssa.gg:194`, but no SlotLoad
+in the lift has dst = zero_byte's id, so the substitution path is
+unclear.
+
+**Hypotheses for the SSA value-subst issue (to investigate next):**
+- (a) `lir_fn_next_value` not properly monotonic across nested `&f`
+  borrows in stage-0's compilation of `emit_void_ptr_option_wrap`.
+  Check by adding a debug print of `f.next_value` on entry/exit of
+  `emit_void_ptr_option_wrap` and at each `lir_fn_next_value` call.
+- (b) SSA's `read_variable` entry-block fallback at `lir_ssa.gg:222-256`
+  allocates new value ids for zero-init constants of promotable slots
+  with no def. If that allocation collides with the lift's IConst dst
+  id (because the SSA pass runs *after* lir_lower has populated
+  `next_value`, the new IDs should be higher — but check whether
+  `compute_predecessors` ran on a stale block list).
+- (c) The SSA pass treating my new blocks (some_bb / none_bb / merge_bb)
+  as predecessors of subsequent code that wasn't anticipated by
+  `compute_predecessors`. Worth verifying that `compute_predecessors`
+  is called *after* all `lower_instruction` calls have completed.
+
+**Re-attempt protocol when ready.** Add `eprintln`-style debug
+instrumentation to `lir_ssa.gg::process_block` (line 194) and
+`apply_value_substitutions` to log every `value_subst.put` and
+`sub_val(zero_byte, ...)` substitution. Run stage-1 on the smallest
+fixture that triggers the lift inside `infer_expr_type` to capture the
+substitution chain. The diff for #1 + #2 + #3 is preserved in this
+session's local history — see TODO.md "Self-host showcase blockers"
+for the precise file:line citations.
+
+**Self-host re-impl (after the fix lands).** Flip
+`build_resource_metadata(name)` → `resource_meta_for(&gmod, name)` at
+every Phase A consumer site (one-line per site) and delete the bridge
+calls + comments. The populate pass becomes the sole source of truth.
+
 ---
 
 ## 4. Phase D — Local-state consolidation (self-host)
