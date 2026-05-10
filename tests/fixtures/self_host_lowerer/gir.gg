@@ -119,9 +119,32 @@ struct BasicBlock:
 
 # ── Local variable slot ──────────────────────────────────
 
+# Phase D ownership state (mirrors Rust's `Local.ownership: OwnershipState`
+# in `docs/internals/unified-resource-model.md` §6). Populated by
+# `lower.gg` at every `add_local` site; read by Phase C validators
+# (§5 of `docs/internals/self-host-resource-model.md`).
+enum LocalOwnership:
+    LoOwned        # local owns its data; consume sites move/drop
+    LoBorrowed     # local aliases a borrow; consume sites must clone
+    LoView         # CoW view (cap=0) into another buffer; auto-materialise on mutation
+    LoParam        # function parameter — passed by caller; ABI-controlled lifetime
+    LoMaybeOwned   # uninferred / generic / merged-from-multiple-arms
+
+# When LoBorrowed, where the borrow originates — used by validators that
+# need to flag borrow-into-owned consume sites by source type. Mirrors
+# Rust's `BorrowOrigin` in `src/ir/types.rs`.
+enum BorrowOrigin:
+    BoNone                  # not a borrow
+    BoParam                 # borrowed from a parameter
+    BoCollectionElement     # borrowed from a Vector/Dict get / iter / safe_get
+    BoField                 # borrowed via field access on an owned aggregate
+    BoRuntimeView           # CoW view returned by string slice / similar
+
 struct GirLocal:
     int type_id
     Option[String] name_hint
+    LocalOwnership ownership
+    BorrowOrigin borrow_origin
 
 # ── Function ─────────────────────────────────────────────
 

@@ -144,7 +144,7 @@ String stmt_kind(Stmt s):
 
 int add_local(LowerCtx &ctx, int type_id, Option[String] name):
     int id = ctx.locals.len()
-    ctx.locals.push(GirLocal(type_id, name))
+    ctx.locals.push(GirLocal(type_id, name, LoOwned(), BoNone()))
     return id
 
 void emit(LowerCtx &ctx, Instruction inst):
@@ -3529,7 +3529,7 @@ int emit_it_closure(int next_id, GirModule &gmod):
     int ic_self_ptr = register_ptr(&gmod, ic_tid)
     Vector[int] ic_params = [ic_self_ptr, I64_TYPE]
     int ic_ret = I64_TYPE
-    Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
+    Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam()), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam())]
     Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
     gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
     return next_id + 1
@@ -3593,12 +3593,12 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 ret_type = lookup_or_register_named(&gmod, "GorgetString")
 
             # Create minimal function with empty body
-            Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME), GirLocal(self_ptr, NO_NAME)]
+            Vector[GirLocal] locals = [GirLocal(ret_type, NO_NAME, LoOwned(), BoNone()), GirLocal(self_ptr, NO_NAME, LoParam(), BoParam())]
             int li = 0
             while li < params.len():
                 Param lp = params.get(li).unwrap()
                 int lpt = map_ast_type(lp.param_type, &gmod)
-                locals.push(GirLocal(lpt, Some(lp.param_name)))
+                locals.push(GirLocal(lpt, Some(lp.param_name), LoParam(), BoParam()))
                 li += 1
             Vector[BasicBlock] blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(call_name, !param_types, ret_type, !locals, !blocks))
@@ -3617,7 +3617,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
             int ic_ret = guess_return_type(*body_box, &gmod)
             if ic_ret == STRING_MARKER:
                 ic_ret = lookup_or_register_named(&gmod, "GorgetString")
-            Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME), GirLocal(ic_self_ptr, NO_NAME), GirLocal(I64_TYPE, Some("it"))]
+            Vector[GirLocal] ic_locals = [GirLocal(ic_ret, NO_NAME, LoOwned(), BoNone()), GirLocal(ic_self_ptr, NO_NAME, LoParam(), BoParam()), GirLocal(I64_TYPE, Some("it"), LoParam(), BoParam())]
             Vector[BasicBlock] ic_blocks = [BasicBlock([], GTReturn(OpCopy(0)))]
             gmod.functions.push(GirFunction(ic_call, !ic_params, ic_ret, !ic_locals, !ic_blocks))
             next_id = next_id + 1
@@ -3679,7 +3679,7 @@ int scan_expr_for_closures(SpannedExpr sexpr, int next_id, GirModule &gmod):
                 String cl_name = "__Closure_" + int_to_str(next_id)
                 String wrap_name = "__spawn_wrap_" + cl_name
                 Vector[int] sw_wp = []
-                Vector[GirLocal] sw_wl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                Vector[GirLocal] sw_wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
                 Vector[BasicBlock] sw_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                 gmod.functions.push(GirFunction(wrap_name, !sw_wp, UNIT_TYPE, !sw_wl, !sw_wb))
             next_id = scan_expr_for_closures(*inner_box, next_id, &gmod)
@@ -4188,7 +4188,7 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
                             match gt:
                                 case GtPtr(inner):
                                     int new_tid = register_type(&gmod, GtMutPtr(inner))
-                                    gfn.locals.set(local_idx, GirLocal(new_tid, loc.name_hint))
+                                    gfn.locals.set(local_idx, GirLocal(new_tid, loc.name_hint, loc.ownership, loc.borrow_origin))
                                     gfn.param_types.set(pi, new_tid)
                                 else:
                                     pass
@@ -4339,7 +4339,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 String wrapper_name = prefix + callee_name
                                 # Emit a stub function
                                 Vector[int] wp = [I64_TYPE]
-                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
+                                Vector[GirLocal] wl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam())]
                                 Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                 gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 emitted.put(callee_name, true)
@@ -4356,7 +4356,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                     if not emitted.contains(wrapper_name):
                                         emitted.put(wrapper_name.clone(), true)
                                         Vector[int] wp = [I64_TYPE]
-                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME), GirLocal(I64_TYPE, NO_NAME)]
+                                        Vector[GirLocal] wl = [GirLocal(I64_TYPE, NO_NAME, LoOwned(), BoNone()), GirLocal(I64_TYPE, NO_NAME, LoParam(), BoParam())]
                                         Vector[BasicBlock] wb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                         gmod.functions.push(GirFunction(wrapper_name, !wp, UNIT_TYPE, !wl, !wb))
                                 case None:
@@ -4398,7 +4398,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, Dict[String, String] &clos
                                 if not emitted.contains(wrap):
                                     emitted.put(wrap.clone(), true)
                                     Vector[int] ncwp = []
-                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                                    Vector[GirLocal] ncwl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
                                     Vector[BasicBlock] ncwb = [BasicBlock([], GTReturn(OpConstUnit()))]
                                     gmod.functions.push(GirFunction(wrap, !ncwp, UNIT_TYPE, !ncwl, !ncwb))
                         else:
@@ -5161,14 +5161,14 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             case ISuiteSetup(setup_body):
                 if not has_main:
                     Vector[int] sp = []
-                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                    Vector[GirLocal] sl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
                     Vector[BasicBlock] sb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_setup", !sp, UNIT_TYPE, !sl, !sb))
                     test_idx += 1
             case ISuiteTeardown(teardown_body):
                 if not has_main:
                     Vector[int] tp = []
-                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME)]
+                    Vector[GirLocal] tl = [GirLocal(UNIT_TYPE, NO_NAME, LoOwned(), BoNone())]
                     Vector[BasicBlock] tb = [BasicBlock([], GTReturn(OpConstUnit()))]
                     gmod.functions.push(GirFunction("__suite_teardown", !tp, UNIT_TYPE, !tl, !tb))
                     test_idx += 1
