@@ -67,11 +67,12 @@ impl<'a> FuncLowering<'a> {
                 let l = self.lower_operand(lhs, bb);
                 let r = self.lower_operand(rhs, bb);
 
-                // Check for Vector + Vector → clone lhs then extend with rhs
-                let is_vector_add = *op == GirBinOp::Add && matches!(
-                    self.gir_types.get(*type_id),
-                    Some(GirType::Named(name)) if name.starts_with("Vector__")
-                );
+                // Check for Vector + Vector → clone lhs then extend with rhs.
+                // Read typed `collection_kind` (Phase A) — Vector/Deque/
+                // GorgetArray all carry `Array` from the protocol registration.
+                let is_vector_add = *op == GirBinOp::Add
+                    && self.gir_types.collection_kind(*type_id)
+                        == Some(crate::ir::types::CollectionKind::Array);
 
                 if is_vector_add {
                     // Emit: result = gorget_array_clone(&lhs); gorget_array_extend(&result, &rhs);

@@ -604,6 +604,22 @@ impl TypeRegistry {
         None
     }
 
+    /// Get the collection kind (Array/Map/Set/OrderedMap/OrderedSet) for a
+    /// named type, if any. Reads typed `metadata.collection_kind` set at
+    /// builtin protocol registration. Both runtime singletons (GorgetArray,
+    /// GorgetMap, GorgetSet) and monomorphized aliases (Vector__T,
+    /// Dict__K__V, ...) carry the kind. Used to route collection-method
+    /// dispatch without name-prefix matching.
+    pub fn collection_kind(&self, type_id: TypeId) -> Option<CollectionKind> {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return None; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(type_def) = self.get_type_def(name) {
+                return type_def.metadata.collection_kind;
+            }
+        }
+        None
+    }
+
     /// Check if a named type is an Option or Result enum.
     pub fn is_option_or_result(&self, name: &str) -> bool {
         self.get_type_def(name)

@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `TypeRegistry::collection_kind` helper + Vector-add detection migrated.** Added a `pub fn collection_kind(&self, TypeId) -> Option<CollectionKind>` accessor to `TypeRegistry` (`src/ir/types.rs:618`) — mirrors the existing `enum_category` accessor; reads `td.metadata.collection_kind`. Migrated `lir/lower/insts.rs:71` Vector+Vector overload detection from `name.starts_with("Vector__")` to `gir_types.collection_kind(*type_id) == Some(CollectionKind::Array)`. The new helper makes future migrations one-liners. 1 prefix match retired (372 → 371); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/ir/types.rs`, `src/lir/lower/insts.rs`, `tests/lints.rs` (BUDGET 372 → 371).
+
 - [2026-05-10] **Layering audit — dead Option/Result fallbacks retired in `closures.rs`.** Three sites in `src/ir/lowering/closures.rs` (Ok/Error closure infer at `:914`, None() call at `:939`, bare `None` at `:952`) had `enum_category(et) == Some(EnumCategory::Option/Result) || tn.starts_with("Option__"/"Result__")` patterns. Removed the dead `||` fallbacks AND the now-orphaned `let tn = ctx.type_registry.type_name(et).unwrap_or_default()` lines. Phase A guarantees `enum_category` is set on every Option/Result registration. 3 prefix matches retired (375 → 372); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/ir/lowering/closures.rs`, `tests/lints.rs` (BUDGET 375 → 372).
 
