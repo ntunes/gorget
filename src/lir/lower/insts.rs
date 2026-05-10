@@ -849,11 +849,14 @@ impl<'a> FuncLowering<'a> {
                 };
                 let is_range = idx_type_name == "GorgetRange";
                 let is_str = base_type_name == "GorgetString";
-                let is_array = base_type_name.starts_with("Vector__")
-                    || base_type_name == "GorgetArray";
-                let is_dict = base_type_name.starts_with("Dict__")
-                    || base_type_name.starts_with("GorgetMap")
-                    || base_type_name.starts_with("HashMap__");
+                // Read typed `collection_kind` (Phase A) — both runtime
+                // singletons and monomorphized aliases carry it.
+                let kind = self.gir_types.get_type_def(&base_type_name)
+                    .and_then(|td| td.metadata.collection_kind);
+                let is_array = kind == Some(crate::ir::types::CollectionKind::Array);
+                let is_dict = matches!(kind,
+                    Some(crate::ir::types::CollectionKind::OrderedMap)
+                    | Some(crate::ir::types::CollectionKind::Map));
 
                 if (is_str || is_array) && is_range {
                     // Str[range] → gorget_str_slice(str, start, end)
@@ -3453,10 +3456,12 @@ impl<'a> FuncLowering<'a> {
             if dst_idx < self.local_to_slot.len() {
                 let slot_ty = self.lir_func.slots[self.local_to_slot[dst_idx].0 as usize].ty.clone();
                 if let LirType::Struct(opt_sid) = slot_ty {
-                    let sname = self.module_structs.get(opt_sid.0 as usize)
-                        .map(|s| s.name.as_str()).unwrap_or("");
+                    // Read typed `enum_kind` from LIR StructDef (set at LIR
+                    // struct registration from GIR's `enum_category`).
+                    let slot_kind = self.module_structs.get(opt_sid.0 as usize)
+                        .map(|s| s.enum_kind).unwrap_or(crate::lir::EnumKind::NotEnum);
 
-                    if sname.starts_with("Result__") {
+                    if slot_kind == crate::lir::EnumKind::Result {
                         if let Some(err_fn) = super::lifts::last_error_fn_lir(emit_name) {
                             let sdef_len = self.module_structs.get(opt_sid.0 as usize)
                                 .map(|s| s.fields.len()).unwrap_or(0);
@@ -3469,7 +3474,7 @@ impl<'a> FuncLowering<'a> {
                         }
                     }
 
-                    if sname.starts_with("Option__") {
+                    if slot_kind == crate::lir::EnumKind::Option {
                         let ext_ret = super::calls::runtime_extern_sig(emit_name, self.struct_reg)
                             .map(|sig| sig.ret)
                             .or_else(|| {

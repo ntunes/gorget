@@ -665,9 +665,11 @@ pub(super) fn lower_method_call(
     // .unwrap_error() / .unwrap_err() on Result → extract Error payload with MoveZero
     if matches!(method_name, "unwrap_error" | "unwrap_err") {
         let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
+        // Read typed `enum_category` (Phase A) instead of name-prefix matching.
         let is_result = type_name.as_ref()
-            .map(|n| n.starts_with("Result__"))
-            .unwrap_or(false);
+            .and_then(|n| ctx.type_registry.get_type_def(n))
+            .and_then(|td| td.metadata.enum_category)
+            == Some(crate::ir::types::EnumCategory::Result);
         if is_result {
             if let Some(ref tn) = type_name {
                 // Result__Ok__Err → extract Err type (last component after last __)
@@ -1235,7 +1237,10 @@ pub(super) fn lower_method_call(
         // GIR-level desugaring for Option/Result combinators on primitive-payload types.
         // For resource-payload types (String, Vector, etc.), the C inline path handles
         // implicit type coercions (GorgetString ↔ Str) that GIR can't express.
-        if (type_name.starts_with("Option__") || type_name.starts_with("Result__"))
+        let is_opt_or_result = ctx.type_registry.get_type_def(&type_name)
+            .and_then(|td| td.metadata.enum_category)
+            .is_some();
+        if is_opt_or_result
             && matches!(method_name, "map" | "and_then" | "or_else" | "filter"
                 | "unwrap_or_else" | "flat_map" | "map_err")
         {

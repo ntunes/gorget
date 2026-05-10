@@ -80,11 +80,11 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 /// **As you migrate**: lower the budget in the same commit that retires
 /// the site(s).
 ///
-/// Baseline 2026-05-09: 411 (initial 438; -6 ir/lowering/stmts/assigns.rs
-/// index-assign collection_kind; -7 ir/lowering/stmts/for_loops.rs dead
-/// fallback + ordered-Set; -6 ir/lowering/stmts/mod.rs return-value
-/// materialization + Option/Result drop registration; -8 lir/lower/operands.rs
-/// Option/Result detection via enum_category / enum_kind in two sites).
+/// Baseline 2026-05-10: 403 (initial 438; -6 ir/lowering/stmts/assigns.rs;
+/// -7 ir/lowering/stmts/for_loops.rs; -6 ir/lowering/stmts/mod.rs;
+/// -8 lir/lower/operands.rs; -3 ir/lowering/exprs/methods.rs
+/// (unwrap_error result detection + combinator gate); -5 lir/lower/insts.rs
+/// (IndexLoad collection_kind dispatch + slot_kind enum result-wrap).
 /// Source-of-truth count — re-derive with
 /// `grep -roE 'starts_with\("(...)__"\)' src/ | wc -l`.
 /// (Counts occurrences, not lines — a line with two matches counts twice.)
@@ -92,7 +92,7 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 fn no_growth_in_name_prefix_routing() {
     /// Maximum allowed count of name-prefix routing sites in src/. Decrease
     /// when you migrate sites to typed metadata.
-    const BUDGET: usize = 411;
+    const BUDGET: usize = 403;
 
     let count = count_name_prefix_sites();
     assert!(
