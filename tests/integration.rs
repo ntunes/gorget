@@ -12620,39 +12620,39 @@ fn self_host_bootstrap_fixed_point() {
     let _ = std::fs::remove_file(&stage2_bin);
 }
 
-// Phase C fatal-promotion (`docs/internals/self-host-resource-model.md`
-// §5.2 step 5): once a validator class's count is zero, the check
-// promotes to "fatal on any violation." On the Rust side, this is
-// the unconditional panic in lowering. On the self-host side it
-// can't be a panic yet (the `noreturn void exit(int)` extern signature
-// doesn't round-trip through self-host's cstr emit; tracked in §7).
+// Phase C fatal-promotion regression sweep
+// (`docs/internals/self-host-resource-model.md` §5.2 step 5): once a
+// validator class's count is zero, the check is promoted to "fatal on
+// any violation" — the env gate is removed and the build halts on the
+// first violation. The validate.gg dispatcher exits 1 in-process; the
+// regression net is therefore: run the self-host driver on each
+// representative fixture and assert it exits 0 with no `(FATAL)`
+// header on stdout.
 //
-// Until the cstr emit gap closes, fatal-promotion uses the same
-// pattern as Tier E.1 lints: a Rust test that runs the validator
-// across a representative fixture set and asserts zero violations.
-// The fixtures chosen are the ones that exercised this class most
-// heavily at the baseline sweep (the burn-down candidates that
-// would have flagged a regression).
+// Closed classes covered:
+//   • validate_resource_field_reads — closed commit `8cfc94ff`.
+//   • validate_resource_call_args   — closed commit `988ce1c3`.
 //
-// Field-reads class (the LoBorrowed/BoField tagging at
-// `emit_payload_read` in `lower.gg`): baseline 4,365 violations,
-// closed in commit `<step-5a>` by tagging the payload-read dst.
-// Regression check sniffs the same fixtures to catch any new
-// emit site that adds a field-read without tagging properly.
+// Either class regressing means an emit site added a new violation:
+//   • field_reads: a __field_read_* GICallExtern whose destination was
+//     left LoOwned; fix by tagging with `LoBorrowed()/BoField()`.
+//   • call_args:   an OpMove(local) at a call-arg position where the
+//     source local's ownership is LoBorrowed; fix by switching to
+//     OpBorrow at the emit site.
 #[test]
 #[serial(self_host_lowerer_driver)]
-fn phase_c_field_reads_at_zero_self_host() {
+fn phase_c_closed_classes_remain_at_zero_self_host() {
     if skip_under_llvm() { return; }
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
 
-    // Representative fixtures from the baseline sweep — the ones with
-    // the most field-read activity. If a regression sneaks in via a
-    // new emit site that forgets the LoBorrowed/BoField tag, these
-    // are the fixtures most likely to surface it.
+    // Representative fixtures from the baseline sweep — the ones that
+    // exercised both classes most heavily. If a regression sneaks in
+    // via a new emit site that forgets the LoBorrowed tag, these are
+    // the fixtures most likely to surface it.
     let fixtures = [
-        "dataframe_groupby.gg",   // 91 baseline violations
+        "dataframe_groupby.gg",   // 91 baseline field-read violations
         "dataframe_join.gg",
         "json_parse.gg",
         "httpserver_router.gg",
@@ -12662,8 +12662,7 @@ fn phase_c_field_reads_at_zero_self_host() {
         "hello.gg",
     ];
 
-    let mut total = 0usize;
-    let mut details = String::new();
+    let mut failures = Vec::new();
     for fname in fixtures.iter() {
         let fixture = manifest_dir.join("tests/fixtures").join(fname);
         if !fixture.exists() {
@@ -12672,115 +12671,36 @@ fn phase_c_field_reads_at_zero_self_host() {
         let out = Command::new(&driver_exe)
             .arg(&fixture)
             .arg(&lib_dir)
-            .arg("--validate-resource-field-reads")
             .output()
             .expect("failed to spawn self-host driver");
-        if !out.status.success() {
-            // Skip fixtures the driver itself can't lower (e.g.
-            // pre-existing crashes); not what this test is checking.
-            continue;
-        }
         let stdout = String::from_utf8_lossy(&out.stdout);
-        // The validator emits: `# validate_resource_field_reads: N violation(s)`
-        // followed by one violation per line. Find the header.
-        for line in stdout.lines() {
-            if let Some(rest) = line.strip_prefix("# validate_resource_field_reads: ") {
-                let n: usize = rest
-                    .trim_end_matches(" violation(s)")
-                    .parse()
-                    .unwrap_or(0);
-                if n > 0 {
-                    details.push_str(&format!("  {fname}: {n} violation(s)\n"));
-                    total += n;
-                }
-                break;
-            }
+        // Closed-class fatal headers land on stdout right before
+        // `exit(1)`. Any FATAL line means a regression.
+        let fatal_lines: Vec<&str> = stdout.lines()
+            .filter(|l| l.contains("(FATAL)"))
+            .collect();
+        if !out.status.success() || !fatal_lines.is_empty() {
+            failures.push((
+                fname.to_string(),
+                out.status.code().unwrap_or(-1),
+                fatal_lines.iter().take(5).map(|s| s.to_string()).collect::<Vec<_>>().join("\n  "),
+            ));
         }
     }
     assert!(
-        total == 0,
-        "Phase C field-reads class regressed — {total} new violations.\n\n\
-         The validate_resource_field_reads validator (per \
-         docs/internals/self-host-resource-model.md §5) was burned \
-         down to zero in commit <step-5a> by tagging emit_payload_read's \
-         destination LoBorrowed/BoField in lower.gg. A new violation \
-         means some emit site added a __field_read_* GICallExtern \
-         without tagging its destination local. Fix: tag the dst with \
-         add_local_with(..., LoBorrowed(), BoField()) at the new \
-         emit site.\n\n\
-         Per-fixture breakdown:\n{details}"
-    );
-}
-
-// Phase C step 5b regression check — call_args class. Burned down
-// from 10,144 → 0 by threading recv/base ownership through four
-// emit sites in lower.gg (EMethodCall receiver, EFieldAccess base
-// in non-ptr load, two __field_write_* paths, gorget_array_set base,
-// borrow-arg in ECall). The pattern at each site is identical:
-// borrowed source → OpBorrow, owned/param source → OpMove.
-#[test]
-#[serial(self_host_lowerer_driver)]
-fn phase_c_call_args_at_zero_self_host() {
-    if skip_under_llvm() { return; }
-    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_dir = manifest_dir.join("lib");
-
-    // Fixtures that had the heaviest call_args activity at baseline,
-    // plus a few that exercised specific emit sites the burn-down
-    // touched (LinkedList → gorget_array_set; p2p → user-fn borrow
-    // arg; nested field access → __field_write_).
-    let fixtures = [
-        "dataframe_groupby.gg",
-        "json_parse.gg",
-        "p2p_handshake.gg",
-        "httpserver_router.gg",
-        "cli_args.gg",
-        "hello.gg",
-    ];
-
-    let mut total = 0usize;
-    let mut details = String::new();
-    for fname in fixtures.iter() {
-        let fixture = manifest_dir.join("tests/fixtures").join(fname);
-        if !fixture.exists() {
-            continue;
-        }
-        let out = Command::new(&driver_exe)
-            .arg(&fixture)
-            .arg(&lib_dir)
-            .arg("--validate-resource-call-args")
-            .output()
-            .expect("failed to spawn self-host driver");
-        if !out.status.success() {
-            continue;
-        }
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if let Some(rest) = line.strip_prefix("# validate_resource_call_args: ") {
-                let n: usize = rest
-                    .trim_end_matches(" violation(s)")
-                    .parse()
-                    .unwrap_or(0);
-                if n > 0 {
-                    details.push_str(&format!("  {fname}: {n} violation(s)\n"));
-                    total += n;
-                }
-                break;
-            }
-        }
-    }
-    assert!(
-        total == 0,
-        "Phase C call_args class regressed — {total} new violations.\n\n\
-         The validate_resource_call_args validator was burned down to \
-         zero in commit <step-5b>. A new violation means an emit site \
-         in lower.gg added an OpMove(local) at a call-arg position \
-         where the source local's ownership is LoBorrowed. Moving from \
-         a borrow is a use-after-free shape. Fix: check the source's \
-         ownership at the emit site and switch to OpBorrow when \
-         LoBorrowed.\n\n\
-         Per-fixture breakdown:\n{details}"
+        failures.is_empty(),
+        "Phase C closed-class regression — {} fixture(s) flagged FATAL.\n\n\
+         The validate_resource_field_reads and validate_resource_call_args \
+         validators are promoted to fatal in self-host's validate.gg \
+         (in-process exit(1) on any violation). A new violation means \
+         an emit site added the bug. See \
+         docs/internals/self-host-resource-model.md §5 for the fix shape.\n\n\
+         Failures:\n{}",
+        failures.len(),
+        failures.iter()
+            .map(|(f, c, l)| format!("  {f} (exit {c}):\n  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
 }
 

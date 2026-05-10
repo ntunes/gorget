@@ -21,23 +21,13 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
+from std.fs import write_file, append_file
+from std.os import getenv, exit
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Operand
 from gir import GirType, GirResourceMetadata
 from gir import LocalOwnership
 from gir import PRIM_COUNT
 from lir_lower import build_resource_metadata
-
-# Phase C validators are activated via flags passed to `run_validators`
-# from `driver.gg`. The Rust-side framework uses `GG_VALIDATE_<NAME>`
-# env vars (`structural-guards.md` Tier 1b); self-host's emit of
-# `getenv` currently has an unfinished cstr→String wrap that makes
-# the env-var path miscompile. Until that gap is closed (TODO entry,
-# §7 of the resource model doc), pass configuration by argument
-# from driver's argv parsing instead.
-struct ValidateConfig:
-    bool run_moves
-    bool run_field_reads
-    bool run_call_args
 
 # ── Helpers ──────────────────────────────────────────────────
 
@@ -284,42 +274,59 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction &func, Gir
             else:
                 pass
         ai += 1
+# ── Validator dispatch ────────────────────────────────────
 #
-# Run every validator whose `GG_VALIDATE_<NAME>` env var is set, write
-# its violations to the path the env var names. Returns silently if no
-# gate is set — the call from `driver.gg` is free when nobody asked
-# for validation.
+# Phase C step 5a / 5b shipped the burn-downs for two classes:
+#   • validate_resource_field_reads — CLOSED (commit `8cfc94ff`)
+#   • validate_resource_call_args   — CLOSED (commit `988ce1c3`)
+#
+# Per `structural-guards.md`'s framework step 5, once a class hits
+# zero it's promoted to fatal: the env gate is removed and the build
+# halts on the first violation. These two run unconditionally below.
+#
+# The moves class is still in burn-down (~89,678 remaining). It's
+# env-gated: setting `GG_VALIDATE_RESOURCE_MOVES=<log-path>` writes
+# the violation list to that path; unset means silent. Once the
+# moves class hits zero, it joins the unconditional set and the gate
+# is removed.
 
-void run_validators(GirModule &gmod, ValidateConfig cfg):
-    if cfg.run_moves:
-        Vector[String] vs = validate_resource_moves(&gmod)
-        print_violations("validate_resource_moves", vs)
-    if cfg.run_field_reads:
-        Vector[String] vs2 = validate_resource_field_reads(&gmod)
-        print_violations("validate_resource_field_reads", vs2)
-    if cfg.run_call_args:
-        Vector[String] vs3 = validate_resource_call_args(&gmod)
-        print_violations("validate_resource_call_args", vs3)
+void run_validators(GirModule &gmod):
+    # ── Closed classes: fatal-on-violation, no gate ──
+    Vector[String] fr_v = validate_resource_field_reads(&gmod)
+    if fr_v.len() > 0:
+        print_violations_to_stderr("validate_resource_field_reads (FATAL)", fr_v)
+        exit(1)
+    Vector[String] ca_v = validate_resource_call_args(&gmod)
+    if ca_v.len() > 0:
+        print_violations_to_stderr("validate_resource_call_args (FATAL)", ca_v)
+        exit(1)
+    # ── Burn-down class: env-gated, logs to file ──
+    String moves_path = getenv("GG_VALIDATE_RESOURCE_MOVES")
+    if moves_path.len() > 0:
+        Vector[String] mv = validate_resource_moves(&gmod)
+        write_violations(moves_path, "validate_resource_moves", mv)
 
-# Phase C step 5a: validate_resource_field_reads is CLOSED (commit
-# `<step-5a>`) — single emit site `emit_payload_read` tags LoBorrowed/
-# BoField; baseline sweep is 0 across 1030 fixtures. Promotion to
-# "fatal-on-violation" lives at the Rust-harness level (a lints-style
-# test that runs the validator across the fixture suite and asserts
-# zero violations), not inside self-host: `exit()` and the
-# `noreturn void` extern signature don't yet round-trip through
-# self-host's emit (cstr/void boundary gap, TODO in §7 of the resource
-# model doc). Until that's fixed, fatal-promotion uses the same
-# pattern as Tier E.1 lints — a Rust test, BUDGET=0.
-
-# Emit violations to stdout. The driver runs validators after the
-# GIR-print / LIR-print, so the lines arrive at the end of the stream
-# and don't corrupt the format_module / generate_c body. The header
-# line `# <name>: N violation(s)` is the parse-anchor for sweep
-# scripts.
-void print_violations(String name, Vector[String] vs):
+# Emit violations to stdout. The closed-class fatal path runs BEFORE
+# the GIR/LIR print, so panicking here means the user sees the
+# violations *as* the diagnostic — the would-be successful build
+# output never lands. (Once self-host gains a stderr writer that
+# round-trips through emit, switch to stderr to keep the violations
+# visually separate from any stdout buffering; Rust gg uses stderr
+# for validator panics.)
+void print_violations_to_stderr(String name, Vector[String] vs):
     print("# " + name + ": " + int_to_str(vs.len()) + " violation(s)")
     int i = 0
     while i < vs.len():
         print(vs.get(i).unwrap())
+        i += 1
+
+# Write the burn-down class's violations to its env-named log file.
+# Header line `# <name>: N violation(s)` is the parse-anchor for
+# sweep scripts (`tools/sweep-validate.sh`-style harnesses).
+void write_violations(String path, String name, Vector[String] vs):
+    String hdr = "# " + name + ": " + int_to_str(vs.len()) + " violation(s)\n"
+    write_file(path, hdr)
+    int i = 0
+    while i < vs.len():
+        append_file(path, vs.get(i).unwrap() + "\n")
         i += 1

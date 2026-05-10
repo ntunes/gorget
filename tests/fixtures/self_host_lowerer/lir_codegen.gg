@@ -1479,21 +1479,75 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
     if arg_idx == 0:
         if name == "gorget_read_file" or name == "gorget_read_line" or name == "gorget_read_file_bytes":
             return true
-        if name == "gorget_write_file" or name == "gorget_file_exists":
+        if name == "gorget_write_file" or name == "gorget_write_file_bytes" or name == "gorget_append_file":
+            return true
+        if name == "gorget_file_exists" or name == "gorget_delete_file":
             return true
         if name == "gorget_getenv" or name == "gorget_setenv":
             return true
         if name == "gorget_mkdir" or name == "gorget_rmdir" or name == "gorget_remove":
             return true
+        if name == "gorget_rename" or name == "gorget_copy_file":
+            return true
+        if name == "gorget_file_size" or name == "gorget_is_dir" or name == "gorget_readdir":
+            return true
         if name == "gorget_parse_int" or name == "gorget_parse_float":
             return true
+        if name == "gorget_path_join" or name == "gorget_path_parent" or name == "gorget_path_basename":
+            return true
+        if name == "gorget_path_extension" or name == "gorget_path_stem":
+            return true
+        if name == "gorget_path_normalize" or name == "gorget_path_absolute":
+            return true
+        if name == "gorget_exec" or name == "gorget_exec_output" or name == "gorget_process_spawn":
+            return true
+        if name == "gorget_input" or name == "gorget_file_open_try":
+            return true
+        if name == "gorget_format_time" or name == "gorget_parse_time":
+            return true
+        if name == "gorget_udp_bind" or name == "gorget_socket_connect":
+            return true
     if arg_idx == 1:
-        if name == "gorget_write_file":
+        if name == "gorget_write_file" or name == "gorget_write_file_bytes" or name == "gorget_append_file":
+            return true
+        if name == "gorget_setenv":
+            return true
+        if name == "gorget_rename" or name == "gorget_copy_file":
+            return true
+        if name == "gorget_path_join":
+            return true
+        if name == "gorget_file_open_try" or name == "gorget_parse_time":
             return true
         # In-place String append — arg 1 is the rhs data passed as cstr+len
         # (extern "C" coerces String→cstr; the .len comes via arg 2).
         if name == "gorget_string_append_buf":
             return true
+    return false
+
+# Runtime functions whose C return type is `const char*` and whose caller-
+# visible Gorget type is `Str`. The call site must wrap the result with
+# `gorget_str_from_cstr(...)` to materialise a Str value. Mirrors Rust gg's
+# CStr-return ABI handling (`src/lir/types.rs:823` ValueOrigin::CStr and
+# `src/backend/c_lir/mod.rs:1808` SlotStore Ptr→Str wrap).
+#
+# Without this, self-host emits `Str __v3 = gorget_getenv(...)` — a direct
+# assignment of `const char*` to a 32-byte Str struct slot, which fails
+# C type-checking with `incompatible types when assigning to type 'Str'`.
+bool is_cstr_returning_fn(String name):
+    if name == "gorget_getenv" or name == "gorget_getcwd" or name == "gorget_platform":
+        return true
+    if name == "gorget_parse_last_error":
+        return true
+    if name == "gorget_path_join" or name == "gorget_path_parent" or name == "gorget_path_basename":
+        return true
+    if name == "gorget_path_extension" or name == "gorget_path_stem":
+        return true
+    if name == "gorget_path_normalize" or name == "gorget_path_absolute":
+        return true
+    if name == "gorget_input" or name == "gorget_readline":
+        return true
+    if name == "gorget_format_time":
+        return true
     return false
 
 bool runtime_takes_str_by_value(String name):
@@ -1759,6 +1813,17 @@ bool is_void_runtime_fn(String name):
     if name == "gorget_box_free":
         return true
     if name == "free" or name == "abort" or name == "exit":
+        return true
+    # Self-host emit gap closure (2026-05-10): runtime fns declared
+    # `extern void Y(...)` whose Gorget-side return type is also void
+    # need their dst-assignment suppressed. Without these, self-host
+    # produces `__vN = gorget_write_file(...)` and C bails with
+    # `void value not ignored as it ought to be`.
+    if name == "gorget_write_file" or name == "gorget_write_file_bytes" or name == "gorget_append_file":
+        return true
+    if name == "gorget_setenv":
+        return true
+    if name == "gorget_exit":
         return true
     if name == "gorget_atomic_int_store" or name == "gorget_atomic_bool_store":
         return true
@@ -3533,9 +3598,28 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         returns_void = true
                     break
                 fi += 1
+    # Self-host emit gap closure (2026-05-10): cstr-returning runtime
+    # fns need their result wrapped with gorget_str_from_cstr(...) when
+    # the destination is a Str slot — self-host treats `cstr` in Gorget
+    # source as LT_PTR, so dst's type discriminates: LT_STRUCT(gs) → wrap
+    # to Str, LT_PTR → keep as raw cstr (extern caller wanted cstr).
+    # Mirrors Rust gg's SlotStore Ptr→Str cstr wrapping
+    # (`src/backend/c_lir/mod.rs:1808`) but at the call-emit site
+    # instead of the slot-store site — self-host doesn't track
+    # per-value cstr origin yet.
+    bool cstr_ret = false
+    if is_cstr_returning_fn(name) and dst >= 0 and not returns_void:
+        int dst_ty_v = LT_VOID
+        if val_types.contains(dst):
+            dst_ty_v = val_types.get(dst).unwrap()
+        int gs_ty_v = find_struct_type("GorgetString", &m)
+        if dst_ty_v == gs_ty_v:
+            cstr_ret = true
     String out = ""
     if dst >= 0 and not returns_void:
         out = v(dst) + " = "
+    if cstr_ret:
+        out = out + "gorget_str_from_cstr("
     out = out + name + "("
     # For runtime functions whose parameters take Str by value, coerce
     # pointer-typed actuals with an explicit *(Str*) deref so we don't fail
@@ -3862,6 +3946,8 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
         if args.len() > 0:
             out = out + ", "
         out = out + "((Str){0})"
+    if cstr_ret:
+        return out + "));"
     return out + ");"
 
 # ── Terminator emission ───────────────────────────────────
