@@ -205,7 +205,73 @@ void check_inst_for_field_read(Instruction inst, GirFunction &func, GirModule &g
         else:
             pass
 
-# ── Env-gate dispatcher ──────────────────────────────────────
+# ── validate_resource_call_args ──────────────────────────────
+#
+# Call argument modes must match the source local's ownership. The
+# *Ownership at Consuming Positions* table (`CLAUDE.md`) spells out the
+# allowed combinations:
+#
+#   Source                          | Allowed at consuming position
+#   ───────────────────────────────-┼──────────────────────────────
+#   Owns AND dead at this call      | OpMove (move after call)
+#   Borrow OR owned-but-live        | OpClone (clone before call)
+#   Static literal                  | (runtime *_materialize)
+#
+# The class this validator owns: `OpMove(local)` where the source
+# local's ownership is `LoBorrowed`. Moving a borrow is a
+# use-after-free — the source doesn't own the data it points into;
+# the move semantics nullify the source slot but the underlying
+# resource is owned elsewhere.
+#
+# `OpCopy(resource_local)` is already covered by validate_resource_moves;
+# this validator deliberately doesn't double-report it (the underlying
+# violation is the same write site).
+#
+# Mirrors Rust's `validate_resource_call_args`
+# (`src/ir/validate.rs` Call/CallExtern arg-mode class).
+Vector[String] validate_resource_call_args(GirModule &gmod):
+    Vector[String] violations = []
+    int fi = 0
+    while fi < gmod.functions.len():
+        GirFunction func = gmod.functions.get(fi).unwrap()
+        int bi = 0
+        while bi < func.blocks.len():
+            BasicBlock blk = func.blocks.get(bi).unwrap()
+            int ii = 0
+            while ii < blk.insts.len():
+                Instruction inst = blk.insts.get(ii).unwrap()
+                check_inst_for_call_arg(inst, &func, &gmod, &violations, fi, bi, ii)
+                ii += 1
+            bi += 1
+        fi += 1
+    return violations
+
+void check_inst_for_call_arg(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+    match inst:
+        case GICall(_, callee, args):
+            check_call_args(callee, args, &func, &gmod, &violations, fi, bi, ii)
+        case GICallExtern(_, callee, args):
+            check_call_args(callee, args, &func, &gmod, &violations, fi, bi, ii)
+        else:
+            pass
+
+void check_call_args(String callee, Vector[Operand] args, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+    int ai = 0
+    while ai < args.len():
+        Operand op = args.get(ai).unwrap()
+        match op:
+            case OpMove(lid):
+                if lid >= 0 and lid < func.locals.len():
+                    GirLocal loc = func.locals.get(lid).unwrap()
+                    match loc.ownership:
+                        case LoBorrowed():
+                            String tname = resolve_type_name(loc.type_id, &gmod)
+                            violations.push(fmt_loc(func.name, bi, ii) + ": OpMove(_" + int_to_str(lid) + ") on LoBorrowed local at call to " + callee + " arg " + int_to_str(ai) + " (" + tname + ")")
+                        else:
+                            pass
+            else:
+                pass
+        ai += 1
 #
 # Run every validator whose `GG_VALIDATE_<NAME>` env var is set, write
 # its violations to the path the env var names. Returns silently if no
@@ -221,6 +287,10 @@ void run_validators(GirModule &gmod):
     if field_reads_path.len() > 0:
         Vector[String] vs2 = validate_resource_field_reads(&gmod)
         write_violations(field_reads_path, "validate_resource_field_reads", vs2)
+    String call_args_path = getenv("GG_VALIDATE_RESOURCE_CALL_ARGS")
+    if call_args_path.len() > 0:
+        Vector[String] vs3 = validate_resource_call_args(&gmod)
+        write_violations(call_args_path, "validate_resource_call_args", vs3)
 
 void write_violations(String path, String name, Vector[String] vs):
     String hdr = "# " + name + ": " + int_to_str(vs.len()) + " violation(s)\n"
