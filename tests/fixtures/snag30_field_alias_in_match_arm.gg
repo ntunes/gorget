@@ -1,0 +1,32 @@
+# Regression pin for Snag #30: pattern-match aliasing of a non-Copy struct
+# field in a match arm, followed by a second match. Pre-fix this combo
+# triggered a double-free at scope exit. Cluster 1 (FieldLoad/EnumFieldLoad
+# shallow-copy migration + Some/None merge Move-mode at commit 2f89aa78)
+# closed the class.
+#
+# The user's original repro also surfaced an unrelated `None`-literal-as-
+# call-arg bug (literal None lowers to const null, dereferenced at the
+# call site → SIGSEGV). This fixture binds `Option[int] d = None` first
+# to focus on the field-alias structural class. The None-literal bug is
+# filed separately in TODO.md.
+
+public struct Catch:
+    String param
+
+String try_path(Option[Catch] catch_opt, Option[int] dummy):
+    String result = match catch_opt:
+        case Some(catch_clause):
+            String _pname = catch_clause.param
+            "ok"
+        case None:
+            "ok"
+    match dummy:
+        case Some(_):
+            return result
+        case None:
+            return result
+
+void main():
+    Option[int] d = None
+    String s = try_path(Some(Catch("e")), d)
+    print(s)

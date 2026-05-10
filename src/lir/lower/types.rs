@@ -1,11 +1,19 @@
 //! Type mapping, size calculation, and enum helpers for GIR → LIR lowering.
 
 use super::*;
+use std::collections::HashMap;
+
+/// Alias map type: monomorphized name (e.g. `Vector__int64_t`) → backing
+/// runtime StructDef id (e.g. GorgetArray's StructId). Populated at LIR
+/// lowering on `LirModule::struct_aliases`. Used by size lookups so the
+/// canonical typed `StructDef.computed_c_size` replaces name-prefix routing
+/// in `opaque_runtime_size`.
+pub(super) type AliasMap = HashMap<String, StructId>;
 
 /// Extract the element sizeof from a monomorphized collection constructor name.
 /// E.g., `Vector__int64_t__new` → sizeof(int64_t) = 8.
 /// Returns the size in bytes, or None if the name doesn't match.
-pub(super) fn elem_size_from_monomorphized(name: &str, structs: &[StructDef]) -> Option<usize> {
+pub(super) fn elem_size_from_monomorphized(name: &str, structs: &[StructDef], aliases: &AliasMap) -> Option<usize> {
     // Extract the type portion between the collection prefix and the method name.
     let type_str = if let Some(rest) = name.strip_prefix("Vector__") {
         rest.strip_suffix("__new")?
@@ -19,20 +27,20 @@ pub(super) fn elem_size_from_monomorphized(name: &str, structs: &[StructDef]) ->
         // Dict/HashMap constructors are handled by dict_elem_sizes_from_monomorphized.
         return None;
     };
-    Some(c_sizeof_with_structs(type_str, structs))
+    Some(c_sizeof_with_structs(type_str, structs, aliases))
 }
 
 /// Extract the inner-type sizeof from a monomorphized concurrency constructor or
 /// guard set call. Works for Mutex__T__new, Shared__T__new, RWLock__T__new,
 /// Channel__T__new, Guard__T__set, WriteGuard__T__set.
-pub(super) fn concurrency_elem_size(name: &str, structs: &[StructDef]) -> Option<usize> {
+pub(super) fn concurrency_elem_size(name: &str, structs: &[StructDef], aliases: &AliasMap) -> Option<usize> {
     // Try each prefix; the type sits between the prefix and the __method suffix.
     for prefix in &["Mutex__", "Shared__", "RWLock__", "Channel__", "Guard__", "WriteGuard__"] {
         if let Some(rest) = name.strip_prefix(prefix) {
             // Find the last `__method` segment.
             if let Some(idx) = rest.rfind("__") {
                 let type_str = &rest[..idx];
-                return Some(c_sizeof_with_structs(type_str, structs));
+                return Some(c_sizeof_with_structs(type_str, structs, aliases));
             }
         }
     }
@@ -41,7 +49,7 @@ pub(super) fn concurrency_elem_size(name: &str, structs: &[StructDef]) -> Option
 
 /// Extract key and value sizeof from a monomorphized Dict constructor name.
 /// E.g., `Dict__Str__int64_t__new` → (sizeof(Str), sizeof(int64_t)) = (16, 8).
-pub(super) fn dict_elem_sizes_from_monomorphized(name: &str, structs: &[StructDef]) -> (usize, usize) {
+pub(super) fn dict_elem_sizes_from_monomorphized(name: &str, structs: &[StructDef], aliases: &AliasMap) -> (usize, usize) {
     // Dict__K__V__new or HashMap__K__V__new
     let rest = name.strip_prefix("Dict__")
         .or_else(|| name.strip_prefix("HashMap__"))
@@ -54,7 +62,7 @@ pub(super) fn dict_elem_sizes_from_monomorphized(name: &str, structs: &[StructDe
         if let Some(idx) = types.find("__") {
             let key = &types[..idx];
             let val = &types[idx + 2..];
-            return (c_sizeof_with_structs(key, structs), c_sizeof_with_structs(val, structs));
+            return (c_sizeof_with_structs(key, structs, aliases), c_sizeof_with_structs(val, structs, aliases));
         }
     }
     (8, 8) // fallback
@@ -148,6 +156,10 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
 
 /// Map a GIR C type name to its sizeof in bytes.
 /// `structs` is used to compute sizes of user-defined struct types.
+/// `aliases` resolves monomorphized names (e.g. `Vector__int64_t`) to their
+/// backing runtime StructDef so the typed `computed_c_size` is the source
+/// of truth for collection-shape types (replaces prefix-match arms in
+/// `opaque_runtime_size`).
 ///
 /// Lookup order:
 ///   1. Primitive C types (int64_t, double, ...) — fixed-width by definition.
@@ -156,13 +168,17 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
 ///      structs (Callable/MutCallable → GorgetClosure size).
 ///   3. `BuiltinTypeProtocol` `c_runtime_alias` lookup — for monomorphized
 ///      types whose LIR `StructDef` hasn't been built yet.
-///   4. `opaque_runtime_size` — the canonical name → runtime-size table for
-///      Vector/Dict/Set/Task/Guard/Box and concrete singletons. Keeping the
-///      remaining `starts_with` prefix matches in ONE place is the boundary
-///      between layered sources (per layering-discipline §Rule 3).
-///   5. `Tuple__`/`Option__` — recursive structural sizes (compute, don't look up).
-///   6. Pointer/opaque default — 8 bytes.
-pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> usize {
+///   4. `struct_aliases` — typed name → StructId map for monomorphized
+///      collection / Box / Task / Guard aliases (replaces prefix-match arms
+///      that previously lived in `opaque_runtime_size`). One source of truth
+///      per axis (layering-discipline §Rule 3).
+///   5. `opaque_runtime_size` — canonical singleton-name table for runtime
+///      handles whose monomorphized form has no registered StructDef
+///      (Mutex__/Shared__/RWLock__/Channel__/Weak__/Thread__ → 8). Concrete
+///      singleton entries (Socket, Match, …) live here too.
+///   6. `Tuple__`/`Option__` — recursive structural sizes (compute, don't look up).
+///   7. Pointer/opaque default — 8 bytes.
+pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef], aliases: &AliasMap) -> usize {
     match type_name {
         "int64_t" | "uint64_t" | "double" => 8,
         "int32_t" | "uint32_t" | "float" => 4,
@@ -206,26 +222,41 @@ pub(super) fn c_sizeof_with_structs(type_name: &str, structs: &[StructDef]) -> u
                 }
             }
 
-            // 4. Canonical opaque-runtime size table — Vector/Dict/Set/Task/
-            //    Guard/Box prefix matches consolidated in `opaque_runtime_size`.
-            //    Tracked in TODO ("Hardcoded type size database") — full
-            //    elimination requires plumbing `struct_aliases` so the typed
-            //    StructDef-resolved-via-alias path can replace this table.
+            // 4. `struct_aliases`: monomorphized collection / Box / Task /
+            //    Guard names resolve to their backing runtime StructDef.
+            //    Reads typed `computed_c_size` from the alias target —
+            //    layering-discipline §Rule 3 (one source of truth per axis).
+            //    Replaces former `name.starts_with("Vector__"|"Dict__"|…)`
+            //    arms in `opaque_runtime_size`.
+            if let Some(sid) = aliases.get(type_name) {
+                if let Some(sd) = structs.get(sid.0 as usize) {
+                    if let Some(sz) = sd.computed_c_size {
+                        return sz;
+                    }
+                    return c_sizeof_struct_def(sd, structs);
+                }
+            }
+
+            // 5. Canonical singleton-name size table — concrete runtime types
+            //    (Socket, Match, ExecResult, …) and the genuinely opaque-pointer
+            //    monomorphized families (Mutex__/Shared__/RWLock__/Channel__/
+            //    Weak__/Thread__) which never get a registered StructDef
+            //    because they're typedef'd to `void*` in C.
             if let Some(sz) = opaque_runtime_size(type_name) {
                 return sz;
             }
 
-            // 5. Recursive structural sizes (compute, don't look up).
+            // 6. Recursive structural sizes (compute, don't look up).
             if let Some(rest) = type_name.strip_prefix("Tuple__") {
-                return c_sizeof_tuple_fields(rest, structs);
+                return c_sizeof_tuple_fields(rest, structs, aliases);
             }
             if let Some(inner) = type_name.strip_prefix("Option__") {
-                let payload = c_sizeof_with_structs(inner, structs);
+                let payload = c_sizeof_with_structs(inner, structs, aliases);
                 // struct { int32_t tag; <pad to 8>; T payload; }
                 return 8 + std::cmp::max(payload, 8);
             }
 
-            // 6. Pointer/opaque default.
+            // 7. Pointer/opaque default.
             8
         }
     }
@@ -298,6 +329,24 @@ pub fn c_sizeof_struct_def(sd: &StructDef, structs: &[StructDef]) -> usize {
 /// Shared by size-of calculations, LLVM struct emission, and aggregate-return
 /// ABI decisions. Keeping the table in one place means both backends reach
 /// the same layout; adding a new runtime struct requires one edit here.
+///
+/// The `*__T` monomorphized arms that previously lived here for
+/// Vector/Deque/Dict/HashMap/Set/HashSet/Heap/Box/Task/Guard/ReadGuard/
+/// WriteGuard have been retired: each now resolves through
+/// `LirModule::struct_aliases` (Vector__/Dict__/Set__/Heap__) or a directly
+/// registered StructDef (Box__/Task__/Guard__) where the typed
+/// `computed_c_size` field is the source of truth. Callers reach the typed
+/// path via `c_sizeof_with_structs(name, structs, aliases)` and via direct
+/// `StructDef.computed_c_size` reads at sites that already hold the
+/// StructDef.
+///
+/// What remains here are concrete singleton names plus the genuinely
+/// opaque-pointer monomorphized families (Mutex__/Shared__/RWLock__/
+/// Channel__/Weak__/Thread__) which never get a registered StructDef
+/// because they typedef to `void*` in C — there is no struct to read a
+/// `computed_c_size` from. Those last six prefix arms are the typed-
+/// metadata floor: removing them requires registering a stub StructDef
+/// for each (architectural change beyond TODO scope).
 pub fn opaque_runtime_size(name: &str) -> Option<usize> {
     let sz = match name {
         // Core collections (layouts match c_runtime.rs typedefs).
@@ -306,14 +355,6 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         "GorgetMap" | "GorgetSet" => 152,
         "GorgetClosure" => 16,
         "GorgetRange" => 24,
-        // Monomorphized collection aliases — each `Vector[T]`/`HashSet[T]`/…
-        // wraps a GorgetArray/GorgetMap/GorgetSet so they share the same
-        // runtime layout. Without this the LLVM backend emits `{ i8 }` for
-        // the empty Gorget struct and misaligns everything downstream.
-        _ if name.starts_with("Vector__") || name.starts_with("Deque__") => 64,
-        _ if name.starts_with("Dict__") || name.starts_with("HashMap__") => 152,
-        _ if name.starts_with("Set__") || name.starts_with("HashSet__") => 152,
-        _ if name.starts_with("Heap__") => 64,
         // Concurrency opaque handles — pointer-sized.
         "AtomicInt" | "AtomicBool" | "Mutex" | "Shared" | "RWLock" | "Barrier"
         | "CondVar" | "WaitGroup" | "Semaphore" | "OnceFlag" | "TaskGroup"
@@ -321,13 +362,14 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         | "GuestModule" | "Thread" => 8,
         // Channel[T] is a pointer to GorgetChannel.
         "Channel" => 8,
-        // Task__T and per-type Thread__T: {task_ptr, drop_fn} = 16.
-        _ if name.starts_with("Task__") => 16,
-        _ if name.starts_with("Thread__") => 8,
-        // Per-type concurrency typedefs alias to opaque pointers.
+        // Per-type concurrency typedefs alias to opaque pointers (`void*`)
+        // — these are deliberately NOT registered as StructDefs, so there
+        // is no `computed_c_size` to read. The prefix-match here is the
+        // typed-metadata floor: every other mangled prefix has been
+        // retired into `struct_aliases` / direct StructDef reads.
         _ if name.starts_with("Mutex__") || name.starts_with("Shared__")
             || name.starts_with("RWLock__") || name.starts_with("Channel__")
-            || name.starts_with("Weak__") => 8,
+            || name.starts_with("Weak__") || name.starts_with("Thread__") => 8,
         // Sockets / files / process — runtime uses fixed layouts.
         "Socket" | "ServerSocket" | "UdpSocket" => 8,
         "TlsSocket" | "TlsServerSocket" => 24,  // fd + SSL_CTX* + SSL*/ctx
@@ -362,11 +404,6 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         "SDLWindow" | "SDLRenderer" | "SDLTexture" | "SDLFont" | "SDLEvent" => 8,
         // Audio.
         "AudioChunk" => 16,
-        // Box[T] types are 1-ptr.
-        _ if name.starts_with("Box__") => 8,
-        // Guard types: { owner: ptr, data: ptr } = 16.
-        _ if name.starts_with("Guard__") || name.starts_with("ReadGuard__")
-            || name.starts_with("WriteGuard__") => 16,
         _ => return None,
     };
     Some(sz)
@@ -421,15 +458,19 @@ pub fn is_small_aggregate(ty: &LirType, structs: &[StructDef]) -> bool {
             Some(s) => s,
             None => return false,
         };
+        // Typed read: `computed_c_size` is the canonical size set at
+        // registration (runtime singletons) or via `compute_struct_sizes()`.
+        // Falls back to the runtime singleton-name table for pre-compute
+        // calls and structurally-sized recursion otherwise. Replaces a
+        // former unconditional `opaque_runtime_size(&sdef.name)` short-
+        // circuit that fired for every monomorphized prefix-matched name.
+        if let Some(cs) = sdef.computed_c_size {
+            return cs <= 16;
+        }
         if let Some(sz) = opaque_runtime_size(&sdef.name) {
             return sz <= 16;
         }
-        let size = if let Some(cs) = sdef.computed_c_size {
-            cs
-        } else {
-            c_sizeof_lir_type(ty, structs)
-        };
-        size <= 16
+        c_sizeof_lir_type(ty, structs) <= 16
     } else {
         false
     }
@@ -445,6 +486,15 @@ pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
+                // Typed read — `computed_c_size` is set at registration for
+                // runtime singletons (GorgetArray = 64, GorgetMap = 152, …)
+                // and populated by `compute_struct_sizes()` for everyone
+                // else. Falls back to the singleton-name table for
+                // pre-compute calls (during `compute_struct_sizes` itself)
+                // and structurally-sized recursion otherwise.
+                if let Some(cs) = sd.computed_c_size {
+                    return cs;
+                }
                 if let Some(sz) = opaque_runtime_size(&sd.name) {
                     return sz;
                 }
@@ -492,12 +542,12 @@ pub fn c_alignof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
 /// `Tuple__int64_t__Str` → fields are [int64_t, Str] → 8 + 32 = 40.
 /// Fields are split on `__` but multi-word types like `int64_t` contain `_`
 /// (not `__`), so we split on `__` and rejoin single-underscore segments.
-pub(super) fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef]) -> usize {
+pub(super) fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef], aliases: &AliasMap) -> usize {
     let mut total = 0usize;
     // Split on __ delimiter.  Type names use single _ (int64_t, uint8_t).
     for part in fields_str.split("__") {
         if part.is_empty() { continue; }
-        let field_sz = c_sizeof_with_structs(part, structs);
+        let field_sz = c_sizeof_with_structs(part, structs, aliases);
         // Align each field to its natural alignment (max 8).
         let align = std::cmp::min(field_sz, 8);
         if align > 0 {

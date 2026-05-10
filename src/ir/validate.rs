@@ -1772,7 +1772,7 @@ impl std::fmt::Display for DropPreRebindWarning {
 /// the next bare `Drop`/`DropIfAlive(p)` site. Mismatch is the snag #23 shape.
 ///
 /// **Shallow-copy heap-allocating consumer.** The class is narrow on
-/// purpose: only `__gorget_box_alloc_*` qualifies today. Box.new
+/// purpose: only `__gorget_box_alloc_<T>` qualifies today. Box.new
 /// `__gorget_box_alloc_<T>(value)` shallow-copies the value's interior
 /// pointers into a fresh heap slot — both source and the new Box now alias
 /// the same heap data, so the source MUST be MoveZero'd before any
@@ -1785,12 +1785,25 @@ impl std::fmt::Display for DropPreRebindWarning {
 ///   source's storage is untouched. A later Drop of source is correct.
 /// - `gorget_*_clone_inplace`: write into an existing slot, no shallow alias.
 ///
-/// Adding a new shallow-copy heap-allocating runtime consumer would
-/// require widening this validator's recognition set.
+/// **Recognition is typed.** The classifier reads
+/// `Module::heap_alloc_consumer_externs` — populated at the writer site
+/// every time the GIR lowering emits a `__gorget_box_alloc_<T>` call.
+/// Adding a new shallow-copy heap-allocating consumer at any future
+/// writer site is a single `module.heap_alloc_consumer_externs.insert(...)`
+/// call and the validator picks it up automatically. No
+/// `name.starts_with(...)` substring match survives in this validator.
+/// Per CLAUDE.md "No name matching".
 pub fn validate_drop_pre_rebind(module: &Module) -> Vec<DropPreRebindWarning> {
     let mut warnings = Vec::new();
 
-    let _ = module.type_registry.type_defs(); // keep registry import live for future widening
+    // Typed metadata: the lowering populates this set at every Box.new
+    // emission site (see `Module::heap_alloc_consumer_externs`). The
+    // validator reads it as a structural fact — never re-derives it
+    // from the callee identifier shape.
+    let heap_alloc_consumers = &module.heap_alloc_consumer_externs;
+    if heap_alloc_consumers.is_empty() {
+        return warnings;
+    }
 
     for func in &module.functions {
         let drop_registered = collect_drop_registered_locals(func);
@@ -1801,8 +1814,7 @@ pub fn validate_drop_pre_rebind(module: &Module) -> Vec<DropPreRebindWarning> {
                     Instruction::CallExtern { func: name, args, .. } => (name.as_str(), args),
                     _ => continue,
                 };
-                let is_heap_alloc = callee.starts_with("__gorget_box_alloc_");
-                if !is_heap_alloc { continue }
+                if !heap_alloc_consumers.contains(callee) { continue }
 
                 for arg in args {
                     let src_place = match arg {
@@ -3059,5 +3071,72 @@ mod tests {
         module.functions.push(f);
         let errors = validate(&module);
         assert!(!errors.iter().any(|e| matches!(e.kind, ValidationErrorKind::SpanMapMismatch { .. })));
+    }
+
+    // ── Tier 2c: drop-tracking pre-rebind validator tests ─────────────
+    //
+    // Three shapes covered:
+    //   1. Empty `heap_alloc_consumer_externs` set → no work, no warnings.
+    //   2. Box.new alloc fn IS in the set, source IS drop-registered, no
+    //      MoveZero between the call and a subsequent Drop → violation.
+    //   3. Same shape but with an intervening MoveZero(p) → no violation.
+
+    fn make_box_alloc_module(
+        register_callee: bool,
+        emit_move_zero: bool,
+    ) -> Module {
+        let mut module = Module::new();
+        if register_callee {
+            module.heap_alloc_consumer_externs.insert("__gorget_box_alloc_int64_t".to_string());
+        }
+        let mut b = FunctionBuilder::new("test_fn", I64_TYPE, &[]);
+        // _0: source value (drop-registered via the trailing Drop).
+        let src = b.add_local(I64_TYPE, None);
+        // Result of box_alloc — type doesn't matter for the validator.
+        b.assign(Place::local(src), FunctionBuilder::const_i64(42));
+        let _dst = b.call_extern(
+            "__gorget_box_alloc_int64_t",
+            vec![FunctionBuilder::copy(src)],
+            I64_TYPE,
+        );
+        if emit_move_zero {
+            b.move_zero(Place::local(src));
+        }
+        b.drop(Place::local(src));
+        b.ret(FunctionBuilder::const_i64(0));
+        module.functions.push(b.build());
+        module
+    }
+
+    #[test]
+    fn drop_pre_rebind_empty_set_no_op() {
+        // No box-alloc fn registered; validator must early-return.
+        let module = make_box_alloc_module(false, false);
+        let warnings = validate_drop_pre_rebind(&module);
+        assert!(warnings.is_empty(), "Expected no warnings, got: {:?}", warnings);
+    }
+
+    #[test]
+    fn drop_pre_rebind_violation_detected() {
+        // Box.new alloc fn registered; source drop-registered (trailing
+        // `Drop`); no intervening MoveZero. Snag #23 shape.
+        let module = make_box_alloc_module(true, false);
+        let warnings = validate_drop_pre_rebind(&module);
+        assert_eq!(warnings.len(), 1,
+            "Expected exactly one warning for the snag #23 shape, got: {:?}",
+            warnings);
+        assert_eq!(warnings[0].callee, "__gorget_box_alloc_int64_t");
+    }
+
+    #[test]
+    fn drop_pre_rebind_move_zero_between_call_and_drop_ok() {
+        // Same shape but with `MoveZero(src)` between the alloc call
+        // and the trailing Drop — the writer-side fix at commit
+        // `4ebefe44`. Validator must NOT flag this.
+        let module = make_box_alloc_module(true, true);
+        let warnings = validate_drop_pre_rebind(&module);
+        assert!(warnings.is_empty(),
+            "MoveZero between call and Drop must clear the violation; got: {:?}",
+            warnings);
     }
 }

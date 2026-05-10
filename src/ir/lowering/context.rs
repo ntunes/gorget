@@ -322,6 +322,16 @@ pub struct LoweringContext<'a> {
     /// Built from resolution_map + module_fn_manglings so that call lowering
     /// uses the correct target when multiple modules define the same bare name.
     pub call_resolved_names: FxHashMap<usize, String>,
+    /// Tier 2c (snag #23 class) — typed registry of shallow-copy
+    /// heap-allocating consumer extern names emitted by this lowering.
+    ///
+    /// Populated at the writer site every time a Box.new / `Box(value)`
+    /// ctor emits a `__gorget_box_alloc_<T>` extern call. Threaded onto
+    /// `Module.heap_alloc_consumer_externs` at the end of lowering for
+    /// the validator (`validate_drop_pre_rebind`) to read structurally.
+    /// Replaces the prior `callee.starts_with("__gorget_box_alloc_")`
+    /// name match per CLAUDE.md "No name matching".
+    pub heap_alloc_consumer_externs: rustc_hash::FxHashSet<String>,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -396,6 +406,7 @@ impl<'a> LoweringContext<'a> {
             fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
             call_resolved_names: FxHashMap::default(),
+            heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
         }
     }
 

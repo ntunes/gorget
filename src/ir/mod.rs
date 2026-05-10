@@ -246,6 +246,29 @@ pub struct Module {
     /// Per-function return ABI kind: fn_name → AbiKind.
     /// Populated from extern block ABI string + return type during pre-scan.
     pub fn_return_abis: rustc_hash::FxHashMap<String, abi::AbiKind>,
+    /// Tier 2c (snag #23 class) — typed registry of shallow-copy
+    /// heap-allocating consumer extern names.
+    ///
+    /// Populated at the writer site every time the GIR lowering emits a
+    /// `__gorget_box_alloc_<T>` call (Box.new and `Box(value)` ctor).
+    /// `Box.new` shallow-copies its argument's interior pointers into a
+    /// fresh heap slot, so the source slot must be `MoveZero`'d before
+    /// any subsequent Drop fires (see snag #23 / commit `4ebefe44`).
+    ///
+    /// Read by [`crate::ir::validate::validate_drop_pre_rebind`] to
+    /// recognise heap-allocating consumers without name matching. Adding
+    /// a new shallow-copy heap-allocating consumer at any future writer
+    /// site is a single `module.heap_alloc_consumer_externs.insert(...)`
+    /// call and the validator picks it up automatically.
+    ///
+    /// **Not in scope:** deep-clone consumers
+    /// (`gorget_string_clone_to_owned`, `gorget_array_clone`,
+    /// `gorget_map_clone`, `gorget_set_clone`) — those return a fresh
+    /// independent value, source's storage is untouched, and a later
+    /// Drop of source is correct. The set excludes them by construction:
+    /// only writers that produce the snag #23 shape (shallow-copy alias
+    /// of source interior into the freshly-allocated destination) insert.
+    pub heap_alloc_consumer_externs: rustc_hash::FxHashSet<String>,
 }
 
 impl Module {
@@ -267,6 +290,7 @@ impl Module {
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
+            heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
         }
     }
 

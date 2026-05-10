@@ -134,13 +134,17 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 /// **As you migrate**: lower the budget in the same commit that retires
 /// the site(s).
 ///
-/// Baseline 2026-05-10: 375 (initial 438; cumulative -63 across migrations
+/// Baseline 2026-05-10: 375 (initial 438; cumulative -76 across migrations
 /// in stmts/assigns.rs, stmts/for_loops.rs, stmts/mod.rs, lir/lower/operands.rs,
 /// ir/lowering/exprs/methods.rs, lir/lower/insts.rs, c_lir/emit_call_extern.rs,
 /// llvm/mod.rs, exprs/mod.rs, context.rs (dead Result__ fallback in
 /// unwrap_result_ok_type, +1 dead Result__ fallback in fn_result_type),
 /// c_lir/emit_types.rs (3 sites in combinator helper emission factored to
-/// single is_result computed from typed enum_kind).
+/// single is_result computed from typed enum_kind),
+/// lir/lower/types.rs (-13 sites: retired Vector__/Deque__/Dict__/HashMap__/
+/// Set__/HashSet__/Heap__/Task__/Box__/Guard__/ReadGuard__/WriteGuard__
+/// prefix arms in `opaque_runtime_size`; sizes now resolve through
+/// `LirModule::struct_aliases` to typed `StructDef.computed_c_size`).
 /// Source-of-truth count — re-derive with
 /// `grep -roE 'starts_with\("(...)__"\)' src/ | wc -l`.
 /// (Counts occurrences, not lines — a line with two matches counts twice.)
@@ -151,7 +155,9 @@ fn no_growth_in_name_prefix_routing() {
     /// Bumped 304 → 305 (2026-05-10): Tier 2a Phase 3 FATAL promotion
     /// (`082f26e9`) added a `starts_with("Task__")` predicate in the
     /// validator's Result-fallback path — single-site, registrar-adjacent.
-    const BUDGET: usize = 305;
+    /// Lowered 305 → 292 (2026-05-10): opaque_runtime_size 13 prefix-arm
+    /// retirement via typed struct_aliases.
+    const BUDGET: usize = 292;
 
     let count = count_name_prefix_sites();
     assert!(

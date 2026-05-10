@@ -98,6 +98,7 @@ These structural guards exist today and are load-bearing:
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
+| `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
 
@@ -204,15 +205,19 @@ Phase 3 progress through 2026-05-10: **11,129 → 64 violations (-99.4%)** acros
 
 **Burn-down.** Validator + a single migration commit + promote. ~1 session.
 
-#### 2c. Drop-tracking pre-rebind correctness *(snag #23 class)*
+#### 2c. Drop-tracking pre-rebind correctness *(snag #23 class)* — **SHIPPED 2026-05-10**
 
-**Invariant.** When a value flows into a heap-allocating consumer (`Box.new`, `gorget_string_clone_to_owned`, `gorget_array_clone`, etc.), the source's drop registration is retired *before* any subsequent drop emission targets the source — i.e., the source slot is move-zeroed AND `drops.mark_moved` is set, not just `drops.unregister`.
+**Validator at `src/ir/validate.rs:1790`** (`validate_drop_pre_rebind`); fatal panic block at `src/ir/lowering/mod.rs:1664`. Initial sweep (1078 fixtures, env-gated via `GG_VALIDATE_DROP_PRE_REBIND=<log-path>`): **0 violations** — Snag #23's writer-side fix at `4ebefe44` (Box.new emits `move_zero_and_mark` after the alloc) closed the only known violation class, and no other shallow-copy heap-allocating consumer exists today. The validator locks the rule for any future consumer.
 
-**Validator sketch.** Pattern-match the IR for `_x = call <heap_alloc_fn>(copy _y)` followed eventually by `drop _y` in the same control-flow region without an intervening MoveZero. Heap-alloc fns are recognised structurally (the LIR knows which functions are heap-allocating consumers).
+Recognition is typed: the validator reads `Module::heap_alloc_consumer_externs`, populated at the writer site every time the GIR lowering emits a `__gorget_box_alloc_<T>` extern call (3 sites — `calls.rs`, `methods.rs`, `mod.rs`). No `name.starts_with("__gorget_box_alloc_")` substring match survives — adding a new shallow-copy heap-allocating consumer at any future writer site is a single `module.heap_alloc_consumer_externs.insert(...)` call. Per CLAUDE.md "No name matching".
 
-**Why it matters.** Snag #23's Box.new segfault. The fix shipped (round 10's `4ebefe44`); the validator locks the class so a future heap-allocating consumer can't forget the move-zero step.
+**Invariant.** When a value flows into a heap-allocating consumer (currently `__gorget_box_alloc_<T>`; deep-clone consumers are out of scope — see below), the source's drop registration is retired *before* any subsequent drop emission targets the source — i.e., the source slot is move-zeroed AND `drops.mark_moved` is set, not just `drops.unregister`.
 
-**Burn-down.** ~1 session.
+**Scope.** Shallow-copy only. `gorget_string_clone_to_owned` / `gorget_array_clone` / `gorget_map_clone` / `gorget_set_clone` produce a fresh independent value — source's storage is untouched and a later `Drop` of source is correct. Including them would produce 138 false positives (sweep of record from the validator's first iteration). Box.new is the only shallow-copy heap-allocating consumer in the codebase today.
+
+**Why it matters.** Snag #23's Box.new segfault. The fix shipped at `4ebefe44`; the validator locks the class so a future heap-allocating consumer can't forget the move-zero step.
+
+See DONE.md for the full commit chain.
 
 #### 2d. Sidecar absence
 

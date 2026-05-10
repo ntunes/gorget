@@ -1662,22 +1662,74 @@ pub fn lower_module(
     }
 
     // Tier 2c — drop-tracking pre-rebind correctness (snag #23 class lock).
-    // Every call to a heap-allocating consumer (`__gorget_box_alloc_*`,
-    // `gorget_string_clone_to_owned`, `gorget_array_clone`, …) with a
-    // Copy/Move source operand must be followed by a `MoveZero` of the
-    // source in the same basic block before any subsequent
-    // `Drop`/`DropIfAlive` of the source. Promote to fatal once the
-    // initial sweep is clean — Snag #23's bug shipped a fix at
-    // `4ebefe44` that the validator now locks in. See
+    // Every call to a heap-allocating consumer (currently `__gorget_box_alloc_<T>`)
+    // with a Copy/Move source operand must be followed by a `MoveZero`
+    // of the source in the same basic block before any subsequent
+    // `Drop`/`DropIfAlive` of the source. Snag #23's bug shipped a fix
+    // at `4ebefe44`; this validator locks in the rule so a future
+    // shallow-copy heap-allocating consumer can't ship without the
+    // paired `move_zero_and_mark`. See
     // `docs/internals/structural-guards.md` Tier 2c.
+    //
+    // Recognition is typed: `Module::heap_alloc_consumer_externs` is
+    // populated at the writer site (3 Box.new lowering paths) and read
+    // by the validator. No `name.starts_with(...)` survives in the
+    // validator's classifier — adding a new shallow-copy heap-allocating
+    // consumer at any future writer site is a single
+    // `module.heap_alloc_consumer_externs.insert(...)` call. Per
+    // CLAUDE.md "No name matching".
+    //
+    // Set GG_VALIDATE_DROP_PRE_REBIND=/path/to/log to also write a
+    // structured report (function counts, sample violations) without
+    // suppressing the panic — mirrors `GG_VALIDATE_CONSUME_SITES` /
+    // `GG_VALIDATE_MOVE_FOLLOW_THROUGH`.
+    module.heap_alloc_consumer_externs = std::mem::take(&mut ctx.heap_alloc_consumer_externs);
     {
         let dpr_warnings = crate::ir::validate::validate_drop_pre_rebind(&module);
         if !dpr_warnings.is_empty() {
+            // Optional structured log for investigation. Sweep-of-record
+            // pattern: per-function counts + sample violations, mirroring
+            // the Tier 2a / Tier 1b env-gate writers.
+            if let Ok(log_path) = std::env::var("GG_VALIDATE_DROP_PRE_REBIND") {
+                if !log_path.is_empty() {
+                    use std::io::Write;
+                    use rustc_hash::FxHashMap;
+                    let mut by_function: FxHashMap<String, usize> = FxHashMap::default();
+                    let mut by_callee: FxHashMap<String, usize> = FxHashMap::default();
+                    for w in &dpr_warnings {
+                        *by_function.entry(w.function.clone()).or_insert(0) += 1;
+                        *by_callee.entry(w.callee.clone()).or_insert(0) += 1;
+                    }
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true).open(&log_path)
+                    {
+                        let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
+                        let _ = writeln!(f, "[drop-pre-rebind] module={} total={}",
+                            module_name, dpr_warnings.len());
+                        let mut bc: Vec<_> = by_callee.iter().collect();
+                        bc.sort_by(|a, b| b.1.cmp(a.1));
+                        for (callee, n) in &bc {
+                            let _ = writeln!(f, "  callee {} = {}", callee, n);
+                        }
+                        let mut bf: Vec<_> = by_function.iter().collect();
+                        bf.sort_by(|a, b| b.1.cmp(a.1));
+                        for (fname, n) in bf.iter().take(20) {
+                            let _ = writeln!(f, "  fn @{} = {}", fname, n);
+                        }
+                        let _ = writeln!(f, "  -- sample warnings (first 200) --");
+                        for w in dpr_warnings.iter().take(200) {
+                            let _ = writeln!(f, "  {}", w);
+                        }
+                    }
+                }
+            }
             eprintln!("[drop-pre-rebind] {} violation(s):", dpr_warnings.len());
             for w in &dpr_warnings {
                 eprintln!("  {}", w);
             }
-            panic!("GIR module failed drop-pre-rebind validation ({} violation(s))", dpr_warnings.len());
+            panic!("GIR module failed drop-pre-rebind validation ({} violation(s)). \
+                    Run with GG_VALIDATE_DROP_PRE_REBIND=/tmp/dpr.log for full report.",
+                   dpr_warnings.len());
         }
     }
 

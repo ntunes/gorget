@@ -688,14 +688,28 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
         LirType::F32 => 4,
         LirType::Struct(sid) => {
             if let Some(def) = structs.get(sid.0 as usize) {
-                // Box[Trait] is C-typedef'd to <Trait>_TraitObj (16 bytes:
-                // {data, vtable}). The opaque table says 8 — correct for
-                // Box[Concrete], not for trait boxes. Read the typed
-                // `is_trait_box` flag set at registration time (commit e5de1616).
-                if def.name.starts_with("Box__") && def.is_trait_box {
+                // Trait-box layout: typed flag set at registration. Wins
+                // over `computed_c_size` only when the registered size
+                // (8) disagrees with the runtime-required {data, vtable}
+                // layout (16 bytes). Held here defensively; current
+                // registration emits 16 for trait boxes already.
+                if def.is_trait_box {
                     return 16;
                 }
-                // Shared opaque-runtime-struct table (Box__, Match, Socket, …).
+                // Typed read: `computed_c_size` is the canonical source of
+                // truth, set at registration for runtime singletons
+                // (GorgetArray = 64, GorgetMap = 152, GorgetClosure = 16,
+                // …) and populated by `compute_struct_sizes()` for
+                // user-defined structs / Box / Task / Guard at the end of
+                // LIR lowering. Replaces a former unconditional
+                // `opaque_runtime_size` short-circuit that fired for every
+                // monomorphized prefix-matched name.
+                if let Some(sz) = def.computed_c_size {
+                    return sz;
+                }
+                // Pre-`compute_struct_sizes` fallback (and for the few
+                // singletons whose registration leaves `computed_c_size`
+                // None — e.g. GorgetRange).
                 if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(&def.name) {
                     return sz;
                 }
@@ -704,9 +718,6 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 if def.is_union_layout {
                     let payload = enum_payload_size(def, structs, snames);
                     return 8 + payload;
-                }
-                if let Some(sz) = def.computed_c_size {
-                    return sz;
                 }
                 // Sum fields with C alignment rules
                 let mut total = 0usize;

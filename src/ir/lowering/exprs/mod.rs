@@ -1423,6 +1423,12 @@ fn lower_struct_literal(
         };
         // Emit: __gorget_box_alloc_T(value) → T* with heap alloc
         let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
+        // Tier 2c (snag #23 class): register this alloc fn as a
+        // shallow-copy heap-allocating consumer so
+        // `validate_drop_pre_rebind` recognises it via typed metadata
+        // rather than name matching. See
+        // `Module::heap_alloc_consumer_externs`.
+        ctx.heap_alloc_consumer_externs.insert(alloc_fn.clone());
         let dst = builder.call_extern(&alloc_fn, vec![val_op], box_type);
         // Tier 2a Phase 2A: Box allocation returns a fresh heap
         // allocation. Tag FreshOwned so the consume-site validator

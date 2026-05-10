@@ -2824,6 +2824,25 @@ fn match_arm_borrow_clone() {
 }
 
 #[test]
+#[ignore = "Snag #30: still double-frees on HEAD; see TODO.md"]
+fn snag30_field_alias_in_match_arm() {
+    // Regression pin for Snag #30: pattern-match aliasing of a non-Copy
+    // struct field in a match arm (`String _pname = catch_clause.param`),
+    // followed by a second match on a separate Option, double-frees at
+    // scope exit. The expected output reflects what the language SHOULD
+    // do; the test is ignored until the bug is fixed.
+    //
+    // Cluster 1's `2f89aa78` (Some/None merge Move-mode) closes the
+    // option-from-Vector-method shape but NOT this struct-field-alias
+    // shape. Both pieces (field alias + trailing match) are required to
+    // trigger; either alone is silent.
+    run_gg(
+        "snag30_field_alias_in_match_arm.gg",
+        "ok",
+    );
+}
+
+#[test]
 fn enum_name_collision_with_constant() {
     run_gg(
         "enum_name_collision_with_constant.gg",

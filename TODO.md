@@ -2,6 +2,8 @@
 
 ## High
 
+- **Snag #30 — pattern-match struct-field alias + trailing match double-frees.** Minimal repro is wired as the `#[ignore]`d `snag30_field_alias_in_match_arm` integration test (fixture `tests/fixtures/snag30_field_alias_in_match_arm.gg`). Pattern: `String _pname = catch_clause.param` extracts a non-Copy field from a match-bound variant payload, then ANY second match on a separate Option triggers `free(): double free detected in tcache 2` (exit 134). Both pieces are required; either alone is silent. Replacing String with int makes it pass. The `_pname` is unused — purely the binding triggers the bug. **Cluster 1's `2f89aa78` (Some/None merge Move-mode for Vector .get/.pop/etc.) closes the option-from-Vector-method shape but NOT this struct-field-alias shape.** Likely needs FieldLoad/EnumFieldLoad shallow-copy migration extended to cover variant-payload field reads (Snag #28's structural class at a different boundary). The Cluster 1 worktree agent's report claimed this fixture passes but local verification shows it still double-frees on HEAD `3754c672`. [added: 2026-05-10, surfaced by user; Cluster 1 partial close]
+
 - **VarDecl from owned function-call result double-drops via aliased intermediate temp slot (Snag #29c runtime).** Surface symptom: `gorget-js`'s `eval_test.gg` test "try/catch: catches a throw" double-frees on the catch param. Valgrind shows `pname` (allocated by `gorget_str_cat` from `catch_clause.param + ""`) freed twice from successive instructions inside `eval_try`. LIR diagnosis (eval_try):
   ```
   v86 = call_runtime StrCat(...)     ; fresh owned String → temp slot s33
@@ -170,9 +172,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 
 - **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
-
-
-- **Hardcoded type size database — final consolidation step**: `c_sizeof_with_structs()`'s direct prefix matches have been retired (Vector/Dict/Set/Task/Box/Guard now route through `opaque_runtime_size`, which remains the canonical name → runtime-size table). The remaining work is to retire `opaque_runtime_size`'s `_ if name.starts_with("Vector__") => 64` etc. arms by reading `computed_c_size` from each monomorphized alias's resolved `StructDef`. Blocker: `c_sizeof_with_structs` takes `&[StructDef]` (no alias map), so resolving `Vector__int64_t` via `module.struct_aliases` requires plumbing the alias `HashMap<String, StructId>` through several call sites (`elem_size_from_monomorphized`, `concurrency_elem_size`, `dict_elem_sizes_from_monomorphized`, `c_sizeof_tuple_fields`). Once plumbed, the table arms collapse to typed reads; `Tuple__`/`Option__` recursive paths stay (they compute structurally). [updated: 2026-05-09]
 
 
 - **`@[no_alloc]` function annotation**: Compiler error on allocating operations. [added: 2026-03-21]

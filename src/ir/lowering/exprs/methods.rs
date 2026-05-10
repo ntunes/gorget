@@ -158,6 +158,12 @@ pub(super) fn lower_method_call(
                     tid
                 };
                 let alloc_fn = format!("__gorget_box_alloc_{inner_c}");
+                // Tier 2c (snag #23 class): register this alloc fn as a
+                // shallow-copy heap-allocating consumer so
+                // `validate_drop_pre_rebind` recognises it via typed
+                // metadata rather than name matching. See
+                // `Module::heap_alloc_consumer_externs`.
+                ctx.heap_alloc_consumer_externs.insert(alloc_fn.clone());
                 let dst = builder.call(alloc_fn, vec![val], box_type);
                 if let Some(src) = consumed_source {
                     ctx.move_zero_and_mark(builder, src);

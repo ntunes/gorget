@@ -3289,7 +3289,7 @@ impl<'a> FuncLowering<'a> {
                 }
             }
             if actual_emit_name.is_none() {
-                let elem_sz = elem_size_from_monomorphized(original_name, self.module_structs).unwrap_or(8) as i64;
+                let elem_sz = elem_size_from_monomorphized(original_name, self.module_structs, self.module_struct_aliases).unwrap_or(8) as i64;
                 let sz_val = self.emit_i64_const(bb, elem_sz);
                 lir_args.push(sz_val);
             }
@@ -3299,7 +3299,7 @@ impl<'a> FuncLowering<'a> {
         // sets up the string hash function.
         if (emit_name == "gorget_map_new" || emit_name == "gorget_dict_new") && lir_args.is_empty() {
             let is_dict = emit_name == "gorget_dict_new";
-            let (key_sz, val_sz) = dict_elem_sizes_from_monomorphized(original_name, self.module_structs);
+            let (key_sz, val_sz) = dict_elem_sizes_from_monomorphized(original_name, self.module_structs, self.module_struct_aliases);
             let key_type = dict_key_type_from_monomorphized(original_name);
             if key_type.as_deref() == Some("GorgetString") {
                 // Use _str variant for string keys.
@@ -3329,14 +3329,14 @@ impl<'a> FuncLowering<'a> {
         if matches!(emit_name, "gorget_mutex_new" | "gorget_shared_new" | "gorget_rwlock_new")
             && lir_args.len() == 1
         {
-            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs, self.module_struct_aliases).unwrap_or(8) as i64;
             let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.insert(0, sz_val);
         }
 
         // gorget_channel_new(capacity, elem_size) — GIR passes (capacity).
         if emit_name == "gorget_channel_new" && lir_args.len() == 1 {
-            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs, self.module_struct_aliases).unwrap_or(8) as i64;
             let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.push(sz_val);
         }
@@ -3345,7 +3345,7 @@ impl<'a> FuncLowering<'a> {
         if matches!(emit_name, "gorget_guard_set" | "gorget_write_guard_set")
             && lir_args.len() == 2
         {
-            let elem_sz = concurrency_elem_size(original_name, self.module_structs).unwrap_or(8) as i64;
+            let elem_sz = concurrency_elem_size(original_name, self.module_structs, self.module_struct_aliases).unwrap_or(8) as i64;
             let sz_val = self.emit_i64_const(bb, elem_sz);
             lir_args.push(sz_val);
         }

@@ -79,6 +79,14 @@ pub(super) struct FuncLowering<'a> {
     pub(super) global_index: &'a std::collections::HashMap<String, GlobalId>,
     /// Module struct definitions (for field-count checking).
     pub(super) module_structs: &'a [StructDef],
+    /// Mangled-collection-name → backing runtime StructId map. Threaded
+    /// through size-of helpers (`c_sizeof_with_structs`,
+    /// `elem_size_from_monomorphized`, `concurrency_elem_size`,
+    /// `dict_elem_sizes_from_monomorphized`) so per-monomorphization size
+    /// reads resolve through `LirModule::struct_aliases` to the backing
+    /// runtime StructDef's typed `computed_c_size` instead of name-prefix
+    /// table lookups in `opaque_runtime_size`. Layering-discipline §Rule 3.
+    pub(super) module_struct_aliases: &'a std::collections::HashMap<String, StructId>,
     /// Module globals (for type lookup).
     pub(super) module_globals: &'a [LirGlobal],
     /// Synthetic externs discovered during lowering (for unknown Call targets).
@@ -264,6 +272,7 @@ impl<'a> LoweringContext<'a> {
                     &self.func_index,
                     &self.global_index,
                     &self.module.structs,
+                    &self.module.struct_aliases,
                     &self.module.globals,
                     self.gir.runtime.overflow_wrap,
                     &self.module.drop_collision_types,
@@ -1322,6 +1331,7 @@ impl<'a> FuncLowering<'a> {
         func_index: &'a std::collections::HashMap<String, FuncId>,
         global_index: &'a std::collections::HashMap<String, GlobalId>,
         module_structs: &'a [StructDef],
+        module_struct_aliases: &'a std::collections::HashMap<String, StructId>,
         module_globals: &'a [LirGlobal],
         overflow_wrap: bool,
         drop_collision_types: &'a std::collections::HashSet<String>,
@@ -1378,6 +1388,7 @@ impl<'a> FuncLowering<'a> {
             func_index,
             global_index,
             module_structs,
+            module_struct_aliases,
             module_globals,
             pending_externs: Vec::new(),
             overflow_wrap,
