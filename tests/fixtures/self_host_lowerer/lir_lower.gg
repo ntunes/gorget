@@ -1581,14 +1581,6 @@ int collection_elem_size_in_mod(String name, Dict[String, int] &sr, LirModule &m
     String elem = coll_elem_type_for_name(name, &m)
     return type_elem_size_in_mod(elem, &sr, &m)
 
-# Extract key type from Dict__K__V or HashMap__K__V (uses typed coll_key_type_map).
-String dict_key_type(String name, LirModule &m):
-    return coll_key_type_for_name(name, &m)
-
-# Extract value type from Dict__K__V or HashMap__K__V (uses typed coll_val_type_map).
-String dict_val_type(String name, LirModule &m):
-    return coll_val_type_for_name(name, &m)
-
 # Check if dict/set has string keys (uses typed coll_elem/key_type_map).
 bool is_string_keyed(String name, LirModule &m):
     String cat = type_category_for_name(name, &m)
@@ -2192,8 +2184,8 @@ void lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &lo
                     String coll_cat2 = type_category_for_name(func_name, &m)
                     if coll_cat2 == "GorgetMap":
                         # Dict/Map: need key_size + val_size, or just val_size for _str variant
-                        String key_ty = dict_key_type(func_name, &m)
-                        String val_ty = dict_val_type(func_name, &m)
+                        String key_ty = coll_key_type_for_name(func_name, &m)
+                        String val_ty = coll_val_type_for_name(func_name, &m)
                         if is_string_keyed(func_name, &m):
                             # _str variant: only val_size
                             int val_size = type_elem_size_in_mod(val_ty, &sr, &m)
