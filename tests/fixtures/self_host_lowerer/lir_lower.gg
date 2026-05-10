@@ -28,15 +28,6 @@ from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 
-# Lookup wrapper for the struct registry. Uses contains-first / get-unwrap
-# instead of unwrap_or(-1) — the self-host's codegen for
-# `Option[int].unwrap_or(default)` emits a NULL deref of the Dict's value
-# pointer with no None-check, segfaulting at runtime when the key is missing.
-# Tracked in TODO.md. Inline as `sr.get(name).unwrap_or(-1)` once fixed.
-int sr_lookup(Dict[String, int] &sr, String name):
-    if sr.contains(name):
-        return sr.get(name).unwrap()
-    return -1
 
 # ── Builtin struct definitions ──────────────────────────────
 
@@ -479,7 +470,7 @@ int map_gir_type(int type_id, GirModule &gmod, Dict[String, int] &sr):
                 return lir_ptr_to(sid)
             return LT_PTR
         case GtNamed(name):
-            int sid = sr_lookup(&sr, name)
+            int sid = sr.get(name).unwrap_or(-1)
             if sid >= 0:
                 return lir_struct(sid)
             # Phase A: typed accessor — read populated metadata from
@@ -487,14 +478,14 @@ int map_gir_type(int type_id, GirModule &gmod, Dict[String, int] &sr):
             Option[GirResourceMetadata] rmeta_opt = resource_meta_for(&gmod, name)
             match rmeta_opt:
                 case Some(rmeta):
-                    int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
+                    int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                     if rt_sid >= 0:
                         return lir_struct(rt_sid)
                 case None:
                     pass
             return LT_PTR
         case GtFnPtr(_, _):
-            int cls_sid = sr_lookup(&sr, "GorgetClosure")
+            int cls_sid = sr.get("GorgetClosure").unwrap_or(-1)
             if cls_sid >= 0:
                 return lir_struct(cls_sid)
             return LT_PTR
@@ -531,7 +522,7 @@ bool is_builtin_runtime_struct(String name):
 void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m):
     if tname == "":
         return
-    if sr_lookup(&sr, tname) >= 0:
+    if sr.get(tname).unwrap_or(-1) >= 0:
         return
     # Primitives: no registration needed — resolve_field_lir_type returns
     # the scalar LirType directly.
@@ -546,7 +537,7 @@ void register_field_type_in_sr(String tname, Dict[String, int] &sr, LirModule &m
     # Collection aliases → map to the pre-registered runtime struct.
     String rt = collection_runtime_type(tname)
     if rt != "":
-        int rt_sid = sr_lookup(&sr, rt)
+        int rt_sid = sr.get(rt).unwrap_or(-1)
         if rt_sid >= 0:
             sr.put(tname, rt_sid)
         m.type_runtime_map.put(tname.clone(), rt.clone())
@@ -616,7 +607,7 @@ int resolve_field_lir_type(String type_name, Dict[String, int] &sr):
     elif type_name == "void":
         return LT_VOID
     # Named types — look up in struct registry
-    int sid = sr_lookup(&sr, type_name)
+    int sid = sr.get(type_name).unwrap_or(-1)
     if sid >= 0:
         return LT_STRUCT_BASE + sid
     # Fallback: treat as pointer (opaque or unresolved type)
@@ -658,7 +649,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                 if enum_variant_names.contains(name):
                     ti += 1
                     continue
-                if sr_lookup(&sr, name) < 0:
+                if sr.get(name).unwrap_or(-1) < 0:
                     # Phase A: typed dispatch on rmeta.collection_kind /
                     # box_kind / opaque_handle, mirroring the
                     # `register_type_alias_for_collection_or_opaque`
@@ -670,7 +661,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                         case Some(rmeta):
                             match rmeta.collection_kind:
                                 case CkVector():
-                                    int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
+                                    int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                                     if rt_sid >= 0:
                                         sr.put(name, rt_sid)
                                     m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
@@ -680,7 +671,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         m.coll_elem_type_map.put(name.clone(), name.slice(7, name.len()))
                                     dispatched = true
                                 case CkSet():
-                                    int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
+                                    int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                                     if rt_sid >= 0:
                                         sr.put(name, rt_sid)
                                     m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
@@ -692,7 +683,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
                                         m.coll_ctor_fn_map.put(name.clone(), "gorget_set_new")
                                     dispatched = true
                                 case CkDict():
-                                    int rt_sid = sr_lookup(&sr, rmeta.runtime_name)
+                                    int rt_sid = sr.get(rmeta.runtime_name).unwrap_or(-1)
                                     if rt_sid >= 0:
                                         sr.put(name, rt_sid)
                                     m.type_runtime_map.put(name.clone(), rmeta.runtime_name.clone())
@@ -789,7 +780,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
         if enum_variant_names.contains(tname):
             tki_pre += 1
             continue
-        if sr_lookup(&sr, tname) < 0:
+        if sr.get(tname).unwrap_or(-1) < 0:
             Vector[StructField] empty_fields = []
             String ph_name = tname.clone()
             int sid = lir_mod_add_struct(&m, LirStructDef(ph_name, empty_fields, 0, false, -1, -1))
@@ -829,7 +820,7 @@ void lower_type_defs(GirModule &gmod, LirModule &m, Dict[String, int] &sr):
     int tki = 0
     while tki < ti_keys.len():
         String tname = ti_keys.get(tki).unwrap()
-        int sid = sr_lookup(&sr, tname)
+        int sid = sr.get(tname).unwrap_or(-1)
         if sid < 0:
             tki += 1
             continue
@@ -1748,7 +1739,7 @@ int type_elem_size_in_mod(String elem, Dict[String, int] &sr, LirModule &m):
         return 1
     elif elem == "GorgetString" or elem == "Str":
         return 32
-    int sid = sr_lookup(&sr, elem)
+    int sid = sr.get(elem).unwrap_or(-1)
     if sid >= 0 and sid < m.structs.len():
         LirStructDef sdef = m.structs.get(sid).unwrap()
         # Pre-computed size (set during type lowering for known runtime
@@ -2207,7 +2198,7 @@ bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand]
     if is_runtime_struct_name(func_name):
         return false
     # Look up the struct in the registry. Absent → not a struct ctor.
-    int sid = sr_lookup(&sr, func_name)
+    int sid = sr.get(func_name).unwrap_or(-1)
     if sid < 0 or sid >= m.structs.len():
         return false
     LirStructDef sdef = m.structs.get(sid).unwrap()
