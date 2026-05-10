@@ -480,16 +480,26 @@ pub fn lower_module(
     if options.snapshot_mode { ctx.snapshot_mode = true; }
     if let Some(m) = options.scheduler_mode { ctx.spawn.scheduler_mode = m; }
 
-    // Register well-known stdlib constants
+    // Snag #29 follow-up: PI/E/TAU/INT_MAX/INT_MIN auto-injection removed.
+    // `lib/std/math.gg` carries `const float PI = …` (etc.) — users `from
+    // std.math import PI, E, TAU`, the const-eval path resolves them at
+    // compile time, and the stdlib's `const` declarations are the single
+    // source of truth (Layering rule 3). INT_MAX / INT_MIN were unused
+    // outside comments and dropped; if needed they belong on a typed
+    // stdlib module.
+    //
+    // INFINITY / NAN are kept here as a temporary holdout. Their stdlib
+    // shape is `public float INFINITY = _math_infinity()` — runtime-init
+    // statics, not consts — and the import-side global initialiser does
+    // NOT execute today (`mod.rs:1196` skips zero-length-span StaticDecls
+    // from stdlib imports, leaving `__lir_g0 = {0}` at module load).
+    // Removing the hardcoded entries here while that bug remains makes
+    // `INFINITY` read as 0. Filed as a follow-up TODO; once cross-module
+    // global initialisers run, INFINITY / NAN drop out of here too.
     {
         use crate::ir::instructions::Constant;
-        ctx.module_constants.insert("PI".into(), Constant::F64(std::f64::consts::PI));
-        ctx.module_constants.insert("E".into(), Constant::F64(std::f64::consts::E));
-        ctx.module_constants.insert("TAU".into(), Constant::F64(std::f64::consts::TAU));
         ctx.module_constants.insert("INFINITY".into(), Constant::F64(f64::INFINITY));
         ctx.module_constants.insert("NAN".into(), Constant::F64(f64::NAN));
-        ctx.module_constants.insert("INT_MAX".into(), Constant::I64(i64::MAX));
-        ctx.module_constants.insert("INT_MIN".into(), Constant::I64(i64::MIN));
     }
     // Scan for module-level const and meta declarations
     for item in &ast_module.items {
