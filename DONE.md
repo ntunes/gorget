@@ -1,5 +1,8 @@
 # DONE
 
+- [2026-05-10] **Layering audit — `backend/llvm/mod.rs` Option/Result detection via typed `enum_kind`.** Three sites in `src/backend/llvm/mod.rs` migrated to `s.enum_kind == EnumKind::Option/Result` reads: `:4286` Map-get Option/Result wrapping detection (Option | Result via matches!), `:4394` Channel `__recv_timeout` Option-slot lookup, `:5398` extern-call Option-slot lookup. All three were checking `s.name.starts_with("Option__")` / `"Result__"` — typed Phase A flag set at LIR struct registration. 4 prefix matches retired (320 → 316); ratchet budget tightened. Full suite 1070/1070.
+  Files: `src/backend/llvm/mod.rs`, `tests/lints.rs` (BUDGET 320 → 316).
+
 - [2026-05-10] **Layering audit — `c_lir/mod.rs` throws-main Result detection via typed `enum_kind`.** Two parallel sites in `src/backend/c_lir/mod.rs` (`:967` `emit_function`'s throws-main signature override; `:2776` `Term::Ret` arm's exit-code unwrap) had `s.name.starts_with("Result__")` checks. Migrated to `s.enum_kind == EnumKind::Result` — typed Phase A flag set at LIR struct registration. 2 prefix matches retired (322 → 320); ratchet budget tightened. Full suite 1070/1070.
   Files: `src/backend/c_lir/mod.rs`, `tests/lints.rs` (BUDGET 322 → 320).
 

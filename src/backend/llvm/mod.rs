@@ -4282,8 +4282,11 @@ fn emit_inst(
                                 if value.0 == d.0 {
                                     let slot_ty = &func.slots[slot.0 as usize].ty;
                                     if let LirType::Struct(sid) = slot_ty {
+                                        // Read typed `enum_kind` (Phase A) — set at LIR
+                                        // struct registration from GIR's `enum_category`.
                                         return module.structs.get(sid.0 as usize)
-                                            .map_or(false, |s| s.name.starts_with("Option__") || s.name.starts_with("Result__"));
+                                            .map_or(false, |s| matches!(s.enum_kind,
+                                                crate::lir::EnumKind::Option | crate::lir::EnumKind::Result));
                                     }
                                 }
                             }
@@ -4388,7 +4391,7 @@ fn emit_inst(
                             if value.0 == d.0 {
                                 if let LirType::Struct(sid) = &func.slots[slot.0 as usize].ty {
                                     if module.structs.get(sid.0 as usize)
-                                        .map_or(false, |s| s.name.starts_with("Option__"))
+                                        .map_or(false, |s| s.enum_kind == crate::lir::EnumKind::Option)
                                     {
                                         return Some(*sid);
                                     }
@@ -5392,7 +5395,7 @@ fn emit_inst(
                             let slot_ty = &func.slots[slot.0 as usize].ty;
                             if let LirType::Struct(sid) = slot_ty {
                                 let sdef = &module.structs[sid.0 as usize];
-                                if sdef.name.starts_with("Option__") {
+                                if sdef.enum_kind == crate::lir::EnumKind::Option {
                                     return Some(*sid);
                                 }
                             }
