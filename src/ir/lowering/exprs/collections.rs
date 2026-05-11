@@ -196,9 +196,31 @@ pub(super) fn lower_dict_literal(
         return Operand::Constant(Constant::Unit);
     }
 
-    // Lower first pair to infer key/value types
+    // Propagate the dict's value-type expected_type when the outer context
+    // declares a known `Dict[K, V]` (bare-init / Some(...) / fn-arg). This
+    // lets a nested array literal in the value position type-resolve as
+    // `Vector[T]` instead of `T[N]` (Snag #35-class — without it,
+    // `Dict[String, Vector[int]] d = {"a": [1,2,3]}` fails typecheck with
+    // `expected Vector[int], found int[3]`).
+    //
+    // Mirrors the override pattern in `lower_array_literal` for nested
+    // `Vector[Option[T]]`-shape literals. The `Some({...})` case works
+    // today by accident — the outer Option's lowering pre-propagates V.
+    use crate::ir::types::CollectionKind;
+    let saved_expected = ctx.func_state.expected_type;
+    let val_expected_override = saved_expected.and_then(|outer| {
+        let is_map = matches!(ctx.type_registry.collection_kind(outer),
+            Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map));
+        if is_map { Some(infer_collection_element_type(ctx, outer)) } else { None }
+    });
+    // Lower first key BEFORE setting the value-override (keys can be any
+    // type, not the value-type), then lower first value with the override.
     let first_key = lower_expr(ctx, builder, &pairs[0].0);
+    if let Some(vt) = val_expected_override {
+        ctx.func_state.expected_type = Some(vt);
+    }
     let first_val = lower_expr(ctx, builder, &pairs[0].1);
+    ctx.func_state.expected_type = saved_expected;
     let key_type = infer_operand_type_full(ctx, &first_key, builder);
     let val_type = infer_operand_type_full(ctx, &first_val, builder);
 
@@ -222,27 +244,99 @@ pub(super) fn lower_dict_literal(
     // ownership state. Mirrors `lower_array_literal:61`.
     ctx.set_owned(builder, dict_local);
 
-    // Insert first pair
-    let dict_ref = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
-    builder.call_extern(
-        &put_fn,
-        vec![FunctionBuilder::copy(dict_ref), first_key, first_val],
-        UNIT_TYPE,
-    );
-
-    // Insert remaining pairs
+    // Insert pairs. Each put memcpys the key/value structs into the slot;
+    // for resource-typed key/value operands, that aliases the temp's heap
+    // buffer with the slot. Without the Move-mode staging + MoveZero
+    // discipline below, the temp's scope-exit drop and the dict's elem_drop
+    // both free the same buffer — double-free. Mirrors lower_array_literal.
+    insert_pair(ctx, builder, dict_local, dict_type, &put_fn, first_key, first_val, key_type, val_type);
     for (key_expr, val_expr) in &pairs[1..] {
         let k = lower_expr(ctx, builder, key_expr);
+        if let Some(vt) = val_expected_override {
+            ctx.func_state.expected_type = Some(vt);
+        }
         let v = lower_expr(ctx, builder, val_expr);
-        let dr = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
-        builder.call_extern(
-            &put_fn,
-            vec![FunctionBuilder::copy(dr), k, v],
-            UNIT_TYPE,
-        );
+        ctx.func_state.expected_type = saved_expected;
+        insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type);
     }
 
     FunctionBuilder::copy(dict_local)
+}
+
+/// Stage a (key, value) pair through fresh per-elem locals with Move-mode
+/// + MoveZero for resource-typed operands, then emit the `put_fn` call.
+/// Mirrors the per-element discipline in `lower_array_literal` so the dict
+/// takes ownership of resource values without double-freeing on temp drop.
+fn insert_pair(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    dict_local: LocalId,
+    dict_type: TypeId,
+    put_fn: &str,
+    key_op: Operand,
+    val_op: Operand,
+    key_type: TypeId,
+    val_type: TypeId,
+) {
+    let key_arg = stage_dict_arg(ctx, builder, key_op, key_type);
+    let val_arg = stage_dict_arg(ctx, builder, val_op, val_type);
+    let dict_ref = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
+    builder.call_extern(
+        put_fn,
+        vec![FunctionBuilder::copy(dict_ref), key_arg, val_arg],
+        UNIT_TYPE,
+    );
+}
+
+/// For a resource-typed operand at a dict-put position, stage it through a
+/// fresh per-elem local with Move-mode + MoveZero on the source. The
+/// dict's `val_drop` / `key_drop` hooks own the slot's lifecycle from
+/// here; the per-elem local is intentionally NOT drop-registered so it
+/// won't fire a scope-exit drop on the data the dict now owns. For
+/// non-resource operands, pass through unchanged.
+fn stage_dict_arg(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    op: Operand,
+    ty: TypeId,
+) -> Operand {
+    use crate::ir::instructions::AssignMode;
+    if !ctx.type_registry.is_resource_type(ty) {
+        return op;
+    }
+    // Pick Move when source is owned (last-use by construction at this site
+    // for unnamed temps) or an unnamed temp that needs drop (the literal /
+    // call-result shape from lower_expr); Copy otherwise. Mirrors the
+    // elem_mode picker in lower_array_literal.
+    let mode = match &op {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+            let src_ty = builder.local_type(p.local);
+            if ctx.is_owned_local(builder, p.local)
+                || (!ctx.is_named_local(p.local)
+                    && (ctx.type_registry.needs_drop(src_ty)
+                        || ctx.type_registry.is_resource_type(src_ty)))
+            {
+                AssignMode::Move
+            } else {
+                AssignMode::Copy
+            }
+        }
+        _ => AssignMode::Copy,
+    };
+    let elem_local = builder.add_local(ty, None);
+    let op_clone = op.clone();
+    builder.assign_mode(mode, Place::local(elem_local), op);
+    if mode == AssignMode::Move {
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = op_clone {
+            if place.projections.is_empty()
+                && place.local != elem_local
+                && !ctx.drops.is_moved(place.local)
+            {
+                ctx.move_zero_and_mark(builder, place.local);
+            }
+        }
+    }
+    FunctionBuilder::copy(elem_local)
 }
 
 /// Map a TypeId to a C-compatible mangle fragment for dict/set type names.

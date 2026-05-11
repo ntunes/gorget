@@ -1,0 +1,18 @@
+# Regression: Some(dict-literal-with-resource-value) at the Option
+# boundary. Same bug class as dict_literal_resource_value.gg but
+# wrapped in Some(...) to exercise the clone_resource_args_for_init
+# path through enum_init.
+#
+# Pre-fix: `Option[Dict[String, Vector[int]]] x = Some({...})` produced
+# `free(): double free detected in tcache 2` at scope exit.
+from std.collections import Dict
+
+void main():
+    Option[Dict[String, Vector[int]]] x = Some({"a": [1, 2, 3], "b": [4, 5, 6]})
+    match x:
+        case Some(d):
+            Vector[int] va = d.get("a").unwrap().clone()
+            print(va.len())   # expected: 3
+        case None:
+            print("none")
+    print("done")

@@ -1,5 +1,29 @@
 # DONE
 
+- [2026-05-11] **Dict literal with resource value type — double-free + bare-init expected-type propagation fixed together.** Two coupled issues from TODO 2026-05-09:
+
+  **Issue (a) — runtime double-free.** `Option[Dict[String, Vector[int]]] x = Some({"a": [1,2,3], "b": [4,5,6]})` produced `free(): double free detected in tcache 2` at scope exit. Symmetric class to Snag #25b (array literal, fixed 2026-05-09) but at the dict-put boundary.
+
+  Root cause: `lower_dict_literal` (`src/ir/lowering/exprs/collections.rs:166`) emitted raw `Copy` operands for key/value arguments to `gorget_map_put`. The put memcpys the value struct into the dict slot, but the temp's drop registration stayed live — both the temp's scope-exit drop and the dict's `val_drop` freed the same heap allocation. For `GorgetString` values, `val_materialize = gorget_string_materialize_inplace` papered over the aliasing; for other resource values (Vector/Map/Set), no materialize hook existed.
+
+  Fix: mirror `lower_array_literal`'s per-element discipline. New `stage_dict_arg` helper: for resource-typed key/value operands, stage through a fresh per-elem local with Move-mode assign + `move_zero_and_mark` on the source; the staged local is intentionally NOT drop-registered (the dict's `val_drop` / `key_drop` hooks own the slot lifecycle from here). Non-resource operands pass through unchanged. The mode picker matches array-literal's: Move when source is owned-by-Phase-D or an unnamed temp that needs drop, Copy otherwise.
+
+  Why this approach over `val_materialize = clone_inplace`: zero-cost when temps transfer ownership (no clone unless the source is named/non-temp, which the existing method-call `.put()` path already handles via `clone_resource_args_for_init`), and structural symmetry with `lower_array_literal` (single source of truth for "consume position at a collection literal").
+
+  **Issue (b) — bare-init expected-type propagation gap.** Surfaced while writing the regression fixture: `Dict[String, Vector[int]] d = {"a": [1,2,3]}` failed typecheck with `expected Vector[int], found int[3]`. The `Some({...})` wrapper happened to propagate the value-type, masking the issue at the wrapped boundary.
+
+  Per CLAUDE.md "Don't redesign around compiler gaps", the regression fixture must use idiomatic Gorget — not reshape around the gap. Initial pass reshaped to `Dict[K,V] d = Dict[K,V](); d.put(...)` (workaround); after user flagged it, fix shipped instead.
+
+  Root cause: `Expr::DictLiteral` typechecker (`src/semantic/typecheck.rs:2230`) inferred K/V from the first pair's lowered types without reading the surrounding `decl_type_hint`. A nested array literal in a value position typed as `T[N]` regardless of whether the outer Dict expected `Vector[T]`.
+
+  Fix: extract K/V hints from `decl_type_hint` when it's a `Generic(Dict|HashMap, [K, V])`. Set `decl_type_hint = K` while inferring keys, `= V` while inferring values. Final dict type uses K/V from the hint when available (so the literal types as `Dict[K, Vector[T]]` even when nested values inferred as `T[N]` — the `is_collection_assignment` coercion at var-decl unify time then accepts).
+
+  **Coverage.** Two regression fixtures, valgrind-verified clean:
+  - `dict_literal_resource_value.gg` — idiomatic bare-init `Dict[String, Vector[int]] d = {...}`. Locks in BOTH the typecheck (issue b) and the runtime double-free (issue a) classes — the test fails the build if either regresses.
+  - `dict_literal_some_resource.gg` — `Some({...})` wrapper for the same shape; pre-fix only the (a) issue fired here, because Some's lowering pre-propagated V.
+
+  Files: `src/ir/lowering/exprs/collections.rs` (stage_dict_arg helper + value-type expected_type override for the IR-lowering side), `src/semantic/typecheck.rs` (DictLiteral decl_type_hint propagation for typechecker), `tests/fixtures/dict_literal_resource_value.gg` + `dict_literal_some_resource.gg` (new), `tests/integration.rs` (regression wires).
+
 - [2026-05-11] **Tier 3a (no name-matching) documented as shipped + BUDGET bump for five rebase-introduced sites; Tier 3b BUDGET bump for six idempotence guards.** The Tier 3a ratchet `no_growth_in_name_prefix_routing` at `tests/lints.rs:152` has been live since at least 2026-05-10, but the structural-guards.md doc still listed §3a in the backlog as pending. Updated the doc — added row to the "What's already in place" table for both `no_growth_in_name_prefix_routing` (compiler tree) and `no_growth_in_self_host_name_prefix_routing` (self-host) ratchets; rewrote §3a backlog entry as SHIPPED with current state (BUDGET=297 compiler, 52 self-host).
 
   **BUDGET bumps:**

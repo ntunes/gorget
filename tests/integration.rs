@@ -2219,6 +2219,51 @@ missing ok
 }
 
 #[test]
+fn dict_literal_resource_value() {
+    // Regression for two coupled issues:
+    //   (a) bare-init expected-type propagation: `Dict[String, Vector[int]] d
+    //       = {"a": [1,2,3]}` pre-fix failed typecheck with `expected
+    //       Vector[int], found int[3]` because lower_dict_literal didn't
+    //       propagate the dict's value-type expected_type into the nested
+    //       array literal. (Surfaced 2026-05-11 while writing the runtime
+    //       regression below.)
+    //   (b) runtime double-free at scope exit: lower_dict_literal passed
+    //       value operands as raw Copy to gorget_map_put, aliasing temp
+    //       and slot. Same shape as Snag #25b but at the dict-put boundary.
+    //
+    // Both fixes ship together (collections.rs::lower_dict_literal):
+    // value-position expected_type override + stage_dict_arg Move + MoveZero.
+    run_gg(
+        "dict_literal_resource_value.gg",
+        "\
+3
+3
+done",
+    );
+}
+
+#[test]
+fn dict_literal_some_resource() {
+    // Regression: `Option[Dict[K, V]] x = Some({k: v})` where V is a
+    // resource type (Vector). Pre-fix, this double-freed with
+    // `free(): double free detected in tcache 2` at scope exit. The
+    // dict-literal lowering passed value operands as raw Copy to
+    // gorget_map_put; the put memcpyed into the slot, then the temp's
+    // scope-exit drop and the dict's val_drop both freed the same buffer.
+    //
+    // Fixed by lower_dict_literal::stage_dict_arg mirroring the per-elem
+    // Move + MoveZero discipline from lower_array_literal — the dict
+    // takes ownership of the resource value cleanly. Filed in TODO
+    // 2026-05-09 as the symmetric class to Snag #25b (array literal).
+    run_gg(
+        "dict_literal_some_resource.gg",
+        "\
+3
+done",
+    );
+}
+
+#[test]
 fn dict_callable_get_clone() {
     // SECURITY regression: Dict[K, Callable].get().unwrap().clone() used to
     // double-free the closure env (TODO 2026-04-28). The Option payload built

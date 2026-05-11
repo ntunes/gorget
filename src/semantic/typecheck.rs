@@ -2235,17 +2235,51 @@ impl<'a> TypeChecker<'a> {
                     }
                     return self.types.error_id;
                 }
+                // Propagate the declared K/V hints into each pair's inference
+                // so nested collection literals in key/value positions can
+                // be coerced (e.g. `Dict[K, Vector[T]] d = {"a": [1, 2, 3]}`
+                // — without this, `[1, 2, 3]` infers as `T[3]` and the outer
+                // Dict literal types as `Dict[K, T[3]]`, failing to unify
+                // with the declared `Dict[K, Vector[T]]`). Mirrors how
+                // `Vector[T] v = [1, 2, 3]` works at the bare-init level.
+                let (key_hint, val_hint) = self.decl_type_hint
+                    .and_then(|hint| {
+                        let resolved = self.resolve_type(hint);
+                        if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+                            let name = &self.scopes.get_def(def_id).name;
+                            if matches!(name.as_str(), "Dict" | "HashMap") && args.len() == 2 {
+                                return Some((Some(args[0]), Some(args[1])));
+                            }
+                        }
+                        None
+                    })
+                    .unwrap_or((None, None));
+                let prev_hint = self.decl_type_hint;
+                self.decl_type_hint = key_hint;
                 let key_type = self.infer_expr(&pairs[0].0);
+                self.decl_type_hint = val_hint;
                 let val_type = self.infer_expr(&pairs[0].1);
                 for (k, v) in &pairs[1..] {
+                    self.decl_type_hint = key_hint;
                     let kt = self.infer_expr(k);
+                    self.decl_type_hint = val_hint;
                     let vt = self.infer_expr(v);
                     self.unify(key_type, kt, k.span);
                     self.unify(val_type, vt, v.span);
                 }
-                // Build Dict[K, V] type
+                self.decl_type_hint = prev_hint;
+                // Build Dict[K, V] type. Use the declared K/V from the
+                // hint when available — the per-pair inferences may have
+                // been coerced (e.g. `int[3]` accepted under `Vector[int]`
+                // hint via `is_collection_assignment`), so reading them
+                // back as the literal's type would still produce the
+                // un-coerced shape. Falling back to the hint K/V keeps
+                // the literal's type aligned with what the decl-site
+                // checker will then unify against.
+                let final_key = key_hint.unwrap_or(key_type);
+                let final_val = val_hint.unwrap_or(val_type);
                 if let Some(dict_def_id) = self.scopes.lookup("Dict") {
-                    let dict_type = self.types.intern_generic(dict_def_id, vec![key_type, val_type]);
+                    let dict_type = self.types.intern_generic(dict_def_id, vec![final_key, final_val]);
                     self.check_struct_type_bounds(dict_type, expr.span);
                     dict_type
                 } else {

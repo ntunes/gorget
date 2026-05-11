@@ -1,0 +1,25 @@
+# Regression: Dict[K, V] literal with resource-typed value V in a
+# bare-init context. Exposes the dict-literal-resource-value double-free
+# class AND the bare-init expected-type propagation for nested literals.
+#
+# Pre-fix shape 1 (typecheck): `expected Vector[int], found int[3]` —
+# the bare-init context didn't propagate Dict's value-type into the
+# nested array literal. The `Some({...})` wrapper happened to propagate.
+#
+# Pre-fix shape 2 (runtime, post-typecheck): double-free at scope exit,
+# because lower_dict_literal passed value operands as raw Copy to
+# gorget_map_put. See dict_literal_some_resource.gg for the runtime-
+# class fix details.
+#
+# Both shapes must close together — the bare-init case is the
+# idiomatic Gorget shape and the regression should fail the build
+# without either fix.
+from std.collections import Dict
+
+void main():
+    Dict[String, Vector[int]] d = {"a": [1, 2, 3], "b": [4, 5, 6]}
+    Vector[int] a_val = d.get("a").unwrap().clone()
+    print(a_val.len())   # expected: 3
+    Vector[int] b_val = d.get("b").unwrap().clone()
+    print(b_val.len())   # expected: 3
+    print("done")
