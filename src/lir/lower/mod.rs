@@ -622,6 +622,14 @@ impl<'a> LoweringContext<'a> {
                     if !matches!(strategy, DropStrategy::Recursive | DropStrategy::Custom(_)) {
                         continue;
                     }
+                    // Tier 1a inverse: flag the LIR StructDef before the
+                    // empty-field-drops skip below so `validate_drop_fn_presence`
+                    // catches a populator that silently produced no entry for
+                    // a metadata-says-Recursive type (the `_ => continue`
+                    // skip class for non-Named/non-FnPtr field types).
+                    if let Some(sd) = self.module.struct_def_by_name_mut(name) {
+                        sd.expects_drop_fn = true;
+                    }
                     let mut field_drops: Vec<(String, String, String)> = Vec::new();
                     for field in &sdef.fields {
                         let (drop_fn, field_type_name) = match self.gir.type_registry.get(field.type_id) {
@@ -677,6 +685,15 @@ impl<'a> LoweringContext<'a> {
                     });
                 }
                 TypeDefKind::Enum(edef) => {
+                    // Tier 1a inverse: flag the LIR StructDef when the GIR
+                    // enum has Recursive/Custom drop strategy, before the
+                    // empty-variant-drops skip below. Trivial-drop enums
+                    // (no resource payloads) intentionally stay unflagged.
+                    if matches!(strategy, DropStrategy::Recursive | DropStrategy::Custom(_)) {
+                        if let Some(sd) = self.module.struct_def_by_name_mut(name) {
+                            sd.expects_drop_fn = true;
+                        }
+                    }
                     let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
                     for (vi, variant) in edef.variants.iter().enumerate() {
                         for (fi, field) in variant.fields.iter().enumerate() {
@@ -792,7 +809,7 @@ impl<'a> LoweringContext<'a> {
                 enum_kind: EnumKind::NotEnum,
                 is_union_layout: false,
                 computed_c_size: Some(16),
-                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+                computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
             });
             self.struct_reg.register(&task_name, sid);
         }
@@ -885,7 +902,7 @@ impl<'a> LoweringContext<'a> {
                         enum_kind: EnumKind::NotEnum,
                         is_union_layout: false,
                         computed_c_size: Some(16),
-                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: true,
+                        computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: true, expects_drop_fn: false,
                     });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -906,7 +923,7 @@ impl<'a> LoweringContext<'a> {
             // Typed Box-inner metadata: the C backend reads this to emit
             // `__gorget_box_alloc_<inner>` / `_free_<inner>` and the per-type
             // `Box__<inner>__drop` wrapper without name-prefix matching.
-            box_inner_type: Some(inner_name.to_string()), is_trait_box: false,
+            box_inner_type: Some(inner_name.to_string()), is_trait_box: false, expects_drop_fn: false,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     continue;
@@ -924,7 +941,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                               });
                 self.struct_reg.register(&def.name, sid);
                 continue;
@@ -965,7 +982,7 @@ impl<'a> LoweringContext<'a> {
                                 materialize_fn: rt_def.materialize_fn.clone(),
                                 c_runtime_alias: Some(rt.clone()),
                                 box_inner_type: rt_def.box_inner_type.clone(),
-                                is_trait_box: false,
+                                is_trait_box: false, expects_drop_fn: false,
                             });
                             self.struct_reg.register(&def.name, sid);
                             // Skip deferred Pass-2: the GIR TypeDef has no
@@ -988,7 +1005,7 @@ impl<'a> LoweringContext<'a> {
             elem_clone_fn: def.metadata.clone_inplace_fn.clone(),
             materialize_fn: def.metadata.materialize_fn.clone(),
             c_runtime_alias: def.metadata.c_runtime_alias.clone(),
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                                   });
                     self.struct_reg.register(&def.name, sid);
                     deferred.push((sid, idx));
@@ -1124,7 +1141,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1148,7 +1165,7 @@ impl<'a> LoweringContext<'a> {
                             fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                                       });
                         self.struct_reg.register(name, sid);
                     }
@@ -1164,7 +1181,7 @@ impl<'a> LoweringContext<'a> {
                     fields,
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                               });
                 self.struct_reg.register(name, sid);
             }

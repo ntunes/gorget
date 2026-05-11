@@ -1407,16 +1407,26 @@ pub struct StructDef {
     /// drop codegen to `free(val.data)` rather than `Box__T__drop`. Replaces
     /// the downstream `{Inner}_TraitObj` GIR registry probe.
     pub is_trait_box: bool,
+    /// Tier 1a inverse-direction signal: when true, the corresponding GIR
+    /// TypeDef has `DropStrategy::Recursive | Custom(_)`, so this struct
+    /// MUST appear in `LirModule.type_drop_fns`. Set at writer site by
+    /// `populate_type_drop_fns`. Read by `validate_drop_fn_presence` to
+    /// catch the "metadata says drop, but no drop fn emitted" gap
+    /// (e.g., a populator `_ => continue` branch eats every field of a
+    /// Recursive struct, leaving `field_drops` empty and producing no
+    /// `type_drop_fns` entry — silent leak). See
+    /// `docs/internals/structural-guards.md` §1a.
+    pub expects_drop_fn: bool,
 }
 
 impl StructDef {
     /// Create a regular (non-enum) struct definition.
     pub fn new(name: String, fields: Vec<(String, LirType)>) -> Self {
-        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false }
+        Self { name, fields, enum_kind: EnumKind::NotEnum, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false }
     }
     /// Create an enum struct definition with the given kind.
     pub fn new_enum(name: String, fields: Vec<(String, LirType)>, kind: EnumKind) -> Self {
-        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false }
+        Self { name, fields, enum_kind: kind, is_union_layout: false, computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false }
     }
     /// True when the type originated from any enum definition.
     pub fn is_enum(&self) -> bool {
@@ -1733,6 +1743,18 @@ impl LirModule {
         None
     }
 
+    /// Mutable counterpart to `struct_def_by_name`. Used by writer-site
+    /// metadata setters (e.g., Tier 1a inverse `expects_drop_fn`).
+    pub fn struct_def_by_name_mut(&mut self, name: &str) -> Option<&mut StructDef> {
+        if let Some(idx) = self.structs.iter().position(|s| s.name == name) {
+            return self.structs.get_mut(idx);
+        }
+        if let Some(sid) = self.struct_aliases.get(name).copied() {
+            return self.structs.get_mut(sid.0 as usize);
+        }
+        None
+    }
+
     /// Look up a function by FuncId.
     pub fn function(&self, id: FuncId) -> &LirFunction {
         &self.functions[id.0 as usize]
@@ -1877,7 +1899,7 @@ mod tests {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                       });
 
         let mut func = LirFunction::new("get_x".into(), vec![LirType::Ptr], LirType::F64);

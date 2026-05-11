@@ -1701,7 +1701,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(64),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         let _ = gorget_array_sid;
 
@@ -1856,7 +1856,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(16),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         // Greeter_VTable { greet: Ptr } — single method slot at index 0.
         let vtable_sid = module.add_struct(StructDef {
@@ -1865,7 +1865,7 @@ mod tests {
             enum_kind: crate::lir::EnumKind::NotEnum,
             is_union_layout: false,
             computed_c_size: Some(8),
-            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_align: Some(8), elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         let _ = vtable_sid;
 

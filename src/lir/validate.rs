@@ -78,7 +78,24 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// would have rejected the original Option/Result-skip lines that silently left
 /// resource-payload Option/Result fields un-dropped at scope exit. See
 /// `docs/internals/structural-guards.md` §1a.
-const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_drop_completeness];
+///
+/// Tier 1a inverse (`validate_drop_fn_presence`): every StructDef whose
+/// `expects_drop_fn` flag is set (mirroring GIR's `DropStrategy::Recursive |
+/// Custom(_)`) must have a corresponding `type_drop_fns` entry. Catches the
+/// populator-skip class — a Recursive struct whose field walk emerged empty
+/// because every field type fell into a `_ => continue` arm (non-Named,
+/// non-FnPtr GIR types like fixed-size `Array`, bare `Generic`, etc.) and
+/// thus produced no drop fn at all — silent leak. See
+/// `docs/internals/structural-guards.md` §1a.
+///
+/// Tier 1d inverse (`validate_box_inner_type_consistency`): every StructDef
+/// carrying `box_inner_type: Some(_)` metadata must have a `Box__` name
+/// prefix. Catches stray Box metadata on a non-Box struct — e.g., a future
+/// copy-bug in the `c_runtime_alias` clone path or any other registrar
+/// that accidentally propagates the `box_inner_type` field where it
+/// doesn't belong. The forward `validate_box_inner_type` only walks
+/// `Box__*`-named structs, so a non-Box with stray metadata slips through.
+const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, validate_box_inner_type_consistency, validate_drop_completeness, validate_drop_fn_presence];
 
 /// Assert that `module` satisfies every registered LIR invariant. Panics with
 /// a descriptive message tagged by `after` (the name of the pass that just
@@ -827,6 +844,34 @@ pub fn validate_box_inner_type(module: &LirModule) -> Vec<LirError> {
     errors
 }
 
+/// Tier 1d inverse-direction validator. Forward `validate_box_inner_type`
+/// walks `Box__`-named structs and asserts `box_inner_type: Some(suffix)`.
+/// The inverse: any struct carrying `box_inner_type: Some(_)` metadata
+/// MUST have a `Box__` name prefix. Catches stray metadata on a non-Box
+/// struct — e.g., a future copy-bug in the `c_runtime_alias` clone path
+/// at `src/lir/lower/mod.rs:858` that accidentally propagates the
+/// `box_inner_type` field across registrations. No known violations
+/// today; the validator future-proofs the registrar.
+pub fn validate_box_inner_type_consistency(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+    for sd in &module.structs {
+        let Some(inner) = sd.box_inner_type.as_ref() else { continue };
+        if sd.name.starts_with("Box__") {
+            // Forward validator covers Box__-named structs (incl. suffix mismatch).
+            continue;
+        }
+        errors.push(LirError {
+            func: String::new(),
+            block: None,
+            message: format!(
+                "StructDef {:?} carries `box_inner_type: Some({:?})` but its name does not start with `Box__` — stray Box metadata on a non-Box struct; the per-type Box emitter scans this field and would produce a `Box__<inner>__drop` / `__gorget_box_alloc_<inner>` for the wrong type",
+                sd.name, inner,
+            ),
+        });
+    }
+    errors
+}
+
 /// Tier 1a — drop completeness. Per `docs/internals/structural-guards.md` §1a:
 /// every droppable field of a type with a registered `type_drop_fns` entry must
 /// appear in that entry's `field_drops` (or, for enums, in `enum_variants`).
@@ -946,6 +991,42 @@ pub fn validate_drop_completeness(module: &LirModule) -> Vec<LirError> {
     errors
 }
 
+/// Tier 1a inverse-direction validator. For every StructDef whose
+/// `expects_drop_fn` flag is set (writer-side: `populate_type_drop_fns`
+/// marks structs/enums with GIR `DropStrategy::Recursive | Custom(_)`),
+/// assert that `module.type_drop_fns` contains a matching entry.
+///
+/// Catches the populator-skip class: a Recursive struct/enum whose field
+/// walk emerged empty because every field type fell into a `_ => continue`
+/// arm at `src/lir/lower/mod.rs` (covers GIR variants other than `Named` /
+/// `FnPtr` — fixed-size `Array`, bare `Generic`, `Tuple` pre-mono, etc.),
+/// producing no `type_drop_fns` entry and therefore no drop fn at all —
+/// silent leak. Today no known violations exist (Tuple/Generic monomorphise
+/// before this pass; fixed-size Array fields aren't carried as TypeDef
+/// fields in any current type). The validator future-proofs the populator
+/// against new field-type variants and against `Custom` strategies whose
+/// dispatch is delegated to a user fn but emit no field_drops.
+pub fn validate_drop_fn_presence(module: &LirModule) -> Vec<LirError> {
+    let mut errors = Vec::new();
+    for sd in &module.structs {
+        if !sd.expects_drop_fn {
+            continue;
+        }
+        if module.type_drop_fns.contains_key(&sd.name) {
+            continue;
+        }
+        errors.push(LirError {
+            func: String::new(),
+            block: None,
+            message: format!(
+                "Drop fn presence: StructDef {:?} has expects_drop_fn=true (GIR DropStrategy::Recursive | Custom) but no module.type_drop_fns entry — scope-exit drop will be a no-op and any droppable field/payload will leak",
+                sd.name,
+            ),
+        });
+    }
+    errors
+}
+
 /// Compute reverse postorder of blocks via DFS from block 0.
 fn compute_rpo(n: usize, blocks: &[Block]) -> Vec<usize> {
     let mut visited = vec![false; n];
@@ -976,7 +1057,7 @@ mod tests {
             fields: vec![("x".into(), LirType::F64), ("y".into(), LirType::F64)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                       });
 
         let mut func = LirFunction::new("main".into(), vec![], LirType::I32);
@@ -1104,7 +1185,7 @@ mod tests {
             fields: vec![("x".into(), LirType::I32)],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
                       });
 
         let mut func = LirFunction::new("bad".into(), vec![], LirType::Void);
@@ -1434,7 +1515,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: inner.map(String::from),
-            is_trait_box: false,
+            is_trait_box: false, expects_drop_fn: false,
         }
     }
 
@@ -1448,7 +1529,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None, // trait box: legitimately None
-            is_trait_box: true,
+            is_trait_box: true, expects_drop_fn: false,
         }
     }
 
@@ -1511,7 +1592,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
-            is_trait_box: false,
+            is_trait_box: false, expects_drop_fn: false,
         });
         let errors = validate_box_inner_type(&module);
         assert!(errors.is_empty(), "non-Box struct should be ignored: {errors:?}");
@@ -1539,7 +1620,7 @@ mod tests {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None,
             c_runtime_alias: None,
             box_inner_type: None,
-            is_trait_box: false,
+            is_trait_box: false, expects_drop_fn: false,
         });
         let errors = validate_box_inner_type(&module);
         assert_eq!(errors.len(), 1);
@@ -1579,7 +1660,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         module
     }
@@ -1598,7 +1679,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         module.type_drop_fns.insert("User".into(), TypeDropInfo {
             drop_fn_name: "User__drop".into(),
@@ -1624,7 +1705,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         // Drop info present but missing the `name` field — the violation.
         module.type_drop_fns.insert("Leaky".into(), TypeDropInfo {
@@ -1655,7 +1736,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
             drop_fn_name: "Option__GorgetString__drop".into(),
@@ -1684,7 +1765,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         module.type_drop_fns.insert("Option__GorgetString".into(), TypeDropInfo {
             drop_fn_name: "Option__GorgetString__drop".into(),
@@ -1714,7 +1795,7 @@ mod tests {
             is_union_layout: false,
             computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
             elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
-            box_inner_type: None, is_trait_box: false,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         });
         module.type_drop_fns.insert("Trivial".into(), TypeDropInfo {
             drop_fn_name: "Trivial__drop".into(),
@@ -1723,6 +1804,137 @@ mod tests {
             enum_variants: None,
         });
         let errors = validate_drop_completeness(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    // ── Tier 1a inverse: validate_drop_fn_presence ──────────────────────
+
+    // ── Tier 1d inverse: validate_box_inner_type_consistency ────────────
+
+    #[test]
+    fn box_inner_type_consistency_skips_box_named_struct() {
+        // Box__Inner with box_inner_type set: forward validator covers it.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "Box__Inner".into(),
+            fields: vec![("_0".into(), LirType::Ptr)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false,
+        });
+        let errors = validate_box_inner_type_consistency(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn box_inner_type_consistency_skips_struct_without_metadata() {
+        // Regular struct without box_inner_type — fine.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "MyStruct".into(),
+            fields: vec![("a".into(), LirType::I64)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+        });
+        let errors = validate_box_inner_type_consistency(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn box_inner_type_consistency_detects_stray_metadata() {
+        // Non-Box struct carrying box_inner_type → violation.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "RandomStruct".into(),
+            fields: vec![("a".into(), LirType::I64)],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: Some("Inner".into()), is_trait_box: false, expects_drop_fn: false,
+        });
+        let errors = validate_box_inner_type_consistency(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("RandomStruct"));
+        assert!(errors[0].message.contains("stray Box metadata"));
+    }
+
+    #[test]
+    fn drop_fn_presence_accepts_flagged_struct_with_entry() {
+        // A struct flagged expects_drop_fn=true and present in type_drop_fns
+        // is the happy path — no violation.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "RecursiveStruct".into(),
+            fields: vec![
+                ("s".into(), LirType::Struct(StructId(1))), // GorgetString
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: true,
+        });
+        module.type_drop_fns.insert("RecursiveStruct".into(), TypeDropInfo {
+            drop_fn_name: "RecursiveStruct__drop".into(),
+            field_drops: vec![
+                ("s".into(), "gorget_string_free".into(), "GorgetString".into()),
+            ],
+            user_drop_fn: None,
+            enum_variants: None,
+        });
+        let errors = validate_drop_fn_presence(&module);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn drop_fn_presence_detects_missing_entry() {
+        // Struct flagged expects_drop_fn=true but missing from type_drop_fns
+        // is the violation we want to catch — populator skipped despite
+        // GIR strategy demanding a drop fn.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "LeakyRecursive".into(),
+            fields: vec![
+                ("s".into(), LirType::Struct(StructId(1))),
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: true,
+        });
+        // Intentionally do NOT add a type_drop_fns entry.
+        let errors = validate_drop_fn_presence(&module);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("LeakyRecursive"), "unexpected message: {}", errors[0].message);
+        assert!(errors[0].message.contains("expects_drop_fn=true"));
+        assert!(errors[0].message.contains("no module.type_drop_fns entry"));
+    }
+
+    #[test]
+    fn drop_fn_presence_ignores_unflagged_struct() {
+        // Struct with expects_drop_fn=false is unflagged → not checked,
+        // even if it happens to have no type_drop_fns entry. Trivial
+        // structs (no resource fields) are this case.
+        let mut module = drop_test_module();
+        module.add_struct(StructDef {
+            name: "Trivial".into(),
+            fields: vec![
+                ("a".into(), LirType::I64),
+            ],
+            enum_kind: EnumKind::NotEnum,
+            is_union_layout: false,
+            computed_c_size: None, computed_c_align: None, elem_drop_fn: None,
+            elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None,
+            box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
+        });
+        let errors = validate_drop_fn_presence(&module);
         assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
     }
 }

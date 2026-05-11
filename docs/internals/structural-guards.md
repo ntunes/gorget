@@ -96,6 +96,7 @@ These structural guards exist today and are load-bearing:
 | GIR module validation | Generic LIR-shape soundness | `src/ir/lowering/mod.rs:1505` | Fatal |
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
 | `validate_drop_completeness` (Tier 1a) | LIR `type_drop_fns` entry missing a droppable struct field / enum-variant payload | `src/lir/validate.rs` | Fatal |
+| `validate_drop_fn_presence` (Tier 1a inverse) | StructDef flagged `expects_drop_fn` (GIR Recursive/Custom) but no `type_drop_fns` entry — populator silently produced no drop fn | `src/lir/validate.rs` | Fatal |
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
 | `validate_type_metadata_coherence` (Tier 1c) | TypeDef registered with implicit `(None, Trivial)` whose fields/variant-payloads are transitively droppable | `src/ir/validate.rs` | Fatal (promoted 2026-05-11 — all 6 migration sites coherent; Cluster 1 / Snag #24 closed) |
@@ -139,6 +140,12 @@ Tiered by maturity. Tier 1 = invariants we know are violated today, with concret
 They compose: Tier 1c locks the GIR→LIR handoff; Tier 1a locks the LIR→C-emit handoff. Both must hold for snag #24 to stay shut.
 
 **Real bug caught post-shipping.** 2026-05-11: re-applying the `monomorphize_struct` Tier 1c migration promoted iterator-chain structs (`MapIter`, etc.) to `(Recursive, Resource)`. Their `Callable[U(T)] f` fields mapped to `GirType::FnPtr` at GIR level but `LirType::Struct(GorgetClosure)` at LIR level. `populate_type_drop_fns` only handled `GirType::Named` fields and silently skipped FnPtr — so the wrapping struct had an incomplete `field_drops` list. Tier 1a's validator flagged the gap on 12 iterator-chain fixtures, exposing a **real pre-existing closure-env leak** that had been silent before. Fix: extend the populator to emit `gorget_closure_free` for FnPtr fields. See DONE.md `[2026-05-11] Tier 1c — FnPtr-field drop emission + monomorphize_struct migration`.
+
+**Inverse-direction strengthening (`validate_drop_fn_presence`, shipped 2026-05-11).** `validate_drop_completeness` only walks entries IN `type_drop_fns`; it can't see structs that *should* have an entry but don't. The populator at `populate_type_drop_fns` had a hidden skip class: a Recursive struct whose field walk emerged empty (every field type fell into a `_ => continue` arm — covers GIR variants beyond `Named`/`FnPtr`: pre-mono `Tuple`, fixed-size `Array`, bare `Generic`) produced no `type_drop_fns` entry at all — silent leak.
+
+The strengthening: a new typed `expects_drop_fn: bool` field on LIR `StructDef`, set at the writer site (`populate_type_drop_fns` flags the struct BEFORE the empty-field-drops skip when GIR strategy is `Recursive | Custom`). The validator walks `module.structs` and asserts every `expects_drop_fn: true` has a matching `type_drop_fns` entry. Fatal on first violation.
+
+Today no known violations fire — `Tuple` monomorphises to `Named` before this pass, fixed-size `Array` fields aren't carried on any current TypeDef, and `Generic` shouldn't survive monomorphization. The validator is future-proofing: any new field-type variant the populator skips, or any `Custom`-drop type whose user-fn dispatch produces empty field_drops, becomes a build halt rather than a silent leak. Three unit tests cover the validator (positive, negative, and unflagged-skip cases).
 
 #### 1b. Move follow-through *(SHIPPED 2026-05-07; commit `3e49a03a`)*
 
