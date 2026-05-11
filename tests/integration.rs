@@ -2906,6 +2906,18 @@ ok",
 }
 
 #[test]
+fn none_assign_to_option_slot() {
+    run_gg(
+        "none_assign_to_option_slot.gg",
+        "\
+field/1: Some(hello)
+field/2: None
+idx: None
+deref: None",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

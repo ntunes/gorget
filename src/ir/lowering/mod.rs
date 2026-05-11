@@ -1778,6 +1778,25 @@ pub fn lower_module(
                     Run with GG_VALIDATE_DROP_PRE_REBIND=/tmp/dpr.log for full report.",
                    dpr_warnings.len());
         }
+
+        // Snag #32 family — None-literal materialisation at writer boundaries.
+        // Fatal: any `Inst::Assign { value: Constant::Null }` into an
+        // Option/Result-typed slot is a writer-site bug. The IR-lowering
+        // chokepoint (`coerce_null_to_option_none` in
+        // `emit_field_store_with_cleanup`, plus
+        // `materialise_none_for_expected_type` on the bare-NoneLiteral arm)
+        // must rewrite `Null` to a tagged `enum_init … None` before
+        // emission. See `validate_no_null_assign_to_option_slot`.
+        let null_to_opt = crate::ir::validate::validate_no_null_assign_to_option_slot(&module);
+        if !null_to_opt.is_empty() {
+            eprintln!("[null-assign-to-option] {} violation(s):", null_to_opt.len());
+            for w in &null_to_opt {
+                eprintln!("  {}", w);
+            }
+            panic!("GIR module failed None-literal-materialisation validation ({} violation(s)). \
+                    Snag #32 family — writer must route through `coerce_null_to_option_none`.",
+                   null_to_opt.len());
+        }
     }
 
     // Tier 2a Phase 2A — post-lowering ownership inference.

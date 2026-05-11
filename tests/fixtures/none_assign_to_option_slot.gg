@@ -1,0 +1,63 @@
+# Snag #32 family regression — None-literal materialisation at writer
+# boundaries. Three shapes:
+#
+#   1. `r.field = None`        — struct field assign through &borrow
+#   2. `vec[i] = None`         — index store
+#   3. `*box = None`           — deref store
+#
+# Pre-fix, all three lowered the bare `Expr::NoneLiteral` to
+# `Operand::Constant(Constant::Null)` and the C backend rendered the
+# assign as `memset(slot, 0, sizeof(Option))`. With the `Some=0 / None=1`
+# discriminator layout, that produces a *Some(empty payload)* zombie —
+# silently dropping the user's `field = None` write.
+#
+# The fix is two-layer:
+#  - `expected_type` propagation at each writer-site so the existing
+#    `materialise_none_for_expected_type` helper fires.
+#  - Chokepoint coercion via `coerce_null_to_option_none` inside
+#    `emit_field_store_with_cleanup` (catches any future writer site
+#    that forgets to propagate `expected_type`).
+#  - A module-exit validator
+#    `validate_no_null_assign_to_option_slot` fatally panics if any
+#    `Inst::Assign` of `Constant::Null` reaches an Option/Result slot.
+
+public struct R:
+    Option[String] pending
+
+public Option[String] take(R &r):
+    Option[String] t = r.pending
+    r.pending = None
+    return t
+
+void main():
+    # Shape 1: struct-field-via-&borrow
+    R r = R(Some("hello"))
+    match take(&r):
+        case Some(s):
+            print(f"field/1: Some({s})")
+        case None:
+            print("field/1: None")
+    match take(&r):
+        case Some(s):
+            print(f"field/2: BUG Some({s})")
+        case None:
+            print("field/2: None")
+
+    # Shape 2: index store
+    Vector[Option[String]] v = []
+    v.push(Some("world"))
+    v[0] = None
+    match v[0]:
+        case Some(s):
+            print(f"idx: BUG Some({s})")
+        case None:
+            print("idx: None")
+
+    # Shape 3: deref store
+    Box[Option[String]] b = Box.new(Some("goodbye"))
+    *b = None
+    match *b:
+        case Some(s):
+            print(f"deref: BUG Some({s})")
+        case None:
+            print("deref: None")

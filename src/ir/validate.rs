@@ -2032,6 +2032,83 @@ pub fn validate_drop_pre_rebind(module: &Module) -> Vec<DropPreRebindWarning> {
     warnings
 }
 
+// ── Snag #32 family: None-literal materialisation at writer boundaries ─
+
+/// One violation of the "no Null assign to tagged-enum slot" invariant.
+#[derive(Debug, Clone)]
+pub struct NullAssignToOptionWarning {
+    pub function: String,
+    pub block: BlockId,
+    pub inst_index: usize,
+    pub dst_type_name: String,
+}
+
+impl std::fmt::Display for NullAssignToOptionWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "@{}::bb{}::i{} — `Inst::Assign` of `Constant::Null` into a tagged-enum slot (`{}`); writer must materialise the variant via `coerce_null_to_option_none` or `materialise_none_for_expected_type` (snag #32 class)",
+            self.function, self.block.0, self.inst_index, self.dst_type_name
+        )
+    }
+}
+
+/// Snag #32 family — None-literal materialisation at writer boundaries.
+///
+/// Walks every `Instruction::Assign { dst, value: Constant::Null, .. }` and
+/// validates that the dst's *resolved* type isn't a tagged enum wrapper
+/// (`Option__T` or `Result__T__E`). The C backend renders `Constant::Null` as
+/// a 40-byte zero-store, which (given the `Some=0 / None=1` discriminator
+/// layout) silently produces a `Some(empty payload)` zombie — Snag #32. The
+/// IR-lowering writer must rewrite the value to an `enum_init <T> None []`
+/// before emitting, via `LoweringContext::coerce_null_to_option_none` (chokepoint
+/// for field-store / index-store / deref-store) or
+/// `materialise_none_for_expected_type` (chokepoint for the
+/// `Expr::NoneLiteral` and `Expr::Call { callee: NoneLiteral }` lowering).
+///
+/// **Recognition is structural, not name-pattern**: the dst's resolved type
+/// name is matched against the typed `enum_category` metadata on the
+/// TypeDef when available, falling back to the `Option__` / `Result__`
+/// mangle-prefix in case the late-registered wrapper hasn't yet had its
+/// metadata stamped. The fallback is the same shape as
+/// `materialise_none_for_expected_type` — both will route through the
+/// typed flag once the IR-layer Option/Result wrapper migration in
+/// Cluster 1 lands.
+pub fn validate_no_null_assign_to_option_slot(
+    module: &Module,
+) -> Vec<NullAssignToOptionWarning> {
+    let mut warnings = Vec::new();
+    for func in &module.functions {
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                let (dst, value) = match inst {
+                    Instruction::Assign { dst, value, .. } => (dst, value),
+                    _ => continue,
+                };
+                if !matches!(value, Operand::Constant(crate::ir::instructions::Constant::Null)) {
+                    continue;
+                }
+                let Some(dst_ty) = resolve_place_type(dst, func, &module.type_registry) else { continue };
+                let Some(GirType::Named(name)) = module.type_registry.get(dst_ty) else { continue };
+                let name = name.clone();
+                let is_tagged_enum = name.starts_with("Option__")
+                    && !name.starts_with("Option__Ref__")
+                    || name.starts_with("Result__");
+                if !is_tagged_enum {
+                    continue;
+                }
+                warnings.push(NullAssignToOptionWarning {
+                    function: func.name.clone(),
+                    block: BlockId(b as u32),
+                    inst_index: i,
+                    dst_type_name: name,
+                });
+            }
+        }
+    }
+    warnings
+}
+
 // ── Tier 2a Phase 1: consume-site discipline (CoW write-side) ────────
 // See `docs/internals/structural-guards.md` Tier 2a (and the project
 // brief in the Phase 1 task) for the full design.

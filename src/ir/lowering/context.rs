@@ -2892,6 +2892,66 @@ impl<'a> LoweringContext<'a> {
     /// upgrade scan is still authoritative for transitive cases (struct A
     /// containing Option[B] where B was upgraded after A), but
     /// late-registered Options now have correct first-order metadata.
+    /// Writer-boundary coercion: rewrite a `Constant::Null` RHS into a
+    /// properly tagged `Option[T]::None` enum-init when the destination is
+    /// Option/Result-typed. Returns the operand unchanged in all other
+    /// shapes.
+    ///
+    /// **Invariant** (Snag #32 family — "None-literal materialisation at
+    /// writer boundaries"). At every Assign / field-store / index-store /
+    /// deref-store site whose dst-type is a tagged enum wrapper
+    /// (`Option__T` / `Result__T__E`), a `Constant::Null` RHS must be
+    /// rewritten to an `enum_init <T> None []` before emission. Without
+    /// this, the C backend memsets the 40-byte struct to zero, which
+    /// (because `Some=0 / None=1` in the current discriminator layout)
+    /// produces a *Some(empty payload)* zombie — silently dropping the
+    /// user's `field = None` write.
+    ///
+    /// Three boundaries used this fallback before today:
+    /// - `Option[T] x = None` (VarDecl) — caught by the Assign handler's
+    ///   pre-existing rewrite path.
+    /// - `f(None)` (call arg) — caught by `materialise_none_for_expected_type`
+    ///   on `Expr::NoneLiteral` after the Snag #29b runtime fix.
+    /// - `r.field = None`, `arr[i] = None`, `*box = None` — Snag #32. Plugged
+    ///   by routing every writer-side `lower_expr(value)` in `stmts/assigns.rs`
+    ///   through this helper.
+    ///
+    /// The companion module-exit validator
+    /// `validate_no_null_assign_to_option_slot` is a defence-in-depth ratchet
+    /// that fatal-panics if a future writer site forgets to route through
+    /// here.
+    pub fn coerce_null_to_option_none(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        target_type: TypeId,
+    ) -> Operand {
+        use crate::ir::instructions::Constant;
+        if !matches!(operand, Operand::Constant(Constant::Null)) {
+            return operand;
+        }
+        let name = match self.type_registry.type_name(target_type) {
+            Some(n) => n.to_string(),
+            None => return operand,
+        };
+        if !name.starts_with("Option__") || name.starts_with("Option__Ref__") {
+            return operand;
+        }
+        let inner = self.type_registry
+            .get_type_def(&name)
+            .and_then(|td| match &td.kind {
+                crate::ir::types::TypeDefKind::Enum(e) => {
+                    e.variants.iter().find(|v| v.name == "Some")
+                        .and_then(|v| v.fields.first().map(|f| f.type_id))
+                }
+                _ => None,
+            });
+        let Some(inner_type) = inner else { return operand; };
+        self.ensure_option_type_registered(&name, inner_type);
+        let dst = builder.enum_init(&name, "None", target_type, vec![]);
+        crate::ir::builder::FunctionBuilder::copy(dst)
+    }
+
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
         use super::types::make_option_type_def;
         use crate::ir::types::GirType;

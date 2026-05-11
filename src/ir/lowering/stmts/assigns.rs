@@ -412,7 +412,15 @@ pub(super) fn lower_assign(
                     }
                     ctx.deref_inner_type(t).unwrap_or(t)
                 };
+                // Propagate the pointee type as expected_type so an
+                // `Expr::NoneLiteral` RHS materialises a tagged None at
+                // lower_expr time. The chokepoint coercion in
+                // `emit_field_store_with_cleanup` catches any case this
+                // propagation misses (Snag #32).
+                let prev_expected = ctx.func_state.expected_type;
+                ctx.func_state.expected_type = Some(pointee_type);
                 let rhs = lower_expr(ctx, builder, value);
+                ctx.func_state.expected_type = prev_expected;
                 emit_field_store_with_cleanup(ctx, builder, &deref_place, pointee_type, &rhs);
             }
         }
@@ -471,7 +479,14 @@ pub(super) fn lower_field_assign(
     // `gs.current_weapon.ammo = x` by building Place { local: gs, projections: [Deref, Field(5), Field(2)] }
     // instead of copying the intermediate struct to a temp.
     if let Some((target_place, field_type)) = try_resolve_field_place(ctx, builder, object, field_name) {
+        // Propagate the field type as expected_type so an `Expr::NoneLiteral`
+        // RHS materialises a tagged None at lower_expr time (see Snag #29b
+        // runtime fix). The chokepoint coercion in `emit_field_store_with_cleanup`
+        // catches any case this propagation misses.
+        let prev_expected = ctx.func_state.expected_type;
+        ctx.func_state.expected_type = Some(field_type);
         let mut rhs = lower_expr(ctx, builder, value);
+        ctx.func_state.expected_type = prev_expected;
         clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
         emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
         return;
@@ -614,6 +629,14 @@ fn emit_field_store_with_cleanup(
     field_type: TypeId,
     rhs: &Operand,
 ) {
+    // Snag #32 (None-literal materialisation at writer boundaries):
+    // chokepoint coercion for `Constant::Null → enum_init None` when the
+    // store target is Option-typed. Every emit_field_store call routes
+    // through here, so any future caller automatically gets the rewrite
+    // — see `LoweringContext::coerce_null_to_option_none`. No-op for
+    // non-Null operands and non-Option target types.
+    let rhs_owned = ctx.coerce_null_to_option_none(builder, rhs.clone(), field_type);
+    let rhs = &rhs_owned;
     emit_field_drop_if_needed(ctx, builder, target_place, field_type);
     maybe_unregister_string_temp(ctx, builder, rhs, field_type);
     maybe_unregister_owned_string_temp(ctx, builder, rhs, field_type);
