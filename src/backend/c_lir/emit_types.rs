@@ -1022,6 +1022,7 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
                 "gorget_array_free" => "gorget_array_clone",
                 "gorget_map_free" => "gorget_map_clone",
                 "gorget_set_free" => "gorget_set_clone",
+                "gorget_closure_free" => "gorget_closure_clone_to_owned",
                 d if d.starts_with("Box__") && d.ends_with("__drop") => {
                     // Box[T] field: allocate a fresh heap slot and deep-clone the
                     // inner T into it. Mirrors the enum-variant Box-clone branch.
@@ -1122,6 +1123,7 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
                 "gorget_array_free" => "gorget_array_clone".into(),
                 "gorget_map_free" => "gorget_map_clone".into(),
                 "gorget_set_free" => "gorget_set_clone".into(),
+                "gorget_closure_free" => "gorget_closure_clone_to_owned".into(),
                 // Box[T] enum-variant field: route to the box-alloc + inner-clone
                 // emission path (see line ~1249 below). The synthetic
                 // "__gorget_box_clone" name is a marker — there's no actual
@@ -1520,6 +1522,7 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                     "gorget_array_free" => Some("gorget_array_clone".into()),
                     "gorget_map_free" => Some("gorget_map_clone".into()),
                     "gorget_set_free" => Some("gorget_set_clone".into()),
+                    "gorget_closure_free" => Some("gorget_closure_clone_to_owned".into()),
                     other if other.ends_with("__drop") => {
                         let base = &other[..other.len() - 6];
                         Some(format!("{base}__clone"))

@@ -513,34 +513,49 @@ impl<'a> LoweringContext<'a> {
             };
             let mut field_drops: Vec<(String, String, String)> = Vec::new();
             for field in &sdef.fields {
-                let field_type_name = match self.gir.type_registry.get(field.type_id) {
-                    Some(GirType::Named(n)) => n.clone(),
-                    _ => continue,
-                };
-                let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
-                let drop_fn = match &field_drop_strategy {
-                    DropStrategy::Trivial(fn_name) => fn_name.clone(),
-                    DropStrategy::Custom(fn_name) => fn_name.clone(),
-                    DropStrategy::Recursive => {
-                        // Check if {Name}__drop exists as a NON-destructor function
-                        // (e.g., DataFrame.drop() column-drop method). If so, we can't
-                        // use it as the field drop function. Skip this field — the LIR
-                        // handles the drop inline via lower_field_drops.
-                        let candidate = format!("{field_type_name}__drop");
-                        // If a function with this name exists in the GIR and is NOT the
-                        // Drop trait impl, skip. Check both exact match and module-prefixed
-                        // names (GIR uses `mod___Name__drop` but C emits `Name__drop`).
-                        let suffix = format!("___{candidate}");
-                        let is_non_destructor = self.gir.functions.iter().any(|f| {
-                            (f.name == candidate || f.name.ends_with(&suffix)) && f.params.len() > 1
-                        });
-                        if is_non_destructor {
-                            self.module.drop_collision_types.insert(field_type_name.clone());
-                            continue;
-                        }
-                        candidate
+                let (drop_fn, field_type_name) = match self.gir.type_registry.get(field.type_id) {
+                    Some(GirType::Named(n)) => {
+                        let field_type_name = n.clone();
+                        let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
+                        let drop_fn = match &field_drop_strategy {
+                            DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                            DropStrategy::Custom(fn_name) => fn_name.clone(),
+                            DropStrategy::Recursive => {
+                                // Check if {Name}__drop exists as a NON-destructor function
+                                // (e.g., DataFrame.drop() column-drop method). If so, we can't
+                                // use it as the field drop function. Skip this field — the LIR
+                                // handles the drop inline via lower_field_drops.
+                                let candidate = format!("{field_type_name}__drop");
+                                // If a function with this name exists in the GIR and is NOT the
+                                // Drop trait impl, skip. Check both exact match and module-prefixed
+                                // names (GIR uses `mod___Name__drop` but C emits `Name__drop`).
+                                let suffix = format!("___{candidate}");
+                                let is_non_destructor = self.gir.functions.iter().any(|f| {
+                                    (f.name == candidate || f.name.ends_with(&suffix)) && f.params.len() > 1
+                                });
+                                if is_non_destructor {
+                                    self.module.drop_collision_types.insert(field_type_name.clone());
+                                    continue;
+                                }
+                                candidate
+                            }
+                            DropStrategy::None => continue,
+                        };
+                        (drop_fn, field_type_name)
                     }
-                    DropStrategy::None => continue,
+                    Some(GirType::FnPtr { .. }) => {
+                        // Tier 1c follow-on: `Callable[…]` fields lower to
+                        // `GirType::FnPtr` at the GIR level but to a 16-byte
+                        // `GorgetClosure` struct at the LIR level (owned heap
+                        // env). Emit a drop entry so scope-exit frees the env
+                        // via `gorget_closure_free(&self->field)`. Without
+                        // this, iterator-chain structs (`MapIter`, `FilterIter`,
+                        // …) marked Recursive via their inner-iter field would
+                        // leak the closure env and trip Tier 1a
+                        // `validate_drop_completeness`.
+                        ("gorget_closure_free".to_string(), "GorgetClosure".to_string())
+                    }
+                    _ => continue,
                 };
                 field_drops.push((field.name.clone(), drop_fn, field_type_name));
             }
@@ -561,24 +576,32 @@ impl<'a> LoweringContext<'a> {
             let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
             for (vi, variant) in edef.variants.iter().enumerate() {
                 for (fi, field) in variant.fields.iter().enumerate() {
-                    let field_type_name = match self.gir.type_registry.get(field.type_id) {
-                        Some(GirType::Named(n)) => n.clone(),
-                        _ => continue,
-                    };
-                    let field_drop = self.infer_drop_strategy(&field_type_name);
-                    let drop_fn = match &field_drop {
-                        DropStrategy::Trivial(fn_name) => fn_name.clone(),
-                        DropStrategy::Custom(fn_name) => fn_name.clone(),
-                        DropStrategy::Recursive => {
-                            // Use mangled destructor name for collision types
-                            // (e.g., DataFrame.drop() is a user method, not a destructor)
-                            if self.module.drop_collision_types.contains(&field_type_name) {
-                                format!("__gorget_dtor_{field_type_name}")
-                            } else {
-                                format!("{field_type_name}__drop")
-                            }
+                    let (drop_fn, field_type_name) = match self.gir.type_registry.get(field.type_id) {
+                        Some(GirType::Named(n)) => {
+                            let field_type_name = n.clone();
+                            let field_drop = self.infer_drop_strategy(&field_type_name);
+                            let drop_fn = match &field_drop {
+                                DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                                DropStrategy::Custom(fn_name) => fn_name.clone(),
+                                DropStrategy::Recursive => {
+                                    // Use mangled destructor name for collision types
+                                    // (e.g., DataFrame.drop() is a user method, not a destructor)
+                                    if self.module.drop_collision_types.contains(&field_type_name) {
+                                        format!("__gorget_dtor_{field_type_name}")
+                                    } else {
+                                        format!("{field_type_name}__drop")
+                                    }
+                                }
+                                DropStrategy::None => continue,
+                            };
+                            (drop_fn, field_type_name)
                         }
-                        DropStrategy::None => continue,
+                        Some(GirType::FnPtr { .. }) => {
+                            // Tier 1c follow-on: see the matching branch in
+                            // `populate_recursive_drop_structs` above.
+                            ("gorget_closure_free".to_string(), "GorgetClosure".to_string())
+                        }
+                        _ => continue,
                     };
                     // LIR field name: {VariantName}_{field_index_within_variant}
                     let field_name = format!("{}_{fi}", variant.name);
@@ -601,23 +624,31 @@ impl<'a> LoweringContext<'a> {
                     }
                     let mut field_drops: Vec<(String, String, String)> = Vec::new();
                     for field in &sdef.fields {
-                        let field_type_name = match self.gir.type_registry.get(field.type_id) {
-                            Some(GirType::Named(n)) => n.clone(),
-                            _ => continue,
-                        };
-                        let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
-                        let drop_fn = match &field_drop_strategy {
-                            DropStrategy::Trivial(fn_name) => fn_name.clone(),
-                            DropStrategy::Custom(fn_name) => fn_name.clone(),
-                            DropStrategy::Recursive => {
-                                // For collision types, use mangled destructor name
-                                if self.module.drop_collision_types.contains(&field_type_name) {
-                                    format!("__gorget_dtor_{field_type_name}")
-                                } else {
-                                    format!("{field_type_name}__drop")
-                                }
+                        let (drop_fn, field_type_name) = match self.gir.type_registry.get(field.type_id) {
+                            Some(GirType::Named(n)) => {
+                                let field_type_name = n.clone();
+                                let field_drop_strategy = self.infer_drop_strategy(&field_type_name);
+                                let drop_fn = match &field_drop_strategy {
+                                    DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                                    DropStrategy::Custom(fn_name) => fn_name.clone(),
+                                    DropStrategy::Recursive => {
+                                        // For collision types, use mangled destructor name
+                                        if self.module.drop_collision_types.contains(&field_type_name) {
+                                            format!("__gorget_dtor_{field_type_name}")
+                                        } else {
+                                            format!("{field_type_name}__drop")
+                                        }
+                                    }
+                                    DropStrategy::None => continue,
+                                };
+                                (drop_fn, field_type_name)
                             }
-                            DropStrategy::None => continue,
+                            Some(GirType::FnPtr { .. }) => {
+                                // Tier 1c follow-on: see the matching branch in
+                                // `populate_recursive_drop_structs` above.
+                                ("gorget_closure_free".to_string(), "GorgetClosure".to_string())
+                            }
+                            _ => continue,
                         };
                         field_drops.push((field.name.clone(), drop_fn, field_type_name));
                     }
@@ -649,22 +680,30 @@ impl<'a> LoweringContext<'a> {
                     let mut variant_drops: Vec<(u32, String, String, String, String)> = Vec::new();
                     for (vi, variant) in edef.variants.iter().enumerate() {
                         for (fi, field) in variant.fields.iter().enumerate() {
-                            let field_type_name = match self.gir.type_registry.get(field.type_id) {
-                                Some(GirType::Named(n)) => n.clone(),
-                                _ => continue,
-                            };
-                            let field_drop = self.infer_drop_strategy(&field_type_name);
-                            let drop_fn = match &field_drop {
-                                DropStrategy::Trivial(fn_name) => fn_name.clone(),
-                                DropStrategy::Custom(fn_name) => fn_name.clone(),
-                                DropStrategy::Recursive => {
-                                    if self.module.drop_collision_types.contains(&field_type_name) {
-                                        format!("__gorget_dtor_{field_type_name}")
-                                    } else {
-                                        format!("{field_type_name}__drop")
-                                    }
+                            let (drop_fn, field_type_name) = match self.gir.type_registry.get(field.type_id) {
+                                Some(GirType::Named(n)) => {
+                                    let field_type_name = n.clone();
+                                    let field_drop = self.infer_drop_strategy(&field_type_name);
+                                    let drop_fn = match &field_drop {
+                                        DropStrategy::Trivial(fn_name) => fn_name.clone(),
+                                        DropStrategy::Custom(fn_name) => fn_name.clone(),
+                                        DropStrategy::Recursive => {
+                                            if self.module.drop_collision_types.contains(&field_type_name) {
+                                                format!("__gorget_dtor_{field_type_name}")
+                                            } else {
+                                                format!("{field_type_name}__drop")
+                                            }
+                                        }
+                                        DropStrategy::None => continue,
+                                    };
+                                    (drop_fn, field_type_name)
                                 }
-                                DropStrategy::None => continue,
+                                Some(GirType::FnPtr { .. }) => {
+                                    // Tier 1c follow-on: see the matching
+                                    // branch in `populate_recursive_drop_structs`.
+                                    ("gorget_closure_free".to_string(), "GorgetClosure".to_string())
+                                }
+                                _ => continue,
                             };
                             let field_name = format!("{}_{fi}", variant.name);
                             variant_drops.push((vi as u32, variant.name.clone(), field_name, drop_fn, field_type_name));
