@@ -1,5 +1,17 @@
 # DONE
 
+- [2026-05-11] **Tier 2b (match-scrutinee discipline) documented as subsumed by Phase C + Tier 1c.** No separate validator needed; backlog entry retired.
+
+  **Why subsumed.** Tier 2b's invariant — "match scrutinee staging assigns of resource-typed scrutinees use `AssignMode::Borrow` or `AssignMode::Move`, never `Copy`" — is structurally enforced by the combination of:
+
+  1. **Writer-side rule** in `stage_match_scrutinee` (`src/ir/lowering/stmts/patterns.rs:49-70`): for resource scrutinees, the mode is unconditionally `Move` (last-use + owned) or `Borrow` (otherwise). `Copy` is reserved for non-resource scrutinees where it is correct.
+  2. **Phase C `validate_resource_moves`** (already fatal) walks every `Inst::Assign { mode: Copy }` with resource-typed dst. The match-scrutinee staging assign IS one of those — if the writer-side rule ever mis-classified, this validator catches it.
+  3. **Tier 1c closure** of the original motivating gap: pre-Tier-1c, `Option/Result-of-resource` TypeDefs carried stale `(None, Trivial)` metadata, so `is_resource_type` returned false at match-staging time and the writer-side picker fell into the Copy branch. With metadata coherent at construction, the resource branch fires correctly.
+
+  Empirical confirmation: the full 1084-fixture sweep runs `validate_resource_moves` as fatal and stays green — no match-scrutinee staging assign produces `Copy` mode on a resource scrutinee today. A separate Tier 2b validator would be redundant-and-more-specific with no marginal soundness benefit.
+
+  Files: `docs/internals/structural-guards.md` (§2b rewritten as SUBSUMED). No code changes required.
+
 - [2026-05-11] **Tier 1a + 1d inverse-direction validators shipped; Tier 1b inverse attempted and retracted.** Two inverse validators close coverage gaps in the existing forward validators; a third was attempted and withdrawn after the integration sweep revealed the bug class doesn't have a clean syntactic signature.
 
   **Shipped:**

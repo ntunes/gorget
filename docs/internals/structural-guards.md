@@ -222,15 +222,19 @@ Phase 3 progress through 2026-05-10: **11,129 → 64 violations (-99.4%)** acros
 
 **Estimate (delivered).** Phase 1/2 was ~6 sessions; Phase 3 closed in 2 sessions.
 
-#### 2b. Match-scrutinee discipline
+#### 2b. Match-scrutinee discipline *(SUBSUMED — closed 2026-05-11 via Phase C + Tier 1c)*
 
-**Invariant.** Every match scrutinee staging assign of a resource-typed scrutinee uses `AssignMode::Borrow` or `AssignMode::Move`, never `AssignMode::Copy`. Phase C covers most of this; the Option/Result-of-resource case (which the snag #24 attempts surfaced) is the remaining gap.
+**Invariant.** Every match scrutinee staging assign of a resource-typed scrutinee uses `AssignMode::Borrow` or `AssignMode::Move`, never `AssignMode::Copy`.
 
-**Validator sketch.** Walk `Inst::Assign` instructions whose dst is the result of `stage_match_scrutinee`. For resource scrutinee types, mode must not be Copy.
+**No separate validator needed.** Originally framed as a Phase C gap that the snag #24 attempts surfaced (Option/Result-of-resource classifier mis-typing). Both halves are now closed:
 
-**Why it matters.** When snag #24's drop-completeness fix promotes Option/Result-of-resource to Resource, the existing match-scrutinee staging emits Copy mode (because today's classifier doesn't see Option as a resource) and trips Phase C's validator. Closing this gap unblocks the snag #24 migration and locks the rule that match never consumes its scrutinee.
+1. **Writer-side rule** in `stage_match_scrutinee` (`src/ir/lowering/stmts/patterns.rs:49-70`) picks `Move` (last-use + owned) or `Borrow` (otherwise) for any resource scrutinee. `Copy` is reserved for non-resource scrutinees (where it is correct).
 
-**Burn-down.** Validator + a single migration commit + promote. ~1 session.
+2. **Phase C enforcement.** `validate_resource_moves` walks every `Inst::Assign { mode: Copy }` with a resource-typed dst. The match-scrutinee staging assign IS one of those instructions — if the writer-side rule ever mis-classified and emitted `Copy` on a resource scrutinee, the validator catches it with the same fatal error as any other shallow-resource-copy violation. Same property, same enforcement.
+
+3. **Tier 1c closed the original gap.** The doc's original framing — "the classifier doesn't see Option as a resource" — was the pre-Tier-1c timing class. With TypeDef metadata now coherent at construction, `is_resource_type` correctly returns true for `Option__T` / `Result__T_E` when T/E are resources; the writer-side picker takes the resource branch and emits Move/Borrow.
+
+**Empirical confirmation.** The full 1084-fixture sweep runs `validate_resource_moves` as fatal and stays green — no match-scrutinee staging assign produces `Copy` mode on a resource type today. A separate `validate_match_scrutinee_discipline` would be a redundant-but-more-specific validator with no marginal soundness benefit; not shipping. See DONE.md `[2026-05-11] Tier 2b documented as subsumed by Phase C + Tier 1c`.
 
 #### 2c. Drop-tracking pre-rebind correctness *(snag #23 class)* — **SHIPPED 2026-05-10**
 
