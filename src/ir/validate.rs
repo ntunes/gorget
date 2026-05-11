@@ -1821,6 +1821,19 @@ pub fn validate_type_metadata_coherence(
             }
         }
 
+        // Closure-env carve-out: structs tagged `is_closure_env: true`
+        // (`closures.rs:140`) capture outer-scope locals at non-last-use as
+        // lifetime-tied aliases — the closure does NOT independently own
+        // those captured values. Outer-scope drops handle cleanup; the
+        // env struct itself stays `(None, Trivial)` so scope-exit doesn't
+        // double-free. The consume-site validator already skips StructInit
+        // fields for closure-env destinations; the coherence validator
+        // skips them here for the same reason. See
+        // `docs/internals/closure-capture.md`.
+        if td.metadata.is_closure_env {
+            continue;
+        }
+
         if expected_drop == DropStrategy::Recursive
             && actual_drop == DropStrategy::None
         {
@@ -3422,6 +3435,40 @@ mod tests {
                 && w.expected_drop == DropStrategy::Recursive
                 && w.kind == TypeMetadataCoherenceKind::Enum),
             "MaybeBuf should be flagged. Warnings: {:?}", warnings
+        );
+    }
+
+    /// Tier 1c: closure-env struct carve-out — a struct tagged
+    /// `is_closure_env: true` with resource fields is NOT flagged, even
+    /// when the helpers would compute `(Recursive, Resource)`. The closure
+    /// captures are lifetime-tied aliases; outer-scope drops handle cleanup.
+    #[test]
+    fn tier1c_coherence_closure_env_skipped() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+        module.type_registry.add_type_def(TypeDef {
+            name: "Closure_env_42".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![StructField { name: "captured".into(), type_id: buf_id }],
+            }),
+            metadata: TypeMetadata {
+                is_closure_env: true,
+                ..Default::default()
+            },
+        });
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(
+            warnings.iter().all(|w| w.type_name != "Closure_env_42"),
+            "closure-env struct should NOT be flagged. Warnings: {:?}", warnings
         );
     }
 }

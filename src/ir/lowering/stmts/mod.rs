@@ -707,7 +707,27 @@ fn lower_var_decl(
                     AssignMode::Copy
                 }
             };
-            builder.assign_mode(tuple_assign_mode, Place::local(tuple_local), operand);
+            builder.assign_mode(tuple_assign_mode, Place::local(tuple_local), operand.clone());
+
+            // Move-mode follow-through. Mirror the Pattern::Binding path
+            // (lines 675-684 above): a Move-mode assign of a drop-registered
+            // source must MoveZero the source so its scope-exit drop doesn't
+            // re-free the buffers now owned by `tuple_local`. With the Tier
+            // 1c tuple migration (`map_ast_type_mut::Type::Tuple` /
+            // `register_tuple_type`), tuples holding resource-typed fields
+            // are now `(Recursive, Resource)`, so the destructure source
+            // needs the same follow-through every other Move-mode assign
+            // site does.
+            if matches!(tuple_assign_mode, crate::ir::instructions::AssignMode::Move) {
+                if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                    if place.projections.is_empty()
+                        && place.local != tuple_local
+                        && !ctx.drops.is_moved(place.local)
+                    {
+                        ctx.move_zero_and_mark(builder, place.local);
+                    }
+                }
+            }
 
             // Extract each field and bind it to the corresponding pattern variable.
             //

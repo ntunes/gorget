@@ -8,7 +8,7 @@ use crate::ir::types::*;
 use super::super::context::LoweringContext;
 
 pub(super) fn register_tuple_type(ctx: &mut LoweringContext, elem_types: &[TypeId]) -> TypeId {
-    use crate::ir::types::{format_type_for_mangle, GirType, StructDef, StructField, TypeDef, TypeDefKind, TypeMetadata, CopySemantics};
+    use crate::ir::types::{format_type_for_mangle, GirType, StructDef, StructField, TypeDef, TypeDefKind, TypeMetadata};
 
     // Build mangled name: Tuple__T1__T2__...
     let mut name = "Tuple".to_string();
@@ -42,11 +42,16 @@ pub(super) fn register_tuple_type(ctx: &mut LoweringContext, elem_types: &[TypeI
         .map(|(i, &tid)| StructField { name: format!("_{i}"), type_id: tid })
         .collect();
 
+    // Tier 1c: coherence-at-construction. A tuple holding a resource-typed
+    // element is itself a resource (its drop must recurse). Mirrors the
+    // matching path in `map_ast_type_mut` for `Type::Tuple`.
+    let (drop_strategy, copy_semantics) = ctx.type_registry.compute_drop_strategy_for_struct(&fields);
     ctx.type_registry.add_type_def(TypeDef {
         name: name.clone(),
         kind: TypeDefKind::Struct(StructDef { fields: fields.clone() }),
         metadata: TypeMetadata {
-            copy_semantics: CopySemantics::Trivial,
+            drop_strategy,
+            copy_semantics,
             ..TypeMetadata::default()
         },
     });

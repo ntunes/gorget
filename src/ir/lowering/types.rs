@@ -438,10 +438,18 @@ impl TypeMapper {
                         }
                     })
                     .collect();
+                // Tier 1c: coherence-at-construction. A tuple holding a
+                // resource-typed element is itself a resource (its drop
+                // must recurse). Mirrors the `monomorphize_struct` migration.
+                let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_struct(&fields);
                 let type_def = TypeDef {
                     name: mangled.clone(),
                     kind: TypeDefKind::Struct(StructDef { fields }),
-                    metadata: TypeMetadata::default(),
+                    metadata: TypeMetadata {
+                        drop_strategy,
+                        copy_semantics,
+                        ..Default::default()
+                    },
                 };
                 registry.add_type_def(type_def);
                 let type_id = registry.insert(GirType::Named(mangled.clone()));

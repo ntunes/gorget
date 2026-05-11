@@ -4,16 +4,14 @@
 
 - **Tier 1c — complete the Option/Result wrapper migration** [filed 2026-05-11, four of six migration sites shipped]. Foundation (helpers + validator + env gate), safe-class migrations (`register_struct_type`/`register_enum_type`/`register_newtype`, `monomorphize_enum` for user enums), per-mono wrapper-emission dependency gap fix, FnPtr-field drop emission, and `monomorphize_struct` migration all shipped without regressing the suite. Full integration: 1082/1082.
 
-  **Already coherent (no migration needed):** `make_option_type_def` / `make_result_type_def` (`lowering/types.rs:1158, 1178`) route through `wrapper_metadata_for_payloads` which reads `needs_drop` from the registry (commit `64125ed2`, Snag #27). `ensure_option_type_registered` (`lowering/context.rs:2895`) routes through `make_option_type_def`.
+  **Already coherent (no migration needed):** `make_option_type_def` / `make_result_type_def` (`lowering/types.rs:1158, 1178`) route through `wrapper_metadata_for_payloads` which reads `needs_drop` from the registry (commit `64125ed2`, Snag #27). `ensure_option_type_registered` (`lowering/context.rs:2895`) routes through `make_option_type_def`. Closure capture struct (`closures.rs:140`) intentionally stays `(None, Trivial)` — captures are lifetime-tied aliases of outer-scope locals; validator skips via the new `is_closure_env` carve-out.
 
-  **Remaining migration sites (still deferred):**
+  **Remaining migration site (still deferred):**
   - `monomorphize_enum` Option/Result carve-out (`generics/mod.rs:2420` — explicit skip in the migration). Removing it would surface FieldLoad/EnumFieldLoad shallow-copy issues at match-scrutinee shapes (per Cluster 1 revert 2026-05-07).
-  - Tuple registration (`lowering/types.rs:391` + `exprs/type_reg.rs::register_tuple_type`).
-  - Closure capture struct (`closures.rs:140`).
 
-  **Why the remaining items are deferred:** removing the `monomorphize_enum` carve-out surfaces ~93 fixtures of latent shallow-copy lowering issues that Phase C's `validate_resource_moves` correctly flags — same class as the 2026-05-07 Cluster 1 revert. Blocker: FieldLoad/EnumFieldLoad lowering must migrate to emit `Borrow` not `Copy` when source is a borrowed Option/Result return (1-2 weeks). Tier 1c remaining work is the closing 2-3 sessions after that.
+  **Why deferred:** removing the carve-out surfaces ~93 fixtures of latent shallow-copy lowering issues that Phase C's `validate_resource_moves` correctly flags — same class as the 2026-05-07 Cluster 1 revert. Blocker: FieldLoad/EnumFieldLoad lowering must migrate to emit `Borrow` not `Copy` when source is a borrowed Option/Result return (1-2 weeks).
 
-  **Burn-down to fatal:** (1) Cluster 1 / Snag #24 lowering follow-on (closes Option/Result wrapper migration in `monomorphize_enum`); (2) migrate tuple + closure capture struct (2-3 commits); (3) promote `validate_type_metadata_coherence` to fatal.
+  **Burn-down to fatal:** (1) Cluster 1 / Snag #24 lowering follow-on (closes Option/Result wrapper migration in `monomorphize_enum`); (2) promote `validate_type_metadata_coherence` to fatal.
 
 - **Phase C self-host validator burn-down — moves class open, 100,170 baseline.** Three validators shipped (`tests/fixtures/self_host_lowerer/validate.gg`); two classes closed:
   - ✅ `validate_resource_field_reads`: 4,365 → 0 (commit `8cfc94ff`, step 5a). Regression test `phase_c_field_reads_at_zero_self_host`.
