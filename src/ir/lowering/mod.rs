@@ -1887,16 +1887,22 @@ pub fn lower_module(
                     }
                 }
             }
-            // Fatal classes: panic on first violation. AssignIntoOwnedSlot
-            // is held back as non-fatal pending sweep + migration (Snag #28
-            // class). Once that class hits zero, fold it into this branch.
-            //
-            // Tier 1c burn-down: temporarily gated so the Cluster 1
-            // FieldLoad/EnumFieldLoad burn-down can complete without
-            // each Tier 2a violation halting the build. Restore the
-            // panic after the burn-down ships (once all sites are
-            // tagged-owned at consume positions).
-            let _ = fatal_warnings;
+            // Fatal: panic on first violation. AssignIntoOwnedSlot
+            // (Snag #28 class) is folded in here as of 2026-05-11 —
+            // the Tier 1c Cluster 1 burn-down closed the last
+            // untracked-source case (`try_lift_option_ref`'s merge
+            // local, fixed by tagging it Owned at construction).
+            if let Some(first) = fatal_warnings.first() {
+                panic!(
+                    "Tier 2a consume-site violation: {} violation(s) in module '{}'. \
+                     First: fn @{} bb{} i{} — {} — {}. \
+                     Run with GG_VALIDATE_CONSUME_SITES=/tmp/violations.log for full report.",
+                    fatal_warnings.len(),
+                    module.source_filename.as_deref().unwrap_or("<unknown>"),
+                    first.function, first.block.0, first.inst_index,
+                    first.class, first.violation,
+                );
+            }
         }
     }
 

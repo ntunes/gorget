@@ -2666,6 +2666,12 @@ fn try_lift_option_ref(
     // Merge local: holds the resulting Option[T].
     let merge = builder.add_local(dst_type, None);
     ctx.drops.register_local(merge, dst_type, &ctx.type_registry);
+    // Tier 2a: tag merge as Owned. Both branches build the Option
+    // (Some via enum_init from a cloned-or-dereffed payload, None via
+    // enum_init []), so merge owns its data. Without this tag, the
+    // caller's `assign(LocalId(0), copy(merge))` is flagged
+    // `AssignIntoOwnedSlot(... — untracked source)`.
+    ctx.set_owned(builder, merge);
 
     // Some branch: extract the Ref payload (void*). Assigning the whole
     // Option[Ref[T]] source to a Ptr(T) local triggers the LIR's
