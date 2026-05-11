@@ -1659,6 +1659,40 @@ pub(super) fn emit_monomorphized_typedefs(out: &mut String, module: &LirModule, 
             }
         }
     }
+    // Walk recursive-drop tables so per-mono Shared/Weak/Channel/Mutex/
+    // RWLock/Guard `__drop` wrappers referenced only from inlined drop-fn
+    // bodies get emitted. The inline drop-fn bodies are NOT in the
+    // `Inst::CallExtern` instruction stream (they're emitted directly into
+    // C by `emit_recursive_struct_drops` / `emit_enum_drop_fns`), so the
+    // function/extern scans above can't pick them up. Without this, a
+    // `Recursive` struct/enum that holds a `Shared[Vector[T]]`-class field
+    // links-fails on the undefined `Shared__Vector__T__drop` symbol.
+    //
+    // Box is excluded — it has its own slot-ABI emission path through
+    // `emit_box_drop_wrappers` (driven by `__gorget_box_alloc_<inner>`
+    // externs and `StructDef.box_inner_type`). Routing it through the
+    // wrapper-method scan as well would emit a second `static inline`
+    // self-ABI variant under the same `Box__T__drop` symbol, colliding at
+    // link.
+    //
+    // This closes the per-mono wrapper-emission dependency-tracking gap
+    // identified by the Tier 1c `monomorphize_struct` migration revert
+    // (commit `a59faf33`).
+    let is_non_box_wrapper = |n: &str| is_wrapper_method(n) && !n.starts_with("Box__");
+    for field_drops in module.recursive_drop_structs.values() {
+        for (_field, drop_fn, _ty) in field_drops {
+            if is_non_box_wrapper(drop_fn) && method_seen.insert(drop_fn.clone()) {
+                method_calls.push(drop_fn.clone());
+            }
+        }
+    }
+    for variant_drops in module.recursive_drop_enums.values() {
+        for (_idx, _variant, _field, drop_fn, _ty) in variant_drops {
+            if is_non_box_wrapper(drop_fn) && method_seen.insert(drop_fn.clone()) {
+                method_calls.push(drop_fn.clone());
+            }
+        }
+    }
 
     // First pass: discover types from method calls and emit all typedefs.
     // Also discover and typedef element types (e.g., Vector__int64_t inside Shared__Vector__int64_t).

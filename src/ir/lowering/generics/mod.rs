@@ -2341,16 +2341,38 @@ fn monomorphize_struct(
         }
     } else {
         // Tier 1c: defer drop metadata to the post-hoc
-        // `upgrade_types_from_fields` pass. Promoting at construction
-        // surfaces missing per-mono Shared/Weak/Channel/Guard `__drop`
-        // wrapper emission for user generic structs that hold those
-        // types — the C backend's `emit_shared_wrapper` family emits
-        // wrappers on-demand by scanning module.externs/functions, and
-        // a field-level recursive drop call doesn't register the
-        // wrapper as a dependency. Migrating this requires the same
-        // Cluster 1 follow-on as the Option/Result wrapper migration
-        // (FieldLoad/EnumFieldLoad → Borrow shape + the per-mono
-        // wrapper emission dependency tracking). Deferred.
+        // `upgrade_types_from_fields` pass. Promoting user generic
+        // structs to (Recursive, Resource) at construction surfaces
+        // TWO blocker classes:
+        //
+        // 1. **Per-mono Shared/Weak/Channel/Mutex/RWLock/Guard
+        //    wrapper emission.** CLOSED — `emit_types.rs` now walks
+        //    `recursive_drop_structs`/`recursive_drop_enums` for
+        //    wrapper-method drop fns referenced only from inlined
+        //    drop-fn bodies.
+        //
+        // 2. **Iterator-chain `FnPtr`-typed Callable field leak (still
+        //    open).** Iterator adapter structs (`MapIter`, `FilterIter`,
+        //    `TakeIter`, …) hold a `Callable[U(T)] f` field whose GIR
+        //    type lowers to `GirType::FnPtr` but whose LIR storage is
+        //    a 16-byte `GorgetClosure` struct (owned closure env on
+        //    heap). When the wrapping struct gets promoted to
+        //    Recursive, the Tier 1a `validate_drop_completeness` LIR
+        //    validator correctly flags this: the LIR side sees the
+        //    field as droppable (via `c_runtime_alias = "GorgetClosure"`
+        //    on the struct registry), while
+        //    `populate_type_drop_fns` skips it because
+        //    `field.type_id` resolves to `GirType::FnPtr` (not
+        //    `GirType::Named`) and the loop only handles Named
+        //    fields. Net: validator catches a real pre-existing
+        //    closure-env leak (it was silent before because the
+        //    wrapping struct had no drop fn at all).
+        //
+        // Migration blocked on extending `populate_type_drop_fns`
+        // (`src/lir/lower/mod.rs:602-622`) to handle `GirType::FnPtr`
+        // by emitting a field_drops entry with drop_fn =
+        // `gorget_closure_free`. Documented in TODO under "Tier 1c —
+        // complete the Option/Result wrapper migration" sub-bullet.
         TypeMetadata::default()
     };
 
