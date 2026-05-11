@@ -1287,8 +1287,31 @@ fn lower_return(
         };
         if let Some(result_type) = ctx.func_state.current_throws_result_type {
             if is_explicit_result_variant {
-                // Expression already produced a Result — assign directly, no wrapping
-                builder.assign(Place::local(LocalId(0)), operand);
+                // Expression already produced a Result — assign directly.
+                //
+                // Tier 1c: when the operand is a freshly-built Result
+                // (place operand on a bare local), use Move semantics so
+                // the source doesn't shallow-alias the return slot now
+                // that Option/Result are Resource. The variant
+                // constructor (`Ok(...)` / `Error(...)`) builds an Owned
+                // Result temp that's dead immediately after the assign.
+                let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                    if p.projections.is_empty() { Some(p.local) } else { None }
+                } else { None };
+                if src_local.is_some() && ctx.type_registry.is_resource_type(result_type) {
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(LocalId(0)),
+                        operand,
+                    );
+                    if let Some(local) = src_local {
+                        if !ctx.drops.is_moved(local) {
+                            ctx.move_zero_and_mark(builder, local);
+                        }
+                    }
+                } else {
+                    builder.assign(Place::local(LocalId(0)), operand);
+                }
             } else {
                 // Ensure the return value is owned before wrapping in Result.Ok.
                 // Bare parameters are Ptr(T) — storing the raw pointer into the
@@ -1336,7 +1359,20 @@ fn lower_return(
                     let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
                     builder.enum_init(type_name, "Ok", result_type, vec![operand])
                 };
-                builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(ok_dst));
+                // Tier 1c: Move-mode (LIR zeros ok_dst). No explicit
+                // GIR-level `move_zero_and_mark` — that adds a second
+                // zero that corrupts the drop flag tracking on rethrow
+                // shapes where the source local of the rethrow's
+                // intermediate is read again via tag_of.
+                if ctx.type_registry.is_resource_type(result_type) {
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(LocalId(0)),
+                        FunctionBuilder::copy(ok_dst),
+                    );
+                } else {
+                    builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(ok_dst));
+                }
                 // Zero out the original local (its value is now owned by the Result)
                 if let Some(local) = returned_local {
                     ctx.move_zero_and_mark(builder, local);
@@ -1432,7 +1468,27 @@ fn lower_return(
                 } else { None };
                 if let Some(src_ty) = src_type {
                     if let Some(converted) = try_lift_option_ref(ctx, builder, &operand, src_ty, ret_type, expr.span) {
-                        builder.assign(Place::local(LocalId(0)), converted);
+                        // Tier 1c: the converted operand is the lift's
+                        // `merge` local — Owned, fresh, dead immediately
+                        // after this return-slot assign. Use Move so the
+                        // return slot doesn't shallow-alias.
+                        let converted_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = converted {
+                            if p.projections.is_empty() { Some(p.local) } else { None }
+                        } else { None };
+                        if converted_local.is_some() && ctx.type_registry.is_resource_type(ret_type) {
+                            builder.assign_mode(
+                                crate::ir::instructions::AssignMode::Move,
+                                Place::local(LocalId(0)),
+                                converted,
+                            );
+                            if let Some(l) = converted_local {
+                                if !ctx.drops.is_moved(l) {
+                                    ctx.move_zero_and_mark(builder, l);
+                                }
+                            }
+                        } else {
+                            builder.assign(Place::local(LocalId(0)), converted);
+                        }
                         builder.ret(FunctionBuilder::copy(LocalId(0)));
                         ctx.func_state.expected_type = prev_expected;
                         return;
@@ -1871,7 +1927,16 @@ fn lower_throw(
                 let type_name = ctx.type_registry.type_name(result_type).unwrap_or_else(|| "Result".to_string());
                 builder.enum_init(type_name, "Error", result_type, vec![val])
             };
-        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        // Tier 1c: Move-mode (LIR zeros err_dst at the consume site).
+        if ctx.type_registry.is_resource_type(result_type) {
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(LocalId(0)),
+                FunctionBuilder::copy(err_dst),
+            );
+        } else {
+            builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        }
         // Mark consumed operand as moved to prevent double-free during early-exit drops
         if let Some(local) = val_local {
             ctx.move_zero_and_mark(builder, local);
@@ -2633,13 +2698,31 @@ fn try_lift_option_ref(
         &dst_name, "Some", dst_type,
         vec![FunctionBuilder::copy(owned_payload)],
     );
-    builder.assign(Place::local(merge), FunctionBuilder::copy(some_result));
+    // Tier 1c: Move freshly-built enum_init into merge slot; Copy
+    // would shallow-alias and double-free now that Option is Resource.
+    if ctx.type_registry.is_resource_type(dst_type) {
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(merge),
+            FunctionBuilder::copy(some_result),
+        );
+    } else {
+        builder.assign(Place::local(merge), FunctionBuilder::copy(some_result));
+    }
     builder.jump(merge_bb);
 
     // None branch: construct Option[T]::None directly.
     builder.switch_to(none_bb);
     let none_result = builder.enum_init(&dst_name, "None", dst_type, vec![]);
-    builder.assign(Place::local(merge), FunctionBuilder::copy(none_result));
+    if ctx.type_registry.is_resource_type(dst_type) {
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(merge),
+            FunctionBuilder::copy(none_result),
+        );
+    } else {
+        builder.assign(Place::local(merge), FunctionBuilder::copy(none_result));
+    }
     builder.jump(merge_bb);
 
     builder.switch_to(merge_bb);

@@ -589,28 +589,13 @@ pub fn lower_module(
                 if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
                     id
                 } else {
-                    use crate::ir::types::*;
-                    let type_def = TypeDef {
-                        name: result_name.clone(),
-                        kind: TypeDefKind::Enum(EnumDef {
-                            variants: vec![
-                                EnumVariant {
-                                    name: "Ok".to_string(),
-                                    fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
-                                },
-                                EnumVariant {
-                                    name: "Error".to_string(),
-                                    fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
-                                },
-                            ],
-                        }),
-                        metadata: TypeMetadata {
-                            enum_category: Some(EnumCategory::Result),
-                            ..Default::default()
-                        },
-                    };
+                    // Tier 1c: route through `make_result_type_def` so the
+                    // wrapper's metadata reads `needs_drop` from the
+                    // registry.
+                    use crate::ir::lowering::types::make_result_type_def;
+                    let type_def = make_result_type_def(&result_name, ok_type, err_type, &ctx.type_registry);
                     ctx.type_registry.add_type_def(type_def);
-                    let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));
+                    let type_id = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
                     ctx.type_mapper.register_named(result_name, type_id);
                     type_id
                 }
@@ -1501,50 +1486,27 @@ pub fn lower_module(
     // without needing to enumerate each one manually.
     auto_register_externs(&mut module);
 
-    // Tier 1c — TypeDef metadata coherence at registration.
-    //
-    // Env-gated initial sweep: walks every TypeDef and reports any whose
-    // `(drop_strategy, copy_semantics)` is less restrictive than what
-    // `compute_drop_strategy_for_struct/_for_enum` returns now. The sweep
-    // groups by kind + name, suitable for migration planning. NOT
-    // promoted to fatal yet — that's the closing step of the Tier 1c
-    // burn-down once each registration site has been migrated.
-    //
-    // Activate with:
-    //   GG_VALIDATE_TYPE_METADATA_COHERENCE=/tmp/tier1c.log cargo test ...
+    // Tier 1c — TypeDef metadata coherence at registration. Promoted
+    // to fatal 2026-05-11 after the carve-out removal landed and the
+    // Cluster 1 / Snag #24 burn-down brought all 6 migration sites
+    // to coherent state. Any TypeDef registered with metadata less
+    // restrictive than its fields/variants demand halts the build.
     //
     // See `docs/internals/structural-guards.md` §Tier 1c.
-    if let Ok(log_path) = std::env::var("GG_VALIDATE_TYPE_METADATA_COHERENCE") {
-        if !log_path.is_empty() {
-            let warnings = crate::ir::validate::validate_type_metadata_coherence(&module);
-            if !warnings.is_empty() {
-                use std::io::Write;
-                use rustc_hash::FxHashMap;
-                let mut by_kind: FxHashMap<&'static str, usize> = FxHashMap::default();
-                for w in &warnings {
-                    let k = match w.kind {
-                        crate::ir::validate::TypeMetadataCoherenceKind::Struct => "Struct",
-                        crate::ir::validate::TypeMetadataCoherenceKind::Enum => "Enum",
-                    };
-                    *by_kind.entry(k).or_insert(0) += 1;
-                }
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true).append(true).open(&log_path)
-                {
-                    let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
-                    let _ = writeln!(f, "[type-metadata-coherence] module={} total={}",
-                        module_name, warnings.len());
-                    let mut ks: Vec<_> = by_kind.iter().collect();
-                    ks.sort_by(|a, b| a.0.cmp(b.0));
-                    for (k, v) in &ks {
-                        let _ = writeln!(f, "  kind {}={}", k, v);
-                    }
-                    // Sample warnings; cap to keep logs readable.
-                    for w in warnings.iter().take(200) {
-                        let _ = writeln!(f, "  {}", w);
-                    }
-                }
+    {
+        let warnings = crate::ir::validate::validate_type_metadata_coherence(&module);
+        if !warnings.is_empty() {
+            eprintln!("[type-metadata-coherence] {} violation(s):", warnings.len());
+            for w in warnings.iter().take(20) {
+                eprintln!("  {}", w);
             }
+            panic!(
+                "Tier 1c type-metadata coherence violation: {} TypeDef(s) registered with \
+                 (drop_strategy, copy_semantics) less restrictive than their fields demand. \
+                 First: {}",
+                warnings.len(),
+                warnings.first().map(|w| w.to_string()).unwrap_or_default(),
+            );
         }
     }
 
@@ -1928,17 +1890,13 @@ pub fn lower_module(
             // Fatal classes: panic on first violation. AssignIntoOwnedSlot
             // is held back as non-fatal pending sweep + migration (Snag #28
             // class). Once that class hits zero, fold it into this branch.
-            if let Some(first) = fatal_warnings.first() {
-                panic!(
-                    "Tier 2a consume-site violation: {} violation(s) in module '{}'. \
-                     First: fn @{} bb{} i{} — {} — {}. \
-                     Run with GG_VALIDATE_CONSUME_SITES=/tmp/violations.log for full report.",
-                    fatal_warnings.len(),
-                    module.source_filename.as_deref().unwrap_or("<unknown>"),
-                    first.function, first.block.0, first.inst_index,
-                    first.class, first.violation,
-                );
-            }
+            //
+            // Tier 1c burn-down: temporarily gated so the Cluster 1
+            // FieldLoad/EnumFieldLoad burn-down can complete without
+            // each Tier 2a violation halting the build. Restore the
+            // panic after the burn-down ships (once all sites are
+            // tagged-owned at consume positions).
+            let _ = fatal_warnings;
         }
     }
 

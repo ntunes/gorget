@@ -1460,6 +1460,52 @@ pub(super) fn lower_method_call(
             if place.projections.is_empty() { Some(place.local) } else { None }
         } else { None };
 
+        // Tier 1c pre-call clone for non-adapter Option/Result combinators
+        // when recv is live past this call. The C inline combinator's
+        // return value shallow-copies recv's payload (e.g. `or` returns
+        // recv on the Ok branch by memcpy); if recv stays alive, both
+        // recv and the result drop the same heap data at scope exit.
+        // Cloning recv before the call gives the runtime an independent
+        // copy to consume, leaving the original intact. Matches the
+        // adapter's scrut_local Clone (see
+        // `try_lower_option_result_combinator` above).
+        //
+        // Gated to non-adapter paths because the adapter early-returns;
+        // the adapter path already Clones internally and doesn't reach
+        // this site.
+        if let Some(recv_local) = recv_local_for_move_zero {
+            let is_option_result = ctx.type_registry.get_type_def(&type_name)
+                .and_then(|td| td.metadata.enum_category)
+                .is_some();
+            let is_combinator = matches!(method_name,
+                "map" | "and_then" | "or_else" | "filter" | "unwrap_or_else"
+                | "flat_map" | "or" | "flatten" | "map_err");
+            if is_option_result && is_combinator
+                && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
+            {
+                let is_last_use = builder.local_name(recv_local)
+                    .map(|n| ctx.is_last_use_at(n, receiver.span))
+                    .unwrap_or(true);
+                if !is_last_use {
+                    let recv_type = builder.local_type(recv_local);
+                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
+                        let ptr_type = ctx.register_ptr_type(recv_type);
+                        let ptr_local = builder.add_local(ptr_type, None);
+                        builder.emit_borrow(ptr_local, Place::local(recv_local));
+                        let cloned = builder.call(
+                            &clone_fn,
+                            vec![FunctionBuilder::copy(ptr_local)],
+                            recv_type,
+                        );
+                        ctx.set_owned(builder, cloned);
+                        // Route the call through the clone. The original
+                        // recv stays alive past this call.
+                        recv = FunctionBuilder::copy(cloned);
+                    }
+                }
+            }
+        }
+
         // Build args: &receiver + explicit args
         let mut call_args = Vec::new();
 
@@ -2301,8 +2347,16 @@ pub(super) fn lower_method_call(
 
         // MoveZero Option/Result receiver after combinator calls to prevent
         // the scope-exit destructor from double-freeing the consumed payload.
-        // The combinator's inline C code shallow-copies the payload for the closure;
-        // MoveZero transfers ownership to the returned value.
+        // The combinator's inline C code shallow-copies the payload for the
+        // result; MoveZero transfers ownership to the returned value.
+        //
+        // Tier 1c: gated on last-use. With Option/Result now Resource, the
+        // pre-Tier-1c default of "always MoveZero" trips when user code
+        // reuses the receiver (e.g. `ok.or(alt)` followed by `ok.map(...)`)
+        // — the second `.map(...)` reads a zeroed slot. When recv is NOT
+        // at last use, we skip the MoveZero AND emit a Clone before the
+        // call so the original `recv` and the result don't alias the same
+        // heap data (which would double-free at scope exit).
         if !has_consuming_self {
             if let Some(recv_local) = recv_local_for_move_zero {
                 // Read typed `enum_category` (Phase A) — Option/Result detection.
@@ -2316,9 +2370,22 @@ pub(super) fn lower_method_call(
                     && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
                     && !ctx.drops.is_moved(recv_local)
                 {
-                    // Move-if-dead: combinator consumes the receiver.
-                    ctx.drops.unregister(recv_local);
-                    ctx.move_zero_and_mark(builder, recv_local);
+                    let is_last_use = builder.local_name(recv_local)
+                        .map(|n| ctx.is_last_use_at(n, receiver.span))
+                        .unwrap_or(true); // unnamed temps: always last-use
+                    if is_last_use {
+                        // Move-if-dead: combinator consumes the receiver.
+                        ctx.drops.unregister(recv_local);
+                        ctx.move_zero_and_mark(builder, recv_local);
+                    }
+                    // else: recv is live past this call. Skip MoveZero.
+                    // The C inline combinator returns a Result that
+                    // aliases recv's payload; to keep recv valid AND
+                    // avoid double-free, the GIR should have emitted a
+                    // pre-call Clone of recv. This is the
+                    // clone-before-non-adapter-combinator pattern; see
+                    // the matching pre-call clone emission below in the
+                    // arg setup.
                 }
             }
         }
@@ -2522,7 +2589,7 @@ fn try_lower_option_result_combinator(
     };
     match method_name {
         "map" | "filter" | "and_then" | "flat_map" | "unwrap_or_else" if has_string_coercion(some_ok_type) => return None,
-        "map_err" | "or_else" if has_string_coercion(none_err_type) => return None,
+        "or_else" if has_string_coercion(none_err_type) => return None,
         _ => {}
     }
 

@@ -811,28 +811,16 @@ pub fn lower_equip_method(
         if let Some(&id) = ctx.type_mapper.named_types.get(&result_name) {
             id
         } else {
-            use crate::ir::types::*;
-            let type_def = TypeDef {
-                name: result_name.clone(),
-                kind: TypeDefKind::Enum(EnumDef {
-                    variants: vec![
-                        EnumVariant {
-                            name: "Ok".to_string(),
-                            fields: vec![StructField { name: "_0".to_string(), type_id: ok_type }],
-                        },
-                        EnumVariant {
-                            name: "Error".to_string(),
-                            fields: vec![StructField { name: "_0".to_string(), type_id: err_type }],
-                        },
-                    ],
-                }),
-                metadata: TypeMetadata {
-                    enum_category: Some(EnumCategory::Result),
-                    ..Default::default()
-                },
-            };
+            // Tier 1c: route through `make_result_type_def` so the
+            // wrapper's metadata reads `needs_drop` from the registry
+            // — registers as `(Recursive, Resource)` when either
+            // variant payload is droppable. Replaces a direct
+            // TypeMetadata::default() construction that silently
+            // recorded `(None, Trivial)` for `Result[T, String]`.
+            use crate::ir::lowering::types::make_result_type_def;
+            let type_def = make_result_type_def(&result_name, ok_type, err_type, &ctx.type_registry);
             ctx.type_registry.add_type_def(type_def);
-            let type_id = ctx.type_registry.insert(GirType::Named(result_name.clone()));
+            let type_id = ctx.type_registry.insert(crate::ir::types::GirType::Named(result_name.clone()));
             ctx.type_mapper.register_named(result_name, type_id);
             type_id
         }

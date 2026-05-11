@@ -184,8 +184,35 @@ impl ClosureLowering {
             })
             .collect();
 
-        // Infer return type from body (simplified — use I64 fallback)
+        // Infer return type from body (simplified — use I64 fallback).
+        //
+        // Tier 1c: temporarily register closure params as locals in ctx
+        // so the inference's `Expr::Identifier` lookup resolves param
+        // references to their hinted types. Without this, a closure body
+        // like `e.to_upper()` (`e: String` from the call site's
+        // closure_param_type_hints) fails to resolve `e` and falls back
+        // to I64_TYPE → MethodCall recv_type = I64 → return type =
+        // I64_TYPE, even though the actual call fn body returns String.
+        // The mismatch makes `map_err` build a wrongly-sized
+        // `Result__T__int64_t` and the destination memcpy overruns the
+        // smaller source slot.
+        let saved_params: Vec<(String, Option<(LocalId, TypeId)>)> = params.iter().enumerate()
+            .map(|(i, p)| {
+                let name = p.node.name.node.clone();
+                let prior = ctx.func_state.locals.get(&name).copied();
+                ctx.register_local(&name, LocalId(u32::MAX - i as u32), closure_param_types[i]);
+                (name, prior)
+            })
+            .collect();
         let return_type = infer_closure_return_type(ctx, body);
+        // Restore the prior locals state for these names.
+        for (name, prior) in saved_params {
+            if let Some(entry) = prior {
+                ctx.func_state.locals.insert(name, entry);
+            } else {
+                ctx.func_state.locals.remove(&name);
+            }
+        }
 
         // Collect parameter ownerships for ABI computation
         let closure_param_ownerships: Vec<Ownership> = params.iter()
@@ -819,7 +846,7 @@ fn detect_mutations_in_expr(
 
 /// Walk block statements looking for an explicit `return expr`, recursing into
 /// if/match/while/for/loop bodies. Returns the inferred type of the first return found.
-fn find_return_type_in_block(ctx: &LoweringContext, stmts: &[Spanned<Stmt>]) -> Option<TypeId> {
+fn find_return_type_in_block(ctx: &mut LoweringContext, stmts: &[Spanned<Stmt>]) -> Option<TypeId> {
     for stmt in stmts {
         match &stmt.node {
             Stmt::Return(Some(expr)) => {
@@ -873,7 +900,7 @@ fn find_return_type_in_block(ctx: &LoweringContext, stmts: &[Spanned<Stmt>]) -> 
 }
 
 /// Infer the return type of a closure body (simplified).
-fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> TypeId {
+fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) -> TypeId {
     match &body.node {
         Expr::IntLiteral(_) => I64_TYPE,
         Expr::FloatLiteral(_) => F64_TYPE,
@@ -981,6 +1008,33 @@ fn infer_closure_return_type(ctx: &LoweringContext, body: &Spanned<Expr>) -> Typ
                 }
             }
             UNIT_TYPE
+        }
+        // Tier 1c: previously fell through to I64_TYPE, silently
+        // mis-typing closure-body method calls like `e.to_upper()`
+        // (returns GorgetString, not int). The fallback was masked
+        // pre-Tier-1c because Option/Result weren't Resource so
+        // the type-rebuild logic in `map_err`'s
+        // `try_lower_option_result_combinator` didn't fire for
+        // same-type closures. Once Option/Result became Resource,
+        // the cross-type adapter built a wrongly-sized result type
+        // (`Result__T__int64_t` for a closure returning String),
+        // causing a memcpy buffer overread.
+        Expr::MethodCall { receiver, method, .. } => {
+            // Resolve receiver type. For `e.to_upper()` where `e` is
+            // a closure param, the param type hint sets `e`'s type
+            // before this inference runs.
+            let recv_type = infer_closure_return_type(ctx, receiver);
+            if recv_type == I64_TYPE {
+                // No useful type info — fall back.
+                return I64_TYPE;
+            }
+            if let Some(type_name) = ctx.type_name_for_id(recv_type) {
+                let type_name = type_name.to_string();
+                if let Some(ret) = ctx.resolve_builtin_method_return_type(&type_name, &method.node) {
+                    return ret;
+                }
+            }
+            I64_TYPE
         }
         _ => I64_TYPE,
     }

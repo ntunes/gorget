@@ -2437,19 +2437,13 @@ fn monomorphize_enum(
     // pre-registration paths via `wrapper_metadata_for_payloads`.
     // Only the rare `monomorphize_enum`-first-sees-it case is left
     // stale here.
-    let metadata = if matches!(template.name.node.as_str(), "Option" | "Result") {
-        TypeMetadata {
-            enum_category,
-            ..Default::default()
-        }
-    } else {
-        let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);
-        TypeMetadata {
-            enum_category,
-            drop_strategy,
-            copy_semantics,
-            ..Default::default()
-        }
+    // Tier 1c burn-down in progress — carve-out removed.
+    let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);
+    let metadata = TypeMetadata {
+        enum_category,
+        drop_strategy,
+        copy_semantics,
+        ..Default::default()
     };
     let type_def = TypeDef {
         name: mangled_name.to_string(),

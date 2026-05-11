@@ -97,7 +97,7 @@ These structural guards exist today and are load-bearing:
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
-| `validate_type_metadata_coherence` (Tier 1c) | TypeDef registered with implicit `(None, Trivial)` whose fields/variant-payloads are transitively droppable | `src/ir/validate.rs` | Env-gated (`GG_VALIDATE_TYPE_METADATA_COHERENCE`) — partial close, Option/Result wrapper migration deferred to Cluster 1 follow-on |
+| `validate_type_metadata_coherence` (Tier 1c) | TypeDef registered with implicit `(None, Trivial)` whose fields/variant-payloads are transitively droppable | `src/ir/validate.rs` | Fatal (promoted 2026-05-11 — all 6 migration sites coherent; Cluster 1 / Snag #24 closed) |
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 | `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
 | `no_typed_metadata_sidecars` (Tier 2d) | Parallel `HashMap<*, T>` sidecar where `T` is a typed `TypeMetadata` / `Local` field (DropStrategy / CopySemantics / CollectionKind / EnumKind / EnumCategory / LocalOwnership / BorrowOrigin) | `tests/lints.rs` | Fatal (BUDGET=0) |

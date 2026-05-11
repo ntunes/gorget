@@ -2422,8 +2422,29 @@ pub fn emit_result_auto_propagate(
     result_operand: Operand,
     result_type: TypeId,
 ) -> Operand {
+    // Tier 1c: when result_operand is a place operand on a resource
+    // Result, use Move semantics so val_local owns the data without
+    // shallow-aliasing the source. The original ENUM-init or call
+    // result is dead immediately after this assign — we extract its
+    // payload inline below and don't reference it again.
     let val_local = builder.add_local(result_type, None);
-    builder.assign(Place::local(val_local), result_operand);
+    let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = result_operand {
+        if p.projections.is_empty() { Some(p.local) } else { None }
+    } else { None };
+    if src_local.is_some() && ctx.type_registry.is_resource_type(result_type) {
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(val_local),
+            result_operand,
+        );
+        if let Some(local) = src_local {
+            if !ctx.drops.is_moved(local) {
+                ctx.move_zero_and_mark(builder, local);
+            }
+        }
+    } else {
+        builder.assign(Place::local(val_local), result_operand);
+    }
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, result_type);
@@ -2481,7 +2502,20 @@ pub fn emit_result_auto_propagate(
     if let Some(fn_res_type) = fn_result_type {
         let type_name = ctx.type_registry.type_name(fn_res_type).unwrap_or_else(|| "Result".to_string());
         let err_dst = builder.enum_init(type_name, "Error", fn_res_type, vec![FunctionBuilder::copy(err_val)]);
-        builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        // Tier 1c: Move + MoveZero — err_dst is freshly built (Owned)
+        // and dead immediately after; Copy would shallow-alias the
+        // return slot and double-free at scope exit now that
+        // Option/Result are Resource.
+        if ctx.type_registry.is_resource_type(fn_res_type) {
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(LocalId(0)),
+                FunctionBuilder::copy(err_dst),
+            );
+            ctx.move_zero_and_mark(builder, err_dst);
+        } else {
+            builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_dst));
+        }
     } else {
         builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(err_val));
     }
@@ -2605,7 +2639,21 @@ fn lower_rethrow_expr(
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
     let val_mode = mode_for(ctx, builder, &val, val_type);
+    // Tier 1c: snapshot the source before assign_mode consumes the
+    // operand, so we can mark it moved after a Move-mode assign.
+    // Without this, the source Result shares heap data with val_local;
+    // both drop at scope exit → double-free now that Result is Resource.
+    let val_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
+        if p.projections.is_empty() { Some(p.local) } else { None }
+    } else { None };
     builder.assign_mode(val_mode, Place::local(val_local), val);
+    if matches!(val_mode, crate::ir::instructions::AssignMode::Move) {
+        if let Some(src_local) = val_src_local {
+            if !ctx.drops.is_moved(src_local) {
+                ctx.move_zero_and_mark(builder, src_local);
+            }
+        }
+    }
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
@@ -2729,7 +2777,21 @@ fn lower_catch_expr(
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
     let val_mode = mode_for(ctx, builder, &val, val_type);
+    // Tier 1c: snapshot the source before assign_mode consumes the
+    // operand, so we can mark it moved after a Move-mode assign.
+    // Without this, the source Result shares heap data with val_local;
+    // both drop at scope exit → double-free now that Result is Resource.
+    let val_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
+        if p.projections.is_empty() { Some(p.local) } else { None }
+    } else { None };
     builder.assign_mode(val_mode, Place::local(val_local), val);
+    if matches!(val_mode, crate::ir::instructions::AssignMode::Move) {
+        if let Some(src_local) = val_src_local {
+            if !ctx.drops.is_moved(src_local) {
+                ctx.move_zero_and_mark(builder, src_local);
+            }
+        }
+    }
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
