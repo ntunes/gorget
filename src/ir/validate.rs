@@ -1070,6 +1070,22 @@ fn assign_read_site<'a>(
         if src_ty != dst_ty && src_place.projections.is_empty() {
             return None;
         }
+        // View-awareness probe (2026-05-11): a Copy of a `Borrowed` or
+        // `View` source is runtime-safe — both source and copy are
+        // non-owning aliases (cap=0 GorgetString views, Ptr-typed
+        // borrows), so the resulting byte-copy creates another
+        // non-owning alias whose drop is a no-op. Mirrors the
+        // `validate_consume_sites` rule at L2507. This skip is the
+        // basic-Assign-class equivalent.
+        use crate::ir::LocalOwnership;
+        if src_place.projections.is_empty()
+            && matches!(
+                func.locals[src_idx].ownership,
+                LocalOwnership::Borrowed { .. } | LocalOwnership::View { .. }
+            )
+        {
+            return None;
+        }
     }
     Some(ReadSite {
         func_name: &func.name,

@@ -2411,18 +2411,25 @@ fn monomorphize_enum(
     };
     // Tier 1c: compute drop metadata at construction for USER
     // generic enums. Option/Result skip the helper here —
-    // upgrading them surfaces ~653 violations across 56 fixtures of
-    // latent `Assign{Copy}` shallow copies of `Option__T`/`Result__T_E`
-    // (dominated by `Result__T__GorgetString`, the common
-    // throws-returns-String shape, with 600+ violations). Phase C's
-    // `validate_resource_moves` correctly flags these but the fix
-    // requires migrating every VarDecl/Assign emission site that
-    // picks Copy-vs-Move-vs-Borrow based on `is_resource_type` —
-    // those paths assumed Option/Result wrappers are non-resource.
-    // Migrating all of them is the Cluster 1 / Snag #24
-    // FieldLoad/EnumFieldLoad → Borrow follow-on (1-2 weeks). See
-    // TODO under "Tier 1c — complete the Option/Result wrapper
-    // migration".
+    // upgrading them surfaces 17 runtime regressions in Option/Result
+    // combinator fixtures (e.g., result_map.gg's map_err: a buffer
+    // overread when a cross-type adapter result is byte-copied into a
+    // wrongly-sized destination slot). The lowering's type inference
+    // at the cross-type adapter result site needs to propagate the
+    // NEW Result type (e.g., Result__int__int from map_err) to the
+    // VarDecl's destination local — currently the dst local is
+    // allocated with the OLD type. See
+    // `docs/internals/tier1c-cluster1-burn-down.md`.
+    //
+    // After view-awareness was added to `validate_resource_moves`
+    // (2026-05-11, this commit), the GIR-level validator probe shows
+    // ONLY 2 genuine violations across the full suite when the
+    // carve-out is removed — the other 15,632 prior "violations"
+    // were SELF-HOST validator output (pre-existing Phase C
+    // burn-down baseline, ~89k), not Rust validator output.
+    // So Cluster 1 is far more tractable than initial estimates:
+    // ~2 GIR violations + 17 runtime regressions = days of work,
+    // not weeks.
     //
     // The post-hoc `upgrade_types_from_fields` runs before this pass
     // for non-monomorphic types, and Snag #27's
