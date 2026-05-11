@@ -2409,17 +2409,27 @@ fn monomorphize_enum(
         "Result" => Some(EnumCategory::Result),
         _ => None,
     };
-    // Tier 1c (Phase 1): compute drop metadata at construction for
-    // USER generic enums only. Option/Result skip the helper here —
-    // upgrading them surfaces ~93 fixtures of latent shallow-copy
-    // lowering issues that Phase C's `validate_resource_moves`
-    // correctly flags (same class as the 2026-05-07 Cluster 1
-    // revert). The post-hoc `upgrade_types_from_fields` runs before
-    // this pass for non-monomorphic types, and Snag #27's
-    // `ensure_option_type_registered` covers late Option
-    // registration. Migrating Option/Result late paths requires
-    // the Cluster 1 follow-on (FieldLoad/EnumFieldLoad → Borrow
-    // shape). Deferred to a follow-up session.
+    // Tier 1c: compute drop metadata at construction for USER
+    // generic enums. Option/Result skip the helper here —
+    // upgrading them surfaces ~653 violations across 56 fixtures of
+    // latent `Assign{Copy}` shallow copies of `Option__T`/`Result__T_E`
+    // (dominated by `Result__T__GorgetString`, the common
+    // throws-returns-String shape, with 600+ violations). Phase C's
+    // `validate_resource_moves` correctly flags these but the fix
+    // requires migrating every VarDecl/Assign emission site that
+    // picks Copy-vs-Move-vs-Borrow based on `is_resource_type` —
+    // those paths assumed Option/Result wrappers are non-resource.
+    // Migrating all of them is the Cluster 1 / Snag #24
+    // FieldLoad/EnumFieldLoad → Borrow follow-on (1-2 weeks). See
+    // TODO under "Tier 1c — complete the Option/Result wrapper
+    // migration".
+    //
+    // The post-hoc `upgrade_types_from_fields` runs before this pass
+    // for non-monomorphic types, and Snag #27's
+    // `make_option_type_def`/`make_result_type_def` cover the AST
+    // pre-registration paths via `wrapper_metadata_for_payloads`.
+    // Only the rare `monomorphize_enum`-first-sees-it case is left
+    // stale here.
     let metadata = if matches!(template.name.node.as_str(), "Option" | "Result") {
         TypeMetadata {
             enum_category,
