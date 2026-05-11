@@ -413,6 +413,28 @@ impl FunctionBuilder {
             base,
             variant,
             field,
+            mode: crate::ir::instructions::EnumFieldLoadMode::Move,
+        })
+    }
+
+    /// Non-destructive sibling of `enum_field_load_move`. Used by
+    /// `lower_pattern_condition` to inspect a nested constructor's payload
+    /// without zeroing the source — `emit_pattern_bindings` re-reads the
+    /// same source for the actual binding (Snag #34).
+    pub fn enum_field_load_borrow(
+        &mut self,
+        base: Place,
+        variant: impl Into<String>,
+        field: u32,
+        type_id: TypeId,
+    ) -> LocalId {
+        let variant = variant.into();
+        self.emit_with_temp(type_id, |dst| Instruction::EnumFieldLoad {
+            dst,
+            base,
+            variant,
+            field,
+            mode: crate::ir::instructions::EnumFieldLoadMode::Borrow,
         })
     }
 

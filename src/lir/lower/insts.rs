@@ -1244,6 +1244,7 @@ impl<'a> FuncLowering<'a> {
                 base,
                 variant,
                 field,
+                mode,
             } => {
                 let mut base_val = self.lower_place_addr(base, bb);
                 let gir_type_id = self.gir_func.locals[base.local.0 as usize].type_id;
@@ -1327,7 +1328,13 @@ impl<'a> FuncLowering<'a> {
                     // a FieldPtr lowers to `memset(fptr, 0, sizeof(field_ty))`
                     // in c_lir (FieldPtr's ptr_pointee is the field type), so
                     // the whole struct payload is zeroed regardless of size.
-                    if payload_is_resource {
+                    // Skip the source-zero step for Borrow-mode reads
+                    // (lower_pattern_condition tests). The Move-mode default
+                    // (emit_pattern_bindings) keeps the destructive
+                    // shallow-copy-safety semantic.
+                    let do_zero = payload_is_resource
+                        && matches!(mode, crate::ir::instructions::EnumFieldLoadMode::Move);
+                    if do_zero {
                         let fptr = self.lir_func.next_value();
                         self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
                             dst: fptr,

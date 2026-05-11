@@ -1378,7 +1378,7 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                         class: ReadSiteClass::IndexLoad { dst_local: *dst },
                     });
                 }
-                Instruction::EnumFieldLoad { dst, base, variant, field } => {
+                Instruction::EnumFieldLoad { dst, base, variant, field, .. } => {
                     let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
                     // Ptr-typed dst: LIR returns field address (borrow).
                     if type_is_ptr(dst_ty, registry) {

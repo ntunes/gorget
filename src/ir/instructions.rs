@@ -116,6 +116,26 @@ pub enum ReadMode {
 /// truth. See `docs/internals/unified-resource-model.md` §6.4.
 pub type AssignMode = ReadMode;
 
+/// Move vs Borrow mode for `EnumFieldLoad` (Snag #34 family).
+///
+/// `Move` zeros the source's payload field at LIR for resource-type
+/// payloads (preventing shallow-copy double-free); used by
+/// `emit_pattern_bindings` when the binding takes ownership of the
+/// extracted field.
+///
+/// `Borrow` skips the source-zero step; used by `lower_pattern_condition`
+/// to inspect a nested constructor's tag/payload without destroying the
+/// source. The subsequent `emit_pattern_bindings` then re-reads from the
+/// same (un-zeroed) source. Without this split, the condition test's
+/// destructive read zeros the payload and the binding sees zeros — Snag
+/// #34's "Dict[String, NonCopyEnum] silently drops mutations" surface
+/// symptom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnumFieldLoadMode {
+    Move,
+    Borrow,
+}
+
 /// Instructions that don't transfer control flow.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
@@ -243,15 +263,24 @@ pub enum Instruction {
     /// Load a field from an enum variant's data (union access).
     /// C: `type _N = base.data.{variant}._{field};`
     ///
-    /// Always zeros the source field after extraction for resource-type
-    /// payloads (string / collection thin pointers), preventing shallow-copy
-    /// double-free when the caller subsequently drops either the extracted
-    /// local or the original enum.
+    /// `mode = Move` (default for pattern bindings): zeros the source field
+    /// after extraction for resource-type payloads (string / collection thin
+    /// pointers), preventing shallow-copy double-free when the caller
+    /// subsequently drops either the extracted local or the original enum.
+    ///
+    /// `mode = Borrow` (pattern-condition tests on nested constructors): does
+    /// NOT zero the source field. Required when the same scrutinee will be
+    /// read again by `emit_pattern_bindings` after the condition check
+    /// completes — without Borrow, the test's destructive read zeros the
+    /// source and the subsequent binding sees zeros (Snag #34 family). The
+    /// extracted local is a *view* of the source's payload bytes; the caller
+    /// must not drop it independently.
     EnumFieldLoad {
         dst: LocalId,
         base: Place,
         variant: String,
         field: u32,
+        mode: EnumFieldLoadMode,
     },
 
     // -- Calls --

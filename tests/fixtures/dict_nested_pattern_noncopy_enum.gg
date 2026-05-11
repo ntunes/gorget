@@ -1,0 +1,60 @@
+# Snag #34 regression: `Dict[K, Enum]` where Enum has any non-Copy
+# (resource-bearing) variant silently dropped mutations when the read
+# site used a nested constructor pattern.
+#
+# Root cause: `lower_pattern_condition` emitted `enum_field_load_move`
+# to inspect a nested constructor's tag/payload. At LIR this lowered to
+# a destructive read (memcpy + zero-source) for resource payloads, so
+# the subsequent `emit_pattern_bindings` re-read from the now-zeroed
+# source and bound zero values.
+#
+# Fix: split `EnumFieldLoad` into `Move` / `Borrow` modes. The
+# condition test uses `Borrow` (read without zero), the binding uses
+# `Move` (existing destructive shallow-copy-safety semantic). Both
+# `emit_pattern_bindings` and `lower_pattern_condition` route through
+# typed builder helpers so the two surface forms can't disagree.
+#
+# The bug surfaced in `gorget-js` via Array push: `length` stored as
+# JsValue (non-Copy enum), each push read length-before / wrote
+# length+1, the nested-pattern read returned 0, push wrote 1, the next
+# push read 0 again → length stuck at 1.
+
+from std.collections import Dict
+
+public enum V:
+    Num(float)
+    VecV(Vector[int])
+
+int read_num(Dict[String, V] &d, String k):
+    return match d.get(k):
+        case Some(V.Num(n)):
+            n as int
+        else:
+            -1
+
+int main():
+    Dict[String, V] d = Dict[String, V]()
+
+    # Single put + nested-pattern read — the unit case that exposed the
+    # bug at its smallest.
+    d.put("a", V.Num(7.0))
+    int a1 = read_num(&d, "a")
+
+    # Overwrite + read — confirms the "silently no-op" surface symptom
+    # the user originally reported. `b` is put twice; the second put
+    # MUST be observable.
+    d.put("b", V.Num(1.0))
+    d.put("b", V.Num(42.0))
+    int b1 = read_num(&d, "b")
+
+    # Read-modify-write cycle, the gorget-js Array.push trigger.
+    # length=0 → read 0 → write 1 → read 1 → write 2 → read 2.
+    d.put("len", V.Num(0.0))
+    int len0 = read_num(&d, "len")
+    d.put("len", V.Num((len0 + 1) as float))
+    int len1 = read_num(&d, "len")
+    d.put("len", V.Num((len1 + 1) as float))
+    int len2 = read_num(&d, "len")
+
+    print(f"a1={a1} b1={b1} len={len0},{len1},{len2}")
+    return 0

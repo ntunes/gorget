@@ -2928,6 +2928,14 @@ case 1 err: inner-error",
 }
 
 #[test]
+fn dict_nested_pattern_noncopy_enum() {
+    run_gg(
+        "dict_nested_pattern_noncopy_enum.gg",
+        "a1=7 b1=42 len=0,1,2",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

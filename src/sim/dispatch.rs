@@ -1108,7 +1108,7 @@ impl<'m> Interpreter<'m> {
                 locals[i] = Value::I64(tag);
             }
 
-            Instruction::EnumFieldLoad { dst, base, variant, field } => {
+            Instruction::EnumFieldLoad { dst, base, variant, field, .. } => {
                 let base_val = self.read_place(locals, base)?;
                 // Auto-deref if base is a pointer (C's `ptr->data.Variant._N` form).
                 let base_val = match base_val {

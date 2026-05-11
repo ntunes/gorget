@@ -161,7 +161,7 @@ fn infer_func(
                     // `returns_fresh` flag is the typed gate for the
                     // "owned by value" axis.
                 }
-                Instruction::EnumFieldLoad { dst, base, variant, field } => {
+                Instruction::EnumFieldLoad { dst, base, variant, field, .. } => {
                     // Tag the extracted slot as Owned when the base is
                     // move-zeroed (whole local OR matching projection)
                     // somewhere later in this block — OR when this exact

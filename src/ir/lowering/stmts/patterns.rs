@@ -413,7 +413,15 @@ pub fn lower_pattern_condition(
                         })
                         .unwrap_or(I64_TYPE);
 
-                    let field_local = builder.enum_field_load_move(
+                    // Snag #34: Borrow mode — the condition test reads the
+                    // payload to inspect a nested constructor's tag but
+                    // must NOT zero the source field, because
+                    // `emit_pattern_bindings` re-reads from the same source
+                    // for the actual binding. Without Borrow, the test's
+                    // destructive read zeros the payload and the binding
+                    // sees zeros (silent wrong-value bug — Dict[K, V]
+                    // with non-Copy V returning zeros after put).
+                    let field_local = builder.enum_field_load_borrow(
                         Place::local(scrut_local),
                         variant_name.clone(),
                         i as u32,
