@@ -31,33 +31,54 @@ remaining items.
 
 ## What surfaces when the carve-out is removed
 
-A 2026-05-11 probe with `validate_resource_moves` env-gated, **after**
-adding view-awareness to that validator (this commit's change), shows:
+A 2026-05-11 probe (re-run post-rebase onto Snag #32 main, serial per
+failing fixture to defeat parallel-append log contention) with
+`validate_resource_moves` env-gated and view-awareness shipped:
 
-1. **2 genuine Rust GIR validator violations** across the full suite:
+1. **202 genuine Rust GIR validator violations** across the 17
+   failing fixtures. All Owned-source shallow copies of
+   `Option__T_String` / `Result__T_String`. View-awareness does NOT
+   collapse these because the sources are Owned (the carve-out
+   removal makes Option/Result Resource, and lowering sites that
+   previously emitted `Copy` of an Owned wrapper now need to emit
+   `Move`/`Borrow`). Breakdown by type:
+
    ```
-   Describer_for_Widget__describe:bb0:i2: OpCopy(_3) on resource GorgetString
-   main:bb0:i4: OpCopy(_1) on resource GorgetString
+    66 Result__GorgetString__GorgetString
+    64 Result__HttpResponse__GorgetString
+    32 Result__HttpRequest__GorgetString
+    12 Option__GorgetString
+    10 Result__int64_t__GorgetString
+     8 Result__TlsSocket__GorgetString
+     8 Result__Socket__GorgetString
+     1 Result__User__GorgetString
+     1 Result__Profile__GorgetString
    ```
 
 2. **17 runtime regressions** (suite passes 1082→1065). These are
-   correctness regressions where the runtime now produces wrong
-   output — typically a buffer overread / wrong-sized memcpy when a
-   cross-type adapter result is byte-copied into a wrongly-sized
-   destination slot.
+   correctness regressions where the runtime produces wrong output —
+   typically a buffer overread / wrong-sized memcpy when a cross-type
+   adapter result is byte-copied into a wrongly-sized destination
+   slot. Overlap with the 202 violations: same fixtures, same root
+   cause class.
 
-The previously-reported "15,634 violations" turned out to be **mostly
-SELF-HOST validator output** (a different format and origin —
-self-host's own GIR validator running while compiling self-host
-fixtures, part of the existing Phase C self-host validator burn-down
-at ~89k baseline). After view-awareness was added to the Rust
-validator AND that prior misattribution was corrected, the Cluster 1
-burn-down shrank by orders of magnitude:
+The previously-reported "15,634 violations" turned out to be **SELF-HOST
+validator output** (a different format and origin — self-host's own
+GIR validator running while compiling self-host fixtures, part of the
+existing Phase C self-host validator burn-down at ~89k baseline,
+unrelated to Tier 1c). After view-awareness was added to the Rust
+validator AND that prior misattribution was corrected:
 
 ```
 Before:  15,634 GIR violations + 17 runtime regressions  →  1-2 weeks
-After:    2 GIR violations + 17 runtime regressions       →  days
+After:      202 GIR violations + 17 runtime regressions  →  days
 ```
+
+The previous note saying "2 GIR violations" was undercounted: it came
+from a parallel-test sweep (`--test-threads=4`) where concurrent writes
+to the shared `GG_VALIDATE_RESOURCE_MOVES` log file lost most of the
+Rust-validator entries; serial probing on the 17 failing fixtures
+recovered the full 202.
 
 ### View-awareness (shipped 2026-05-11)
 
@@ -69,10 +90,10 @@ creates another non-owning alias whose drop is a no-op. The validator
 now mirrors `validate_consume_sites` (`src/ir/validate.rs:2507`) by
 skipping Borrowed/View sources at the `assign_read_site` level.
 
-This collapsed false positives. The remaining 2 violations are
-genuine Owned-source shallow copies on resource types — likely from
-the same root cause as the 17 runtime regressions (cross-type result
-adapter destination mis-sizing).
+This eliminated false positives. The remaining 202 violations are
+genuine Owned-source shallow copies on resource types — same root
+cause class as the 17 runtime regressions (cross-type result adapter
+destination mis-sizing).
 
 ## The 17 runtime regressions
 
