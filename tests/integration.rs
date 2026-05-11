@@ -2918,6 +2918,16 @@ deref: None",
 }
 
 #[test]
+fn nested_match_return_from_inner_arm() {
+    run_gg(
+        "nested_match_return_from_inner_arm.gg",
+        "\
+case 0: 142
+case 1 err: inner-error",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

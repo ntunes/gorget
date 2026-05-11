@@ -2928,8 +2928,25 @@ fn lower_match_stmt_as_expr(
             builder.jump(merge_bb);
         }
     } else if !concrete_arms.is_empty() {
-        // No else arm but we're on the fallthrough block — jump to merge
-        builder.jump(merge_bb);
+        // No else arm. After the loop, builder.current_block is the last
+        // arm's body block (because next_test_bb == merge_bb for the last
+        // arm, so the post-arm `switch_to(next_test_bb)` is skipped). That
+        // body is already terminated — either by `return`/`break`/`continue`
+        // emitted inside the arm, or by the post-arm `jump(merge_bb)` the
+        // loop emits when not terminated.
+        //
+        // Snag #33: this branch previously emitted `builder.jump(merge_bb)`
+        // unconditionally, which calls `set_terminator` and *overwrites* the
+        // already-set Return terminator. The result was a nested
+        // match-as-expression where `return X` in the inner arm silently
+        // fell through to the outer merge block instead of returning from
+        // the function. Gate on `!is_terminated()` so the jump only fires
+        // for genuine fallthrough (defensive — current code-paths never
+        // hit it). The sibling `lower_match_expr` doesn't have this branch
+        // at all; both forms now agree.
+        if !builder.is_terminated() {
+            builder.jump(merge_bb);
+        }
     }
 
     builder.switch_to(merge_bb);

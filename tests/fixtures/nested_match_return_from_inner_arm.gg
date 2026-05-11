@@ -1,0 +1,42 @@
+# Snag #33 regression: when the inner of a nested match-as-expression
+# contains `return X` in an arm body, the outer's
+# `lower_match_stmt_as_expr` was overwriting the inner block's `Return`
+# terminator with a `Jump merge_bb`. Result: the function never returned;
+# control fell through to the outer merge_bb, used the (stale/zero)
+# result_local for the outer arm value, and silently produced a wrong
+# answer.
+#
+# Bug location: `src/ir/lowering/exprs/mod.rs::lower_match_stmt_as_expr`
+# at the post-loop `else if !concrete_arms.is_empty() { jump(merge_bb) }`
+# branch — `builder.jump` calls `set_terminator` which unconditionally
+# overwrites. Fix: gate the jump on `!is_terminated()`. The sibling
+# `lower_match_expr` doesn't have this branch at all (correct), which is
+# why the single-match version `outer() / match inner(): …; return Ok(v+100)`
+# worked.
+
+Result[int, String] inner():
+    return Error("inner-error")
+
+Result[int, String] outer(int n):
+    int v = match n:
+        case 0:
+            42
+        else:
+            match inner():
+                case Ok(x):
+                    x
+                case Error(e):
+                    return Error(e)
+    return Ok(v + 100)
+
+void main():
+    match outer(0):
+        case Ok(v):
+            print(f"case 0: {v}")
+        case Error(e):
+            print(f"case 0 err: {e}")
+    match outer(1):
+        case Ok(v):
+            print(f"case 1: BUG: {v}")
+        case Error(e):
+            print(f"case 1 err: {e}")
