@@ -1501,6 +1501,53 @@ pub fn lower_module(
     // without needing to enumerate each one manually.
     auto_register_externs(&mut module);
 
+    // Tier 1c — TypeDef metadata coherence at registration.
+    //
+    // Env-gated initial sweep: walks every TypeDef and reports any whose
+    // `(drop_strategy, copy_semantics)` is less restrictive than what
+    // `compute_drop_strategy_for_struct/_for_enum` returns now. The sweep
+    // groups by kind + name, suitable for migration planning. NOT
+    // promoted to fatal yet — that's the closing step of the Tier 1c
+    // burn-down once each registration site has been migrated.
+    //
+    // Activate with:
+    //   GG_VALIDATE_TYPE_METADATA_COHERENCE=/tmp/tier1c.log cargo test ...
+    //
+    // See `docs/internals/structural-guards.md` §Tier 1c.
+    if let Ok(log_path) = std::env::var("GG_VALIDATE_TYPE_METADATA_COHERENCE") {
+        if !log_path.is_empty() {
+            let warnings = crate::ir::validate::validate_type_metadata_coherence(&module);
+            if !warnings.is_empty() {
+                use std::io::Write;
+                use rustc_hash::FxHashMap;
+                let mut by_kind: FxHashMap<&'static str, usize> = FxHashMap::default();
+                for w in &warnings {
+                    let k = match w.kind {
+                        crate::ir::validate::TypeMetadataCoherenceKind::Struct => "Struct",
+                        crate::ir::validate::TypeMetadataCoherenceKind::Enum => "Enum",
+                    };
+                    *by_kind.entry(k).or_insert(0) += 1;
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true).append(true).open(&log_path)
+                {
+                    let module_name = module.source_filename.as_deref().unwrap_or("<unknown>");
+                    let _ = writeln!(f, "[type-metadata-coherence] module={} total={}",
+                        module_name, warnings.len());
+                    let mut ks: Vec<_> = by_kind.iter().collect();
+                    ks.sort_by(|a, b| a.0.cmp(b.0));
+                    for (k, v) in &ks {
+                        let _ = writeln!(f, "  kind {}={}", k, v);
+                    }
+                    // Sample warnings; cap to keep logs readable.
+                    for w in warnings.iter().take(200) {
+                        let _ = writeln!(f, "  {}", w);
+                    }
+                }
+            }
+        }
+    }
+
     // Validate the resulting module
     let errors = crate::ir::validate::validate(&module);
     if !errors.is_empty() {

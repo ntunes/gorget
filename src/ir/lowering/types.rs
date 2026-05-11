@@ -600,10 +600,19 @@ pub fn register_struct_type(
         })
         .collect();
 
+    // Tier 1c: compute coherence-at-construction drop metadata. The
+    // post-hoc `upgrade_types_from_fields` pass already catches user
+    // structs registered before function lowering; this helper closes
+    // the timing window between registration and the upgrade pass.
+    let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_struct(&fields);
     let type_def = TypeDef {
         name: name.clone(),
         kind: TypeDefKind::Struct(StructDef { fields }),
-        metadata: TypeMetadata::default(), // Copy semantics by default
+        metadata: TypeMetadata {
+            drop_strategy,
+            copy_semantics,
+            ..Default::default()
+        },
     };
 
     registry.add_type_def(type_def);
@@ -632,10 +641,16 @@ pub fn register_newtype(
         name: "_0".to_string(),
         type_id: inner_type,
     }];
+    // Tier 1c: compute coherence-at-construction drop metadata.
+    let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_struct(&fields);
     let type_def = TypeDef {
         name: name.clone(),
         kind: TypeDefKind::Struct(StructDef { fields }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            drop_strategy,
+            copy_semantics,
+            ..Default::default()
+        },
     };
     registry.add_type_def(type_def);
 }
@@ -973,10 +988,16 @@ pub fn register_enum_type(
         })
         .collect();
 
+    // Tier 1c: compute coherence-at-construction drop metadata.
+    let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);
     let type_def = TypeDef {
         name: name.clone(),
         kind: TypeDefKind::Enum(EnumDef { variants }),
-        metadata: TypeMetadata::default(),
+        metadata: TypeMetadata {
+            drop_strategy,
+            copy_semantics,
+            ..Default::default()
+        },
     };
 
     registry.add_type_def(type_def);

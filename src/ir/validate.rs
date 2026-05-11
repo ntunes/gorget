@@ -1711,6 +1711,161 @@ pub fn validate_move_follow_through(module: &Module) -> Vec<MoveFollowThroughWar
     warnings
 }
 
+// ── Tier 1c: TypeDef metadata coherence at registration ──────────────
+// See `docs/internals/structural-guards.md` §1c for the invariant.
+//
+// Every registered TypeDef whose fields/variant-payloads contain a
+// droppable type must itself have a non-None drop_strategy and Resource
+// copy_semantics. Today this is enforced post-hoc by
+// `upgrade_types_from_fields` — but that creates a timing class where
+// late-registered Options/tuples/structs carry stale metadata between
+// registration and the next upgrade scan.
+//
+// The validator walks every TypeDef and compares the recorded metadata
+// to what `compute_drop_strategy_for_struct/_for_enum` would compute
+// now. Any mismatch indicates a registration site that didn't write
+// coherent metadata at construction — those are the migration targets.
+
+/// A single Tier 1c coherence violation.
+#[derive(Debug, Clone)]
+pub struct TypeMetadataCoherenceWarning {
+    pub type_name: String,
+    /// What `compute_drop_strategy_for_struct/_for_enum` returned NOW.
+    pub expected_drop: DropStrategy,
+    pub expected_copy: CopySemantics,
+    /// What's recorded on the TypeDef.
+    pub actual_drop: DropStrategy,
+    pub actual_copy: CopySemantics,
+    /// Whether the TypeDef is a struct or enum (for grouping).
+    pub kind: TypeMetadataCoherenceKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeMetadataCoherenceKind {
+    Struct,
+    Enum,
+}
+
+impl std::fmt::Display for TypeMetadataCoherenceWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kind = match self.kind {
+            TypeMetadataCoherenceKind::Struct => "struct",
+            TypeMetadataCoherenceKind::Enum => "enum",
+        };
+        write!(f,
+            "{} {}: expected ({:?}, {:?}), actual ({:?}, {:?})",
+            kind, self.type_name,
+            self.expected_drop, self.expected_copy,
+            self.actual_drop, self.actual_copy)
+    }
+}
+
+/// Run the Tier 1c TypeDef metadata coherence validator.
+///
+/// Walks every TypeDef and returns a warning for any whose metadata is
+/// less restrictive than `compute_drop_strategy_for_struct/_for_enum`
+/// would yield NOW. False positives are impossible at the
+/// `(DropStrategy, CopySemantics)` axis: the helper only "upgrades"
+/// from `(None, Trivial)` to `(Recursive, Resource)`. A site that
+/// recorded `Trivial("fn")` / `Custom("fn")` / explicit `Recursive` is
+/// considered coherent — the helper would have upgraded to Recursive,
+/// but the recorded strategy is already non-None, so the validator
+/// treats it as already correct (the writer was explicit and we trust
+/// it).
+///
+/// **Smart-pointer-wrapper carve-out.** A single-field struct
+/// `{ _0: T }` registered with `(Trivial, None)` and no
+/// `enum_category` / `collection_kind` is the signature of the
+/// Mutex/RWLock-style "permanent singleton" wrapper. The writer
+/// chose Trivial+None EXPLICITLY (these handles are never freed at
+/// the GIR level; the inner T's lifecycle is managed at the runtime
+/// level via `mutex_destroy` etc.). The validator skips this case to
+/// avoid flagging the writer's deliberate design. The signature is
+/// structural: number of fields + recorded copy/drop + absence of
+/// enum_category / collection_kind. No name-matching.
+///
+/// Returns the violations sorted by type name (stable output).
+pub fn validate_type_metadata_coherence(
+    module: &Module,
+) -> Vec<TypeMetadataCoherenceWarning> {
+    let mut warnings = Vec::new();
+    for td in module.type_registry.type_defs() {
+        let (expected_drop, expected_copy) = match &td.kind {
+            TypeDefKind::Struct(sdef) => {
+                module.type_registry.compute_drop_strategy_for_struct(&sdef.fields)
+            }
+            TypeDefKind::Enum(edef) => {
+                module.type_registry.compute_drop_strategy_for_enum(&edef.variants)
+            }
+            // Aliases don't have their own drop metadata — they defer to
+            // the aliased TypeId.
+            TypeDefKind::Alias(_) => continue,
+        };
+        // Coherence rule: if the helper says "must be Resource+Recursive"
+        // but the TypeDef recorded (None, Trivial), that's a violation.
+        // Any explicit non-None strategy is accepted (the writer was
+        // explicit and chose Trivial("free") / Custom / Recursive).
+        let actual_drop = td.metadata.drop_strategy.clone();
+        let actual_copy = td.metadata.copy_semantics;
+
+        // Smart-pointer wrapper carve-out (see doc above).
+        if let TypeDefKind::Struct(sdef) = &td.kind {
+            let is_single_field_wrapper = sdef.fields.len() == 1
+                && sdef.fields[0].name == "_0"
+                && td.metadata.enum_category.is_none()
+                && td.metadata.collection_kind.is_none()
+                && actual_drop == DropStrategy::None
+                && actual_copy == CopySemantics::Trivial;
+            if is_single_field_wrapper {
+                continue;
+            }
+        }
+
+        if expected_drop == DropStrategy::Recursive
+            && actual_drop == DropStrategy::None
+        {
+            let kind = match &td.kind {
+                TypeDefKind::Struct(_) => TypeMetadataCoherenceKind::Struct,
+                TypeDefKind::Enum(_) => TypeMetadataCoherenceKind::Enum,
+                TypeDefKind::Alias(_) => unreachable!(),
+            };
+            warnings.push(TypeMetadataCoherenceWarning {
+                type_name: td.name.clone(),
+                expected_drop,
+                expected_copy,
+                actual_drop,
+                actual_copy,
+                kind,
+            });
+        } else if expected_drop == DropStrategy::Recursive
+            && actual_copy != CopySemantics::Resource
+        {
+            // drop_strategy is set, but copy_semantics still Trivial:
+            // ref-counted types are intentional (Channel/Shared/Weak —
+            // Copy + Trivial(decref)), so only warn when drop_strategy
+            // is Recursive — that case combines "transitive drop" with
+            // "Copy semantics" which is incoherent.
+            if matches!(actual_drop, DropStrategy::Recursive) {
+                let kind = match &td.kind {
+                    TypeDefKind::Struct(_) => TypeMetadataCoherenceKind::Struct,
+                    TypeDefKind::Enum(_) => TypeMetadataCoherenceKind::Enum,
+                    TypeDefKind::Alias(_) => unreachable!(),
+                };
+                warnings.push(TypeMetadataCoherenceWarning {
+                    type_name: td.name.clone(),
+                    expected_drop,
+                    expected_copy,
+                    actual_drop,
+                    actual_copy,
+                    kind,
+                });
+            }
+        }
+    }
+    warnings.sort_by(|a, b| a.type_name.cmp(&b.type_name));
+    warnings
+}
+
 /// Identify locals that receive a bare-place `Drop`/`DropIfAlive`
 /// instruction anywhere in `func`. These are "drop-registered" from the
 /// validator's vantage point — the lowering passes emitted a drop site
@@ -3138,5 +3293,135 @@ mod tests {
         assert!(warnings.is_empty(),
             "MoveZero between call and Drop must clear the violation; got: {:?}",
             warnings);
+    }
+
+    /// Tier 1c: struct with `..Default::default()` metadata + a resource
+    /// field gets flagged by the validator.
+    #[test]
+    fn tier1c_coherence_struct_with_resource_flagged() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+        module.type_registry.add_type_def(TypeDef {
+            name: "Holder".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![
+                    StructField { name: "a".into(), type_id: I64_TYPE },
+                    StructField { name: "b".into(), type_id: buf_id },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(
+            warnings.iter().any(|w| w.type_name == "Holder"
+                && w.expected_drop == DropStrategy::Recursive
+                && w.actual_drop == DropStrategy::None),
+            "Holder should be flagged. Warnings: {:?}", warnings
+        );
+    }
+
+    /// Tier 1c: struct with coherent metadata is NOT flagged.
+    #[test]
+    fn tier1c_coherence_struct_coherent_not_flagged() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+        module.type_registry.add_type_def(TypeDef {
+            name: "Holder".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![StructField { name: "b".into(), type_id: buf_id }],
+            }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Recursive,
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(warnings.is_empty(), "coherent Holder should NOT be flagged. Warnings: {:?}", warnings);
+    }
+
+    /// Tier 1c: smart-pointer wrapper carve-out — single-field `_0: T`
+    /// struct with explicit (Trivial, None) is NOT flagged even when T
+    /// is a resource type.
+    #[test]
+    fn tier1c_coherence_smart_pointer_wrapper_skipped() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+        module.type_registry.add_type_def(TypeDef {
+            name: "Mutex__Buf".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![StructField { name: "_0".into(), type_id: buf_id }],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(
+            warnings.iter().all(|w| w.type_name != "Mutex__Buf"),
+            "smart-pointer wrapper should NOT be flagged. Warnings: {:?}", warnings
+        );
+    }
+
+    /// Tier 1c: enum with `..Default::default()` metadata + resource
+    /// variant payload gets flagged.
+    #[test]
+    fn tier1c_coherence_enum_with_resource_variant_flagged() {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("OwnedBuf".into()));
+        module.type_registry.add_type_def(TypeDef {
+            name: "MaybeBuf".into(),
+            kind: TypeDefKind::Enum(EnumDef {
+                variants: vec![
+                    EnumVariant {
+                        name: "Some".into(),
+                        fields: vec![StructField { name: "_0".into(), type_id: buf_id }],
+                    },
+                    EnumVariant { name: "None".into(), fields: vec![] },
+                ],
+            }),
+            metadata: TypeMetadata::default(),
+        });
+        let warnings = validate_type_metadata_coherence(&module);
+        assert!(
+            warnings.iter().any(|w| w.type_name == "MaybeBuf"
+                && w.expected_drop == DropStrategy::Recursive
+                && w.kind == TypeMetadataCoherenceKind::Enum),
+            "MaybeBuf should be flagged. Warnings: {:?}", warnings
+        );
     }
 }

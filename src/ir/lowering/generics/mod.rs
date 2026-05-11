@@ -2340,6 +2340,17 @@ fn monomorphize_struct(
             ..Default::default()
         }
     } else {
+        // Tier 1c: defer drop metadata to the post-hoc
+        // `upgrade_types_from_fields` pass. Promoting at construction
+        // surfaces missing per-mono Shared/Weak/Channel/Guard `__drop`
+        // wrapper emission for user generic structs that hold those
+        // types — the C backend's `emit_shared_wrapper` family emits
+        // wrappers on-demand by scanning module.externs/functions, and
+        // a field-level recursive drop call doesn't register the
+        // wrapper as a dependency. Migrating this requires the same
+        // Cluster 1 follow-on as the Option/Result wrapper migration
+        // (FieldLoad/EnumFieldLoad → Borrow shape + the per-mono
+        // wrapper emission dependency tracking). Deferred.
         TypeMetadata::default()
     };
 
@@ -2395,13 +2406,35 @@ fn monomorphize_enum(
         "Result" => Some(EnumCategory::Result),
         _ => None,
     };
+    // Tier 1c (Phase 1): compute drop metadata at construction for
+    // USER generic enums only. Option/Result skip the helper here —
+    // upgrading them surfaces ~93 fixtures of latent shallow-copy
+    // lowering issues that Phase C's `validate_resource_moves`
+    // correctly flags (same class as the 2026-05-07 Cluster 1
+    // revert). The post-hoc `upgrade_types_from_fields` runs before
+    // this pass for non-monomorphic types, and Snag #27's
+    // `ensure_option_type_registered` covers late Option
+    // registration. Migrating Option/Result late paths requires
+    // the Cluster 1 follow-on (FieldLoad/EnumFieldLoad → Borrow
+    // shape). Deferred to a follow-up session.
+    let metadata = if matches!(template.name.node.as_str(), "Option" | "Result") {
+        TypeMetadata {
+            enum_category,
+            ..Default::default()
+        }
+    } else {
+        let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);
+        TypeMetadata {
+            enum_category,
+            drop_strategy,
+            copy_semantics,
+            ..Default::default()
+        }
+    };
     let type_def = TypeDef {
         name: mangled_name.to_string(),
         kind: TypeDefKind::Enum(EnumDef { variants }),
-        metadata: TypeMetadata {
-            enum_category,
-            ..Default::default()
-        },
+        metadata,
     };
 
     registry.add_type_def(type_def);

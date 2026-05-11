@@ -97,6 +97,7 @@ These structural guards exist today and are load-bearing:
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
+| `validate_type_metadata_coherence` (Tier 1c) | TypeDef registered with implicit `(None, Trivial)` whose fields/variant-payloads are transitively droppable | `src/ir/validate.rs` | Env-gated (`GG_VALIDATE_TYPE_METADATA_COHERENCE`) — partial close, Option/Result wrapper migration deferred to Cluster 1 follow-on |
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 | `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
 | `no_typed_metadata_sidecars` (Tier 2d) | Parallel `HashMap<*, T>` sidecar where `T` is a typed `TypeMetadata` / `Local` field (DropStrategy / CopySemantics / CollectionKind / EnumKind / EnumCategory / LocalOwnership / BorrowOrigin) | `tests/lints.rs` | Fatal (BUDGET=0) |
@@ -143,21 +144,32 @@ Tiered by maturity. Tier 1 = invariants we know are violated today, with concret
 
 Validator at `src/ir/validate.rs:1642` (`validate_move_follow_through`); fatal panic block at `src/ir/lowering/mod.rs:1619`. The dominant violation class — f-string interp segment temps emitting `Move`-mode assigns of drop-registered sources without follow-through — was closed in commit `1d3ccd5b` at `src/ir/lowering/exprs/calls.rs:1517` and `:1533`. Sweep of record (`c_emit_comparison`, 1066 fixtures): 0 violations. See DONE.md for the full chain.
 
-#### 1c. Type-metadata coherence at registration
+#### 1c. Type-metadata coherence at registration *(IN PROGRESS — foundation + safe-class migrations shipped 2026-05-11; Option/Result wrappers deferred)*
 
 **Invariant.** Whenever a TypeDef is registered with `copy_semantics: Trivial`, none of its fields/variant-payloads has `copy_semantics: Resource` or `drop_strategy ≠ None`. Said differently: the upgrade pass (`upgrade_types_from_fields`) is unnecessary because metadata is correct at the construction site.
 
-**Validator sketch.** After GIR lowering completes, for each TypeDef walk fields/variant payloads. If any payload is droppable, the type's `drop_strategy` must be non-None and `copy_semantics` must be Resource.
+**Validator.** `validate_type_metadata_coherence` at `src/ir/validate.rs:1776` walks every TypeDef and compares the recorded `(drop_strategy, copy_semantics)` against what `TypeRegistry::compute_drop_strategy_for_struct/_for_enum` returns from the live registry. Mismatch (helper says Recursive+Resource, recorded was None+Trivial) is a violation. Env-gated via `GG_VALIDATE_TYPE_METADATA_COHERENCE=<log>`. **Smart-pointer-wrapper carve-out:** single-field struct `{ _0: T }` registered with explicit `(Trivial, None)` and no `enum_category` / `collection_kind` is the structural signature of Mutex/RWLock-style "permanent singleton" wrappers — the writer chose Trivial+None EXPLICITLY (these handles aren't freed at the GIR level; inner T's lifecycle is managed at the C runtime layer). The validator skips this case structurally, no name-matching.
 
 **Why it matters.** The snag #24 root cause includes a timing class: `make_option_type_def` registers Options with `..Default::default()` (DropStrategy::None), and the global `upgrade_types_from_fields` pass that fixes this only runs once at module-start. Lazy registrations during expression lowering miss the upgrade. Promoting *coherence-at-construction* to a hard invariant eliminates the timing class entirely.
 
-**Burn-down.**
-1. Validator + gate.
-2. Migrate `make_option_type_def` / `make_result_type_def` / `make_wrapper_type_def` to take the type registry and compute correct metadata from the inner type.
-3. Delete the post-hoc `upgrade_types_from_fields` pass (or keep it as a defence-in-depth assertion that the construction sites are correct).
-4. Promote.
+**Shipped 2026-05-11 (commits `3556b390`, `1f463392`):**
+1. **Foundation:** `TypeRegistry::compute_drop_strategy_for_struct(&[StructField]) -> (DropStrategy, CopySemantics)` and `compute_drop_strategy_for_enum(&[EnumVariant]) -> (DropStrategy, CopySemantics)` extracted from `upgrade_types_from_fields` semantics — narrower than `needs_drop` (excludes FnPtr fields, matching the post-hoc pass).
+2. **Validator + env gate:** `validate_type_metadata_coherence` + `GG_VALIDATE_TYPE_METADATA_COHERENCE` env gate + smart-pointer wrapper carve-out. 4 unit tests.
+3. **Safe-class migrations (registration sites that don't surface latent shallow-copy lowering bugs):** `register_struct_type` / `register_enum_type` / `register_newtype` in `lowering/types.rs`; `monomorphize_enum` (user generic enums, with Option/Result carve-out) in `lowering/generics/mod.rs`.
 
-**Estimate.** 1-2 sessions. Migration is mechanical once the validator pinpoints the construction sites.
+**Deferred (Cluster 1 follow-on required first):**
+- `make_option_type_def` / `make_result_type_def` and all their callers (`map_ast_type_mut`, `register_builtin_option`/`_result`, three `Result_T_E`-from-throws sites in mod.rs/traits.rs/functions.rs, `map_err`/`map` in methods.rs, `ensure_option_type_registered` in context.rs).
+- `monomorphize_enum` carve-out for Option/Result.
+- `monomorphize_struct` (user generic structs) — initial migration regressed 8 `tensor_*` fixtures via missing per-mono Shared/Weak `__drop` wrapper emission (the C backend emits wrappers on-demand and a field-level recursive drop call doesn't register the dependency). Reverted in commit `7c20e379`. Migration blocked on per-mono wrapper emission dependency tracking at LIR-exit, in addition to the Cluster 1 lowering follow-on.
+- Tuple registration in `map_ast_type_mut` and `exprs/type_reg.rs::register_tuple_type` (late-registered).
+- Closure capture struct in `closures.rs` (late-registered).
+
+Migrating these surfaces ~93 latent shallow-copy lowering issues that Phase C's `validate_resource_moves` correctly flags — same class as the 2026-05-07 Cluster 1 revert. The blocker: FieldLoad/EnumFieldLoad lowering needs to emit `Borrow` not `Copy` when the source is a borrowed Option/Result return. Estimated 1-2 weeks; tracked in the existing Cluster 1 / Snag #24 TODO entries.
+
+**Remaining burn-down.**
+1. Cluster 1 / Snag #24 follow-on lowering migration (1-2 weeks).
+2. Migrate the deferred wrappers above.
+3. Promote validator to fatal once the count hits zero.
 
 #### 1d. Box-inner-type completeness *(SHIPPED 2026-05-07; commit `bfb6bb67`, defense-in-depth tests `095ff22f`)*
 

@@ -420,6 +420,84 @@ impl TypeRegistry {
             .unwrap_or(false)
     }
 
+    /// Tier 1c: predicate used by the construction helpers. Mirrors
+    /// `upgrade_types_from_fields`' check: a field counts as droppable
+    /// for transitive-drop purposes when its type is a `GirType::Named`
+    /// whose TypeDef has Resource copy_semantics or a non-None
+    /// drop_strategy.
+    ///
+    /// Deliberately NARROWER than `needs_drop`: bare `GirType::FnPtr`
+    /// fields (vtable entries) are NOT counted, even though
+    /// `needs_drop(FnPtr) == true` for local Callable bindings. The
+    /// post-hoc `upgrade_types_from_fields` pass — the writer-side
+    /// authority on transitive drop today — also excludes FnPtr fields;
+    /// matching that semantic keeps the construction helper and the
+    /// upgrade pass in lockstep. (See `closures.rs` for closure layout:
+    /// captures use `MutPtr(T)` / value fields, never `FnPtr`-as-field.
+    /// The `Callable[T()]` local case where FnPtr DOES own a heap env
+    /// is a function-body local, not a struct field.)
+    fn field_is_transitively_droppable(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT {
+            return false;
+        }
+        let Some(GirType::Named(name)) = self.get(type_id) else { return false; };
+        let Some(td) = self.get_type_def(name) else { return false; };
+        td.metadata.copy_semantics == CopySemantics::Resource
+            || td.metadata.drop_strategy != DropStrategy::None
+    }
+
+    /// Tier 1c: compute coherence-at-construction drop strategy + copy
+    /// semantics for a struct's fields. Returns the inferred metadata
+    /// upgrade — call this at every TypeDef construction site that doesn't
+    /// already carry explicit drop metadata. The caller writes the result
+    /// to the TypeDef's metadata before insertion.
+    ///
+    /// The contract is:
+    /// - If ANY field is transitively droppable (the helper recurses
+    ///   through registered Named TypeDefs), returns
+    ///   `(DropStrategy::Recursive, CopySemantics::Resource)`.
+    /// - Otherwise returns `(DropStrategy::None, CopySemantics::Trivial)`.
+    ///
+    /// This is the once-at-registration counterpart of
+    /// `upgrade_types_from_fields`. Together with
+    /// `compute_drop_strategy_for_enum`, it eliminates the timing class
+    /// where a late-registered TypeDef carries stale metadata.
+    ///
+    /// **Read this AFTER setting the field types** but BEFORE inserting
+    /// the TypeDef — the helper reads `field_is_transitively_droppable`
+    /// on each field's TypeId from the live registry.
+    pub fn compute_drop_strategy_for_struct(
+        &self,
+        fields: &[StructField],
+    ) -> (DropStrategy, CopySemantics) {
+        let needs_drop = fields.iter().any(|f| self.field_is_transitively_droppable(f.type_id));
+        if needs_drop {
+            (DropStrategy::Recursive, CopySemantics::Resource)
+        } else {
+            (DropStrategy::None, CopySemantics::Trivial)
+        }
+    }
+
+    /// Tier 1c: compute coherence-at-construction drop strategy + copy
+    /// semantics for an enum's variants. Walks every variant payload field
+    /// and returns the same shape as `compute_drop_strategy_for_struct`.
+    ///
+    /// Use at Option/Result/user-enum registration sites. The wrapper
+    /// auto-upgrades to Recursive whenever a variant payload is droppable.
+    pub fn compute_drop_strategy_for_enum(
+        &self,
+        variants: &[EnumVariant],
+    ) -> (DropStrategy, CopySemantics) {
+        let needs_drop = variants.iter().any(|v| {
+            v.fields.iter().any(|f| self.field_is_transitively_droppable(f.type_id))
+        });
+        if needs_drop {
+            (DropStrategy::Recursive, CopySemantics::Resource)
+        } else {
+            (DropStrategy::None, CopySemantics::Trivial)
+        }
+    }
+
     /// Check whether a Copy-semantics type needs dropping when passed as a parameter.
     /// Only true for ref-counted types (Channel, Shared, Weak) that are Copy but
     /// still have a drop strategy. Move types are excluded (body-level drops handle them).
@@ -896,5 +974,92 @@ mod tests {
         } else {
             panic!("Expected Enum");
         }
+    }
+
+    /// Tier 1c: helper returns `(Recursive, Resource)` for a struct whose
+    /// field is a registered Resource type.
+    #[test]
+    fn compute_drop_strategy_struct_with_resource_field() {
+        let mut reg = TypeRegistry::new();
+        reg.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = reg.insert(GirType::Named("OwnedBuf".into()));
+
+        let fields = vec![
+            StructField { name: "a".into(), type_id: I64_TYPE },
+            StructField { name: "b".into(), type_id: buf_id },
+        ];
+        let (drop, copy) = reg.compute_drop_strategy_for_struct(&fields);
+        assert_eq!(drop, DropStrategy::Recursive);
+        assert_eq!(copy, CopySemantics::Resource);
+    }
+
+    /// Tier 1c: helper returns `(None, Trivial)` for an all-primitive struct.
+    #[test]
+    fn compute_drop_strategy_struct_primitives_only() {
+        let reg = TypeRegistry::new();
+        let fields = vec![
+            StructField { name: "x".into(), type_id: F64_TYPE },
+            StructField { name: "y".into(), type_id: F64_TYPE },
+            StructField { name: "z".into(), type_id: I64_TYPE },
+        ];
+        let (drop, copy) = reg.compute_drop_strategy_for_struct(&fields);
+        assert_eq!(drop, DropStrategy::None);
+        assert_eq!(copy, CopySemantics::Trivial);
+    }
+
+    /// Tier 1c: helper returns `(Recursive, Resource)` for an enum whose
+    /// variant payload is a registered Resource type.
+    #[test]
+    fn compute_drop_strategy_enum_with_resource_payload() {
+        let mut reg = TypeRegistry::new();
+        reg.add_type_def(TypeDef {
+            name: "OwnedBuf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = reg.insert(GirType::Named("OwnedBuf".into()));
+
+        let variants = vec![
+            EnumVariant {
+                name: "Some".into(),
+                fields: vec![StructField { name: "_0".into(), type_id: buf_id }],
+            },
+            EnumVariant { name: "None".into(), fields: vec![] },
+        ];
+        let (drop, copy) = reg.compute_drop_strategy_for_enum(&variants);
+        assert_eq!(drop, DropStrategy::Recursive);
+        assert_eq!(copy, CopySemantics::Resource);
+    }
+
+    /// Tier 1c: helper returns `(None, Trivial)` for an enum with only
+    /// primitive payloads.
+    #[test]
+    fn compute_drop_strategy_enum_primitives_only() {
+        let reg = TypeRegistry::new();
+        let variants = vec![
+            EnumVariant {
+                name: "Ok".into(),
+                fields: vec![StructField { name: "_0".into(), type_id: I64_TYPE }],
+            },
+            EnumVariant {
+                name: "Error".into(),
+                fields: vec![StructField { name: "_0".into(), type_id: I64_TYPE }],
+            },
+        ];
+        let (drop, copy) = reg.compute_drop_strategy_for_enum(&variants);
+        assert_eq!(drop, DropStrategy::None);
+        assert_eq!(copy, CopySemantics::Trivial);
     }
 }

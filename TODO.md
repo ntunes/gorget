@@ -2,6 +2,20 @@
 
 ## High
 
+- **Tier 1c — complete the Option/Result wrapper migration** [filed 2026-05-11, foundation shipped]. Foundation (helpers + validator + env gate) and safe-class migrations (`register_struct_type`/`register_enum_type`/`register_newtype`, `monomorphize_enum` for user enums) shipped without regressing the suite. Full integration: 1068/1068.
+
+  **Remaining migration sites (deferred — coupled to Cluster 1 / Snag #24 lowering follow-on AND per-mono Shared/Weak wrapper emission dependency tracking):**
+  - `make_option_type_def` (`lowering/types.rs:1080`) + 3 call sites: `lowering/types.rs::map_ast_type_mut`, `lowering/context.rs::ensure_option_type_registered`, `register_builtin_option`.
+  - `make_result_type_def` (`lowering/types.rs:1103`) + 5 call sites: `map_ast_type_mut`, `register_builtin_result`, 3× `Result_T_E`-from-throws, 2× `methods.rs::map`/`map_err`.
+  - `monomorphize_enum` Option/Result carve-out (`generics/mod.rs` — explicit skip in the migration).
+  - **`monomorphize_struct`** (`generics/mod.rs:2326-2351`) — reverted after exposing 8 tensor_* linker breaks. User-generic struct mono path is blocked on per-mono Shared/Weak/Channel/Guard `__drop` wrapper emission: the C backend emits these on-demand by scanning `module.externs/functions`, and a field-level recursive drop call doesn't register the wrapper as a dependency. Closing this requires the C backend `emit_shared_wrapper` family to also walk recursive drop tables (or a structural dependency-tracking pass at LIR-exit).
+  - Tuple registration (`lowering/types.rs:391` + `exprs/type_reg.rs::register_tuple_type`).
+  - Closure capture struct (`closures.rs:140`).
+
+  **Why deferred:** migrating these surfaces ~93 fixtures of latent shallow-copy lowering issues that Phase C's `validate_resource_moves` correctly flags — same class as the 2026-05-07 Cluster 1 revert. Blocker: FieldLoad/EnumFieldLoad lowering must migrate to emit `Borrow` not `Copy` when source is a borrowed Option/Result return (1-2 weeks). Tier 1c remaining work is the closing 2-3 sessions after that.
+
+  **Burn-down to fatal:** (1) Cluster 1 / Snag #24 lowering follow-on; (2) migrate deferred wrappers (3-5 commits); (3) promote `validate_type_metadata_coherence` to fatal.
+
 - **Phase C self-host validator burn-down — moves class open, 100,170 baseline.** Three validators shipped (`tests/fixtures/self_host_lowerer/validate.gg`); two classes closed:
   - ✅ `validate_resource_field_reads`: 4,365 → 0 (commit `8cfc94ff`, step 5a). Regression test `phase_c_field_reads_at_zero_self_host`.
   - ✅ `validate_resource_call_args`: 10,144 → 0 (commit `<step-5b>`, step 5b). Five emit sites in `lower.gg` migrated to pick OpBorrow vs OpMove based on source ownership. Regression test `phase_c_call_args_at_zero_self_host`.
