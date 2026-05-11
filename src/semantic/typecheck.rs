@@ -2222,9 +2222,39 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::TupleLiteral(elements) => {
-                let elem_types: Vec<TypeId> =
-                    elements.iter().map(|e| self.infer_expr(e)).collect();
-                self.types.insert(ResolvedType::Tuple(elem_types))
+                // Propagate declared per-element types from a Tuple
+                // decl_type_hint so nested collection literals coerce
+                // correctly. Mirrors the DictLiteral fix: without this,
+                // `(Vector[int], int) p = ([1, 2, 3], 42)` fails typecheck
+                // because the first element types as `int[3]` regardless of
+                // the declared `Vector[int]`. With this, each element infers
+                // under its declared expected-type.
+                let elem_hints: Option<Vec<TypeId>> = self.decl_type_hint
+                    .and_then(|hint| {
+                        let resolved = self.resolve_type(hint);
+                        if let ResolvedType::Tuple(types) = self.types.get(resolved).clone() {
+                            if types.len() == elements.len() {
+                                return Some(types);
+                            }
+                        }
+                        None
+                    });
+                let prev_hint = self.decl_type_hint;
+                let elem_types: Vec<TypeId> = elements.iter().enumerate().map(|(i, e)| {
+                    self.decl_type_hint = elem_hints.as_ref().map(|hs| hs[i]);
+                    self.infer_expr(e)
+                }).collect();
+                self.decl_type_hint = prev_hint;
+                // Use the declared element types when available so the
+                // tuple's recorded type aligns with what the var-decl
+                // checker will unify against (analogous to DictLiteral's
+                // final-K/V hint fallback). For elements without a hint,
+                // fall through to the inferred type.
+                let final_types: Vec<TypeId> = match elem_hints {
+                    Some(hints) => hints,
+                    None => elem_types,
+                };
+                self.types.insert(ResolvedType::Tuple(final_types))
             }
 
             Expr::DictLiteral(pairs) => {

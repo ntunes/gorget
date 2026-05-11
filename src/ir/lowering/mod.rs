@@ -1792,6 +1792,29 @@ pub fn lower_module(
     // See `src/ir/tag_ownership.rs` for the rules + the rationale.
     crate::ir::tag_ownership::infer_fresh_owned(&mut module);
 
+    // Populate Module::consume_externs. Two sources:
+    //   (1) Direct registrations from writer sites (lower_dict_literal etc.)
+    //       that emit mangled mutator extern calls — see ctx.consume_externs.
+    //   (2) Derivation from `fn_param_ownerships` — any registered function
+    //       with at least one `Ownership::Move` parameter is consume-shape
+    //       by definition (covers Vector__push, Set__add, etc. that go
+    //       through register_collection_method_sigs).
+    //
+    // This is the typed-metadata bridge between the IR-stage mangled name
+    // (`Dict__K__V__put`) and the runtime contract that name-matched
+    // allowlists miss. See `Module::consume_externs` doc for full rationale.
+    // Must run BEFORE `validate_consume_sites` so the classifier sees the
+    // registry.
+    {
+        use crate::parser::ast::Ownership;
+        module.consume_externs = std::mem::take(&mut ctx.consume_externs);
+        for (name, ownerships) in &ctx.fn_param_ownerships {
+            if ownerships.iter().any(|o| matches!(o, Ownership::Move)) {
+                module.consume_externs.insert(name.clone());
+            }
+        }
+    }
+
     // Tier 2a: consume-site discipline (CoW write-side) — FATAL.
     // Promoted from env-gated warning (Phase 1) to unconditional fatal
     // after Phase 2A/2B/2C drove the violation count to zero across all

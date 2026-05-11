@@ -2219,6 +2219,22 @@ missing ok
 }
 
 #[test]
+fn tuple_literal_resource_value() {
+    // Regression for the parallel TupleLiteral propagation gap surfaced
+    // by the dict-literal investigation. Pre-fix:
+    //   `(Vector[int], int) p = ([1, 2, 3], 42)`
+    // failed typecheck with `expected Vector[int], found int[3]` because
+    // TupleLiteral inferred each element without reading decl_type_hint.
+    // Mirrors the DictLiteral hint propagation shipped 2026-05-11.
+    run_gg(
+        "tuple_literal_resource_value.gg",
+        "\
+3
+42",
+    );
+}
+
+#[test]
 fn dict_literal_resource_value() {
     // Regression for two coupled issues:
     //   (a) bare-init expected-type propagation: `Dict[String, Vector[int]] d

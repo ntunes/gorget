@@ -2875,6 +2875,19 @@ fn is_runtime_collection_mutator(name: &str) -> bool {
     )
 }
 
+// Future strengthening: replace `is_runtime_collection_mutator` callers
+// with a `is_consume_extern(module, name)` that ORs the runtime allowlist
+// with `module.consume_externs.contains(name)`. Probe sweep 2026-05-11
+// surfaced 27 latent violations (mainly Callable-resource params in
+// httpserver / gorget-js paths) — Vector__Callable__GorgetClosure__push
+// at Router::use / Router::before / various eval_* sites where the
+// Callable parameter is Untracked at the validator's view. Burn-down
+// requires the writer-side fix: tag resource Move-ownership params as
+// `LocalOwnership::Owned` at fn entry (today `lower_function` only does
+// this for string Move params at line ~632). Filed in TODO. Once
+// burn-down hits zero, swap the callers to `is_consume_extern` and
+// retire the runtime-allowlist `is_runtime_collection_mutator`.
+
 #[cfg(test)]
 mod tests {
     use super::*;

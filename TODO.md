@@ -2,6 +2,16 @@
 
 ## High
 
+- **Tier 2a strengthening — promote `is_consume_extern` after Callable-param ownership burn-down.** Infrastructure shipped 2026-05-11 (commit `<dict-fix>`): `Module::consume_externs` typed registry populated at module finalization from (i) writer-site direct registrations (e.g. `lower_dict_literal` registers the mangled `Dict__K__V__put`), and (ii) derivation from `fn_param_ownerships` (any fn with at least one `Ownership::Move` param). The validator's `is_consume_extern(module, name)` helper exists in `src/ir/validate.rs` but is intentionally UNUSED — promoting it requires burn-down of latent violations the strengthening surfaces.
+
+  **Probe sweep 2026-05-11 (test_threads=4, full integration):** 27 violations across 25 fixtures, dominated by `Vector__Callable__GorgetClosure__push` at Router::use / Router::before / various eval_* sites (gorget-js). Pattern: `_3 : ty1382 — untracked source consumed` — Callable Move-ownership parameter at fn entry is `LocalOwnership::Untracked`, then the push consumes it without a tracked ownership state.
+
+  **Root cause.** `src/ir/lowering/functions.rs:632` tags string `!` (Move) params as `Owned`, but the analogous tagging is missing for OTHER resource Move params (Callable, Vector, Dict, etc.). Fix: extend the line-632 block to `if ctx.type_registry.is_resource_type(base_type) && Move` → `ctx.set_owned(...)`, mirroring the existing string-only carve-out. Risk: may surface secondary cascades; needs sweep with the writer-side change. Estimated 1-2 sessions including burn-down.
+
+  **Why the existing strengthening matters.** `is_runtime_collection_mutator` is a name allowlist of post-mono runtime symbols (`gorget_array_push`, `gorget_map_put`, etc.). The IR validator sees the IR-stage mangled name (`Vector__T__push`, `Dict__K__V__put`) — different lexical strings. Tier 2a's classifier therefore misses mangled-name consume-mutator calls today. The dict-literal-resource-value double-free fix (commit `077f756e`) was a writer-side correctness fix; the validator extension would lock the rule so a future regression at the writer side halts the build. Per CLAUDE.md "No name matching".
+
+  Files for the burn-down: `src/ir/lowering/functions.rs:632` (resource Move param tagging), then `src/ir/validate.rs` (swap `is_runtime_collection_mutator` → `is_consume_extern` at the two call-sites in `validate_consume_sites`), then retire the dead-code allowance on `is_consume_extern`. [added: 2026-05-11]
+
 - **Phase C self-host validator burn-down — moves class open, 100,170 baseline.** Three validators shipped (`tests/fixtures/self_host_lowerer/validate.gg`); two classes closed:
   - ✅ `validate_resource_field_reads`: 4,365 → 0 (commit `8cfc94ff`, step 5a). Regression test `phase_c_field_reads_at_zero_self_host`.
   - ✅ `validate_resource_call_args`: 10,144 → 0 (commit `<step-5b>`, step 5b). Five emit sites in `lower.gg` migrated to pick OpBorrow vs OpMove based on source ownership. Regression test `phase_c_call_args_at_zero_self_host`.

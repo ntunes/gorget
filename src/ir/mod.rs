@@ -269,6 +269,27 @@ pub struct Module {
     /// only writers that produce the snag #23 shape (shallow-copy alias
     /// of source interior into the freshly-allocated destination) insert.
     pub heap_alloc_consumer_externs: rustc_hash::FxHashSet<String>,
+    /// Typed registry of consume-shape extern function names (collection
+    /// mutators: `Vector__T__push`, `Dict__K__V__put`, `Set__T__add`,
+    /// `Channel__T__send`, etc.). Populated at module finalization from
+    /// `LoweringContext::fn_param_ownerships` — any registered fn with at
+    /// least one `Ownership::Move` param is consume-shape by definition.
+    ///
+    /// Read by [`crate::ir::validate::validate_consume_sites`] to recognise
+    /// mangled collection-mutator calls (which is_runtime_collection_mutator's
+    /// name allowlist misses, because that allowlist matches the post-mono
+    /// runtime symbol — `gorget_map_put` — not the IR-stage mangled name
+    /// `Dict__K__V__put`). The dict-literal-resource-value double-free fix
+    /// (commit `077f756e`) exposed this gap: Tier 2a's classifier was looking
+    /// for the runtime symbol but the IR call uses the mangled mono name, so
+    /// the validator missed the consume-without-MoveZero violation.
+    ///
+    /// Per CLAUDE.md "No name matching" / structural-guards Tier 3a: this
+    /// registry is the typed-metadata bridge between the IR-stage mangled
+    /// name and the runtime's consume contract. Writers populate it at
+    /// `register_collection_method_sigs` registration time, and the validator
+    /// reads it as the source of truth.
+    pub consume_externs: rustc_hash::FxHashSet<String>,
 }
 
 impl Module {
@@ -291,6 +312,7 @@ impl Module {
             yield_point_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
+            consume_externs: rustc_hash::FxHashSet::default(),
         }
     }
 

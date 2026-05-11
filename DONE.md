@@ -1,5 +1,23 @@
 # DONE
 
+- [2026-05-11] **Tier 2a typed `consume_externs` registry shipped as infrastructure; TupleLiteral hint propagation + parallel typecheck fixes; validator promotion deferred pending Callable-param ownership burn-down.** Follow-up to the dict-literal investigation answering the architectural question "is this an isolated gap or a class?".
+
+  **What's structural.** The runtime double-free fix at `lower_dict_literal` (commit `077f756e`) was a writer-side correctness fix. The validator that SHOULD have caught the class — Tier 2a's `validate_consume_sites` — was looking at the wrong name: `is_runtime_collection_mutator` is a name allowlist of post-mono runtime symbols (`gorget_map_put`), but the IR-stage call uses the mangled name (`Dict__K__V__put`). The validator was structurally blind to mangled-name collection-mutator consume sites. Per CLAUDE.md "No name matching" this is the wrong layer.
+
+  **What landed.**
+
+  1. **`Module::consume_externs: FxHashSet<String>`** — typed registry of consume-shape extern fn names. Populated at module finalization from two sources: (a) writer-site direct registrations (e.g., `lower_dict_literal` inserts the mangled `Dict__K__V__put` at the call emission point), (b) derivation from `LoweringContext::fn_param_ownerships` — any registered fn with at least one `Ownership::Move` param is consume-shape by definition (covers Vector__push, Set__add, etc. registered via `register_collection_method_sigs`).
+
+  2. **`is_consume_extern(module, name)` helper** in `src/ir/validate.rs` — ORs the typed registry with the existing `is_runtime_collection_mutator` runtime-symbol allowlist. Currently UNUSED (commented as future-path) — the helper exists for the burn-down session that promotes it.
+
+  3. **TupleLiteral typecheck hint propagation** — `(Vector[int], int) p = ([1, 2, 3], 42)` pre-fix failed typecheck with `expected Vector[int], found int[3]`. Parallel to the DictLiteral hint propagation (commit `077f756e`); container literals must propagate per-element type hints from `decl_type_hint` to nested positions so collection-literal coercion works inside Tuple slots. Fixture `tuple_literal_resource_value.gg` locks in the regression. ArrayLiteral works via the existing `is_collection_assignment` permissiveness path (no fix needed for nested Vector cases).
+
+  **Probe sweep deferred via TODO.** Promoting `is_consume_extern` (replacing `is_runtime_collection_mutator` at its two callsites in `validate_consume_sites`) surfaces 27 latent violations across 25 fixtures, dominated by `Vector__Callable__GorgetClosure__push` at Router::use / Router::before / gorget-js eval_* sites. Pattern: Callable parameters at fn entry are `LocalOwnership::Untracked`, then the push consumes them without tracked ownership. Root cause: `src/ir/lowering/functions.rs:632` tags string `!` (Move) params as `Owned` but the analogous tagging is missing for other resource Move params (Callable, Vector, etc.). Burn-down requires extending the writer-side param tagging — estimated 1-2 sessions. Sharp TODO filed.
+
+  **Honest framing.** The dict-literal class IS architectural — same root cause shape as Tier 2c (Snag #23) and the broader Tier 2a (consume-without-MoveZero). The typed registry is the right structural fix; the validator promotion just waits on the burn-down of the latent violations the strengthening surfaces. Per the structural-guards.md framework, this is the standard pattern: register, gate, log, burn down, promote.
+
+  Files: `src/ir/mod.rs` (`Module::consume_externs` field + doc), `src/ir/lowering/context.rs` (`LoweringContext::consume_externs`), `src/ir/lowering/mod.rs` (finalization derivation), `src/ir/lowering/exprs/collections.rs` (writer-site insert at dict-put emission), `src/ir/validate.rs` (`is_consume_extern` helper + future-path comment), `src/semantic/typecheck.rs` (TupleLiteral hint propagation), `tests/fixtures/tuple_literal_resource_value.gg` (new), `tests/integration.rs` (regression wire), `TODO.md` (burn-down filed).
+
 - [2026-05-11] **Dict literal with resource value type — double-free + bare-init expected-type propagation fixed together.** Two coupled issues from TODO 2026-05-09:
 
   **Issue (a) — runtime double-free.** `Option[Dict[String, Vector[int]]] x = Some({"a": [1,2,3], "b": [4,5,6]})` produced `free(): double free detected in tcache 2` at scope exit. Symmetric class to Snag #25b (array literal, fixed 2026-05-09) but at the dict-put boundary.

@@ -271,6 +271,14 @@ pub struct LoweringContext<'a> {
     /// Function parameter ownerships: fn_name → Vec<Ownership> (in declaration order).
     /// Used by token wrapper generation to determine lock type per shared arg.
     pub fn_param_ownerships: FxHashMap<String, Vec<crate::parser::ast::Ownership>>,
+    /// Tier 2a strengthening: typed registry of consume-shape extern fn
+    /// names (collection mutators emitting `Dict__K__V__put` etc.). Writer
+    /// sites register here at call emission; the registry transfers to
+    /// `Module::consume_externs` at finalization. See `Module::consume_externs`
+    /// for the rationale (catches the `is_runtime_collection_mutator`
+    /// name-allowlist gap that lets the validator miss mangled-name
+    /// collection-mutator calls).
+    pub consume_externs: rustc_hash::FxHashSet<String>,
     /// Unified parameter ABI: fn_name → Vec<ParamABI> (in declaration order).
     /// Single source of truth for how each parameter is passed at the C ABI level.
     pub fn_param_abis: FxHashMap<String, Vec<ParamABI>>,
@@ -390,6 +398,7 @@ impl<'a> LoweringContext<'a> {
             fn_defaults: FxHashMap::default(),
             fn_param_names: FxHashMap::default(),
             fn_param_ownerships: FxHashMap::default(),
+            consume_externs: rustc_hash::FxHashSet::default(),
             fn_param_abis: FxHashMap::default(),
             fn_extern_abi_kinds: FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),

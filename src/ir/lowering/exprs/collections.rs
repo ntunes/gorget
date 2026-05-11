@@ -236,6 +236,12 @@ pub(super) fn lower_dict_literal(
 
     let new_fn = format!("{mangled}__new");
     let put_fn = format!("{mangled}__put");
+    // Tier 2a strengthening: register the mangled put fn as a consume-shape
+    // extern so the validator's `is_runtime_collection_mutator` allowlist
+    // — which name-matches the runtime symbol (`gorget_map_put`), not the
+    // mangled IR-stage name (`Dict__K__V__put`) — picks up via the typed
+    // registry instead. See Module::consume_externs for rationale.
+    ctx.consume_externs.insert(put_fn.clone());
 
     // Create the dict
     let dict_local = builder.call_extern(&new_fn, vec![], dict_type);
