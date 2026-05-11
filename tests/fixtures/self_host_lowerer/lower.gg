@@ -2865,21 +2865,69 @@ int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule 
     emit(&ctx, GICallExtern(tag, read_fn, args))
     return tag
 
+# Resolve the runtime clone function for a payload type, or "" if no
+# safe clone is available at this site. Routes through
+# `build_resource_metadata` for builtin runtime types
+# (GorgetString/Array/Map/Set/Closure and their parameterised forms);
+# user-defined resource structs/enums would use `T__clone` but the
+# C codegen emits that symbol only for types in
+# `recursive_drop_structs`/`recursive_drop_enums`, populated later
+# in the LIR-lower pass. Emitting `T__clone` here for a type that
+# never gets registered produces a stage-1 link error; until the
+# user-type clone emission is wired through `gmod.resource_types`
+# unconditionally, restrict the clone path to builtins.
+#
+# `gorget_string_clone_to_owned` and `gorget_closure_clone_to_owned`
+# override `build_resource_metadata`'s `clone_fn` because their
+# `_to_owned` variants are what `infer_runtime_return_type` registers
+# as returning the struct type by value (vs the in-place variants
+# that return void).
+String resolve_payload_clone_fn(String tname, GirModule &gmod):
+    if tname == "":
+        return ""
+    match build_resource_metadata(tname):
+        case Some(rmeta):
+            match rmeta.clone_fn:
+                case Some(fn):
+                    if rmeta.runtime_name == "GorgetString":
+                        return "gorget_string_clone_to_owned"
+                    if rmeta.runtime_name == "GorgetClosure":
+                        return "gorget_closure_clone_to_owned"
+                    return fn
+                case None:
+                    return ""
+        case None:
+            return ""
+
 # Emit a variant-payload read. `variant_name` + `field_idx` determines
 # which struct field to read; result binds into `dst_type`.
 int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
     Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(field_idx)]
-    # Phase C step 5a: the payload is owned by the scrutinee, not by
-    # this read. Tag the destination as LoBorrowed/BoField so
-    # validate_resource_field_reads doesn't flag this site (and so
-    # downstream Phase C validators see the correct shape). Whether the
-    # scrutinee is being consumed (move semantics for `.unwrap()`) vs
-    # peeked (borrow semantics for match-arm bindings) is a flow-level
-    # question the caller resolves — the read itself is always a borrow.
+    # The field read produces a byte-copy of the variant's payload
+    # bytes — for resource payloads (Vector, Dict, String, user enums
+    # with resource sub-fields), those bytes alias the scrutinee's
+    # interior. Returning that alias directly means downstream
+    # value-passing (e.g., `type_check_item(item, ...)`) byte-copies the
+    # alias into the callee's frame; the callee destructures, mutates
+    # state, and the alias's storage invalidates → SIGSEGV (showcase
+    # blocker #2). Fix: when the payload type has a clone fn, emit a
+    # real clone so the extracted value is independently owned.
+    #
+    # Borrow-mode arg + slot-addr at the call boundary handles the
+    # signature (`T T__clone(T*)` / `T gorget_string_clone_to_owned(T*)`)
+    # — Phase D step 3's OpBorrow lowering at lir_lower.gg already
+    # threads SlotAddr for pass-by-ptr args.
     int dst = add_local_with(&ctx, dst_type, NO_NAME, LoBorrowed(), BoField())
     emit(&ctx, GICallExtern(dst, read_fn, args))
+    String dst_tname = type_id_to_name(dst_type, &gmod)
+    String clone_fn = resolve_payload_clone_fn(dst_tname, &gmod)
+    if clone_fn != "":
+        int cloned = add_local(&ctx, dst_type, NO_NAME)
+        Vector[Operand] clone_args = [OpBorrow(dst)]
+        emit(&ctx, GICallExtern(cloned, clone_fn, clone_args))
+        return cloned
     return dst
 
 # Take the address of scrutinee's local so we can pass a pointer to the
