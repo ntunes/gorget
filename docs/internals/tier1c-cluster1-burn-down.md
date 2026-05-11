@@ -80,6 +80,55 @@ to the shared `GG_VALIDATE_RESOURCE_MOVES` log file lost most of the
 Rust-validator entries; serial probing on the 17 failing fixtures
 recovered the full 202.
 
+### Adapter Clone/Move improvements (shipped 2026-05-11)
+
+`try_lower_option_result_combinator` had two Copy-mode emission sites
+that produce shallow aliases when Option/Result are Resource:
+
+1. **`scrut_local = copy(recv)`** (around `methods.rs:2530`). The
+   adapter copies the receiver into a fresh scrutinee local for
+   pattern-matching. Now switched to **Clone**: emit `T__clone(&recv)`
+   producing an independently-owned copy. Always safe; one extra
+   allocation per adapter call. Last-use liveness analysis can later
+   refine to pick Move at last-use sites for the perf win.
+
+2. **`result_local = copy(wrapped)`** at 14 merge-slot assign sites.
+   Each site assigns a freshly-built Owned local (`wrapped`, `some_val`,
+   `none_val`, or closure call `result`) into the merge slot. Now
+   switched to **Move** via a `assign_result_local_move` helper.
+
+These improvements ship inert today (Option/Result are still
+non-Resource per the carve-out) but will activate when the carve-out
+is removed, eliminating those two violation classes from the burn-down.
+
+### Known blockers for carve-out removal (next session)
+
+The 2026-05-11 probe identified three issues beyond the dst-type bug:
+
+1. **`map_err` bail removal regresses coroutine context.**
+   Removing `map_err` from the GorgetString-coercion bail (so the
+   GIR adapter handles it instead of falling through to the C inline
+   path) regresses `coroutine_result_combinators.gg` with a string
+   truncation (`"BAD"` → `"B"`). The non-coroutine
+   `result_map.gg` works correctly with the bail removed. Suggests
+   the coroutine state-save/restore for adapter-built GorgetString
+   payloads is broken. Needs separate investigation.
+
+2. **Unconditional recv MoveZero at `methods.rs:2330`.** The
+   `is_option_result && is_combinator` post-call MoveZero fires for
+   ALL combinators including `or`/`flatten` that don't go through
+   the GIR adapter. With Option/Result becoming Resource, this
+   trips when user code reuses the receiver (e.g.
+   `ok.or(...)` followed by `ok.map(...)`). The MoveZero should be
+   gated on whether the adapter actually consumed the receiver, or
+   the C inline `or` should clone the receiver before returning it
+   to keep both alive.
+
+3. **The 17 runtime regressions overlap heavily with the 202 GIR
+   violations.** Both share the same root-cause class: the cross-type
+   adapter dst-type bug AND the recv/result Copy shapes. With (1)
+   and (2) fixed, expect the count to drop dramatically.
+
 ### View-awareness (shipped 2026-05-11)
 
 `validate_resource_moves` previously flagged every `Assign{Copy}` of
