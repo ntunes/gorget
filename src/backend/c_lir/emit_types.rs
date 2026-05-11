@@ -957,15 +957,7 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         writeln!(out, "static inline void {drop_fn_name}(void* __p) {{").unwrap();
         writeln!(out, "    {c_name}* self = ({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
-            if drop_fn.starts_with("__clone_only:") { continue; }
-            // Dual marker `__drop_then_clone:<drop>:<clone>` (Option/Result
-            // fields with resource payload). Use the drop part here.
-            let effective_drop = if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                rest.split(':').next().unwrap_or(rest).to_string()
-            } else {
-                drop_fn.clone()
-            };
-            writeln!(out, "    {effective_drop}((void*)&self->{field_name});").unwrap();
+            writeln!(out, "    {drop_fn}((void*)&self->{field_name});").unwrap();
         }
         writeln!(out, "}}").unwrap();
         writeln!(out).unwrap();
@@ -999,21 +991,6 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
         writeln!(out, "    if (!__p) {{ {c_name} z = {{0}}; return z; }}").unwrap();
         writeln!(out, "    {c_name} dst = *({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, _field_type_name) in drop_info {
-            // Handle clone-only entries (Option/Result fields)
-            if let Some(clone_name) = drop_fn.strip_prefix("__clone_only:") {
-                writeln!(out, "    dst.{field_name} = {clone_name}(&dst.{field_name});").unwrap();
-                continue;
-            }
-            // Handle dual `__drop_then_clone:<drop>:<clone>` entries — extract
-            // the clone part and emit it. The drop emitter pulls the drop part.
-            if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                let mut parts = rest.split(':');
-                let _ = parts.next();
-                if let Some(clone_name) = parts.next() {
-                    writeln!(out, "    dst.{field_name} = {clone_name}(&dst.{field_name});").unwrap();
-                }
-                continue;
-            }
             // Map drop function → clone function
             let clone_fn = match drop_fn.as_str() {
                 // Clone to owned: CoW materializations must produce independently-owned
@@ -1155,17 +1132,7 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
             for (variant_name, field_name, drop_fn, _field_type_name) in fields {
-                // Handle clone-only entries (Option/Result fields)
-                let clone_fn = if let Some(clone_name) = drop_fn.strip_prefix("__clone_only:") {
-                    clone_name.to_string()
-                } else if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                    // dual marker: extract the clone part (second segment)
-                    let mut parts = rest.split(':');
-                    let _ = parts.next();
-                    parts.next().unwrap_or("").to_string()
-                } else {
-                    drop_to_clone(drop_fn)
-                };
+                let clone_fn = drop_to_clone(drop_fn);
                 // Only emit clone call if the function is a known runtime clone OR
                 // will be generated (exists in recursive_drop_structs/enums).
                 // Handle types like Task with Trivial drop but no clone are left
@@ -1258,12 +1225,6 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
             let fields = &by_variant[&vi];
             write!(out, "        case {vi}: ").unwrap();
             for (variant_name, field_name, drop_fn, _field_type_name) in fields {
-                if drop_fn.starts_with("__clone_only:") { continue; }
-                let effective_drop: String = if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                    rest.split(':').next().unwrap_or(rest).to_string()
-                } else {
-                    (*drop_fn).to_string()
-                };
                 let variant_prefix = format!("{variant_name}_");
                 let variant_field_count = sdef.fields.iter()
                     .filter(|(n, _)| n.starts_with(&variant_prefix))
@@ -1278,10 +1239,10 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                 // Self-cleaning: gorget_array_free/gorget_map_free drop elements.
                 // Trait-box marker keeps `free(value)`; everything else (incl.
                 // non-trait Box via the wrapper) routes through `&self->field`.
-                if effective_drop == "free" {
+                if *drop_fn == "free" {
                     write!(out, "free(self->{access}); ").unwrap();
                 } else {
-                    write!(out, "{effective_drop}((void*)&self->{access}); ").unwrap();
+                    write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
                 }
             }
             writeln!(out, "break;").unwrap();
@@ -1449,12 +1410,6 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                     let fields = &by_variant[&vi];
                     write!(out, "        case {vi}: ").unwrap();
                     for (variant_name, field_name, drop_fn, _ftn) in fields {
-                        if drop_fn.starts_with("__clone_only:") { continue; }
-                        let effective_drop: String = if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                            rest.split(':').next().unwrap_or(rest).to_string()
-                        } else {
-                            (*drop_fn).to_string()
-                        };
                         let variant_prefix = format!("{variant_name}_");
                         let variant_field_count = sdef.fields.iter()
                             .filter(|(n, _)| n.starts_with(&variant_prefix))
@@ -1466,10 +1421,10 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                         } else {
                             field_name.to_string()
                         };
-                        if effective_drop == "free" {
+                        if *drop_fn == "free" {
                             write!(out, "free(self->{access}); ").unwrap();
                         } else {
-                            write!(out, "{effective_drop}((void*)&self->{access}); ").unwrap();
+                            write!(out, "{drop_fn}((void*)&self->{access}); ").unwrap();
                         }
                     }
                     writeln!(out, "break;").unwrap();
@@ -1485,16 +1440,10 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                     writeln!(out, "    {user_fn}(__p);").unwrap();
                 }
                 for (field_name, drop_fn, _ftn) in &info.field_drops {
-                    if drop_fn.starts_with("__clone_only:") { continue; }
-                    let effective_drop: String = if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                        rest.split(':').next().unwrap_or(rest).to_string()
-                    } else {
-                        drop_fn.to_string()
-                    };
-                    if effective_drop == "free" {
+                    if drop_fn == "free" {
                         writeln!(out, "    free(self->{field_name});").unwrap();
                     } else {
-                        writeln!(out, "    {effective_drop}(&self->{field_name});").unwrap();
+                        writeln!(out, "    {drop_fn}(&self->{field_name});").unwrap();
                     }
                 }
                 writeln!(out, "}}").unwrap();
@@ -1509,14 +1458,6 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
             || module.recursive_drop_enums.contains_key(type_name.as_str());
         if !already_has_clone {
             fn drop_to_clone_fn(drop_fn: &str) -> Option<String> {
-                if let Some(clone_name) = drop_fn.strip_prefix("__clone_only:") {
-                    return Some(clone_name.to_string());
-                }
-                if let Some(rest) = drop_fn.strip_prefix("__drop_then_clone:") {
-                    let mut parts = rest.split(':');
-                    let _ = parts.next();
-                    return parts.next().map(|s| s.to_string());
-                }
                 match drop_fn {
                     "gorget_string_free" => Some("gorget_string_clone_to_owned".into()),
                     "gorget_array_free" => Some("gorget_array_clone".into()),

@@ -4377,13 +4377,11 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
         int di = 0
         while di < drops.len():
             FieldDrop fd = drops.get(di).unwrap()
-            # Skip clone-only markers
-            if not fd.drop_fn_name.starts_with("__clone_only:"):
-                String access = field_access(type_name, fd.field_name, &m, &sn, true)
-                if fd.drop_fn_name == "free":
-                    out = out + "    free(" + access + ");\n"
-                else:
-                    out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
+            String access = field_access(type_name, fd.field_name, &m, &sn, true)
+            if fd.drop_fn_name == "free":
+                out = out + "    free(" + access + ");\n"
+            else:
+                out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
             di += 1
         out = out + "}\n\n"
         ki += 1
@@ -4422,11 +4420,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
         int di = 0
         while di < drops.len():
             FieldDrop fd = drops.get(di).unwrap()
-            String clone_fn = ""
-            if fd.drop_fn_name.starts_with("__clone_only:"):
-                clone_fn = fd.drop_fn_name.slice(13, fd.drop_fn_name.len())
-            else:
-                clone_fn = drop_to_clone_fn(fd.drop_fn_name)
+            String clone_fn = drop_to_clone_fn(fd.drop_fn_name)
             if clone_fn != "":
                 String access = field_access(type_name, fd.field_name, &m, &sn, false)
                 out = out + "    " + access + " = " + clone_fn + "(&" + access + ");\n"

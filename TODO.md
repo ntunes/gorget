@@ -38,15 +38,7 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 
 
-- **`is_resource_type` widening Phase 2 — Cluster 5 residual** [filed 2026-05-04, Cluster 1 closed by Tier 1c 2026-05-11]. The umbrella migration that catalogued ~134 `is_resource_type` callsites across `src/ir/`. Clusters 1, 2, 3, 4, 6, 7 all closed (Cluster 1 was the FieldLoad/EnumFieldLoad migration, now done as part of Tier 1c; 2/3/7 shipped 2026-05-07; 4/6 closed as no-op). Cluster 5 (`lower_var_decl` / `lower_assign` Branch F + ABI choice) has partial progress: 3 ownership-transfer sites widened (commit `6e21d034`), 6 disjunction sites probed-and-kept-narrow with documented finding (commit `7d91805b`). Remaining ~40 sites across files are all per-audit narrow-correct. **Action remaining:** none mandatory — every remaining narrow callsite has been audited and tagged in the `is_resource_or_contains_resource` docstring. Convert-to-fatal optional cleanup work only.
-
-- **Deferred String materialization — Sites #2 and #4 remaining** [LOW PRIORITY] (filed 2026-05-04, sites #1 + #3 closed 2026-05-05/06). The auto-deref path at `stmts/mod.rs` (Site #1) now propagates `Borrowed { Field { base, field }, .. }` for typed bindings off struct field-loads (closed 2026-05-06; option (a) shipped via consumer-bug fix at `lower_struct_init` Move-sigil branch). The CoW severance walk for NAMED Field borrows (Site #3) shipped 2026-05-05. Sites #2 and #4 remain:
-
-  - **Site 2 (`methods.rs:2197` view propagation through Option-wrapping).** **Theoretical, not currently triggered.** The 6 string methods that return views (`trim`, `substring`, `slice`, `strip`, `str`, `as_str` per `builtins.rs:634-639`) all return `String`-by-value, not `Option[String]`. The `s.find(...)` example in the original TODO returns `Option[int]`, not `Option[StrView]`. No currently-shipped or planned API hits this path. Not a real gap until a future view-of-Option API exists.
-
-  - **Site 4 (borrow-checker decidability).** The lifetime question — "can we statically prove `x` doesn't outlive `source`'s last possible mutation?" — needs a separate design pass. Today's heuristic (`is_cow_unsafe_at(name, span)` for reassignment-on-forward-path) catches the common case but isn't lifetime-aware. Defer to a dedicated session.
-
-  [added: 2026-05-04, sites #1 + #3 shipped: 2026-05-05]
+- **Deferred String materialization — Site #4 (borrow-checker decidability)** [LOW PRIORITY] (filed 2026-05-04, sites #1 + #3 closed 2026-05-05/06, site #2 retired as theoretical 2026-05-11). The lifetime question — "can we statically prove `x` doesn't outlive `source`'s last possible mutation?" — needs a separate design pass. Today's heuristic (`is_cow_unsafe_at(name, span)` for reassignment-on-forward-path) catches the common case but isn't lifetime-aware. Defer to a dedicated session.
 
 
 
@@ -107,13 +99,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 - **Collection Resource semantics: remaining call-site ownership gaps**: Borrow checker doesn't cover field assignment or method-call ownership transfer. [updated: 2026-03-22]
 
 - **Drop elaboration — remaining cleanup**: (1) 24 Memsets across 17 fixtures remain: IndexLoad element zeroing (inside collection data arrays) and projected Deref/Field MoveZero (field-level ownership through pointers). Genuinely necessary — could be eliminated with element drop flags or `MoveField` instruction. (2) GIR still emits MoveZero for borrow-wrapped call args (field loads, MutPtr params), but these are zero-cost at runtime (V6 converts to MoveSlot). Removing the GIR emissions is code cleanliness, not a perf concern. [updated: 2026-04-14]
-
-- **LLVM backend test results (2026-04-16, post-session)**:
-  - **738 PASS / 814 (90.7%)**, 29 FAIL, 38 CRASH, 9 BUILD_FAIL (after elem_drop re-enable). Up from 710 PASS baseline — **+28 net PASS, -10 FAIL, +3 CRASH**.
-  - Fixes: (1) Option/Result combinator inline handlers, (2) CStr null-termination, (3) **LIR elem_drop/elem_clone stores re-enabled** + LLVM SlotStore String CoW clone + NamedFuncAddr declaration generation.
-  - **elem_drop root cause (resolved)**: LLVM's SlotStore did plain memcpy for all aggregate stores regardless of `is_move`. C backend emits `gorget_string_copy_cow` on non-move Ptr→String stores (src/backend/c_lir/mod.rs:1629). Fix: mirror that CoW clone in LLVM backend src/backend/llvm/mod.rs SlotStore handler + declare `T__clone`/`T__drop` for NamedFuncAddr user-type references.
-  - **Remaining 4 dataframe_* CRASH**: Still double-free somewhere in xtd.dataframe with elem_drop active — deferred (likely nested Vector[Vector[Column]] or Union-typed payload issue).
-  - Remaining BUILD_FAIL (9): 4x LLC forward-ref type mismatch, conv_stdlib, shared_iterator_invalidation, print_trait_object, string_enum_variants, sqlite
 
 ## Low
 

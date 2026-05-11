@@ -95,6 +95,7 @@ These structural guards exist today and are load-bearing:
 | Cross-module type collision (snag #20) | Two modules publish same TypeDef name | `src/semantic/scope.rs` | Fatal |
 | GIR module validation | Generic LIR-shape soundness | `src/ir/lowering/mod.rs:1505` | Fatal |
 | `register_signatures_recursive` ExternBlock arm (snag #12) | Extern functions get FunctionInfo / def.type_id | `src/semantic/typecheck.rs` | Fatal |
+| `validate_drop_completeness` (Tier 1a) | LIR `type_drop_fns` entry missing a droppable struct field / enum-variant payload | `src/lir/validate.rs` | Fatal |
 | `validate_move_follow_through` (Tier 1b) | Move-mode assign of drop-registered source without follow-through MoveZero | `src/ir/validate.rs` | Fatal |
 | `validate_box_inner_type` (Tier 1d) | Regular `Box[T]` StructDef missing typed inner-type metadata | `src/lir/validate.rs` | Fatal |
 | `validate_type_metadata_coherence` (Tier 1c) | TypeDef registered with implicit `(None, Trivial)` whose fields/variant-payloads are transitively droppable | `src/ir/validate.rs` | Fatal (promoted 2026-05-11 — all 6 migration sites coherent; Cluster 1 / Snag #24 closed) |
@@ -123,53 +124,48 @@ Tiered by maturity. Tier 1 = invariants we know are violated today, with concret
 
 ### Tier 1 — invariants with known violations today
 
-#### 1a. Drop completeness *(addresses snag #24)*
+#### 1a. Drop completeness *(SHIPPED — distinct invariant from Tier 1c at the LIR layer)*
 
-**Invariant.** Every droppable field of every type T must be reachable through T's emitted drop function. If a field's type has `drop_strategy ≠ None`, the field appears in `module.recursive_drop_structs[T]` (or `recursive_drop_enums[T]`) with a non-skip drop entry.
+**Invariant.** For every type `T` with a registered `module.type_drop_fns` entry, every droppable struct field (or enum-variant payload) of `T` appears in that entry's `field_drops` (or `enum_variants`). "Droppable" is the LIR-level predicate `is_droppable_type` at `src/lir/validate.rs:854` — matches `c_runtime_alias`-tagged structs (`GorgetString` / `GorgetArray` / `GorgetMap` / `GorgetSet` / `GorgetClosure`), `Box__` prefix, and any struct already in `module.type_drop_fns`.
 
-**Validator sketch.** Walk every struct/enum LIR StructDef. For each field whose type has a non-None drop strategy, check the recursive-drop table contains a corresponding non-`__clone_only:` entry. The `__clone_only:` markers self-incriminate.
+**Validator at `src/lir/validate.rs:851`** (`validate_drop_completeness`). Walks `module.type_drop_fns`; for each registered entry, checks that every droppable field by name appears in `field_drops` (for structs) or `enum_variants` (for enums). Registered in the `VALIDATORS` constant at line 81, called from `assert_module_valid` per-pass under debug builds and via `GG_VALIDATE_PASSES` under release. Fatal on first violation.
 
-**Why it matters.** Snag #24's class. A struct field of type `Option[Box[Resource]]` silently leaks the box at scope exit because `lir/lower/mod.rs:412-423` records the field as `__clone_only:` (skip drop). The validator turns this leak from "discovered when a user runs ASAN" into "the build halts the moment the lowering pass produces an incomplete drop table".
+**Re-scope note (2026-05-11).** The original framing (validator detects `__clone_only:` skip markers in `recursive_drop_structs`) was superseded. The Snag #24 fix (commit `25e441da`) removed all `__clone_only:` producers; the dead consumer branches in the C emitter and self-host lowerer were retired in a follow-on cleanup the same day. The shipped validator does something stronger: it checks LIR-level drop-table completeness directly, independent of any marker convention. This catches the snag #24 class structurally — a missing field-drop entry halts the build whether the omission came from a forgotten emit site or (as in 2026-05-11's FnPtr-field discovery) an entirely new field-type variant the populator didn't handle.
 
-**Burn-down (in order).**
-1. Build validator + env gate. Initial sweep gives the migration size.
-2. Inline-drop scheme for Option/Result struct fields (prototype documented in TODO snag #24).
-3. CoW clone-on-consume for enum constructors with resource args (the deeper bug snag #24 exposed).
-4. Match-scrutinee staging migration so the resulting Borrow shape doesn't trip Phase C's read-site validators.
-5. Promote.
+**Tier 1a vs Tier 1c (distinct invariants).** Both address snag #24's family but at different layers:
+- **Tier 1c (`validate_type_metadata_coherence`, GIR-level):** does `TypeDef.metadata.(drop_strategy, copy_semantics)` match what the field-walk would compute? Catches the *registration timing* class — wrappers registered with `(None, Trivial)` whose fields are transitively droppable.
+- **Tier 1a (`validate_drop_completeness`, LIR-level):** once metadata is coherent and `type_drop_fns` is populated, does the drop table reach every droppable field? Catches the *drop-table population* class — the LIR populator missed a field-type variant (the 2026-05-11 FnPtr discovery is the canonical example: GIR said "not droppable", LIR said "droppable via `c_runtime_alias`", and Tier 1a's predicate caught the layering mismatch).
 
-**Estimate.** 1-2 sessions for the validator, ~3-5 sessions for the migration.
+They compose: Tier 1c locks the GIR→LIR handoff; Tier 1a locks the LIR→C-emit handoff. Both must hold for snag #24 to stay shut.
+
+**Real bug caught post-shipping.** 2026-05-11: re-applying the `monomorphize_struct` Tier 1c migration promoted iterator-chain structs (`MapIter`, etc.) to `(Recursive, Resource)`. Their `Callable[U(T)] f` fields mapped to `GirType::FnPtr` at GIR level but `LirType::Struct(GorgetClosure)` at LIR level. `populate_type_drop_fns` only handled `GirType::Named` fields and silently skipped FnPtr — so the wrapping struct had an incomplete `field_drops` list. Tier 1a's validator flagged the gap on 12 iterator-chain fixtures, exposing a **real pre-existing closure-env leak** that had been silent before. Fix: extend the populator to emit `gorget_closure_free` for FnPtr fields. See DONE.md `[2026-05-11] Tier 1c — FnPtr-field drop emission + monomorphize_struct migration`.
 
 #### 1b. Move follow-through *(SHIPPED 2026-05-07; commit `3e49a03a`)*
 
 Validator at `src/ir/validate.rs:1642` (`validate_move_follow_through`); fatal panic block at `src/ir/lowering/mod.rs:1619`. The dominant violation class — f-string interp segment temps emitting `Move`-mode assigns of drop-registered sources without follow-through — was closed in commit `1d3ccd5b` at `src/ir/lowering/exprs/calls.rs:1517` and `:1533`. Sweep of record (`c_emit_comparison`, 1066 fixtures): 0 violations. See DONE.md for the full chain.
 
-#### 1c. Type-metadata coherence at registration *(IN PROGRESS — foundation + safe-class migrations shipped 2026-05-11; Option/Result wrappers deferred)*
+#### 1c. Type-metadata coherence at registration *(SHIPPED 2026-05-11 — Cluster 1 / Snag #24 closed)*
 
-**Invariant.** Whenever a TypeDef is registered with `copy_semantics: Trivial`, none of its fields/variant-payloads has `copy_semantics: Resource` or `drop_strategy ≠ None`. Said differently: the upgrade pass (`upgrade_types_from_fields`) is unnecessary because metadata is correct at the construction site.
+**Invariant.** Whenever a TypeDef is registered, the recorded `(drop_strategy, copy_semantics)` matches what `TypeRegistry::compute_drop_strategy_for_struct/_for_enum` would compute from a transitive field walk. Said differently: the upgrade pass (`upgrade_types_from_fields`) is no longer load-bearing — metadata is correct at the construction site for every registration path.
 
-**Validator.** `validate_type_metadata_coherence` at `src/ir/validate.rs:1776` walks every TypeDef and compares the recorded `(drop_strategy, copy_semantics)` against what `TypeRegistry::compute_drop_strategy_for_struct/_for_enum` returns from the live registry. Mismatch (helper says Recursive+Resource, recorded was None+Trivial) is a violation. Env-gated via `GG_VALIDATE_TYPE_METADATA_COHERENCE=<log>`. **Smart-pointer-wrapper carve-out:** single-field struct `{ _0: T }` registered with explicit `(Trivial, None)` and no `enum_category` / `collection_kind` is the structural signature of Mutex/RWLock-style "permanent singleton" wrappers — the writer chose Trivial+None EXPLICITLY (these handles aren't freed at the GIR level; inner T's lifecycle is managed at the C runtime layer). The validator skips this case structurally, no name-matching.
+**Validator.** `validate_type_metadata_coherence` at `src/ir/validate.rs` walks every TypeDef and reports when recorded metadata is less restrictive than the helpers compute. **Two structural carve-outs**, neither name-matched:
+- **Smart-pointer wrapper:** single-field struct `{ _0: T }` registered with explicit `(Trivial, None)` and no `enum_category` / `collection_kind` is the structural signature of Mutex/RWLock-style permanent singletons. Inner T's lifecycle is managed at the C runtime layer; the GIR-level metadata is intentionally Trivial.
+- **Closure environment:** structs flagged `is_closure_env: true` (closure capture structs from `closures.rs`). Captures are lifetime-tied aliases of outer-scope locals, not independently owned; outer-scope drops handle cleanup. See `docs/internals/closure-capture.md`.
 
-**Why it matters.** The snag #24 root cause includes a timing class: `make_option_type_def` registers Options with `..Default::default()` (DropStrategy::None), and the global `upgrade_types_from_fields` pass that fixes this only runs once at module-start. Lazy registrations during expression lowering miss the upgrade. Promoting *coherence-at-construction* to a hard invariant eliminates the timing class entirely.
+**Why it mattered.** The snag #24 root cause included a timing class: `make_option_type_def` registered Options with `..Default::default()` (DropStrategy::None), and the global `upgrade_types_from_fields` pass that fixed this only ran once at module-start. Lazy registrations during expression lowering missed the upgrade, producing silent metadata incoherence that surfaced downstream as leaks and double-frees on Option/Result-of-resource shapes. Promoting *coherence-at-construction* to a fatal invariant eliminated the timing class entirely.
 
-**Shipped 2026-05-11 (commits `3556b390`, `1f463392`):**
-1. **Foundation:** `TypeRegistry::compute_drop_strategy_for_struct(&[StructField]) -> (DropStrategy, CopySemantics)` and `compute_drop_strategy_for_enum(&[EnumVariant]) -> (DropStrategy, CopySemantics)` extracted from `upgrade_types_from_fields` semantics — narrower than `needs_drop` (excludes FnPtr fields, matching the post-hoc pass).
-2. **Validator + env gate:** `validate_type_metadata_coherence` + `GG_VALIDATE_TYPE_METADATA_COHERENCE` env gate + smart-pointer wrapper carve-out. 4 unit tests.
-3. **Safe-class migrations (registration sites that don't surface latent shallow-copy lowering bugs):** `register_struct_type` / `register_enum_type` / `register_newtype` in `lowering/types.rs`; `monomorphize_enum` (user generic enums, with Option/Result carve-out) in `lowering/generics/mod.rs`.
+**Shipped (commit chain).**
+1. **Foundation (commits `3556b390`, `1f463392`):** `compute_drop_strategy_for_struct/_for_enum` helpers + validator + `GG_VALIDATE_TYPE_METADATA_COHERENCE` env gate + smart-pointer carve-out.
+2. **Safe-class migrations (commits `3556b390`, `1f463392`):** `register_struct_type` / `register_enum_type` / `register_newtype` (`lowering/types.rs`); `monomorphize_enum` for user generic enums (with Option/Result carve-out).
+3. **Per-mono wrapper-emission dependency tracking (2026-05-11):** `emit_types.rs` now walks `recursive_drop_structs`/`_enums` collecting wrapper-method drop fn names (`Shared__T__drop`, `Weak__T__drop`, `Channel__T__drop`, `Mutex__T__drop`, `RWLock__T__drop`, `Guard__T__drop`) so per-mono wrappers are emitted on demand. Box excluded via `is_non_box_wrapper` (Box has its own slot-ABI emission path).
+4. **FnPtr-field drop emission (2026-05-11):** `populate_recursive_drop_structs`/`_enums` and `populate_type_drop_fns` extended to emit `gorget_closure_free` for `GirType::FnPtr` fields. Unblocked `monomorphize_struct` migration for iterator-chain structs (`MapIter`, `FilterIter`, `TakeIter`, `DropWhileIter`, `InspectIter`, `FilterMapIter`).
+5. **`monomorphize_struct` migration (2026-05-11):** user generic structs now compute `(Recursive, Resource)` at construction whenever any field is transitively droppable.
+6. **Tuple registration migration (2026-05-11):** `Type::Tuple` arm of `map_ast_type_mut` and `register_tuple_type` in `exprs/type_reg.rs` compute correct metadata at construction. Pattern::Tuple destructure migrated to emit `MoveZero` follow-through for Resource tuples.
+7. **Closure-env carve-out (2026-05-11):** `is_closure_env: true` skip added to the validator, matching the smart-pointer carve-out shape.
+8. **Cluster 1 / Snag #24 lowering follow-on (2026-05-11):** the FieldLoad/EnumFieldLoad shallow-copy lowering issues that originally blocked the Option/Result wrapper migrations were closed via cross-type adapter dst-type fix, adapter recv pre-clone + last-use-gated MoveZero, Result auto-propagation Move-mode, `try_lift_option_ref` Move-mode, return/throw staging Move-mode, rethrow/catch Move + MoveZero source, MethodCall closure return-type inference, and three more Result__T_E registration sites migrated to `make_result_type_def`. See DONE.md for the full chain.
+9. **Promotion (2026-05-11):** validator flipped from env-gated to unconditional fatal at `src/ir/lowering/mod.rs:1890`. All 6 registration paths now coherent at construction.
 
-**Deferred (Cluster 1 follow-on required first):**
-- `make_option_type_def` / `make_result_type_def` and all their callers (`map_ast_type_mut`, `register_builtin_option`/`_result`, three `Result_T_E`-from-throws sites in mod.rs/traits.rs/functions.rs, `map_err`/`map` in methods.rs, `ensure_option_type_registered` in context.rs).
-- `monomorphize_enum` carve-out for Option/Result.
-- `monomorphize_struct` (user generic structs) — initial migration regressed 8 `tensor_*` fixtures via missing per-mono Shared/Weak `__drop` wrapper emission (the C backend emits wrappers on-demand and a field-level recursive drop call doesn't register the dependency). Reverted in commit `7c20e379`. Migration blocked on per-mono wrapper emission dependency tracking at LIR-exit, in addition to the Cluster 1 lowering follow-on.
-- Tuple registration in `map_ast_type_mut` and `exprs/type_reg.rs::register_tuple_type` (late-registered).
-- Closure capture struct in `closures.rs` (late-registered).
-
-Migrating these surfaces ~93 latent shallow-copy lowering issues that Phase C's `validate_resource_moves` correctly flags — same class as the 2026-05-07 Cluster 1 revert. The blocker: FieldLoad/EnumFieldLoad lowering needs to emit `Borrow` not `Copy` when the source is a borrowed Option/Result return. Estimated 1-2 weeks; tracked in the existing Cluster 1 / Snag #24 TODO entries.
-
-**Remaining burn-down.**
-1. Cluster 1 / Snag #24 follow-on lowering migration (1-2 weeks).
-2. Migrate the deferred wrappers above.
-3. Promote validator to fatal once the count hits zero.
+**Post-shipping state.** `upgrade_types_from_fields` remains in the codebase as defense-in-depth — the validator catches any future regression at the construction site before the upgrade pass runs.
 
 #### 1d. Box-inner-type completeness *(SHIPPED 2026-05-07; commit `bfb6bb67`, defense-in-depth tests `095ff22f`)*
 
