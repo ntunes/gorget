@@ -157,7 +157,25 @@ fn no_growth_in_name_prefix_routing() {
     /// validator's Result-fallback path — single-site, registrar-adjacent.
     /// Lowered 305 → 292 (2026-05-10): opaque_runtime_size 13 prefix-arm
     /// retirement via typed struct_aliases.
-    const BUDGET: usize = 292;
+    /// Bumped 292 → 297 (2026-05-11): five new validator/registrar-adjacent
+    /// sites. (1) `42e40c45` `validate_box_inner_type_consistency` (Tier 1d
+    /// inverse): `if sd.name.starts_with("Box__") { continue }` filters out
+    /// Box-named structs so the inverse only flags stray-`box_inner_type`-
+    /// on-non-Box. Cannot migrate — the validator's job IS to detect when
+    /// the name suffix and typed metadata disagree, so using the metadata
+    /// as the scope filter would short-circuit the very check.
+    /// (2,3,4) `cec47c9c` Snag #32 None-literal materialisation at writer
+    /// boundaries: three `starts_with("Option__")` / `starts_with("Result__")`
+    /// guards in `coerce_null_to_option_none` + the module-exit validator
+    /// `validate_no_null_assign_to_option_slot`. Scope filters for "the
+    /// Option/Result-slot class" at GIR-stage logic where typed enum_kind
+    /// reads through type_registry but the registrar-adjacent context
+    /// already has the name in hand from `GirType::Named(name)`.
+    /// (5) `39679d0e` per-mono wrapper-emission gap fix: `is_non_box_wrapper`
+    /// filter excluding `Box__`-named drop fns from the new
+    /// per-mono-wrapper scan (Box has its own slot-ABI emission path
+    /// through `emit_box_drop_wrappers`). Registrar-adjacent.
+    const BUDGET: usize = 297;
 
     let count = count_name_prefix_sites();
     assert!(
@@ -395,7 +413,19 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// Maximum allowed proxy-read count. Lower as Phase D migrates
     /// `is_named_local`/`is_owned_local`/`drops.is_registered`/
     /// `drops.is_moved` callsites to typed `Local.ownership` reads.
-    const BUDGET: usize = 64;
+    /// Bumped 64 → 70 (2026-05-11): six new `!ctx.drops.is_moved(local)`
+    /// idempotence guards before `move_zero_and_mark` calls. Five from
+    /// `c779d976` (Tier 1c Cluster 1 burn-down — rethrow/catch/return
+    /// staging paths each guard the move_zero with `!is_moved` to avoid
+    /// double-marking when the source is also drop-registered via the
+    /// drop accountant); one from `47c8fb20` (Tier 1c tuple destructure
+    /// Pattern::Tuple MoveZero follow-through, same idempotence shape).
+    /// These are write-side discipline guards, not ownership-decision
+    /// reads — `move_zero_and_mark` is not idempotent (it asserts), so
+    /// the guard is the ONLY way to make the writer safe under
+    /// already-moved sources. Migrating would require making
+    /// `move_zero_and_mark` idempotent first.
+    const BUDGET: usize = 70;
 
     let count = count_phase_d_proxy_reads();
     assert!(

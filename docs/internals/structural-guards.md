@@ -103,6 +103,8 @@ These structural guards exist today and are load-bearing:
 | `validate_consume_sites` (Tier 2a) | Source ownership mismatch at every consume position (Call/Init/Mutator/HeapAlloc/`Inst::Assign`) | `src/ir/validate.rs` | Fatal |
 | `validate_drop_pre_rebind` (Tier 2c) | Heap-allocating consumer (Box.new shallow-copy) source not `MoveZero`'d before subsequent same-block Drop | `src/ir/validate.rs` | Fatal |
 | `no_typed_metadata_sidecars` (Tier 2d) | Parallel `HashMap<*, T>` sidecar where `T` is a typed `TypeMetadata` / `Local` field (DropStrategy / CopySemantics / CollectionKind / EnumKind / EnumCategory / LocalOwnership / BorrowOrigin) | `tests/lints.rs` | Fatal (BUDGET=0) |
+| `no_growth_in_name_prefix_routing` (Tier 3a) | `starts_with("Box__")` / `Vector__` / `Option__` / ... at non-registrar sites in `src/**/*.rs` | `tests/lints.rs` | Ratchet (BUDGET=297, decreases as migrations land) |
+| `no_growth_in_self_host_name_prefix_routing` (Tier 3a self-host) | Same as above, in `tests/fixtures/self_host_*/**/*.gg` | `tests/lints.rs` | Ratchet (BUDGET=52) |
 | `no_growth_in_phase_d_proxy_reads` (Tier 3b) | Proxy reads of `is_named_local` / `is_owned_local` / `drops.is_registered` / `drops.is_moved` (sidecar to Phase D's `Local.ownership`) | `tests/lints.rs` | Ratchet (BUDGET=64, decreases as migration proceeds) |
 
 Plus the migration framework itself — `GG_VALIDATE_*` env gate, per-class file logging, the gate-→-zero-→-promote pattern from Phase C — is reusable as-is.
@@ -268,15 +270,21 @@ See DONE.md for the full commit chain.
 
 ### Tier 3 — discipline meta-invariants
 
-#### 3a. No name-matching at consumer boundaries
+#### 3a. No name-matching at consumer boundaries — **SHIPPED** (ratchet locks current floor)
 
-**Rule.** `name.starts_with("Box__")` / `.starts_with("Vector__")` / `.starts_with("Option__")` / similar at non-registrar sites is a violation. The legitimate registrar sites (LIR registrars, the C-emit boundary contract layer) form an explicit allowlist.
+**Rule.** `name.starts_with("Box__")` / `.starts_with("Vector__")` / `.starts_with("Option__")` / similar at non-registrar sites is a violation. The legitimate registrar sites (LIR registrars, validators, the C-emit boundary contract layer) form an implicit allowlist by virtue of the ratchet: the count never grows, so new sites must either replace an existing one or come with a justified BUDGET bump.
 
-**Validator sketch.** Lint pass over the compiler source tree (Rust). Match `&str::starts_with` calls whose argument is a string literal matching a known mangled-type prefix; flag anything outside the allowlist.
+**Validator at `tests/lints.rs::no_growth_in_name_prefix_routing`** — Rust test grep-walking `src/**/*.rs` for `starts_with("<prefix>__")` where `<prefix>` is in `MANGLED_PREFIXES` (Vector, Deque, Dict, HashMap, Set, HashSet, Mutex, RWLock, Channel, Shared, Weak, Guard, ReadGuard, WriteGuard, Box, Task, Heap, Tuple, Callable, MutCallable, ConsumeCallable, Option, Result). Plus a companion `no_growth_in_self_host_name_prefix_routing` ratchet for `tests/fixtures/self_host_*/**/*.gg`.
 
-**Why it matters.** *Layering discipline rule 2*: typed metadata, not name-matched. The rule has been violated quietly multiple times across the project's history; each violation produced a snag (snag #13's helper-emission gap, snag #20's collision detector gap, snag #24's skip class). Promoting the rule to a lint catches the next instance at PR time.
+**Current state (2026-05-11):**
+- Compiler tree (`src/`): BUDGET=297, ratcheting down as migrations land. Baseline 438; cumulative ~141 migrations to typed metadata (typed `struct_aliases`, `enum_kind`, `enum_category`, `collection_kind`, `box_inner_type`, `c_runtime_alias`, etc.).
+- Self-host (`tests/fixtures/self_host_*/**/*.gg`): BUDGET=52. Phase A migrated self-host's classification consumers to `build_resource_metadata` (single source of truth).
 
-**Burn-down.** One-off lint pass. Allowlist starts small; grows as legitimate registrar sites are discovered.
+**Burn-down history.** See the BUDGET comment in `tests/lints.rs:no_growth_in_name_prefix_routing` for the per-commit ledger. Each migration that retires a name-prefix site decreases the budget — one-way ratchet. New validator/registrar sites that genuinely cannot be migrated (e.g. the Tier 1d inverse where the name suffix IS the structural marker being validated) require a documented BUDGET bump.
+
+**Why it matters.** *Layering discipline rule 2*: typed metadata, not name-matched. The rule was violated quietly multiple times across the project's history; each violation produced a snag (snag #13's helper-emission gap, snag #20's collision detector gap, snag #24's skip class). The ratchet catches the next instance at lint time.
+
+**Coverage extensions.** New monomorphized-type prefixes (a future `Atomic` builtin protocol with `base_name: "Atomic"` requires adding `"Atomic"` to `MANGLED_PREFIXES`). The watchlist is the explicit registry of what's covered.
 
 #### 3b. Phase D state coherence — **SHIPPED 2026-05-10** (ratchet locks current floor)
 

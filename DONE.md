@@ -1,5 +1,15 @@
 # DONE
 
+- [2026-05-11] **Tier 3a (no name-matching) documented as shipped + BUDGET bump for five rebase-introduced sites; Tier 3b BUDGET bump for six idempotence guards.** The Tier 3a ratchet `no_growth_in_name_prefix_routing` at `tests/lints.rs:152` has been live since at least 2026-05-10, but the structural-guards.md doc still listed §3a in the backlog as pending. Updated the doc — added row to the "What's already in place" table for both `no_growth_in_name_prefix_routing` (compiler tree) and `no_growth_in_self_host_name_prefix_routing` (self-host) ratchets; rewrote §3a backlog entry as SHIPPED with current state (BUDGET=297 compiler, 52 self-host).
+
+  **BUDGET bumps:**
+  - Tier 3a 292 → 297: five rebase-introduced sites since the last lock, all registrar/validator-adjacent. (1) Tier 1d inverse `validate_box_inner_type_consistency` (`42e40c45`) — `if sd.name.starts_with("Box__") { continue }` filters out Box-named structs so the inverse only flags stray-`box_inner_type`-on-non-Box. Cannot migrate; the validator's job IS to detect when name and metadata disagree, so using the metadata as scope filter would short-circuit the check. (2,3,4) Snag #32 None-literal materialisation (`cec47c9c`) — three `Option__`/`Result__` guards in `coerce_null_to_option_none` + the validator. (5) `39679d0e` per-mono wrapper-emission `is_non_box_wrapper` filter.
+  - Tier 3b 64 → 70: six new `!ctx.drops.is_moved(local)` idempotence guards before `move_zero_and_mark` calls — five from `c779d976` (Tier 1c rethrow/catch/return staging) + one from `47c8fb20` (Pattern::Tuple destructure). Write-side discipline, not ownership-decision reads; `move_zero_and_mark` asserts on already-moved sources, so the guard is the only way to make the writer safe. Migrating would require making `move_zero_and_mark` idempotent.
+
+  Both BUDGET comments now carry the per-commit citation ledger; future bumps follow the same pattern.
+
+  Files: `tests/lints.rs` (BUDGET bumps + citations), `docs/internals/structural-guards.md` (Tier 3a table rows + §3a body rewrite). No code changes.
+
 - [2026-05-11] **Tier 2b (match-scrutinee discipline) documented as subsumed by Phase C + Tier 1c.** No separate validator needed; backlog entry retired.
 
   **Why subsumed.** Tier 2b's invariant — "match scrutinee staging assigns of resource-typed scrutinees use `AssignMode::Borrow` or `AssignMode::Move`, never `Copy`" — is structurally enforced by the combination of:
