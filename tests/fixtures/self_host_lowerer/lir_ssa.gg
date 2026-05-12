@@ -185,7 +185,17 @@ Vector[int] term_successors(LirTerm term):
 int ssa_key(int bb, int slot): bb * 100000 + slot
 
 # Process one block: eliminate promoted SlotStore/SlotLoad.
-void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds, Vector[int] &pending_phis, Vector[int] &pending_phi_bbs, Vector[int] &pending_phi_tys):
+#
+# Re-fetches the block at the end before writing `new_insts` back —
+# `read_variable` may call `add_block_param(slot, bb, ...)` for THIS
+# bb during the ISlotLoad iteration (multi-pred case), which appends
+# a phi to `f.blocks[bb].params` via rebuild-and-set. Writing back
+# the start-of-function snapshot would clobber those param updates;
+# the re-fetch picks up the latest state. (§6.4 retirement of
+# pending_phis — the old code dodged this by deferring all phi-param
+# application to a Phase-4 reconstruction after every process_block
+# call had completed.)
+void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds):
     LirBlock blk = f.blocks.get(bb).unwrap()
     Vector[LirInst] new_insts = []
 
@@ -201,7 +211,7 @@ void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int
                     new_insts.push(inst)
             case ISlotLoad(dst, slot, _):
                 if promotable.contains(slot):
-                    int reaching = read_variable(slot, bb, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+                    int reaching = read_variable(slot, bb, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
                     current_def.put(ssa_key(bb, slot), reaching)
                     if reaching != dst:
                         value_subst.put(dst, reaching)
@@ -211,8 +221,11 @@ void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int
                 new_insts.push(inst)
         ii += 1
 
-    blk.insts = new_insts
-    f.blocks.set(bb, blk)
+    # Re-fetch to pick up any phi-param updates add_block_param
+    # applied to f.blocks[bb] during the iteration above.
+    LirBlock final_blk = f.blocks.get(bb).unwrap()
+    final_blk.insts = new_insts
+    f.blocks.set(bb, final_blk)
 
 # Chase substitution chain to find canonical value.
 int resolve_value(int val, Dict[int, int] &value_subst):
@@ -224,7 +237,7 @@ int resolve_value(int val, Dict[int, int] &value_subst):
     return current
 
 # Read the reaching definition of a slot at block entry.
-int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds, Vector[int] &pending_phis, Vector[int] &pending_phi_bbs, Vector[int] &pending_phi_tys):
+int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &current_def, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &value_subst, Vector[Vector[int]] &preds):
     int key = ssa_key(bb, slot)
     if current_def.contains(key):
         return current_def.get(key).unwrap()
@@ -270,18 +283,32 @@ int read_variable(int slot, int bb, LirFunction &f, Dict[int, bool] &promotable,
     elif bb_preds.len() == 1:
         # Single predecessor — use its definition
         int pred = bb_preds.get(0).unwrap()
-        int val = read_variable(slot, pred, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+        int val = read_variable(slot, pred, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
         current_def.put(key, val)
         return val
     else:
         # Multiple predecessors — need block parameter (phi)
-        return add_block_param(slot, bb, &f, &block_params, &current_def, &incomplete_phis, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+        return add_block_param(slot, bb, &f, &block_params, &current_def, &incomplete_phis)
 
-# Add a block parameter for a slot at a merge point. Because the naive
-# `f.blocks.get(bb).params.push + set` nested-Vector mutation silently drops
-# the push through the &f borrow, we accumulate phis in flat side-vectors
-# and rebuild the blocks at the end of construct_ssa (Phase 4).
-int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_params, Dict[int, int] &current_def, Dict[int, int] &incomplete_phis, Vector[int] &pending_phis, Vector[int] &pending_phi_bbs, Vector[int] &pending_phi_tys):
+# Add a block parameter for a slot at a merge point.
+#
+# Phase C step §6.4 (2026-05-12): retired the flat-`pending_phis`
+# parallel-Vector workaround in favour of in-place rebuild. The naive
+# chained shape `f.blocks.get(bb).params.push(...)` silently drops the
+# push because `.unwrap()` byte-copies the LirBlock struct and the
+# `.push` modifies a temporary that's discarded — same family as the
+# nested-Vector mutation gap documented in compute_predecessors at
+# line 65-92. The rebuild-and-set pattern works:
+#
+#   1. Read the block as a local `blk`.
+#   2. Build `new_params` from `blk.params` + the new BlockParam.
+#   3. Reassign `blk.params = new_params` and write `blk` back via
+#      `f.blocks.set(bb, blk)`.
+#
+# Identical shape to `process_block`'s `blk.insts = new_insts` pattern
+# at line 214, which has worked for the inst rebuild since SSA shipped.
+# Equally robust for `params`.
+int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_params, Dict[int, int] &current_def, Dict[int, int] &incomplete_phis):
     int key = ssa_key(bb, slot)
     if block_params.contains(key):
         return block_params.get(key).unwrap()
@@ -291,9 +318,17 @@ int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_para
     block_params.put(key, param_val)
     current_def.put(key, param_val)
     incomplete_phis.put(key, param_val)
-    pending_phis.push(param_val)
-    pending_phi_bbs.push(bb)
-    pending_phi_tys.push(s.ty)
+
+    # In-place rebuild: copy existing params + append the new phi.
+    LirBlock blk = f.blocks.get(bb).unwrap()
+    Vector[BlockParam] new_params = []
+    int ei = 0
+    while ei < blk.params.len():
+        new_params.push(blk.params.get(ei).unwrap())
+        ei += 1
+    new_params.push(BlockParam(param_val, s.ty))
+    blk.params = new_params
+    f.blocks.set(bb, blk)
 
     return param_val
 
@@ -457,7 +492,7 @@ LirTerm substitute_term(LirTerm term, Dict[int, int] &subst):
 
 # ── Terminator patching ─────────────────────────────────────
 
-void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &current_def, Dict[int, int] &value_subst, Vector[Vector[int]] &preds, Vector[int] &pending_phis, Vector[int] &pending_phi_bbs, Vector[int] &pending_phi_tys):
+void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, int] &block_params, Dict[int, int] &incomplete_phis, Dict[int, int] &current_def, Dict[int, int] &value_subst, Vector[Vector[int]] &preds):
     # Iteratively resolve reaching definitions for each phi's predecessors.
     # When a predecessor's `current_def` is missing, the slot's SSA value at
     # that predecessor must be the reaching definition from its own ancestors
@@ -485,7 +520,7 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
                     # Chase the reaching definition through pred_bb's
                     # ancestors. read_variable handles single-pred chains,
                     # multi-pred (adds a new phi), and entry (zero-init).
-                    read_variable(slot, pred_bb, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+                    read_variable(slot, pred_bb, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
                     changed = true
                 pi += 1
             ki += 1
@@ -494,44 +529,37 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
         if incomplete_phis.len() > prev_phi_count:
             changed = true
 
-    # Build target_bb → [slots in param order] by iterating
-    # pending_phi_bbs / pending_phis in insertion order.
+    # Build target_bb → [slots in param order] directly from
+    # incomplete_phis. The Dict's keys() iteration is insertion-order
+    # (Gorget Dict spec), which matches the order add_block_param
+    # appended each phi onto blk.params — so the terminator's per-target
+    # args list lines up by position with the destination block's
+    # params list.
     Dict[int, Vector[int]] target_slots = {}
-    int pp_i = 0
-    while pp_i < pending_phi_bbs.len():
-        int target_bb = pending_phi_bbs.get(pp_i).unwrap()
-        int slot = -1
-        # Recover slot from incomplete_phis: scan its keys (the actual
-        # value at pending_phis[pp_i] is a SSA value id, not a slot).
-        Vector[int] all_phi_keys = incomplete_phis.keys()
-        int akpi = 0
-        while akpi < all_phi_keys.len():
-            int test_key = all_phi_keys.get(akpi).unwrap()
-            int test_target_bb = test_key / 100000
-            int test_slot = test_key - test_target_bb * 100000
-            if test_target_bb == target_bb and incomplete_phis.get(test_key).unwrap() == pending_phis.get(pp_i).unwrap():
-                slot = test_slot
-                break
-            akpi += 1
-        if slot >= 0:
-            if not target_slots.contains(target_bb):
-                Vector[int] new_slots = [slot]
-                target_slots.put(target_bb, !new_slots)
-            else:
-                # Rebuild the inner Vector from scratch + slot, then put it back.
-                # The straightforward `get().push()` pattern silently loses the
-                # mutation for nested Vector[Vector[int]] in a Dict (the inner
-                # Vector returned by .get() is a borrow that doesn't persist
-                # through .put()). Rebuilding forces a fresh owned Vector.
-                Vector[int] old_slots = target_slots.get(target_bb).unwrap()
-                Vector[int] new_slots2 = []
-                int osi = 0
-                while osi < old_slots.len():
-                    new_slots2.push(old_slots.get(osi).unwrap())
-                    osi += 1
-                new_slots2.push(slot)
-                target_slots.put(target_bb, !new_slots2)
-        pp_i += 1
+    Vector[int] all_phi_keys = incomplete_phis.keys()
+    int akpi = 0
+    while akpi < all_phi_keys.len():
+        int key = all_phi_keys.get(akpi).unwrap()
+        int target_bb = key / 100000
+        int slot = key - target_bb * 100000
+        if not target_slots.contains(target_bb):
+            Vector[int] new_slots = [slot]
+            target_slots.put(target_bb, !new_slots)
+        else:
+            # Rebuild the inner Vector from scratch + slot, then put it back.
+            # The straightforward `get().push()` pattern silently loses the
+            # mutation for nested Vector[Vector[int]] in a Dict (the inner
+            # Vector returned by .get() is a borrow that doesn't persist
+            # through .put()). Rebuilding forces a fresh owned Vector.
+            Vector[int] old_slots = target_slots.get(target_bb).unwrap()
+            Vector[int] new_slots2 = []
+            int osi = 0
+            while osi < old_slots.len():
+                new_slots2.push(old_slots.get(osi).unwrap())
+                osi += 1
+            new_slots2.push(slot)
+            target_slots.put(target_bb, !new_slots2)
+        akpi += 1
 
     # For each predecessor→target edge, collect args in param order.
     # Dict.keys() is now insertion-order, so iteration matches registration order.
@@ -619,14 +647,6 @@ void construct_ssa(LirFunction &f):
     Dict[int, int] incomplete_phis = {}
     Dict[int, int] value_subst = {}
 
-    # Phi parameters accumulated during SSA construction. Gorget's nested
-    # Vector mutation through &f (f.blocks.get(bb).params.push + set) silently
-    # drops state, so we collect phis in flat parallel Vectors and apply them
-    # to blk.params at the end by rebuilding each block that got phis.
-    Vector[int] pending_phis = []
-    Vector[int] pending_phi_bbs = []
-    Vector[int] pending_phi_tys = []
-
     # Phase 1: Process blocks in RPO (reverse post-order) so predecessors
     # are visited before successors — this is critical for the
     # single-predecessor chain in read_variable to find reaching defs. In
@@ -642,49 +662,15 @@ void construct_ssa(LirFunction &f):
     int rpi = 0
     while rpi < rpo.len():
         int bi_rpo = rpo.get(rpi).unwrap()
-        process_block(bi_rpo, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
+        process_block(bi_rpo, &f, &promotable, &current_def, &block_params, &incomplete_phis, &value_subst, &preds)
         rpi += 1
 
     # Phase 2: Apply value substitutions
     apply_value_substitutions(&f, &value_subst)
 
-    # Phase 3: Patch terminators with block arguments for phis
-    patch_terminators(&f, &promotable, &block_params, &incomplete_phis, &current_def, &value_subst, &preds, &pending_phis, &pending_phi_bbs, &pending_phi_tys)
-
-    # Phase 4: Apply pending phi params to the blocks. Rebuild each block
-    # that has pending phis, since direct in-place mutation of blk.params
-    # doesn't persist across &f borrow boundaries.
-    Dict[int, bool] bbs_with_phis = {}
-    int ppi = 0
-    while ppi < pending_phi_bbs.len():
-        bbs_with_phis.put(pending_phi_bbs.get(ppi).unwrap(), true)
-        ppi += 1
-    Vector[int] phi_bb_keys = bbs_with_phis.keys()
-    int pki = 0
-    while pki < phi_bb_keys.len():
-        int bb_to_rebuild = phi_bb_keys.get(pki).unwrap()
-        LirBlock old_blk = f.blocks.get(bb_to_rebuild).unwrap()
-        Vector[BlockParam] new_params = []
-        # Preserve existing params (if any — defensive).
-        int ei = 0
-        while ei < old_blk.params.len():
-            new_params.push(old_blk.params.get(ei).unwrap())
-            ei += 1
-        # Append accumulated phis for this bb in insertion order.
-        int qi = 0
-        while qi < pending_phi_bbs.len():
-            if pending_phi_bbs.get(qi).unwrap() == bb_to_rebuild:
-                new_params.push(BlockParam(pending_phis.get(qi).unwrap(), pending_phi_tys.get(qi).unwrap()))
-            qi += 1
-        LirBlock rebuilt = LirBlock(old_blk.id, new_params, old_blk.insts, old_blk.term)
-        # Rebuild f.blocks with `rebuilt` substituted at bb_to_rebuild.
-        Vector[LirBlock] new_blocks = []
-        int nbi = 0
-        while nbi < f.blocks.len():
-            if nbi == bb_to_rebuild:
-                new_blocks.push(rebuilt)
-            else:
-                new_blocks.push(f.blocks.get(nbi).unwrap())
-            nbi += 1
-        f.blocks = new_blocks
-        pki += 1
+    # Phase 3: Patch terminators with block arguments for phis. Phi
+    # params themselves are appended to each merge block's `params`
+    # in-place by `add_block_param`'s rebuild-and-set (Phase C step
+    # §6.4 retirement of the flat-pending_phis workaround) — no
+    # separate phase-4 block rebuild needed.
+    patch_terminators(&f, &promotable, &block_params, &incomplete_phis, &current_def, &value_subst, &preds)
