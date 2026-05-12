@@ -268,6 +268,13 @@ fn lower_for_string(
     );
     ctx.register_local(var_name, ch_local, owned_string_type);
     ctx.drops.register_local(ch_local, owned_string_type, &ctx.type_registry);
+    // `gorget_str_codepoint_at` allocates a fresh owned String for each
+    // codepoint — tag FreshOwned so the consume-site validator sees a
+    // concrete state at downstream sinks (e.g., `stack.push(ch)` in
+    // `string_algorithms::is_balanced`). Without this the local stays
+    // at default Untracked, surfaced by the Tier 2a `consume_externs`
+    // promotion 2026-05-12.
+    ctx.set_owned_fresh(builder, ch_local);
 
     // Lower the body
     lower_block(ctx, builder, body);

@@ -422,6 +422,81 @@ fn lower_var_decl(
                     ctx.register_local(name, local_id, inferred);
                     ctx.drops.update_or_register_type(local_id, inferred, &ctx.type_registry);
                 }
+                // Closure (Callable) var-decl auto-clone. `Callable[...] h = hook`
+                // pre-fix lowered to a shallow Copy of the 16-byte GorgetClosure,
+                // aliasing the source's env pointer with the destination.
+                // Subsequent `push(h)` into a Vector triggered the Tier 2a
+                // consume-site violation (untracked source consumed).
+                //
+                // The destination's `gir_type` is the load-bearing signal:
+                // the user declared `Callable[...]`, which `map_ast_type_mut`
+                // resolves to `GirType::FnPtr` (primitive sig) or Named with
+                // `c_runtime_alias = "GorgetClosure"` (user-typed sig).
+                // The source's `inferred` is unreliable here — Callable
+                // parameters resolve to `UNIT_TYPE` at the immutable
+                // `map_ast_type` path (intentional design for the void*
+                // __callable_N ABI; see types.rs:60-110).
+                //
+                // Auto-clone unless the source is already Owned/FreshOwned
+                // (e.g., fresh from a function-call return). Added 2026-05-12
+                // as the Tier 2a consume_externs burn-down (see TODO).
+                let gir_is_closure = match ctx.type_registry.get(gir_type) {
+                    Some(GirType::FnPtr { .. }) => true,
+                    Some(GirType::Named(n)) => {
+                        ctx.type_registry.get_type_def(n)
+                            .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                            == Some("GorgetClosure")
+                    }
+                    _ => false,
+                };
+                if gir_is_closure {
+                    // Narrow gate: only auto-clone when the source local's
+                    // type is ALSO a closure-handle shape (FnPtr or
+                    // c_runtime_alias = GorgetClosure) AND the source
+                    // local is named (i.e., a callable parameter or a
+                    // previously-bound Callable local), NOT an unnamed
+                    // closure-literal temp.
+                    //
+                    // Closure literals lower to the user's __Closure_N
+                    // struct type — passing that to gorget_closure_clone_to_owned
+                    // fails the ABI (expects const GorgetClosure*, gets
+                    // user-struct-by-value). Closure literals are fresh
+                    // by construction and don't need clone.
+                    //
+                    // Callable params (Router::use's hook) and prior
+                    // Callable bindings ARE closure-handle-shaped at the
+                    // IR level (the param's local has Unit type for the
+                    // void* __callable_N ABI, but the underlying value at
+                    // runtime is a GorgetClosure handle).
+                    let should_clone = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                        if !p.projections.is_empty() {
+                            false
+                        } else {
+                            let src_local = builder.locals.get(p.local.0 as usize);
+                            let src_owned = matches!(
+                                src_local.map(|l| &l.ownership),
+                                Some(crate::ir::LocalOwnership::Owned)
+                                    | Some(crate::ir::LocalOwnership::FreshOwned)
+                            );
+                            let src_named = ctx.is_named_local(p.local);
+                            // Already Owned/FreshOwned (fresh local from
+                            // call result) → no clone needed.
+                            // Not named (closure literal temp) → ABI-
+                            // incompatible source struct, skip clone.
+                            !src_owned && src_named
+                        }
+                    } else { false };
+                    if should_clone {
+                        let cloned = builder.call_extern(
+                            "gorget_closure_clone_to_owned",
+                            vec![operand.clone()],
+                            gir_type,
+                        );
+                        ctx.drops.register_local(cloned, gir_type, &ctx.type_registry);
+                        ctx.set_owned_fresh(builder, cloned);
+                        operand = FunctionBuilder::copy(cloned);
+                    }
+                }
                 if let Some(GirType::Ptr(_inner)) = ctx.type_registry.get(inferred).cloned() {
                     if !matches!(ctx.type_registry.get(gir_type), Some(GirType::Ptr(_))) {
                         // Check: is the source a Ptr borrow safe to propagate?

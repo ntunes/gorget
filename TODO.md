@@ -2,28 +2,6 @@
 
 ## High
 
-- **Tier 2a strengthening — promote `is_consume_extern` after Callable param-type resolution gap closes.** Infrastructure shipped 2026-05-11 (commit `31250be5`): `Module::consume_externs` typed registry populated at module finalization. The validator's `is_consume_extern(module, name)` helper exists in `src/ir/validate.rs` (marked `#[allow(dead_code)]`) but is UNUSED.
-
-  **Probe sweeps 2026-05-11/12 — three iterations, each revealed a deeper layer:**
-
-  1. **Initial probe (2026-05-11):** 27 violations, all `Vector__Callable__GorgetClosure__push` at Router::use etc. Hypothesis: `lower_function` only tags string `!` params as Owned; extending to all resource types closes the class.
-
-  2. **First fix (2026-05-12):** extended `lower_function`'s `set_owned` from string-only to all `is_resource_type(base_type)` Move params. Closed only 2 of 27 (27 → 25). Hypothesis incomplete — the dominant class isn't Move param tagging.
-
-  3. **Second fix (2026-05-12):** added a var-decl auto-clone branch in `lower_var_decl` (`src/ir/lowering/stmts/mod.rs` around line 425) for `GirType::FnPtr` and Named-with-`c_runtime_alias = GorgetClosure` sources. Worked on a minimal repro (`Callable[int(int)] hook`) but the httpserver tests still failed. Debug print revealed: **the Router::use hook param has `inferred_type = Unit`** (NOT `FnPtr` or `Named`-with-alias). The param type info is missing entirely at the var-decl site for Callable params with user-typed signatures like `Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]`.
-
-  **Actual structural blocker.** Callable param-type resolution gap: when the Callable's signature references user-defined types (HttpServerResponse, HttpRequest, etc.), `ctx.type_mapper.map_ast_type(&p.node.type_.node)` returns `Unit` instead of registering a proper `Callable__T_args` Named type (or even an FnPtr). The simple `Callable[int(int)]` case works because primitive-arg Callables resolve to `FnPtr` directly. This is a missing type-resolution path, not a var-decl bug.
-
-  **Fix path** (multi-session, sequenced):
-  1. Audit `map_ast_type` and related type-resolution paths for `ast::Type::Callable { args, return_type }` with user-typed args. Should register a `Callable__<mangled_args>__<mangled_ret>` Named TypeDef with `c_runtime_alias = "GorgetClosure"`, mirroring how Vector__T monomorphizes.
-  2. Verify with a debug probe that param's `gir_type` is no longer `Unit` for the httpserver shape.
-  3. Re-apply the var-decl FnPtr/Named-with-alias auto-clone branch.
-  4. Re-apply validator promotion (`is_runtime_collection_mutator` → `is_consume_extern` at two callsites).
-  5. Retire `#[allow(dead_code)]` on `is_consume_extern`.
-
-  Probably 2-3 sessions including the type-resolution audit. The infrastructure (consume_externs registry) is shipped and ready; promotion is gated on the Callable type-resolution work.
-
-  Files: type resolution path for user-typed Callable sigs (likely `src/ir/lowering/types.rs`); `src/ir/lowering/stmts/mod.rs` (var-decl FnPtr branch); `src/ir/validate.rs` (promote callers + retire allowance). [added: 2026-05-11, root cause refined 2026-05-12]
 
 - **Phase C self-host validator burn-down — moves class open, 100,170 baseline.** Three validators shipped (`tests/fixtures/self_host_lowerer/validate.gg`); two classes closed:
   - ✅ `validate_resource_field_reads`: 4,365 → 0 (commit `8cfc94ff`, step 5a). Regression test `phase_c_field_reads_at_zero_self_host`.

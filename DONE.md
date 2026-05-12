@@ -1,5 +1,28 @@
 # DONE
 
+- [2026-05-12] **Tier 2a `consume_externs` burn-down COMPLETE — validator promoted to fatal.** Closes the 27-violation latent class surfaced by the 2026-05-11 infrastructure ship (commit `31250be5`). The typed registry's `is_consume_extern(module, name)` is now live at the two callsites in `validate_consume_sites`; `is_runtime_collection_mutator` stays as runtime-symbol fallback only.
+
+  **Three writer-side fixes that landed together:**
+
+  1. **var-decl Callable auto-clone** (`src/ir/lowering/stmts/mod.rs:425`). `Callable[T(...)] h = hook` pre-fix shallow-Copy'd the 16-byte GorgetClosure handle, aliasing hook's env with h. Subsequent `push(h)` then double-freed at scope exit. Fix: detect the destination's `gir_type` as a closure shape (FnPtr or Named-with-`c_runtime_alias = "GorgetClosure"`) and auto-clone via `gorget_closure_clone_to_owned` to FreshOwned. Keys on destination because source's `inferred` is unreliable — Callable params resolve to `UNIT_TYPE` at the immutable `map_ast_type` path (intentional design for the void* `__callable_N` ABI).
+
+     **Narrow gate** to avoid spurious clones: only fire when source is a NAMED local that's NOT already Owned/FreshOwned. Closure literals (`!(n): n * 2`) are unnamed temps that lower to user-`__Closure_N` struct types — passing those to `gorget_closure_clone_to_owned` ABI-mismatches (the runtime wants `const GorgetClosure*`, not a user struct by value). Closure literals are fresh-by-construction and skip the auto-clone.
+
+  2. **for-loop string-iter `set_owned_fresh`** (`src/ir/lowering/stmts/for_loops.rs:270`). `for ch in s:` calls `gorget_str_codepoint_at` which allocates a fresh owned String per codepoint. The loop var was `drops.register_local`'d but missing the ownership tag, so the validator saw Untracked at `stack.push(ch)` in `string_algorithms::is_balanced`. One-line `ctx.set_owned_fresh(builder, ch_local)` after register.
+
+  3. **Validator promotion** (`src/ir/validate.rs`). Swap `is_runtime_collection_mutator(callee)` → `is_consume_extern(module, callee)` at the two consume-site callsites in `validate_consume_sites`. Retire `#[allow(dead_code)]` on `is_consume_extern` and update its doc-comment to reflect live status.
+
+  **Probe sequence (full transparency).** Three iterations refined the diagnosis before landing on the fix:
+  - Iter 1: extended `lower_function`'s string-only `set_owned` to all resource Move params. 27→25, hypothesis incomplete (dominant class is Borrow not Move). Reverted.
+  - Iter 2: added var-decl FnPtr branch keyed on source `inferred`. Worked on `Callable[int(int)]` repro; failed on httpserver `Callable[UserType(...)]`. Debug print → source `inferred=Unit` for Callable params (by design — void* ABI signal).
+  - Iter 3: re-keyed the var-decl branch on destination `gir_type`. Narrow gate excluding closure literals. 27→4. Investigated the 4 — 3 were closure-literal C-ABI mismatches (fixed by gate), 1 was the for-loop char-iter ownership tag gap (separate fix #2 above). Final: **27 → 0**.
+
+  **What's locked in.** The Tier 2a typed registry now sees mangled-name collection mutators (`Dict__K__V__put`, `Vector__Callable__GorgetClosure__push`, etc.). Any future writer that emits a consume-shape mangled extern without proper move/clone discipline halts the build — same fatal-panic shape as the existing Phase C / Tier 2a coverage. Per CLAUDE.md "No name matching": registry-driven, not pattern-matched.
+
+  **Self-host parallel.** The self-host frontend uses Callable params (e.g., parser combinators) — its lowering may have analogous gaps. Not surfaced by this sweep (self-host fixtures pass) but the structural class exists. Future audit work, not a session blocker.
+
+  Files: `src/ir/lowering/stmts/mod.rs` (var-decl branch, ~50 lines), `src/ir/lowering/stmts/for_loops.rs` (1-line `set_owned_fresh`), `src/ir/validate.rs` (promotion + doc update). Full integration: 1088/1088 PASS in 662s.
+
 - [2026-05-12] **Tier 2a `consume_externs` burn-down — three probe iterations, root cause refined; ship deferred pending Callable type-resolution work.** Followed up the 2026-05-11 Tier 2a strengthening (commit `31250be5`) which shipped the typed registry as infrastructure with `is_consume_extern` gated `#[allow(dead_code)]`. Goal: close the 27-violation latent class so the validator promotion lands.
 
   **Iteration 1 (writer-side, Move params).** Hypothesis: `lower_function:632` only tags string `!` (Move) params as `Owned`; extend to all `is_resource_type(base_type)` Move params. Closed 2 of 27. The dominant class is `Ownership::Borrow` (default), not Move — hypothesis incomplete.

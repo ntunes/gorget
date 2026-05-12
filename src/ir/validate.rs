@@ -2392,7 +2392,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     use crate::ir::lowering::context::ParamABI;
                     // Try internal-call ABI table first.
                     let abis = module.fn_param_abis.get(callee);
-                    let is_runtime_collection = is_runtime_collection_mutator(callee);
+                    let is_runtime_collection = is_consume_extern(module, callee);
                     for (idx, op) in args.iter().enumerate() {
                         // For internal calls: ByValue is a consume position.
                         // ByPtr / ByMutPtr are borrow shapes — the callee can't
@@ -2428,7 +2428,7 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                 Instruction::CallExtern { func: callee, args, .. } => {
                     use crate::ir::abi::AbiKind;
                     let extern_decl = module.find_extern(callee);
-                    let is_runtime_collection = is_runtime_collection_mutator(callee);
+                    let is_runtime_collection = is_consume_extern(module, callee);
                     for (idx, op) in args.iter().enumerate() {
                         // Externs: ByValue/GorgetString consume the value;
                         // VoidElem also consumes (the callee writes the data
@@ -2875,12 +2875,26 @@ fn is_runtime_collection_mutator(name: &str) -> bool {
     )
 }
 
-// Future strengthening: replace `is_runtime_collection_mutator` callers
-// with `is_consume_extern(module, name)`. Burn-down probe 2026-05-12
-// uncovered a deeper structural blocker than originally diagnosed: see
-// TODO entry. Once burn-down hits zero, swap callers + retire the
-// runtime-allowlist function.
-#[allow(dead_code)]
+/// Recognise consume-shape extern calls. Combines:
+///   (1) `module.consume_externs` — typed registry populated at writer-
+///       site registration (e.g., `lower_dict_literal` inserts the
+///       mangled `Dict__K__V__put`) AND derived at module finalization
+///       from `fn_param_ownerships` (any fn with `Ownership::Move`
+///       params). Catches mangled mono names like `Dict__K__V__put`
+///       that the runtime allowlist misses (post-mono runtime symbol
+///       vs IR-stage mangled name; see `Module::consume_externs`).
+///   (2) `is_runtime_collection_mutator` — historical name allowlist
+///       for direct runtime-symbol emissions that bypass the lowering's
+///       mangled-name path. Kept as fallback so the registry doesn't
+///       need to enumerate every direct runtime emission site.
+///
+/// Promoted to the live classifier 2026-05-12 after the var-decl
+/// closure auto-clone branch landed in `lower_var_decl` (the burn-down
+/// of the latent 27-violation class). The branch keys off the
+/// destination's `gir_type` (the user-declared `Callable[...]`) — the
+/// source's `inferred` is unreliable because Callable params resolve
+/// to `UNIT_TYPE` at the immutable `map_ast_type` path (intentional
+/// design for the void* `__callable_N` ABI).
 fn is_consume_extern(module: &Module, name: &str) -> bool {
     module.consume_externs.contains(name) || is_runtime_collection_mutator(name)
 }
