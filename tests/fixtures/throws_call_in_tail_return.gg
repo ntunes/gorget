@@ -1,24 +1,31 @@
-# Snag #36 regression: `return throws_fn(...)` from inside a throws
-# function used to fail typecheck with "expected T, found
-# Result[T, E]" — the tail-return path didn't apply the auto-prop /
-# capture-compat skip that VarDecl and arg-passing already had
-# (Snag #35).
+# Snag #36 + follow-up regression: `return throws_fn(...)` and
+# `return match v: ...` from inside a throws function.
 #
-# The fix is two-layer:
-#  - typecheck Stmt::Return now skips `unify(ret, value)` when the
-#    pair is auto-propagation- or capture-compatible (mirrors the
-#    Snag #35 VarDecl / arg-passing policy);
-#  - IR-lowering's `lower_return` recognises a value-typed operand
-#    that already matches the function's throws-Result type as
-#    "already a Result" — direct-assign into the return slot
-#    instead of wrapping in another `Ok(...)`. Without the
-#    IR-lowering half, typecheck would pass but the C-layer would
-#    see `Result[Result[T, E], E]` bytes in the `Result[T, E]`
-#    return slot, producing wrong values (Ok(false) instead of
-#    Ok(true) for the simple case).
+# Two layers covered:
 #
-# Both happy and error paths must propagate correctly across the
-# tail-return boundary.
+# (1) Simple tail return — `return helper(x)` where both functions
+#     are `T throws E`. Snag #36 proper. Typecheck previously
+#     rejected this as `expected T, found Result[T, E]`. Fix:
+#       - typecheck `Stmt::Return` skips unify when auto-prop /
+#         capture compatible (mirrors VarDecl / arg-passing);
+#       - IR-lowering `lower_return` recognises an operand whose
+#         type already matches the function's throws-Result and
+#         direct-assigns into the return slot instead of wrapping
+#         in another `Ok(...)`.
+#
+# (2) Recursive `return match v: case A(b): b; case B(n): return
+#     recurse(...)` — Snag #36 follow-up. Even with (1), the
+#     match's result_local was sized from `expected_type`
+#     (Result[T, E]) but the bare-T arm wrote a bool into the
+#     Result slot, tripping Tier 2a's `AssignIntoOwnedSlot`
+#     validator. Fix: in `lower_match_expr` /
+#     `lower_match_stmt_as_expr`, when `expected_type` is a
+#     Result wrapper, defer the result_local's final type to the
+#     first non-divergent arm. Arms producing bare T (the
+#     throws-sugar case) refine to T; arms producing explicit
+#     Ok/Error refine to Result — same end state, just discovered
+#     arm-by-arm. The outer `lower_return` then wraps the bare T
+#     (or direct-assigns the Result) as before.
 
 bool helper(int x) throws String:
     if x == 0:
@@ -28,7 +35,19 @@ bool helper(int x) throws String:
 bool caller(int x) throws String:
     return helper(x)
 
+public enum V:
+    BoolV(bool)
+    NumberV(float)
+
+bool match_recurse(V v) throws String:
+    return match v:
+        case V.BoolV(b):
+            b
+        case V.NumberV(n):
+            return match_recurse(V.BoolV(n > 0.0))
+
 void main():
+    # (1) simple tail return
     match caller(5):
         case Ok(v):
             print(f"+: ok {v}")
@@ -44,3 +63,20 @@ void main():
             print("0: ok BUG")
         case Error(e):
             print(f"0: err {e}")
+
+    # (2) recursive match-arm with mixed bare-T / return-recurse arms
+    match match_recurse(V.BoolV(true)):
+        case Ok(v):
+            print(f"r/bool: ok {v}")
+        case Error(_):
+            print("r/bool: err")
+    match match_recurse(V.NumberV(2.0)):
+        case Ok(v):
+            print(f"r/+: ok {v}")
+        case Error(_):
+            print("r/+: err")
+    match match_recurse(V.NumberV(-3.0)):
+        case Ok(v):
+            print(f"r/-: ok {v}")
+        case Error(_):
+            print("r/-: err")

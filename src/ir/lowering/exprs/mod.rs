@@ -2350,9 +2350,24 @@ fn lower_match_expr(
     // contexts without an expected_type (statement-level `match` whose
     // expression value is later coerced) still produce a correctly-sized
     // result.
+    //
+    // Snag #36 follow-up: when `expected_type` is a `Result[T, E]` wrapper
+    // (e.g. `return match v: case A(b): b ...` from a throws function), the
+    // match arms typically produce the bare Ok-type `T` — the Ok-wrap
+    // happens at the outer `lower_return` boundary as part of the `throws`
+    // sugar. Defer the slot's final type to the first non-divergent arm
+    // so the arm's assign doesn't write a bare `T` into a `Result[T, E]`
+    // slot. If the arms DO produce Result explicitly (`case A: Ok(true)`
+    // / `case B: Error("...")`), the refinement picks up Result from the
+    // first non-divergent arm — same end state, just discovered
+    // arm-by-arm. The typechecker requires non-divergent arms to share
+    // their type via unify, so the first arm's type is authoritative.
     let result_type_init = ctx.func_state.expected_type.unwrap_or(I64_TYPE);
     let result_local = builder.add_local(result_type_init, None);
-    let mut result_type_refined = ctx.func_state.expected_type.is_some();
+    let expected_is_result_wrapper = ctx.func_state.expected_type
+        .map_or(false, |t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result));
+    let mut result_type_refined = ctx.func_state.expected_type.is_some()
+        && !expected_is_result_wrapper;
     let merge_bb = builder.new_block();
 
     for (i, arm) in arms.iter().enumerate() {
@@ -2927,9 +2942,15 @@ fn lower_match_stmt_as_expr(
     // arms wrote `&__sNN` (Ptr) into an I64-sized slot, and the outer match's
     // boundary path then assigned an int64_t into the surrounding enum struct,
     // producing `incompatible types` C errors.
+    //
+    // Snag #36 follow-up: same Result-wrapper deferral as
+    // `lower_match_expr` — see the comment there.
     let result_type_init = ctx.func_state.expected_type.unwrap_or(I64_TYPE);
     let result_local = builder.add_local(result_type_init, None);
-    let mut result_type_refined = ctx.func_state.expected_type.is_some();
+    let expected_is_result_wrapper = ctx.func_state.expected_type
+        .map_or(false, |t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result));
+    let mut result_type_refined = ctx.func_state.expected_type.is_some()
+        && !expected_is_result_wrapper;
     let merge_bb = builder.new_block();
 
     let concrete_arms: Vec<&ast::MatchArm> = arms.iter().filter_map(|i| i.arm()).collect();

@@ -3052,7 +3052,10 @@ fn throws_call_in_tail_return() {
         "\
 +: ok true
 -: ok false
-0: err zero!",
+0: err zero!
+r/bool: ok true
+r/+: ok true
+r/-: ok false",
     );
 }
 
