@@ -27,6 +27,7 @@ from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Opera
 from gir import GirType, GirResourceMetadata
 from gir import LocalOwnership
 from gir import PRIM_COUNT
+from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, SwitchCase, BlockParam
 from lir_lower import build_resource_metadata
 
 # ── Helpers ──────────────────────────────────────────────────
@@ -364,4 +365,135 @@ void write_violations(String path, String name, Vector[String] vs):
     int i = 0
     while i < vs.len():
         append_file(path, vs.get(i).unwrap() + "\n")
+        i += 1
+
+# ── §6.2: validator-runs-after-every-pass ─────────────────────
+#
+# Mirrors Rust's `src/lir/validate.rs::assert_module_valid(module, after)`:
+# a single dispatcher gated on `GG_VALIDATE_PASSES`, called from
+# `driver.gg` after each pipeline pass. When the env var is unset
+# (default), every hook is a no-op — zero cost on normal builds. When
+# set, every hook runs the registered validators for its layer and
+# panics with the offending pass's name + all errors found.
+#
+# Sweep-mode usage:
+#
+#   GG_VALIDATE_PASSES=1 ./driver fixture.gg lib
+#
+# Catches mid-pipeline regressions (e.g. a pass that leaves the IR in
+# a malformed state, even if downstream passes happen to mask the bug)
+# the same way the Rust side has used `assert_module_valid` since
+# unified-resource-model.md §8.3 shipped.
+
+# Read the GG_VALIDATE_PASSES env var. Set (any value) → true.
+bool validate_passes_enabled():
+    String v = getenv("GG_VALIDATE_PASSES")
+    return v.len() > 0
+
+# GIR-stage hook. Called from `driver.gg` immediately after
+# `lower_module` returns. The closed-class fatal validators
+# (`validate_resource_field_reads` / `_call_args` / `_moves`) ALREADY
+# run unconditionally from `run_validators(&gir)`, so this hook adds
+# the per-pass naming + a pass-name-tagged error message when any
+# violations turn up.
+void validate_gir_after(String after, GirModule &gmod):
+    if not validate_passes_enabled():
+        return
+    Vector[String] errors = []
+    Vector[String] fr_v = validate_resource_field_reads(&gmod)
+    int i = 0
+    while i < fr_v.len():
+        errors.push("[field_reads] " + fr_v.get(i).unwrap())
+        i += 1
+    Vector[String] ca_v = validate_resource_call_args(&gmod)
+    i = 0
+    while i < ca_v.len():
+        errors.push("[call_args] " + ca_v.get(i).unwrap())
+        i += 1
+    Vector[String] mv_v = validate_resource_moves(&gmod)
+    i = 0
+    while i < mv_v.len():
+        errors.push("[moves] " + mv_v.get(i).unwrap())
+        i += 1
+    if errors.len() > 0:
+        print_pass_violations("GIR invariant violated after " + after, errors)
+        exit(1)
+
+# LIR-stage hook. Called from `driver.gg` after `lower_gir_to_lir`
+# and after each LIR transformation pass (SSA construction, future
+# optimizer passes). Runs the structural LIR invariants — mirrors
+# Rust's `validate_module` registered in
+# `src/lir/validate.rs::VALIDATORS`.
+void validate_lir_after(String after, LirModule &m):
+    if not validate_passes_enabled():
+        return
+    Vector[String] errors = []
+    int fi = 0
+    while fi < m.functions.len():
+        LirFunction func = m.functions.get(fi).unwrap()
+        validate_lir_function(func, &errors)
+        fi += 1
+    if errors.len() > 0:
+        print_pass_violations("LIR invariant violated after " + after, errors)
+        exit(1)
+
+# Per-function LIR structural checks:
+#   • Block ids are sequential (block.id == position).
+#   • Each terminator's successor block ids are in range.
+#   • Each block param's value_id is unique across the function (no
+#     duplicate value definitions from block params).
+void validate_lir_function(LirFunction func, Vector[String] &errors):
+    int num_blocks = func.blocks.len()
+    Dict[int, bool] seen_values = {}
+    int bi = 0
+    while bi < num_blocks:
+        LirBlock blk = func.blocks.get(bi).unwrap()
+        if blk.id != bi:
+            errors.push("@" + func.name + " bb" + int_to_str(blk.id) + " at position " + int_to_str(bi) + " (non-sequential block id)")
+        # Block params define values — check uniqueness.
+        int pi = 0
+        while pi < blk.params.len():
+            BlockParam bp = blk.params.get(pi).unwrap()
+            if seen_values.contains(bp.value_id):
+                errors.push("@" + func.name + " bb" + int_to_str(blk.id) + ": duplicate value definition v" + int_to_str(bp.value_id) + " (also defined earlier in this function)")
+            else:
+                seen_values.put(bp.value_id, true)
+            pi += 1
+        # Terminator successor sanity.
+        check_term_successors(blk.term, blk.id, num_blocks, func.name, &errors)
+        bi += 1
+
+void check_term_successors(LirTerm term, int blk_id, int num_blocks, String fn_name, Vector[String] &errors):
+    match term:
+        case TJump(tgt, _):
+            if tgt < 0 or tgt >= num_blocks:
+                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TJump target bb" + int_to_str(tgt) + " out of range (0.." + int_to_str(num_blocks) + ")")
+        case TBranch(_, then_bb, _, else_bb, _):
+            if then_bb < 0 or then_bb >= num_blocks:
+                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TBranch then-target bb" + int_to_str(then_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            if else_bb < 0 or else_bb >= num_blocks:
+                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TBranch else-target bb" + int_to_str(else_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+        case TSwitch(_, cases, default_bb, _):
+            if default_bb < 0 or default_bb >= num_blocks:
+                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TSwitch default bb" + int_to_str(default_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            int ci = 0
+            while ci < cases.len():
+                SwitchCase sc = cases.get(ci).unwrap()
+                if sc.target < 0 or sc.target >= num_blocks:
+                    errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TSwitch case-" + int_to_str(ci) + " target bb" + int_to_str(sc.target) + " out of range (0.." + int_to_str(num_blocks) + ")")
+                ci += 1
+        else:
+            pass
+
+# Render a pass-tagged violation block to stdout. Header matches the
+# pattern `phase_c_closed_classes_remain_at_zero_self_host`'s FATAL
+# detector (`^# validate_` + `(FATAL)`) so the same regression
+# tooling picks up violate-passes failures, but with a distinct
+# header prefix so an operator can grep for `GG_VALIDATE_PASSES`
+# specifically.
+void print_pass_violations(String header, Vector[String] errors):
+    print("# validate_passes (FATAL): " + header + " — " + int_to_str(errors.len()) + " violation(s)")
+    int i = 0
+    while i < errors.len():
+        print(errors.get(i).unwrap())
         i += 1

@@ -12990,6 +12990,89 @@ fn phase_c_closed_classes_remain_at_zero_self_host() {
     );
 }
 
+// §6.2 (`docs/internals/self-host-resource-model.md`): the
+// `GG_VALIDATE_PASSES=1` env-gated dispatcher runs structural
+// validators between every pipeline pass on self-host (mirrors Rust's
+// `assert_module_valid`). The regression net: running the self-host
+// driver on each representative fixture with `GG_VALIDATE_PASSES=1`
+// must exit 0 with no `# validate_passes (FATAL): …` line on stdout.
+//
+// If this fails, a pipeline pass introduced a structural regression
+// (non-sequential block ids, duplicate value definitions across block
+// params, or a terminator targeting an out-of-range block id). The
+// FATAL header names the offending pass so the failure points
+// directly at the source pass to debug.
+//
+// FATAL detection: matches the `# validate_passes (FATAL):` header so
+// string-literal occurrences inside the driver's own emitted GIR
+// (validate.gg's source contains the FATAL string as a const) don't
+// false-positive.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn validate_passes_passes_self_host() {
+    if skip_under_llvm() { return; }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+
+    // A diverse cross-section: simple, control-flow-heavy, collection-
+    // heavy, concurrent, and the self-host driver itself.
+    let fixtures = [
+        "hello.gg",
+        "vector_concat.gg",
+        "dataframe_groupby.gg",
+        "json_parse.gg",
+        "httpserver_router.gg",
+        "exec_builtin.gg",
+        "cli_args.gg",
+        "mutex_basic.gg",
+        "onceflag_basic.gg",
+        "error_raw_nested.gg",
+    ];
+
+    let mut failures = Vec::new();
+    for fname in fixtures.iter() {
+        let fixture = manifest_dir.join("tests/fixtures").join(fname);
+        if !fixture.exists() {
+            continue;
+        }
+        let out = Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c")
+            .env("GG_VALIDATE_PASSES", "1")
+            .output()
+            .expect("failed to spawn self-host driver");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let fatal_lines: Vec<&str> = stdout.lines()
+            .filter(|l| l.starts_with("# validate_passes (FATAL):"))
+            .collect();
+        if !out.status.success() || !fatal_lines.is_empty() {
+            failures.push((
+                fname.to_string(),
+                out.status.code().unwrap_or(-1),
+                fatal_lines.iter().take(5).map(|s| s.to_string()).collect::<Vec<_>>().join("\n  "),
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "§6.2 validate_passes regression — {} fixture(s) flagged FATAL with \
+         GG_VALIDATE_PASSES=1.\n\n\
+         A pipeline pass introduced a structural regression (non-sequential \
+         block ids, duplicate value definitions, or out-of-range terminator \
+         targets). The FATAL header names the offending pass. See \
+         `tests/fixtures/self_host_lowerer/validate.gg::validate_lir_after` \
+         for the validator list.\n\n\
+         Failures:\n{}",
+        failures.len(),
+        failures.iter()
+            .map(|(f, c, l)| format!("  {f} (exit {c}):\n  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Self-host End-to-End — every fixture, compiled+run via stage-1
 // ═══════════════════════════════════════════════════════════════

@@ -10,7 +10,7 @@ from lower import lower_module
 from loader import load_imports
 from gir import GirModule
 from format_gir import format_module
-from validate import run_validators
+from validate import run_validators, validate_gir_after, validate_lir_after
 from lir_lower import lower_gir_to_lir
 from lir_ssa import construct_ssa
 from lir import LirModule, LirFunction
@@ -47,16 +47,22 @@ void main():
     ResolveContext ctx = resolve_module(m, &scopes, &types)
     type_check_module(m, &scopes, &types, ctx)
     GirModule gir = lower_module(m, scopes, types, call_redirects, imported_fns)
+    # §6.2 hook: validate-after-every-pass dispatcher. No-op unless
+    # `GG_VALIDATE_PASSES` is set; when set, runs the GIR validators
+    # with a pass-tagged failure message that surfaces mid-pipeline
+    # regressions.
+    validate_gir_after("gir-lowering", &gir)
     # Phase C validators run BEFORE the GIR/LIR print so a fatal
     # violation (closed-class with non-zero count) halts the build
-    # with the violations as the diagnostic. Closed classes
-    # (field_reads, call_args) are unconditional; the moves class is
-    # env-gated on `GG_VALIDATE_RESOURCE_MOVES=<log-path>` while its
-    # burn-down is in progress.
+    # with the violations as the diagnostic. All three classes
+    # (field_reads, call_args, moves) are unconditional fatal as
+    # of step 5c.
     run_validators(&gir)
     if emit_lir_c:
         LirModule lir = lower_gir_to_lir(&gir)
+        validate_lir_after("lir-lowering", &lir)
         run_ssa(&lir)
+        validate_lir_after("ssa-construction", &lir)
         print(generate_c(&lir))
     else:
         print(format_module(&gir))
