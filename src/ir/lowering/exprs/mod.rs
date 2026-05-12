@@ -2874,6 +2874,15 @@ fn lower_catch_expr(
     builder.jump(merge_bb);
 
     builder.switch_to(merge_bb);
+    // Snag #38 (2026-05-12): tag result_local as Owned after both branches'
+    // Move-mode assigns. Same shape as `assign_match_arm_to_result`'s Snag
+    // #31 fix — without this, a downstream `[Mv] user_var = copy
+    // result_local` (e.g. `V x = throws_fn() catch (msg): V.B(msg)` for
+    // non-Copy V) sees result_local as Untracked and trips Tier 2a's
+    // AssignIntoOwnedSlot validator. Both writer paths in this function
+    // (Ok extraction + recovery expression) are Move-mode assigns from
+    // sources that own their data; the typed tag must follow.
+    ctx.set_owned(builder, result_local);
     FunctionBuilder::copy(result_local)
 }
 

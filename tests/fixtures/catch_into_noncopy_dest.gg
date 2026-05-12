@@ -1,0 +1,42 @@
+# Snag #38 regression: `NonCopyType x = throws_fn() catch (msg): ...`
+# panicked the compiler with `Tier 2a consume-site violation:
+# AssignIntoOwnedSlot — untracked source consumed`. The catch
+# expression's `result_local` was written by Move-mode assigns from
+# both branches (Ok extraction + recovery expr) but never tagged with
+# `LocalOwnership::Owned` at the writer site. Downstream VarDecl saw
+# an untracked source and the fatal validator fired.
+#
+# Same shape as Snag #31's fix at `assign_match_arm_to_result`: the
+# Move-mode assign IS the writer-side commitment that result_local
+# owns the data; the typed tag must follow. Fix: one `ctx.set_owned`
+# call after both branches in `lower_catch_expr`.
+#
+# Trigger requires the destination to be non-Copy. Copy types
+# (`int x = ... catch ...`) sailed through because the existing
+# bit-blit path doesn't go through AssignIntoOwnedSlot.
+
+enum V:
+    A(int)
+    B(String)
+
+V helper(int x) throws String:
+    if x < 0:
+        throw "negative!"
+    return V.A(x)
+
+void main():
+    # Happy path — Ok branch flows through catch into V slot.
+    V r1 = helper(7) catch (msg): V.B(msg)
+    match r1:
+        case V.A(n):
+            print(f"+: A({n})")
+        case V.B(s):
+            print(f"+: B({s})")
+
+    # Error path — recovery expression flows through catch into V slot.
+    V r2 = helper(-1) catch (msg): V.B(msg)
+    match r2:
+        case V.A(n):
+            print(f"-: A({n})")
+        case V.B(s):
+            print(f"-: B({s})")

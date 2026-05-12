@@ -3074,6 +3074,16 @@ catch-def/-: 999",
 }
 
 #[test]
+fn catch_into_noncopy_dest() {
+    run_gg(
+        "catch_into_noncopy_dest.gg",
+        "\
++: A(7)
+-: B(negative!)",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
