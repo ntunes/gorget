@@ -1,0 +1,46 @@
+# Snag #36 regression: `return throws_fn(...)` from inside a throws
+# function used to fail typecheck with "expected T, found
+# Result[T, E]" — the tail-return path didn't apply the auto-prop /
+# capture-compat skip that VarDecl and arg-passing already had
+# (Snag #35).
+#
+# The fix is two-layer:
+#  - typecheck Stmt::Return now skips `unify(ret, value)` when the
+#    pair is auto-propagation- or capture-compatible (mirrors the
+#    Snag #35 VarDecl / arg-passing policy);
+#  - IR-lowering's `lower_return` recognises a value-typed operand
+#    that already matches the function's throws-Result type as
+#    "already a Result" — direct-assign into the return slot
+#    instead of wrapping in another `Ok(...)`. Without the
+#    IR-lowering half, typecheck would pass but the C-layer would
+#    see `Result[Result[T, E], E]` bytes in the `Result[T, E]`
+#    return slot, producing wrong values (Ok(false) instead of
+#    Ok(true) for the simple case).
+#
+# Both happy and error paths must propagate correctly across the
+# tail-return boundary.
+
+bool helper(int x) throws String:
+    if x == 0:
+        throw "zero!"
+    return x > 0
+
+bool caller(int x) throws String:
+    return helper(x)
+
+void main():
+    match caller(5):
+        case Ok(v):
+            print(f"+: ok {v}")
+        case Error(_):
+            print("+: err")
+    match caller(-1):
+        case Ok(v):
+            print(f"-: ok {v}")
+        case Error(_):
+            print("-: err")
+    match caller(0):
+        case Ok(_):
+            print("0: ok BUG")
+        case Error(e):
+            print(f"0: err {e}")

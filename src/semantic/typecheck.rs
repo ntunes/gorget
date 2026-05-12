@@ -2635,7 +2635,24 @@ impl<'a> TypeChecker<'a> {
                     let expr_type = self.infer_expr(expr);
                     self.decl_type_hint = prev_hint;
                     if let Some(ret_type) = self.current_return_type {
-                        self.unify(ret_type, expr_type, expr.span);
+                        // Snag #36: `return throws_fn(...)` from inside a
+                        // throws function should auto-propagate just like
+                        // `T x = throws_fn(...)` does. Same policy as
+                        // `Stmt::VarDecl` / `Stmt::Assign` / call-arg
+                        // passing: skip unify when the destination type
+                        // (here the function's declared return type)
+                        // matches the value's Ok type (auto-prop, with the
+                        // enclosing function's throws/Result-returning
+                        // gating that's already in
+                        // `is_auto_propagation_compatible`) OR when the
+                        // destination IS the wrapping Result[T, E]
+                        // (return-Result-typed function capturing the
+                        // whole Result directly).
+                        if !self.is_auto_propagation_compatible(ret_type, expr_type)
+                            && !self.is_result_capture_compatible(ret_type, expr_type)
+                        {
+                            self.unify(ret_type, expr_type, expr.span);
+                        }
                     }
                 }
             }

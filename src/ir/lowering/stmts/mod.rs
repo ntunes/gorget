@@ -1312,7 +1312,7 @@ fn lower_return(
         // Check if the return expression is already an explicit Ok/Error variant
         // (used in throws functions). If so, skip the automatic Result wrapping —
         // the expression itself already produces a Result.
-        let is_explicit_result_variant = matches!(&expr.node,
+        let mut is_explicit_result_variant = matches!(&expr.node,
             Expr::Call { callee, .. } if matches!(&callee.node,
                 Expr::Identifier(name) if name == "Ok" || name == "Error" || name == "Some" || name == "None"
             )
@@ -1344,6 +1344,22 @@ fn lower_return(
         };
 
         let operand = lower_expr(ctx, builder, expr);
+        // Snag #36: `return throws_fn(...)` from a throws function. The
+        // operand here is already a `Result[T, E]` (the call's typed
+        // return per Snag #35) matching the function's own return type.
+        // Treat it as if the user had written an explicit Ok/Error
+        // variant — direct-assign into the return slot. Without this
+        // the Ok-wrap path below would re-wrap the Result in another
+        // `Ok(...)`, producing `Result[Result[T, E], E]` bytes in the
+        // `Result[T, E]` return slot at the C layer.
+        if !is_explicit_result_variant {
+            if let Some(throws_result_ty) = ctx.func_state.current_throws_result_type {
+                let op_type = super::exprs::infer_operand_type_full(ctx, &operand, builder);
+                if op_type == throws_result_ty {
+                    is_explicit_result_variant = true;
+                }
+            }
+        }
         // Auto-propagate: if returning a Result value from a throws function,
         // unwrap so the Ok-wrapping below works on the inner value.
         // NOTE: must run before restoring expected_type so the guard sees ret_type.

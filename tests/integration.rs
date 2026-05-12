@@ -3046,6 +3046,17 @@ arg-capture: 10",
 }
 
 #[test]
+fn throws_call_in_tail_return() {
+    run_gg(
+        "throws_call_in_tail_return.gg",
+        "\
++: ok true
+-: ok false
+0: err zero!",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
