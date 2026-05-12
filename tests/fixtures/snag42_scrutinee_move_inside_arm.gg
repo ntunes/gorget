@@ -1,0 +1,18 @@
+enum V:
+    NumberV(float)
+    StringV(String)
+
+enum C:
+    Normal(V)
+
+void main():
+    C last = C.Normal(V.NumberV(0.0))
+    C c = C.Normal(V.NumberV(3.0))
+    match c:
+        case C.Normal(_):
+            last = !c
+    match last:
+        case C.Normal(V.NumberV(n)):
+            print(f"num: {n}")
+        case C.Normal(V.StringV(_)):
+            print("str")

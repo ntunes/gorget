@@ -25,20 +25,58 @@ use super::lower_block;
 /// (Expr::Match). All three must do the same thing — they were drifting,
 /// which is what produced the @DataFrame__col_* cluster (the inner match
 /// went through the second site, which lacked C2.9's fix).
-/// Walks an expression looking for any `Expr::Move { .. }` — the `!x`
-/// move operator. Used by `stage_match_scrutinee` to decide whether
-/// match arms intend to destructively consume scrutinee-bound payloads,
-/// in which case the scrutinee staging must drive zero-the-source
-/// semantics rather than the shallow-copy "view" semantics.
-fn expr_has_move(expr: &Spanned<Expr>) -> bool {
+/// Collect all `Binding(name)` identifiers introduced by a pattern,
+/// recursively. Used by the Snag #41 detection to limit the
+/// `arms_consume_payload` trigger to moves of pattern-bound names —
+/// avoiding the Snag #42 regression where a *scrutinee* move (`!c`
+/// inside `match c: case _: ...`) misclassified as a payload-consume
+/// and the direct-source staging zeroed the scrutinee's payload via
+/// `emit_pattern_bindings` before the arm body could read it.
+fn collect_pattern_bindings(pattern: &Spanned<Pattern>, out: &mut Vec<String>) {
+    match &pattern.node {
+        Pattern::Binding(name) => out.push(name.clone()),
+        Pattern::Constructor { fields, .. } => {
+            for f in fields { collect_pattern_bindings(f, out); }
+        }
+        Pattern::Tuple(elems) => {
+            for e in elems { collect_pattern_bindings(e, out); }
+        }
+        Pattern::Or(alts) => {
+            for a in alts { collect_pattern_bindings(a, out); }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) | Pattern::Rest
+        | Pattern::DotShorthand { .. } => {}
+    }
+}
+
+/// Walks an expression looking for `Expr::Move(Expr::Identifier(name))`
+/// where `name` is one of the arm's pattern bindings. Returns true on
+/// the first such match.
+///
+/// **Why filter by `bindings`.** The Snag #41 fix uses an
+/// `arms_consume_payload` flag to switch to direct-source staging that
+/// zeros the scrutinee's payload field via `emit_pattern_bindings`.
+/// That zero is only correct when the move is of a pattern binding
+/// (whose data aliases the scrutinee's payload). Moves of the
+/// scrutinee itself (`!c` inside `match c:`) need the *opposite* —
+/// the existing shallow-copy path that leaves the source intact, so
+/// the wholesale move sees the original value. Filtering by bindings
+/// makes the detection precise: `!v` where v is bound triggers
+/// direct-source; `!c` where c is the scrutinee does not. (Snag #42,
+/// 2026-05-12.)
+fn body_has_binding_move(expr: &Spanned<Expr>, bindings: &[String]) -> bool {
     use crate::parser::visitor::{walk_expr, ExprVisitor};
-    struct Finder { found: bool }
-    impl ExprVisitor for Finder {
+    struct Finder<'a> { found: bool, bindings: &'a [String] }
+    impl<'a> ExprVisitor for Finder<'a> {
         fn visit_expr(&mut self, e: &Spanned<Expr>) {
             if self.found { return; }
-            if matches!(e.node, Expr::Move { .. }) {
-                self.found = true;
-                return;
+            if let Expr::Move { expr: inner } = &e.node {
+                if let Expr::Identifier(name) = &inner.node {
+                    if self.bindings.iter().any(|b| b == name) {
+                        self.found = true;
+                        return;
+                    }
+                }
             }
             walk_expr(self, e);
         }
@@ -51,59 +89,47 @@ fn expr_has_move(expr: &Spanned<Expr>) -> bool {
             crate::parser::visitor::walk_block(self, b);
         }
     }
-    let mut f = Finder { found: false };
+    let mut f = Finder { found: false, bindings };
     f.visit_expr(expr);
     f.found
 }
 
-/// Returns true if any of the match arms (or the else arm body) contains
-/// an `Expr::Move` — i.e., the arms intend to destructively consume the
-/// scrutinee's payload. Drives the Snag #41 direct-source staging path.
+/// Returns true if any match arm has a pattern binding that's moved
+/// (via `!name`) inside that arm's body. Drives the Snag #41
+/// direct-source staging path. Else-arm contributes nothing since it
+/// has no pattern → no bindings → no qualifying moves (a `!scrutinee`
+/// inside else is the Snag #42 shape, which the existing shallow-copy
+/// path handles correctly).
 ///
-/// Two arm-shape parameters because the three callers of
+/// Two arm-shape helpers because the three callers of
 /// `stage_match_scrutinee` pass arms in two different shapes
-/// (`&[MatchItem]` for stmt forms, `&[MatchArm]` for the expr form),
-/// and two different else-arm shapes (`&Option<Block>` vs
-/// `Option<&Spanned<Expr>>`).
+/// (`&[MatchItem]` for stmt forms, `&[MatchArm]` for the expr form).
 pub fn arms_have_move_extract_items(
     arms: &[ast::MatchItem],
-    else_arm: Option<&Block>,
+    _else_arm: Option<&Block>,
 ) -> bool {
     for item in arms {
         if let Some(a) = item.arm() {
-            if expr_has_move(&a.body) { return true; }
-        }
-    }
-    if let Some(blk) = else_arm {
-        // Walk all stmts for moves nested in any expression position.
-        use crate::parser::visitor::{walk_block, ExprVisitor};
-        struct BlockFinder { found: bool }
-        impl ExprVisitor for BlockFinder {
-            fn visit_expr(&mut self, e: &Spanned<Expr>) {
-                if self.found { return; }
-                if matches!(e.node, Expr::Move { .. }) {
-                    self.found = true;
-                    return;
-                }
-                crate::parser::visitor::walk_expr(self, e);
+            let mut bindings = Vec::new();
+            collect_pattern_bindings(&a.pattern, &mut bindings);
+            if !bindings.is_empty() && body_has_binding_move(&a.body, &bindings) {
+                return true;
             }
         }
-        let mut bf = BlockFinder { found: false };
-        walk_block(&mut bf, blk);
-        if bf.found { return true; }
     }
     false
 }
 
 pub fn arms_have_move_extract_exprs(
     arms: &[ast::MatchArm],
-    else_arm: Option<&Spanned<Expr>>,
+    _else_arm: Option<&Spanned<Expr>>,
 ) -> bool {
     for a in arms {
-        if expr_has_move(&a.body) { return true; }
-    }
-    if let Some(e) = else_arm {
-        if expr_has_move(e) { return true; }
+        let mut bindings = Vec::new();
+        collect_pattern_bindings(&a.pattern, &mut bindings);
+        if !bindings.is_empty() && body_has_binding_move(&a.body, &bindings) {
+            return true;
+        }
     }
     false
 }

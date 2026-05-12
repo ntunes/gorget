@@ -2921,6 +2921,40 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag42_scrutinee_move_inside_arm() {
+    // Snag #42 — regression introduced by the initial Snag #41 fix.
+    // `match c: case C.Normal(_): last = !c` moves the scrutinee
+    // wholesale inside its own arm body. The Snag #41 fix's
+    // `arms_consume_payload` detection was too broad: it triggered on
+    // ANY `Expr::Move` in arm bodies, including moves of the scrutinee
+    // itself. That routed the match through the direct-source staging
+    // path, where `emit_pattern_bindings` zeros the source's payload
+    // field (correct for snag41's `case C.V(v): !v` shape) — but the
+    // arm body then read the now-zeroed source via `!c` and got a
+    // default-initialised value (e.g. `V.NumberV(0.0)` instead of the
+    // original `V.NumberV(3.0)`).
+    //
+    // Fix: refine the detection to count only `Expr::Move(EIdent(name))`
+    // where `name` is a pattern binding of the arm. Scrutinee moves
+    // (`!c` where c is the matched-on identifier, not a binding)
+    // don't trigger the direct-source path; the existing shallow-copy
+    // staging handles them correctly (the shallow copy is zeroed, the
+    // source stays intact, the wholesale move sees the original value).
+    //
+    // The bisect ingredients the user reported all pin to this
+    // detection bug: V must be non-Copy (else `is_resource_type`
+    // gate doesn't fire), C wraps V (resource-typed scrutinee), move
+    // must be inside the match-arm (outer move would route through
+    // `lower_var_decl` not the match staging), pattern shape doesn't
+    // matter (wildcard, bind-all, or nested — all triggered the buggy
+    // detection equally).
+    run_gg(
+        "snag42_scrutinee_move_inside_arm.gg",
+        "num: 3.000000",
+    );
+}
+
+#[test]
 fn snag41_match_scrutinee_consume() {
     // Snag #41: match-scrutinee staging emitted a value-typed Borrow
     // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,
