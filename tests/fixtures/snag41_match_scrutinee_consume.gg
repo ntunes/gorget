@@ -1,0 +1,44 @@
+enum V:
+    StringV(String)
+
+enum C:
+    Normal(V)
+    ThrowC(V)
+
+V make_v() throws String:
+    return V.StringV("x")
+
+C make() throws String:
+    V v = match make_v():
+        case Ok(x):
+            x
+        case Error(e):
+            throw e
+    return C.Normal(v)
+
+bool to_b(V v):
+    match v:
+        case V.StringV(s):
+            return s.len() > 0
+
+C e_if() throws String:
+    C cc = match make():
+        case Ok(x):
+            !x
+        case Error(e):
+            throw e
+    V cv = match cc:
+        case C.Normal(v):
+            !v
+        else:
+            return !cc
+    if to_b(cv):
+        return C.Normal(V.StringV("then"))
+    return C.Normal(V.StringV("end"))
+
+void main():
+    match e_if():
+        case Ok(_):
+            print("ok")
+        case Error(_):
+            print("err")

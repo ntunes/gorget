@@ -2921,6 +2921,35 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag41_match_scrutinee_consume() {
+    // Snag #41: match-scrutinee staging emitted a value-typed Borrow
+    // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,
+    // which at LIR/C lowered to a struct memcpy — a shallow alias of
+    // the source's resource fields. An arm body that consumed the
+    // extracted payload (`case C.Normal(v): !v`) then double-freed at
+    // scope exit because the source still aliased the heap.
+    //
+    // Fix in `src/ir/lowering/stmts/patterns.rs::stage_match_scrutinee`:
+    // when (a) the scrutinee type is a non-Copy non-collection user
+    // aggregate (no `cap==0 ↔ view` discriminator) AND (b) any arm
+    // body contains an `Expr::Move`, skip the shallow-copy staging
+    // and use the source local directly. The LIR's Move-mode
+    // EnumFieldLoad then zeros the source's payload field in-place,
+    // matching the partial-move semantic — source's drop tracker sees
+    // the now-zeroed payload and the resource drop is a no-op via the
+    // cap=0 path.
+    //
+    // Same architectural shape as Snag #29c's `lower_var_decl` bare-
+    // param Ptr-alias path: non-Copy values without view discriminators
+    // can't be shallow-copied safely; the staging must drive zero-the-
+    // source semantics.
+    run_gg(
+        "snag41_match_scrutinee_consume.gg",
+        "ok",
+    );
+}
+
+#[test]
 fn snag31_match_arm_move_into_owned() {
     // Snag #31: Tier 2a consume-site validator panicked on `Completion
     // c = match … : case Ok(x): !x …` — the user-opt-in `!arg` move

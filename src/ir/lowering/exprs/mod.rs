@@ -2339,7 +2339,8 @@ fn lower_match_expr(
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)
     } else { false };
-    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
+    let arms_consume_payload = super::stmts::arms_have_move_extract_exprs(arms, else_arm);
+    let (scrut_local, scrut_type) = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use, arms_consume_payload);
 
     // Allocate result local with the surrounding context's expected type when
     // available (VarDecl `T x = match …`, return-position match, struct
@@ -2952,7 +2953,8 @@ fn lower_match_stmt_as_expr(
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)
     } else { false };
-    let scrut_local = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
+    let arms_consume_payload = super::stmts::arms_have_move_extract_items(arms, else_arm);
+    let (scrut_local, scrut_type) = super::stmts::stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use, arms_consume_payload);
 
     // Mirror lower_match_expr: size the result slot from expected_type when
     // available (set by an enclosing VarDecl/Assign/Return/arg), otherwise

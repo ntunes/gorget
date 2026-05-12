@@ -25,14 +25,168 @@ use super::lower_block;
 /// (Expr::Match). All three must do the same thing — they were drifting,
 /// which is what produced the @DataFrame__col_* cluster (the inner match
 /// went through the second site, which lacked C2.9's fix).
+/// Walks an expression looking for any `Expr::Move { .. }` — the `!x`
+/// move operator. Used by `stage_match_scrutinee` to decide whether
+/// match arms intend to destructively consume scrutinee-bound payloads,
+/// in which case the scrutinee staging must drive zero-the-source
+/// semantics rather than the shallow-copy "view" semantics.
+fn expr_has_move(expr: &Spanned<Expr>) -> bool {
+    use crate::parser::visitor::{walk_expr, ExprVisitor};
+    struct Finder { found: bool }
+    impl ExprVisitor for Finder {
+        fn visit_expr(&mut self, e: &Spanned<Expr>) {
+            if self.found { return; }
+            if matches!(e.node, Expr::Move { .. }) {
+                self.found = true;
+                return;
+            }
+            walk_expr(self, e);
+        }
+        fn visit_stmt(&mut self, s: &Spanned<crate::parser::ast::Stmt>) {
+            if self.found { return; }
+            crate::parser::visitor::walk_stmt(self, s);
+        }
+        fn visit_block(&mut self, b: &Block) {
+            if self.found { return; }
+            crate::parser::visitor::walk_block(self, b);
+        }
+    }
+    let mut f = Finder { found: false };
+    f.visit_expr(expr);
+    f.found
+}
+
+/// Returns true if any of the match arms (or the else arm body) contains
+/// an `Expr::Move` — i.e., the arms intend to destructively consume the
+/// scrutinee's payload. Drives the Snag #41 direct-source staging path.
+///
+/// Two arm-shape parameters because the three callers of
+/// `stage_match_scrutinee` pass arms in two different shapes
+/// (`&[MatchItem]` for stmt forms, `&[MatchArm]` for the expr form),
+/// and two different else-arm shapes (`&Option<Block>` vs
+/// `Option<&Spanned<Expr>>`).
+pub fn arms_have_move_extract_items(
+    arms: &[ast::MatchItem],
+    else_arm: Option<&Block>,
+) -> bool {
+    for item in arms {
+        if let Some(a) = item.arm() {
+            if expr_has_move(&a.body) { return true; }
+        }
+    }
+    if let Some(blk) = else_arm {
+        // Walk all stmts for moves nested in any expression position.
+        use crate::parser::visitor::{walk_block, ExprVisitor};
+        struct BlockFinder { found: bool }
+        impl ExprVisitor for BlockFinder {
+            fn visit_expr(&mut self, e: &Spanned<Expr>) {
+                if self.found { return; }
+                if matches!(e.node, Expr::Move { .. }) {
+                    self.found = true;
+                    return;
+                }
+                crate::parser::visitor::walk_expr(self, e);
+            }
+        }
+        let mut bf = BlockFinder { found: false };
+        walk_block(&mut bf, blk);
+        if bf.found { return true; }
+    }
+    false
+}
+
+pub fn arms_have_move_extract_exprs(
+    arms: &[ast::MatchArm],
+    else_arm: Option<&Spanned<Expr>>,
+) -> bool {
+    for a in arms {
+        if expr_has_move(&a.body) { return true; }
+    }
+    if let Some(e) = else_arm {
+        if expr_has_move(e) { return true; }
+    }
+    false
+}
+
 pub fn stage_match_scrutinee(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     scrut_op: &Operand,
     scrut_type: TypeId,
     source_at_last_use: bool,
-) -> LocalId {
+    arms_consume_payload: bool,
+) -> (LocalId, TypeId) {
     use crate::ir::instructions::AssignMode;
+    // Snag #41 (2026-05-12): non-Copy user types (struct/enum containing
+    // resources) under Borrow mode used to emit `[Bw] scrut_local =
+    // copy source` into a fresh value-typed slot, which at LIR/C
+    // produces a struct memcpy — a SHALLOW copy of all inner resource
+    // fields.
+    //
+    // Two scope-exit paths through that shallow copy:
+    //
+    // (a) Read-only arms (`case C.V(x): use(x)`): extracted `x` is a
+    //     non-owning view (no drop registered, no zero step). The
+    //     scrut_local copy is not registered for drop either (the
+    //     existing Borrow-stage path leaves the drop on source). At
+    //     scope exit, only the source's drop fires — frees the data
+    //     once. Safe.
+    // (b) Consuming arms (`case C.V(x): !x` or anything that moves x
+    //     to a new owner): the moved-out destination registers for
+    //     drop. The source still aliases the same heap (no zero ever
+    //     fired against it). At scope exit BOTH the new owner AND
+    //     source try to free the same heap — double-free.
+    //
+    // The `arms_consume_payload` flag (true iff any arm body contains
+    // an `Expr::Move`) distinguishes (a) from (b). Only (b) needs the
+    // direct-source staging that zeros the source's payload at
+    // extraction — for (a) the existing shallow-copy + view path is
+    // correct and cheaper (no zero, source readable post-match).
+    //
+    // Collections (Vector/Dict/Set/HashMap/HashSet/Deque) and `String`
+    // are safe under value-typed Borrow regardless because they carry
+    // a runtime `cap == 0 ↔ view` discriminator — the borrowed copy
+    // is marked as a view and drops elide. User aggregates have no
+    // such discriminator, so case (b) above bites.
+    let needs_direct_source = arms_consume_payload
+        && ctx.type_registry.is_resource_type(scrut_type)
+        && !ctx.type_registry.is_collection_type(scrut_type)
+        && scrut_type != ctx.type_mapper.owned_string_type
+        && !matches!(
+            ctx.type_registry.get(scrut_type),
+            Some(GirType::Ptr(_) | GirType::MutPtr(_))
+        );
+    // For Move-eligible non-Copy scrutinees (source at last-use, owned),
+    // keep the existing staging path so ownership transfers cleanly into
+    // a fresh scrut_local and the source is zeroed.
+    let move_eligible = if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
+        p.projections.is_empty()
+            && ctx.is_owned_local(builder, p.local)
+            && source_at_last_use
+    } else { false };
+
+    if needs_direct_source && !move_eligible {
+        if let Operand::Copy(place) | Operand::Move(place) = scrut_op {
+            if place.projections.is_empty() {
+                // Use the source local directly — no staging assign,
+                // no shallow copy. The match's `enum_field_load_move`
+                // zeros the source's payload field in-place at LIR
+                // (`Inst::Store(NullPtr) through FieldPtr` — see
+                // `src/lir/lower/insts.rs:1335`), correctly partial-
+                // moving the source. The source's existing drop
+                // registration handles the now-zeroed value (a
+                // resource drop on a zeroed slot is a no-op via the
+                // cap=0 / NULL-pointer path). Any subsequent reads of
+                // source (e.g. a later `return !source` from a sister
+                // arm) see the partially-moved state — by construction
+                // a sister arm wouldn't have executed if this arm did,
+                // and same-arm post-match reads of source are now well-
+                // defined: the moved field is zero, the others intact.
+                return (place.local, scrut_type);
+            }
+        }
+    }
+
     let scrut_local = builder.add_local(scrut_type, None);
     // Phase C: prefer Borrow for resource-typed scrutinees by default —
     // a match doesn't consume its scrutinee, so the staged temp is a
@@ -46,17 +200,15 @@ pub fn stage_match_scrutinee(
     // Owned + dead-after sources still benefit from Move (transfers
     // ownership), but only when we can prove the source is owned at
     // this site — which the predicate below handles.
+    //
+    // Reached only for: (a) Copy-eligible types (primitives, value
+    // structs without resources), (b) types with view-discriminators
+    // (collections / String), (c) types already Ptr-shaped, (d)
+    // Move-eligible cases (last-use + owned). The Snag #41 path above
+    // handles all other non-Copy aggregates via Ptr alias.
     let mode = if !ctx.type_registry.is_resource_type(scrut_type) {
         AssignMode::Copy
     } else if let Operand::Copy(p) | Operand::Move(p) = scrut_op {
-        // Tier 2a Phase 3: Move-mode requires source-at-last-use too.
-        // The match scrutinee is read again by `tag_of` and pattern
-        // extraction; Move-mode at the staging assign without
-        // `source_at_last_use` made the source "owned-AND-live"
-        // (validator's `OwnedLiveSourceConsumed`). Borrow is the
-        // unconditional fallback when liveness isn't proven dead.
-        // Worked example: `GroupBy__agg`'s `match src_col:` shape
-        // (272 of 303 owned-but-live violations pre-fix).
         if p.projections.is_empty()
             && ctx.is_owned_local(builder, p.local)
             && source_at_last_use
@@ -104,7 +256,7 @@ pub fn stage_match_scrutinee(
             ctx.set_ref(builder, scrut_local);
         }
     }
-    scrut_local
+    (scrut_local, scrut_type)
 }
 
 /// Lower a match statement to GIR using Branch chains.
@@ -165,7 +317,8 @@ pub(super) fn lower_match_stmt(
     // sources at end-of-life — without this, an arm's `unwrap()` zeros only
     // the scrutinee copy and the source's drop double-frees the payload.
     let source_at_last_use = scrutinee_dead_original.is_some();
-    let scrut_local = stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use);
+    let arms_consume_payload = arms_have_move_extract_items(arms, else_arm.as_ref());
+    let (scrut_local, scrut_type) = stage_match_scrutinee(ctx, builder, &scrut_op, scrut_type, source_at_last_use, arms_consume_payload);
 
     let merge_bb = builder.new_block();
 
