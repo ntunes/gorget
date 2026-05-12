@@ -1609,13 +1609,43 @@ fn resolve_expr(
             resolve_expr(right, scopes, errors, resolution_map);
         }
         Expr::MetaOpToken(_) => {}
-        Expr::Rethrow { expr, transform, .. } => {
+        Expr::Rethrow { expr, error_binding, transform } => {
             resolve_expr(expr, scopes, errors, resolution_map);
-            resolve_expr(transform, scopes, errors, resolution_map);
+            // Snag #37: the `(Type name)` payload-binding form introduces
+            // `name` into scope for the transform expression. Without the
+            // scope-and-define dance, the resolver reports "undefined name"
+            // when the user references the bound name in the transform —
+            // even though IR-lowering correctly binds it at codegen time.
+            // Type assignment happens later in the typechecker; resolver
+            // only registers the name.
+            if let Some((_ty, name)) = error_binding {
+                scopes.push_scope(super::scope::ScopeKind::Block);
+                if let Err(e) = scopes.define(name.node.clone(), DefKind::Variable, name.span) {
+                    errors.push(e);
+                }
+                resolve_expr(transform, scopes, errors, resolution_map);
+                scopes.pop_scope();
+            } else {
+                resolve_expr(transform, scopes, errors, resolution_map);
+            }
         }
-        Expr::Catch { expr, recovery, .. } => {
+        Expr::Catch { expr, error_binding, recovery } => {
             resolve_expr(expr, scopes, errors, resolution_map);
+            // Snag #37: `catch (name): recovery` binds the error value to
+            // `name` in the recovery expression. The binding's type is
+            // inferred from the throws-error type of `expr` at typecheck
+            // time; here we just register the name so resolver lookups
+            // succeed.
+            scopes.push_scope(super::scope::ScopeKind::Block);
+            if let Err(e) = scopes.define(
+                error_binding.node.clone(),
+                DefKind::Variable,
+                error_binding.span,
+            ) {
+                errors.push(e);
+            }
             resolve_expr(recovery, scopes, errors, resolution_map);
+            scopes.pop_scope();
         }
     }
 }

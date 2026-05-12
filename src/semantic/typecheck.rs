@@ -2489,21 +2489,54 @@ impl<'a> TypeChecker<'a> {
                 // Meta op tokens have no runtime value.
                 self.types.void_id
             }
-            Expr::Rethrow { expr: inner, transform, .. } => {
+            Expr::Rethrow { expr: inner, error_binding, transform } => {
                 let inner_type = self.infer_expr(inner);
+                // Snag #37: bind the error-payload local's type. The
+                // resolver registers `name` in scope; here we set its
+                // `type_id` from the user-declared `Type` in the binding,
+                // so references to `name` in the transform resolve to a
+                // proper type instead of `<error>`.
+                if let Some((ty, name)) = error_binding {
+                    if let Some(def_id) = self.scopes.lookup_def_by_span(&name.node, name.span) {
+                        if let Ok(tid) = super::types::ast_type_to_resolved(
+                            &ty.node, ty.span, self.scopes, self.types,
+                        ) {
+                            self.scopes.get_def_mut(def_id).type_id = Some(tid);
+                        }
+                    }
+                }
                 self.infer_expr(transform);
                 if !self.current_function_throws {
                     self.error(SemanticErrorKind::RethrowInNonThrowingFunction, expr.span);
                 }
                 inner_type
             }
-            Expr::Catch { expr: inner, recovery, .. } => {
+            Expr::Catch { expr: inner, error_binding, recovery } => {
                 let inner_type = self.infer_expr(inner);
+                // Snag #37: bind the error-payload local's type. The error
+                // type comes from the throws-Result's `E` slot. The
+                // resolver registers `name` in scope; here we set its
+                // `type_id` so references to `name` in the recovery
+                // expression resolve to a proper type.
+                let resolved = self.resolve_type(inner_type);
+                let err_ty = if let ResolvedType::Generic(def_id, ref args) =
+                    self.types.get(resolved).clone()
+                {
+                    if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
+                        Some(args[1])
+                    } else { None }
+                } else { None };
+                if let Some(err_ty) = err_ty {
+                    if let Some(def_id) = self.scopes.lookup_def_by_span(
+                        &error_binding.node, error_binding.span,
+                    ) {
+                        self.scopes.get_def_mut(def_id).type_id = Some(err_ty);
+                    }
+                }
                 self.infer_expr(recovery);
                 // Snag #35: throws calls now type as `Result[T, E]` at the
                 // call site. `catch` resolves the Result, so the
                 // expression's type is the OK type, not the Result.
-                let resolved = self.resolve_type(inner_type);
                 if let ResolvedType::Generic(def_id, ref args) = self.types.get(resolved).clone() {
                     if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
                         return args[0];

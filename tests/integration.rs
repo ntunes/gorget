@@ -3060,6 +3060,20 @@ r/-: ok false",
 }
 
 #[test]
+fn rethrow_catch_binding() {
+    run_gg(
+        "rethrow_catch_binding.gg",
+        "\
+rt/+: ok 105
+rt/-: err transformed: neg!
+catch-ref/+: 5
+catch-ref/-: 4
+catch-def/+: 5
+catch-def/-: 999",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

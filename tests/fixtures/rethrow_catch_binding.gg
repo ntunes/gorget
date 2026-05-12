@@ -1,0 +1,56 @@
+# Snag #37 regression: the payload-binding form of `rethrow (Type
+# name): transform` and `catch (name): recovery` parsed cleanly but
+# `name` was undefined when referenced in the transform / recovery
+# expression. The resolver didn't push a scope and define the
+# binding before resolving the transform/recovery; the typechecker
+# didn't set the binding's type_id. IR-lowering correctly binds the
+# local at codegen, but typecheck rejected the use before getting
+# there.
+#
+# Three cases covered:
+#   (1) `rethrow (String e): Err(f"...{e}...")` — payload re-wrap
+#       with the bound name interpolated into the new error.
+#   (2) `catch (e): e.len()` — recovery expression uses the bound
+#       error directly.
+#   (3) `catch (e): default` — recovery doesn't reference the
+#       binding (control path; previously worked because the bare
+#       binding never tripped the resolver).
+
+struct Err:
+    String msg
+
+int helper_str(int x) throws String:
+    if x < 0:
+        throw "neg!"
+    return x
+
+int caller_rethrow(int x) throws Err:
+    int v = helper_str(x) rethrow (String e): Err(f"transformed: {e}")
+    return v + 100
+
+int caller_catch_uses(int x):
+    return helper_str(x) catch (e): e.len()
+
+int caller_catch_default(int x):
+    return helper_str(x) catch (_e): 999
+
+void main():
+    # Case (1) — happy + error paths through rethrow
+    match caller_rethrow(5):
+        case Ok(v):
+            print(f"rt/+: ok {v}")
+        case Error(e):
+            print(f"rt/+: err {e.msg}")
+    match caller_rethrow(-1):
+        case Ok(v):
+            print(f"rt/-: ok {v}")
+        case Error(e):
+            print(f"rt/-: err {e.msg}")
+
+    # Case (2) — catch with binding referenced
+    print(f"catch-ref/+: {caller_catch_uses(5)}")
+    print(f"catch-ref/-: {caller_catch_uses(-1)}")
+
+    # Case (3) — catch with unused binding (regression-pin)
+    print(f"catch-def/+: {caller_catch_default(5)}")
+    print(f"catch-def/-: {caller_catch_default(-1)}")
