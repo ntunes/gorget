@@ -949,11 +949,30 @@ impl<'a> BorrowChecker<'a> {
             Expr::MetaOpToken(_) => {}
             Expr::Rethrow { expr, transform, .. } => {
                 self.check_expr(expr);
+                // Snag #39 follow-up: rethrow's transform builds the
+                // re-throw value; on the Ok path the rethrow falls through
+                // with the Ok payload. The transform's divergence (if any)
+                // shouldn't leak into `self.diverged` for the surrounding
+                // continuation, because the Ok path is always reachable.
+                // Mirrors the save/restore dance in If/Match.
+                let before = self.save_branch_state();
                 self.check_expr(transform);
+                self.restore_branch_state(&before);
             }
             Expr::Catch { expr, recovery, .. } => {
                 self.check_expr(expr);
+                // Snag #39 follow-up: catch's recovery only runs on the
+                // Error path; the Ok path falls through with the unwrapped
+                // value. A divergent recovery (e.g. `catch (msg): print(msg);
+                // exit(1); return`) shouldn't mark `self.diverged` for the
+                // surrounding continuation, because the Ok path is always
+                // reachable. Without this, post-catch code triggers a false
+                // "unreachable code after diverging statement" warning.
+                // Same shape as If/Match's save_branch_state machinery —
+                // branch divergence doesn't escape the branch boundary.
+                let before = self.save_branch_state();
                 self.check_expr(recovery);
+                self.restore_branch_state(&before);
             }
         }
     }

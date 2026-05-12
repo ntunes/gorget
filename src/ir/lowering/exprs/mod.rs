@@ -2869,9 +2869,19 @@ fn lower_catch_expr(
     ctx.register_local(&error_binding.node, err_local, err_field_type);
 
     let recovery_val = lower_expr(ctx, builder, recovery);
-    let recovery_mode = mode_for(ctx, builder, &recovery_val, ok_field_type);
-    builder.assign_mode(recovery_mode, Place::local(result_local), recovery_val);
-    builder.jump(merge_bb);
+    // Snag #39 (2026-05-12): if the recovery is divergent (ends in
+    // `return`/`exit`/`throw`/`unreachable`), the builder is already
+    // terminated. Emitting `assign_mode` + `jump(merge_bb)` would
+    // clobber the divergent terminator (per `set_terminator`'s
+    // unconditional overwrite) and the C-emit would synthesise a
+    // bogus default initializer at the merge — `__sN (V) = (int32_t)0LL`
+    // for non-Copy enum result types. Same gating as Snag #33's
+    // `lower_match_stmt_as_expr` post-loop fallthrough fix.
+    if !builder.is_terminated() {
+        let recovery_mode = mode_for(ctx, builder, &recovery_val, ok_field_type);
+        builder.assign_mode(recovery_mode, Place::local(result_local), recovery_val);
+        builder.jump(merge_bb);
+    }
 
     builder.switch_to(merge_bb);
     // Snag #38 (2026-05-12): tag result_local as Owned after both branches'

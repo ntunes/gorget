@@ -3084,6 +3084,14 @@ fn catch_into_noncopy_dest() {
 }
 
 #[test]
+fn catch_divergent_arm() {
+    run_gg(
+        "catch_divergent_arm.gg",
+        "A(42)",
+    );
+}
+
+#[test]
 fn variant_mixed_arm_match_error() {
     // Path A from Snag #36 mixed-arm discussion: variant calls now
     // type as Generic(parent_enum, [...]) at the typecheck layer, so

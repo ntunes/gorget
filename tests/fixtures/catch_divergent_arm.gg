@@ -1,0 +1,49 @@
+# Snag #39 regression: divergent catch arm with non-Copy destination.
+#
+# Two distinct bugs surfaced and both are fixed:
+#
+# (1) IR-lowering of `lower_catch_expr`'s recovery: when the recovery
+#     expression terminates with `return` / `exit` / `throw`, the
+#     builder is already terminated by the divergent terminator. The
+#     post-lower `assign_mode` + `jump(merge_bb)` was clobbering the
+#     divergent terminator (set_terminator overwrites), and the C-emit
+#     then synthesised a default initialiser at the merge —
+#     `__sN (V) = (int32_t)0LL` for non-Copy enum result types,
+#     producing C compile errors. Fix: gate the post-lower steps on
+#     `!builder.is_terminated()` — same shape as Snag #33's
+#     `lower_match_stmt_as_expr` fallthrough fix.
+#
+# (2) Safety pass `Expr::Catch` / `Expr::Rethrow` didn't use the
+#     branch-state save/restore mechanism that If/Match use. When
+#     recovery / transform diverged, `self.diverged` stayed set
+#     across the catch boundary and post-catch code triggered a
+#     spurious "unreachable code after diverging statement" warning.
+#     Catch's Ok path always falls through (recovery only runs on the
+#     Error path), so the surrounding continuation is reachable.
+#     Fix: save/restore branch state around the recovery / transform
+#     expression so divergence doesn't escape.
+
+from std.os import exit
+
+enum V:
+    A(int)
+    B(String)
+
+V helper(bool fail) throws String:
+    if fail:
+        throw "boom!"
+    return V.A(42)
+
+void main():
+    # Happy path — catch arm is divergent but doesn't fire. The
+    # post-catch code MUST be reachable (no spurious "unreachable"
+    # warning).
+    V r = helper(false) catch (msg):
+        print(f"caught: {msg}")
+        exit(1)
+        return
+    match r:
+        case V.A(n):
+            print(f"A({n})")
+        case V.B(_):
+            print("B")
