@@ -1,0 +1,27 @@
+# Regression: Set literal `{a, b, c}` lowered to GorgetArray instead of
+# GorgetSet, producing silent UB at runtime.
+#
+# Root cause: the parser produces `Expr::ArrayLiteral` for both
+# `[a, b, c]` (Vec) and `{a, b, c}` (Set), with the convention that
+# "semantic analysis distinguishes set vs array by context"
+# (src/parser/expr.rs:1663-1674). But the IR lowering only built
+# GorgetArray — when the declared type was Set[T], the C-emit memcpy'd
+# GorgetArray bytes into a Set[T] slot (different layouts) and `s.len()`
+# returned a garbage memory-address-like value.
+#
+# Fix: lower_array_literal checks decl_type_hint at entry; if Set/HashSet,
+# dispatches to lower_set_literal_from_array which uses gorget_set_new
+# + gorget_set_add with per-element Move + MoveZero discipline (parallel
+# to lower_array_literal). Surfaced 2026-05-12 during the post-Tier-2a
+# audit of container-literal hint propagation.
+void main():
+    Set[int] s = {1, 2, 3}
+    print(s.len())          # expected: 3
+
+    Set[String] strs = {"a", "b", "c", "a"}
+    print(strs.len())       # expected: 3 (duplicate "a" deduped)
+
+    # Empty set literal — still must be GorgetSet, not GorgetArray.
+    # (Today `{}` lowers as DictLiteral([])); use the explicit form.
+    Set[int] empty = Set[int]()
+    print(empty.len())      # expected: 0

@@ -1,5 +1,21 @@
 # DONE
 
+- [2026-05-12] **Set literal lowering + container-literal discipline ratchet.** Closes the (b) work from the earlier (a)+(b) audit. Two issues shipped together:
+
+  **1. Set literal silent-UB bug (`Set[int] s = {1, 2, 3}`).** Pre-fix produced garbage memory-address-like values at runtime. Surfaced during the post-Tier-2a container-literal hint-propagation audit.
+
+  Root cause: the parser produces `Expr::ArrayLiteral` for BOTH `[a, b, c]` AND `{a, b, c}` (shared AST node, "set vs array distinguished by context" — `src/parser/expr.rs:1663`). But the IR lowering only built GorgetArray — when decl_type_hint was Set/HashSet, the C-emit memcpyed GorgetArray bytes into a Set[T] slot. Different layouts → undefined values returned for `s.len()`.
+
+  Fix: `lower_array_literal` now checks `ctx.func_state.expected_type` at entry; if `CollectionKind::Set | OrderedSet`, dispatches to new `lower_set_literal_from_array` helper that calls `gorget_set_new` + `gorget_set_add` with per-element Move + MoveZero discipline (parallel to `lower_array_literal`). Regression fixture `set_literal_basic.gg` covers `Set[int]`, `Set[String]` (with deduplication), and the explicit constructor empty case.
+
+  **2. Container-literal discipline ratchet (`tests/lints.rs::container_literal_arms_count`).** New one-way ratchet asserting the number of `Expr::*Literal(...)` / `*Comprehension { ... }` arms in `infer_expr` (`src/semantic/typecheck.rs`) stays at the expected baseline (5: ArrayLiteral, TupleLiteral, DictLiteral, DictComprehension, SetComprehension). Adding a new container-literal arm requires bumping the count with a justification — forces the author to audit decl_type_hint propagation for nested collection literals (DictLiteral/TupleLiteral propagate; ArrayLiteral relies on `is_collection_assignment` permissiveness at the var-decl unify site).
+
+  Closes the (b) ratchet that was outlined when the user picked "Both — (a) first, then (b)" earlier in the session.
+
+  **Why this matters.** The set-literal bug is the third in a class surfaced over this session: dict-literal-with-resource-value (Snag #25b symmetric), tuple-literal-resource-element, and now set-literal-silent-UB. All three were latent because no existing test exercised the shape AND no validator caught the class structurally. The ratchet locks the discipline so future container-literal arms can't silently slip through.
+
+  Files: `src/ir/lowering/exprs/collections.rs` (~95 lines: dispatch + `lower_set_literal_from_array` helper), `tests/fixtures/set_literal_basic.gg`, `tests/integration.rs` (regression wire), `tests/lints.rs` (new ratchet + Phase D BUDGET bump for new proxy reads).
+
 - [2026-05-12] **Snag #35 — `int n = throws_fn()` from non-throws context now compile-errors, plus arg-position fix.** Surface symptom: calling a `T throws E` function from a non-throws context and binding to plain `T` (instead of `Result[T, E]`) typechecked silently and produced C-level pointer/int garbage at runtime — the IR-lowering coerced a Result handle into the bare-T slot. Same bug bit the arg-position case (`unwrap_or_zero(might(5))` where `unwrap_or_zero` takes `Result[T, E]`). Per `docs/book/10-errors.md:121-122`: "Without the `Result` type on the destination, calling a `throws` function from a non-`throws` function is a compile error."
   Root cause: the typechecker's Call inference returned the bare declared return type `T`, ignoring the `throws E` annotation. The `throws` was tracked as a side-channel `FunctionInfo::throws: bool` flag with no `Result[T, E]` shape exposed at the type-system level — so unify treated `int n = might(5)` as `int = int` and no error fired. The IR-lowering then wrapped the call's runtime return as `Result[T, E]` and memcpy'd it into the int slot.
   Fix per option (1) of the snag report (hard error, matching the docs):

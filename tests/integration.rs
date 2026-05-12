@@ -2219,6 +2219,27 @@ missing ok
 }
 
 #[test]
+fn set_literal_basic() {
+    // Regression: Set literal `{a, b, c}` lowered to GorgetArray instead
+    // of GorgetSet (parser produces shared ArrayLiteral AST node for both
+    // `[...]` and `{...}` syntaxes). The C-emit memcpy'd GorgetArray bytes
+    // into a Set[T] slot, producing silent UB at runtime — `s.len()`
+    // returned a garbage memory-address-like value instead of 3.
+    //
+    // Fix: lower_array_literal checks decl_type_hint; if Set/HashSet,
+    // dispatches to lower_set_literal_from_array (gorget_set_new +
+    // gorget_set_add). Surfaced 2026-05-12 during the container-literal
+    // hint-propagation audit.
+    run_gg(
+        "set_literal_basic.gg",
+        "\
+3
+3
+0",
+    );
+}
+
+#[test]
 fn tuple_literal_resource_value() {
     // Regression for the parallel TupleLiteral propagation gap surfaced
     // by the dict-literal investigation. Pre-fix:

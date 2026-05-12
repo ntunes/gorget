@@ -425,7 +425,20 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// the guard is the ONLY way to make the writer safe under
     /// already-moved sources. Migrating would require making
     /// `move_zero_and_mark` idempotent first.
-    const BUDGET: usize = 70;
+    /// Bumped 70 → 77 (2026-05-12): seven new proxy reads in the
+    /// Tier 2a `consume_externs` burn-down + Set literal lowering:
+    /// (1) var-decl Callable auto-clone branch (stmts/mod.rs) uses
+    /// `is_named_local` to narrow-gate the clone (closure literals
+    /// are unnamed temps; named Callable params/locals need the
+    /// clone), and a `Borrowed/Untracked` source check via
+    /// `builder.locals[].ownership` (1 proxy in the new branch);
+    /// (2) `lower_set_literal_from_array` (collections.rs) mirrors
+    /// `lower_array_literal`'s per-element discipline using
+    /// `is_owned_local` + `is_named_local` (mode picker) and
+    /// `drops.is_moved` (MoveZero idempotence guard) — same writer-
+    /// side discipline class as Tier 1c. Migrating would require
+    /// promoting these proxies to typed accessors on Local; deferred.
+    const BUDGET: usize = 77;
 
     let count = count_phase_d_proxy_reads();
     assert!(
@@ -474,6 +487,115 @@ fn no_growth_in_phase_d_proxy_reads() {
 ///   2. If it's necessary name parsing inside an already-migrated dispatcher
 ///      arm, bump `BUDGET` deliberately with a comment.
 ///
+/// Container-literal arms in `infer_expr` that need decl_type_hint
+/// propagation for nested collection literals to coerce correctly.
+/// See `docs/internals/structural-guards.md` and the
+/// `tuple_literal_resource_value` / `dict_literal_resource_value`
+/// fixtures for the failure shape.
+///
+/// Counts `Expr::*Literal(...)` and comprehension arms in the
+/// `infer_expr` match. When a new container-literal arm is added,
+/// the count grows and this test fails until either:
+///   1. The new arm correctly propagates `decl_type_hint` to nested
+///      `infer_expr` calls (DictLiteral / TupleLiteral patterns),
+///      and the budget is bumped with a justification.
+///   2. The new arm doesn't need propagation (ArrayLiteral relies on
+///      `is_collection_assignment` permissiveness at the var-decl
+///      unify site); the budget bump explains why.
+///
+/// Baseline 2026-05-12: 3 (ArrayLiteral, TupleLiteral, DictLiteral).
+/// SetLiteral shares ArrayLiteral's AST node (parser convention; see
+/// `src/parser/expr.rs:1663`).
+fn count_container_literal_arms() -> usize {
+    let content = match fs::read_to_string("src/semantic/typecheck.rs") {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    // Scope the count to the `infer_expr` fn so unrelated match arms
+    // (resolver, rewrite, etc.) don't inflate it. infer_expr's literal
+    // arms are stable patterns at lines ~2212-2270 today.
+    let mut in_infer_expr = false;
+    let mut depth = 0;
+    let mut count = 0;
+    let arm_patterns = [
+        "Expr::ArrayLiteral(",
+        "Expr::TupleLiteral(",
+        "Expr::DictLiteral(",
+        "Expr::SetComprehension {",
+        "Expr::DictComprehension {",
+    ];
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.starts_with("fn infer_expr(") {
+            in_infer_expr = true;
+            depth = 0;
+        }
+        if !in_infer_expr {
+            continue;
+        }
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth <= 0 && !trimmed.starts_with("fn infer_expr(") {
+            in_infer_expr = false;
+            continue;
+        }
+        for pat in &arm_patterns {
+            if trimmed.starts_with(pat) {
+                count += 1;
+                break;
+            }
+        }
+    }
+    count
+}
+
+/// Ratchet: the number of container-literal arms in `infer_expr` must
+/// stay at the expected baseline. New arms require an audit for
+/// `decl_type_hint` propagation (see DictLiteral / TupleLiteral fixes
+/// 2026-05-11/12) and a bump here with a justification comment.
+///
+/// **If this fails because a new arm was added:**
+///   - Read the new arm's body. Does it call `self.infer_expr(...)` on
+///     a child expression? If so, does it propagate `decl_type_hint`?
+///   - For container types where `is_collection_assignment` permits
+///     coercion at the outer var-decl unify site (Array→Vector, Set,
+///     Dict, HashMap), propagation may be unnecessary — but verify
+///     with a nested-literal test (e.g. `Dict[K, NewContainer[T]] d =
+///     {...}`).
+///   - For container types WITHOUT that permissiveness, propagation is
+///     required (DictLiteral / TupleLiteral pattern: extract K/V hints
+///     from decl_type_hint, set per-child decl_type_hint, restore).
+///
+/// **If the count went DOWN:** lower BUDGET to lock the new floor.
+#[test]
+fn container_literal_arms_count() {
+    /// Expected container-literal-like arms in infer_expr:
+    /// - ArrayLiteral (includes set-shape `{a, b, c}` via parser convention)
+    /// - TupleLiteral
+    /// - DictLiteral
+    /// - DictComprehension
+    /// - SetComprehension
+    /// ListComprehension is intentionally excluded from the lint scope —
+    /// it's range-only today and doesn't admit nested-collection-literal
+    /// element expressions in practice.
+    /// Baseline 2026-05-12: 5.
+    const EXPECTED: usize = 5;
+
+    let count = count_container_literal_arms();
+    assert_eq!(
+        count, EXPECTED,
+        "Container-literal arm count in `infer_expr` changed: {count} vs expected {EXPECTED}.\n\n\
+         If a new arm was added, audit it for `decl_type_hint` propagation \
+         (DictLiteral / TupleLiteral pattern). If unneeded (e.g., outer var-decl \
+         `is_collection_assignment` permissiveness coerces), document the \
+         exception in the bump comment.\n\n\
+         If an arm was removed, lower EXPECTED in tests/lints.rs.",
+    );
+}
+
 /// Baseline 2026-05-10: 52 (after Phase A.1–A.4 + 12/N migrations).
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {

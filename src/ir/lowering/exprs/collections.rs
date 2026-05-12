@@ -15,6 +15,24 @@ pub(super) fn lower_array_literal(
     builder: &mut FunctionBuilder,
     elems: &[Spanned<Expr>],
 ) -> Operand {
+    // Set-literal disambiguation: the parser produces `Expr::ArrayLiteral`
+    // for BOTH `[a, b, c]` AND `{a, b, c}` (the AST node is shared with a
+    // "set vs array distinguished by context" convention — see
+    // `src/parser/expr.rs:1663`). When the surrounding context declares a
+    // Set / HashSet type, the literal must lower to `GorgetSet`, not
+    // `GorgetArray` — otherwise the C-emit memcpys array bytes into a
+    // Set slot (different layouts), producing silent UB at runtime.
+    // Pre-fix repro: `Set[int] s = {1, 2, 3}; print(s.len())` printed a
+    // garbage memory-address-like value instead of 3.
+    if let Some(outer) = ctx.func_state.expected_type {
+        let kind = ctx.type_registry.collection_kind(outer);
+        if matches!(kind,
+            Some(crate::ir::types::CollectionKind::OrderedSet)
+            | Some(crate::ir::types::CollectionKind::Set))
+        {
+            return lower_set_literal_from_array(ctx, builder, elems);
+        }
+    }
     let array_type = ctx.type_mapper.lookup_named("GorgetArray").unwrap_or(UNIT_TYPE);
 
     // If the surrounding context has an expected type like Vector[Option[T]],
@@ -158,6 +176,110 @@ pub(super) fn lower_array_literal(
     };
     ctx.func_state.expected_type = saved_expected;
     elem_type
+}
+
+/// Lower `{a, b, c}` to `gorget_set_new(sizeof(elem))` + N `gorget_set_add`
+/// calls. Mirrors `lower_array_literal` but uses Set runtime fns and the
+/// `gorget_set_*` ABI. Dispatched from `lower_array_literal` when the
+/// surrounding `decl_type_hint` is `Set` / `HashSet`.
+fn lower_set_literal_from_array(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    elems: &[Spanned<Expr>],
+) -> Operand {
+    let set_type = ctx.type_mapper.lookup_named("GorgetSet").unwrap_or(UNIT_TYPE);
+
+    if elems.is_empty() {
+        // Empty set — infer element size from expected type if available.
+        let elem_size_type = ctx.func_state.expected_type
+            .map(|et| infer_collection_element_type(ctx, et))
+            .unwrap_or(I64_TYPE);
+        let set_local = builder.call_extern(
+            "gorget_set_new",
+            vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
+            set_type,
+        );
+        ctx.set_owned(builder, set_local);
+        ctx.drops.register_local(set_local, set_type, &ctx.type_registry);
+        return FunctionBuilder::copy(set_local);
+    }
+
+    // Lower first element with the per-element expected-type override.
+    // Mirrors lower_array_literal's nonempty_expected_override.
+    let saved_expected = ctx.func_state.expected_type;
+    let elem_override = ctx.func_state.expected_type
+        .map(|outer| infer_collection_element_type(ctx, outer));
+    if let Some(elem_t) = elem_override {
+        ctx.func_state.expected_type = Some(elem_t);
+    }
+
+    let first = lower_expr(ctx, builder, &elems[0]);
+    let etype = infer_operand_type_full(ctx, &first, builder);
+
+    let set_local = builder.call_extern(
+        "gorget_set_new",
+        vec![Operand::Constant(Constant::SizeOf(etype))],
+        set_type,
+    );
+    ctx.set_owned(builder, set_local);
+    ctx.drops.register_local(set_local, set_type, &ctx.type_registry);
+
+    let elem_mode = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
+        use crate::ir::instructions::AssignMode;
+        if !ctx.type_registry.is_resource_type(ty) { return AssignMode::Copy; }
+        match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                let src_ty = builder.local_type(p.local);
+                if ctx.is_owned_local(builder, p.local)
+                    || (!ctx.is_named_local(p.local)
+                        && (ctx.type_registry.needs_drop(src_ty)
+                            || ctx.type_registry.is_resource_type(src_ty)))
+                {
+                    AssignMode::Move
+                } else {
+                    AssignMode::Copy
+                }
+            }
+            _ => AssignMode::Copy,
+        }
+    };
+
+    // Insert first element with per-elem Move + MoveZero discipline
+    // (parallel to lower_array_literal's element handling — sets share
+    // the same consume-position semantics as arrays).
+    let insert_elem = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder, val: Operand| {
+        let mode = elem_mode(ctx, builder, &val, etype);
+        let el = builder.add_local(etype, None);
+        let val_clone = val.clone();
+        builder.assign_mode(mode, Place::local(el), val);
+        if mode == crate::ir::instructions::AssignMode::Move {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = val_clone {
+                if place.projections.is_empty()
+                    && place.local != el
+                    && !ctx.drops.is_moved(place.local)
+                {
+                    ctx.move_zero_and_mark(builder, place.local);
+                }
+            }
+        }
+        let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(etype));
+        let s_ref = builder.borrow_mut(Place::local(set_local), ctx.register_mut_ptr_type(set_type));
+        builder.call_extern(
+            "gorget_set_add",
+            vec![FunctionBuilder::copy(s_ref), FunctionBuilder::copy(el_ref)],
+            UNIT_TYPE,
+        );
+    };
+    insert_elem(ctx, builder, first);
+    for elem_expr in &elems[1..] {
+        if let Some(elem_t) = elem_override {
+            ctx.func_state.expected_type = Some(elem_t);
+        }
+        let val = lower_expr(ctx, builder, elem_expr);
+        insert_elem(ctx, builder, val);
+    }
+    ctx.func_state.expected_type = saved_expected;
+    FunctionBuilder::copy(set_local)
 }
 
 // ---- Dict Literals ----
