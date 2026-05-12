@@ -147,12 +147,29 @@ impl FunctionBuilder {
 
     fn set_terminator(&mut self, term: Terminator) {
         let block = &mut self.blocks[self.current_block.0 as usize];
+        // Cluster B (Snag #33 + Snag #39 bug 1): no-op when already
+        // terminated. The previous behaviour was silent-overwrite, which
+        // let post-divergent-subexpression fallthrough `jump`/`ret` /
+        // `branch` calls clobber the divergent Return/Throw/Unreachable
+        // terminator. Callers no longer need to scatter
+        // `is_terminated()` guards — `jump(merge)` / `ret(...)` /
+        // `branch(...)` after a divergent statement is now a built-in
+        // no-op. Should a future caller genuinely want to overwrite a
+        // terminator (none today), introduce `force_set_terminator`
+        // explicitly rather than relying on silent overwrite.
+        if block.terminator.is_some() {
+            return;
+        }
         block.terminator = Some(term);
         block.terminator_span = self.current_span;
     }
 
     /// Returns true if the current block already has a terminator set.
-    /// Used to skip redundant `jump(merge_bb)` after `return` statements inside match arms.
+    /// Most callers no longer need this guard after Cluster B —
+    /// `jump`/`ret`/`branch` are no-ops on terminated blocks. The
+    /// remaining legitimate use cases: skipping result-slot assigns
+    /// before `jump(merge)` when the assign would be a wrong-shape
+    /// type write (see `lower_catch_expr` / `lower_match_expr`).
     pub fn is_terminated(&self) -> bool {
         self.blocks[self.current_block.0 as usize].terminator.is_some()
     }
