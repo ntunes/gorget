@@ -140,8 +140,23 @@ void check_operand_for_copy(Operand op, GirFunction &func, GirModule &gmod, Vect
             if local_is_resource(lid, &func, &gmod):
                 GirFunction fr = gmod.functions.get(fi).unwrap()
                 GirLocal loc = fr.locals.get(lid).unwrap()
-                String tname = resolve_type_name(loc.type_id, &gmod)
-                violations.push(fmt_loc(fr.name, bi, ii) + ": OpCopy(_" + int_to_str(lid) + ") on resource " + tname)
+                # View-awareness skip (mirror of Rust's `validate_read` at
+                # `src/ir/validate.rs:1080`): a Copy of a Borrowed / View
+                # source is runtime-safe — both source and copy are
+                # non-owning aliases, so the byte-copy creates another
+                # non-owning alias whose drop is a no-op. The Phase D
+                # step-2 work tagged collection-getter destinations and
+                # field-access results as LoBorrowed; the validator now
+                # understands those as alias copies, not shallow copies
+                # of owned resources.
+                match loc.ownership:
+                    case LoBorrowed():
+                        pass
+                    case LoView():
+                        pass
+                    else:
+                        String tname = resolve_type_name(loc.type_id, &gmod)
+                        violations.push(fmt_loc(fr.name, bi, ii) + ": OpCopy(_" + int_to_str(lid) + ") on resource " + tname)
         else:
             pass
 
@@ -276,19 +291,32 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction &func, Gir
         ai += 1
 # ── Validator dispatch ────────────────────────────────────
 #
-# Phase C step 5a / 5b shipped the burn-downs for two classes:
+# Phase C step 5a / 5b / 5c shipped the burn-downs for three classes:
 #   • validate_resource_field_reads — CLOSED (commit `8cfc94ff`)
 #   • validate_resource_call_args   — CLOSED (commit `988ce1c3`)
+#   • validate_resource_moves       — CLOSED (this commit, step 5c).
+#     100,170 → 0 via the `op_consume(&ctx, &gmod, lid)` dispatcher in
+#     lower.gg, which picks OpMove / OpBorrow / OpCopy from the source
+#     local's ownership tag (LoBorrowed/LoView → OpBorrow; LoOwned/
+#     LoParam → OpMove; non-resource → OpCopy). Migrated ~25 OpCopy
+#     emit sites in lower.gg to use it. `is_resource_type_name` now
+#     delegates to lir_lower's `build_resource_metadata` for the
+#     single-source-of-truth resource classification (covers runtime
+#     types GorgetString/Array/Map/Set/Closure, parameterised Vector__/
+#     Dict__/Set__/Box__, and opaque handles Mutex__/Channel__/Shared__/
+#     OnceFlag__/Semaphore__/AtomicInt__/etc.). The four operand modes
+#     all lower to ISlotLoad in lir_lower.gg:2349-2394, so this burn-down
+#     produces correct GIR ownership labels without changing runtime
+#     behaviour; when Phase 5 codegen lands real OpClone/OpMove
+#     emission, the labels become the contract.
 #
 # Per `structural-guards.md`'s framework step 5, once a class hits
 # zero it's promoted to fatal: the env gate is removed and the build
-# halts on the first violation. These two run unconditionally below.
+# halts on the first violation. All three run unconditionally below.
 #
-# The moves class is still in burn-down (~89,678 remaining). It's
-# env-gated: setting `GG_VALIDATE_RESOURCE_MOVES=<log-path>` writes
-# the violation list to that path; unset means silent. Once the
-# moves class hits zero, it joins the unconditional set and the gate
-# is removed.
+# The `GG_VALIDATE_RESOURCE_MOVES=<log-path>` env gate is preserved
+# for diagnostic logging when a violation re-appears — the writer
+# is a sweep entry point for `tools/sweep-validate.sh`-style harnesses.
 
 void run_validators(GirModule &gmod):
     # ── Closed classes: fatal-on-violation, no gate ──
@@ -300,7 +328,14 @@ void run_validators(GirModule &gmod):
     if ca_v.len() > 0:
         print_violations_to_stderr("validate_resource_call_args (FATAL)", ca_v)
         exit(1)
-    # ── Burn-down class: env-gated, logs to file ──
+    Vector[String] mv_v = validate_resource_moves(&gmod)
+    if mv_v.len() > 0:
+        print_violations_to_stderr("validate_resource_moves (FATAL)", mv_v)
+        exit(1)
+    # ── Diagnostic gate: write violations to file when env-set ──
+    # Now redundant since the class promotes to fatal above, but kept
+    # for sweep tooling that wants a per-fixture violation log rather
+    # than a single fatal-on-first stop.
     String moves_path = getenv("GG_VALIDATE_RESOURCE_MOVES")
     if moves_path.len() > 0:
         Vector[String] mv = validate_resource_moves(&gmod)

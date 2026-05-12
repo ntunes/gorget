@@ -186,6 +186,68 @@ void switch_to(LowerCtx &ctx, int block_id):
 void set_terminator(LowerCtx &ctx, Terminator term):
     ctx.block_terms.set(ctx.current_block, term)
 
+# ── Operand-mode dispatch (Phase C step 5c) ─────────────────
+#
+# `op_consume` picks the right operand mode for reading `lid` at a
+# consume position (call arg, var-decl init, return, branch condition,
+# match-arm payload, etc.). It enforces the *Ownership at Consuming
+# Positions* discipline from CLAUDE.md:
+#
+#   • Non-resource source     → OpCopy (byte-copy is sound for scalars
+#     and Ptr/MutPtr aliases; the validator already filters those out).
+#   • LoBorrowed/LoView source → OpBorrow (the alias propagates; no
+#     ownership transfer; consumer can take the address if it wants).
+#   • LoOwned/LoParam/LoMaybeOwned resource → OpMove (assumes last-use
+#     of the source at this read; matches the convention established by
+#     the closed `validate_resource_call_args` migration at the
+#     EMethodCall receiver, EFieldAccess non-Ptr base, lower_field_write
+#     base, emit_field_write_from_local base, lower_index_assign base,
+#     and ECall borrow-arg sites in this file).
+#
+# All four operand modes lower to the same `ISlotLoad` in
+# `lir_lower.gg:2349-2394`, so the runtime behaviour is unchanged — the
+# helper produces correct GIR ownership labels without inserting any
+# clone or move-zero codegen. When Phase 5 codegen lands real
+# OpClone/OpMove emission, the labels written here become the contract.
+#
+# Closes Phase C's `validate_resource_moves` violations: each
+# OpCopy-on-resource converted via this helper drops the count by one.
+# Scalar OpCopy sites (GIBinOp on i64, GICmp, GTBranch on bool, etc.)
+# stay OpCopy because `local_is_resource` in `validate.gg` short-circuits
+# on non-resource slot types.
+Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid):
+    if lid < 0 or lid >= ctx.locals.len():
+        return OpCopy(lid)
+    GirLocal loc = ctx.locals.get(lid).unwrap()
+    int tid = loc.type_id
+    # Primitives and pointer-typed slots: byte-copy is sound. The
+    # validator's `resolve_type_name` returns "" for these so they
+    # never produce violations; keep OpCopy for honest GIR labelling.
+    if tid < PRIM_COUNT:
+        return OpCopy(lid)
+    if tid >= gmod.type_table.len():
+        return OpCopy(lid)
+    GirType gt = gmod.type_table.get(tid).unwrap()
+    String tname = ""
+    match gt:
+        case GtNamed(n):
+            tname = n
+        else:
+            # Ptr/MutPtr/Tuple slots — byte-copy of a pointer is just
+            # a pointer copy, not a resource copy. Validator filters
+            # these too.
+            return OpCopy(lid)
+    if not is_resource_type_name(tname, &gmod):
+        return OpCopy(lid)
+    # Resource source: pick mode by ownership.
+    match loc.ownership:
+        case LoBorrowed():
+            return OpBorrow(lid)
+        case LoView():
+            return OpBorrow(lid)
+        else:
+            return OpMove(lid)
+
 # ── Type mapping ─────────────────────────────────────────
 
 int prim_name_to_type(String name):
@@ -1115,16 +1177,24 @@ bool is_resource_field_type(SpannedType stype, Dict[String, bool] resource_types
             return false
 
 bool is_resource_type_name(String name, GirModule &gmod):
-    match name:
-        case "GorgetString" | "String":
+    # Delegate to `build_resource_metadata` in lir_lower.gg — the single
+    # source of truth for the runtime-resource classification (covers
+    # GorgetString / Array / Map / Set / Closure, parameterised Vector__/
+    # Dict__/Set__/Box__, opaque handles Mutex__/Channel__/Shared__/
+    # Weak__/AtomicInt__/Semaphore__/OnceFlag__/WaitGroup__/etc.).
+    # Layering rule 3: one source of truth per axis.
+    match build_resource_metadata(name):
+        case Some(_):
             return true
-        else:
-            if gmod.resource_types.contains(name):
-                return true
-            # Collection types are always resource types
-            if name.starts_with("Vector") or name.starts_with("Dict") or name.starts_with("Set"):
-                return true
-            return false
+        case None:
+            pass
+    # User struct/enum types registered as resource by lower_module's
+    # type-registration pass (Phase D step 1 didn't extend
+    # build_resource_metadata to cover user types, so this fallback
+    # remains until that consolidation lands).
+    if gmod.resource_types.contains(name):
+        return true
+    return false
 
 # ── Binary operator mapping ──────────────────────────────
 
@@ -1380,7 +1450,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int in_rhs = lower_expr(&ctx, *rhs_box, &gmod)
                 String coll_tname = local_type_name(in_rhs, &ctx, &gmod)
                 String contains_method = coll_tname + "__contains"
-                Vector[Operand] in_args = [OpMove(in_rhs), OpCopy(in_lhs)]
+                Vector[Operand] in_args = [OpMove(in_rhs), op_consume(&ctx, &gmod, in_lhs)]
                 int in_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                 emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
                 return in_dst
@@ -1393,7 +1463,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if gmod.type_infos.contains(lhs_cmp_name) and (op == "<" or op == "<=" or op == ">" or op == ">="):
                     String cmp_method = lhs_cmp_name + "__compare"
                     if gmod.fn_sigs.contains(cmp_method):
-                        Vector[Operand] cmp_args = [OpMove(lhs), OpCopy(rhs)]
+                        Vector[Operand] cmp_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs)]
                         int cmp_val = add_local(&ctx, I64_TYPE, NO_NAME)
                         emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
                         int zero = add_local(&ctx, I64_TYPE, NO_NAME)
@@ -1405,7 +1475,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if (op == "==" or op == "!=") and gmod.type_infos.contains(lhs_cmp_name):
                     String eq_method = lhs_cmp_name + "__eq"
                     if gmod.fn_sigs.contains(eq_method):
-                        Vector[Operand] eq_args = [OpMove(lhs), OpCopy(rhs)]
+                        Vector[Operand] eq_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs)]
                         int eq_dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
                         emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
                         if op == "==":
@@ -1414,15 +1484,15 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         emit(&ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
                         return neq_dst
                 int dst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+                emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, op_consume(&ctx, &gmod, lhs), op_consume(&ctx, &gmod, rhs)))
                 return dst
             # String concatenation: + on string operands → gorget_str_cat(Str, Str)
             if op == "+" and (is_string_local(lhs, &ctx, &gmod) or is_string_local(rhs, &ctx, &gmod)):
                 int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
                 int dst = add_local(&ctx, gs_tid, NO_NAME)
                 Vector[Operand] concat_args = []
-                concat_args.push(OpCopy(lhs))
-                concat_args.push(OpCopy(rhs))
+                concat_args.push(op_consume(&ctx, &gmod, lhs))
+                concat_args.push(op_consume(&ctx, &gmod, rhs))
                 emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
                 return dst
             # Operator overload on user types: if lhs is a user struct/enum,
@@ -1441,7 +1511,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             lhs_is_user = true
                 if lhs_is_user:
                     String method_full = lhs_tname + "__" + op_method
-                    Vector[Operand] op_args = [OpMove(lhs), OpCopy(rhs)]
+                    Vector[Operand] op_args = [OpMove(lhs), op_consume(&ctx, &gmod, rhs)]
                     int op_ret = I64_TYPE
                     if gmod.fn_sigs.contains(method_full):
                         op_ret = gmod.fn_sigs.get(method_full).unwrap()
@@ -1454,7 +1524,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     emit(&ctx, GICallExtern(op_dst, method_full, op_args))
                     return op_dst
             int dst = add_local(&ctx, I64_TYPE, NO_NAME)
-            emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, OpCopy(lhs), OpCopy(rhs)))
+            emit(&ctx, GIBinOp(dst, map_binop(op), I64_TYPE, op_consume(&ctx, &gmod, lhs), op_consume(&ctx, &gmod, rhs)))
             return dst
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
@@ -1493,12 +1563,12 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int callable_local = nl_get(&ctx, fname)
                         # Lower args
                         Vector[Operand] cl_args = []
-                        cl_args.push(OpCopy(callable_local))  # closure/callable as first arg
+                        cl_args.push(op_consume(&ctx, &gmod, callable_local))  # closure/callable as first arg
                         int cai = 0
                         while cai < args.len():
                             SpannedExpr carg = args.get(cai).unwrap()
                             int cval = lower_expr(&ctx, carg, &gmod)
-                            cl_args.push(OpCopy(cval))
+                            cl_args.push(op_consume(&ctx, &gmod, cval))
                             cai += 1
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
@@ -1669,7 +1739,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         while smi < margs.len():
                             SpannedExpr sma = margs.get(smi).unwrap()
                             int sma_val = lower_expr(&ctx, sma, &gmod)
-                            static_args.push(OpCopy(sma_val))
+                            static_args.push(op_consume(&ctx, &gmod, sma_val))
                             smi += 1
                         # Primitive method names need C-runtime mangling.
                         String type_prefix = ident_name
@@ -1777,7 +1847,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     else:
                         inner_tid = lookup_or_register_named(&gmod, inner_name_str)
                 if inner_tid >= 0 and variant_name != "":
-                    int scr_ptr = match_scrutinee_ptr(&ctx, recv)
+                    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, recv)
                     # `.unwrap_or(default)`: emit a real tag check so
                     # None/Error returns the default instead of dereffing
                     # a NULL pointer (closes showcase blocker #4 — the
@@ -1799,11 +1869,11 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Some arm: read payload, store to uo_dst.
                         switch_to(&ctx, some_bb)
                         int payload = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
-                        emit(&ctx, GIAssign(uo_dst, OpCopy(payload)))
+                        emit(&ctx, GIAssign(uo_dst, op_consume(&ctx, &gmod, payload)))
                         set_terminator(&ctx, GTJump(uo_merge_bb))
                         # None arm: store the default.
                         switch_to(&ctx, none_bb)
-                        emit(&ctx, GIAssign(uo_dst, OpCopy(default_local)))
+                        emit(&ctx, GIAssign(uo_dst, op_consume(&ctx, &gmod, default_local)))
                         set_terminator(&ctx, GTJump(uo_merge_bb))
                         switch_to(&ctx, uo_merge_bb)
                         return uo_dst
@@ -1814,7 +1884,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # Fall back to re-cast if we couldn't identify the variant.
                 if inner_tid >= 0:
                     int ud = add_local(&ctx, inner_tid, NO_NAME)
-                    emit(&ctx, GIAssign(ud, OpCopy(recv)))
+                    emit(&ctx, GIAssign(ud, op_consume(&ctx, &gmod, recv)))
                     return ud
                 return recv
             # clone() — return a copy of the receiver
@@ -1873,7 +1943,7 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             while mi2 < margs.len():
                 SpannedExpr ma = margs.get(mi2).unwrap()
                 int ma_val = lower_expr(&ctx, ma, &gmod)
-                call_args.push(OpCopy(ma_val))
+                call_args.push(op_consume(&ctx, &gmod, ma_val))
                 mi2 += 1
             # Build the mangled method name: TypeName__method
             # Resolve receiver type name from the GIR local's type
@@ -2332,7 +2402,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             if val_type == gs_tid:
                 fmt = "%s\n"
-            Vector[Operand] printf_args = [OpConstStr(fmt), OpCopy(val)]
+            Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(&ctx, &gmod, val)]
             int pdst = add_local(&ctx, I32_TYPE, NO_NAME)
             emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             result = pdst
@@ -2394,7 +2464,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                     else:
                         gir_args.push(OpMove(arg_local))
             else:
-                gir_args.push(OpCopy(arg_local))
+                # Phase C step 5c: pick OpMove/OpBorrow/OpCopy based on
+                # source ownership and resource-typedness via the
+                # `op_consume` dispatcher. Non-resource sources keep
+                # OpCopy semantics.
+                gir_args.push(op_consume(&ctx, &gmod, arg_local))
             ai = ai + 1
         # Look up return type from module's fn_sigs, or from function definitions
         int ret_type = I64_TYPE
@@ -2513,19 +2587,19 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             int gs_tid_decl = lookup_or_register_named(&gmod, "GorgetString")
             if declared_ty == gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
                 int coerced = add_local(&ctx, gs_tid_decl, NO_NAME)
-                Vector[Operand] cstr_args = [OpCopy(val)]
+                Vector[Operand] cstr_args = [op_consume(&ctx, &gmod, val)]
                 emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
                 val = coerced
                 var_type = gs_tid_decl
             int var_local = add_local(&ctx, var_type, Some(name.clone()))
-            emit(&ctx, GIAssign(var_local, OpCopy(val)))
+            emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val)))
             nl_put(&ctx, name, var_local)
         case SReturn(opt_expr):
             match opt_expr:
                 case Some(ret_expr):
                     int val = lower_expr(&ctx, ret_expr, &gmod)
-                    emit(&ctx, GIAssign(0, OpCopy(val)))
-                    set_terminator(&ctx, GTReturn(OpCopy(0)))
+                    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, val)))
+                    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0)))
                 case None:
                     set_terminator(&ctx, GTReturn(OpConstUnit()))
         case SExpr(sexpr):
@@ -2540,7 +2614,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     if nl_contains(&ctx, name):
                         int lid = nl_get(&ctx, name)
                         int val = lower_expr(&ctx, value_expr, &gmod)
-                        emit(&ctx, GIAssign(lid, OpCopy(val)))
+                        emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, val)))
                 case EFieldAccess(base_box, field_name):
                     # self.field = value
                     # Lower as: __field_write_TYPE_FIELD(&base, value).
@@ -2617,11 +2691,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int lid = nl_get(&ctx, name)
                         int lhs_type = ctx.locals.get(lid).unwrap().type_id
                         int lhs_val = add_local(&ctx, lhs_type, NO_NAME)
-                        emit(&ctx, GIAssign(lhs_val, OpCopy(lid)))
+                        emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid)))
                         int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                         int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                        emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
-                        emit(&ctx, GIAssign(lid, OpCopy(op_dst)))
+                        emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val), op_consume(&ctx, &gmod, rhs_val)))
+                        emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst)))
                 case EFieldAccess(base_box, field_name):
                     # self.field <op>= value
                     # Lower as: self.field = self.field <op> value.
@@ -2631,7 +2705,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                     int op_dst = add_local(&ctx, lhs_type, NO_NAME)
-                    emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, OpCopy(lhs_val), OpCopy(rhs_val)))
+                    emit(&ctx, GIBinOp(op_dst, map_compound_binop(op), lhs_type, op_consume(&ctx, &gmod, lhs_val), op_consume(&ctx, &gmod, rhs_val)))
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
@@ -2670,7 +2744,7 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
                 write_args.push(OpBorrow(base))
             else:
                 write_args.push(OpMove(base))
-    write_args.push(OpCopy(val))
+    write_args.push(op_consume(&ctx, &gmod, val))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
 # Variant of lower_field_write that takes a pre-lowered local id for the
@@ -2701,7 +2775,7 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
                 write_args.push(OpBorrow(base))
             else:
                 write_args.push(OpMove(base))
-    write_args.push(OpCopy(value_local))
+    write_args.push(op_consume(&ctx, &gmod, value_local))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
 
 # ── Control flow lowering ────────────────────────────────
@@ -2792,7 +2866,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
             base_op = OpBorrow(base)
         else:
             pass
-    Vector[Operand] set_args = [base_op, OpCopy(idx), OpCopy(val)]
+    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx), op_consume(&ctx, &gmod, val)]
     emit(&ctx, GICallExtern(-1, setter, set_args))
 
 # Look up the parent enum name for a type. If `type_name` itself is an
@@ -2860,7 +2934,7 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
 # first `_` and confuses `Option__int64_t` with the `Option` type.
 int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule &gmod):
     String read_fn = "__field_read_" + enum_name + "_tag"
-    Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(0)]
+    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr), OpConstI64(0)]
     int tag = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GICallExtern(tag, read_fn, args))
     return tag
@@ -2904,7 +2978,7 @@ String resolve_payload_clone_fn(String tname, GirModule &gmod):
 int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod):
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
-    Vector[Operand] args = [OpCopy(scrutinee_ptr), OpConstI64(field_idx)]
+    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr), OpConstI64(field_idx)]
     # The field read produces a byte-copy of the variant's payload
     # bytes — for resource payloads (Vector, Dict, String, user enums
     # with resource sub-fields), those bytes alias the scrutinee's
@@ -2932,13 +3006,13 @@ int emit_payload_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String
 
 # Take the address of scrutinee's local so we can pass a pointer to the
 # field_read helpers (arg 0 is Ptr-typed by needs_ptr_arg convention).
-int match_scrutinee_ptr(LowerCtx &ctx, int scrutinee):
+int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
     # Move the value into a temp local so we can take its address —
     # scrutinee may already be an identifier with a stable slot, but
     # this extra copy keeps the address path uniform.
     int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
     int tmp = add_local(&ctx, scr_tid, NO_NAME)
-    emit(&ctx, GIAssign(tmp, OpCopy(scrutinee)))
+    emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee)))
     return tmp
 
 # Lower a single match arm's pattern-match test. Emits branches to
@@ -2963,7 +3037,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
                 Option[String] name_opt = Some(name.clone())
                 int bound = add_local(&ctx, scr_tid, name_opt)
-                emit(&ctx, GIAssign(bound, OpCopy(scrutinee)))
+                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, scrutinee)))
                 nl_put(&ctx, name, bound)
                 set_terminator(&ctx, GTJump(match_bb))
         case PConstructor(variant_name, sub_pats):
@@ -2996,7 +3070,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                     if scr_tid == BOOL_TYPE:
                         cmp_tid = BOOL_TYPE
                     int is_match = add_local(&ctx, BOOL_TYPE, NO_NAME)
-                    emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, OpCopy(scrutinee), OpCopy(lit_val)))
+                    emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(&ctx, &gmod, scrutinee), op_consume(&ctx, &gmod, lit_val)))
                     set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
         case POr(alts):
             # `case A | B | C:` — match if any alternative matches. Each
@@ -3104,7 +3178,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
         lower_fail("PConstructor variant not in enum: enum='" + effective_enum + "' variant='" + effective_variant + "'")
         set_terminator(&ctx, GTJump(match_bb))
         return
-    int scrutinee_ptr = match_scrutinee_ptr(&ctx, scrutinee)
+    int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, scrutinee)
     int tag = emit_tag_read(&ctx, scrutinee_ptr, effective_enum, &gmod)
     int expected = add_local(&ctx, I64_TYPE, NO_NAME)
     emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
@@ -3137,7 +3211,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 int field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod)
                 Option[String] bname_opt = Some(bname.clone())
                 int bound = add_local(&ctx, fty, bname_opt)
-                emit(&ctx, GIAssign(bound, OpCopy(field_val)))
+                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val)))
                 nl_put(&ctx, bname, bound)
             else:
                 lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback")

@@ -12795,11 +12795,18 @@ fn self_host_bootstrap_fixed_point() {
 // first violation. The validate.gg dispatcher exits 1 in-process; the
 // regression net is therefore: run the self-host driver on each
 // representative fixture and assert it exits 0 with no `(FATAL)`
-// header on stdout.
+// header in the driver's printed output.
 //
 // Closed classes covered:
 //   • validate_resource_field_reads — closed commit `8cfc94ff`.
 //   • validate_resource_call_args   — closed commit `988ce1c3`.
+//   • validate_resource_moves       — closed (this step 5c).
+//     Fix shape: emit OpMove/OpBorrow/OpCopy from source ownership at
+//     every consume site via lower.gg's `op_consume(&ctx, &gmod, lid)`
+//     dispatcher. New violation = an OpCopy emit site that didn't
+//     route through it. The four operand modes all lower to ISlotLoad
+//     today (lir_lower.gg:2349-2394), so a regression here is purely a
+//     GIR-labelling bug, not a runtime miscompilation.
 //
 // Either class regressing means an emit site added a new violation:
 //   • field_reads: a __field_read_* GICallExtern whose destination was
@@ -12807,6 +12814,18 @@ fn self_host_bootstrap_fixed_point() {
 //   • call_args:   an OpMove(local) at a call-arg position where the
 //     source local's ownership is LoBorrowed; fix by switching to
 //     OpBorrow at the emit site.
+//   • moves:       a `Vector[Operand].push(OpCopy(lid))` (or `OpCopy(x)`
+//     positional arg in an Instruction constructor) at a site that
+//     should have called `op_consume(&ctx, &gmod, lid)`. Most likely
+//     a freshly-added emit site that defaulted to OpCopy.
+//
+// FATAL detection: the dispatcher prints `# validate_resource_*(FATAL): N
+// violation(s)` on the FIRST line of the violation block, then the
+// per-site lines. Matching the `^# validate_resource_.*(FATAL):` prefix
+// distinguishes a real fatal print from a string-literal occurrence of
+// "(FATAL)" inside the driver's own emitted GIR (which happens when the
+// driver compiles itself, since validate.gg contains the FATAL string
+// as a const).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn phase_c_closed_classes_remain_at_zero_self_host() {
@@ -12843,9 +12862,13 @@ fn phase_c_closed_classes_remain_at_zero_self_host() {
             .expect("failed to spawn self-host driver");
         let stdout = String::from_utf8_lossy(&out.stdout);
         // Closed-class fatal headers land on stdout right before
-        // `exit(1)`. Any FATAL line means a regression.
+        // `exit(1)`: a "# validate_resource_*(FATAL): N violation(s)"
+        // header line, followed by per-site lines. Match the header
+        // shape to avoid false positives from string literals inside
+        // the driver's own emitted GIR (validate.gg's source contains
+        // the FATAL string as a const).
         let fatal_lines: Vec<&str> = stdout.lines()
-            .filter(|l| l.contains("(FATAL)"))
+            .filter(|l| l.starts_with("# validate_resource_") && l.contains("(FATAL)"))
             .collect();
         if !out.status.success() || !fatal_lines.is_empty() {
             failures.push((
