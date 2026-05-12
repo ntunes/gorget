@@ -20,7 +20,13 @@ The active plan is:
 
 The phases compose: A and D are refactors that unblock C (A on the type axis, D on the local axis); C is the compile-time guarantee that the bug class can't recur. Tier E proceeds independently throughout.
 
-**Already shipped** (subsets of Phase A, delivered by the LIR audit): `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2 — typed runtime call boundary), `Inst::CollectionCtor` (LIR A3 — typed collection ctor with `ElemMeta` replacing `original_name` parsing in three downstream passes). What's left of Phase A is the GIR-side type-metadata consolidation and the runtime declaration table extension.
+> **Headline status (2026-05-12):**
+> - **Phase D — SHIPPED.** D1–D5 + D4.5 all in. `local_ownership: FxHashMap` retired (every setter writes directly to `Local.ownership`; `SavedScope` captures typed `Vec<LocalOwnership>`). `ReadMode` unification shipped (D5); `AssignMode = ReadMode` type alias. D6 partial (BorrowOrigin flows GIR → LIR via `slot_kind` but no typed `Slot.origin` yet). Residual: Tier 3b proxy-read ratchet (BUDGET=77, cosmetic).
+> - **Phase C — SHIPPED.** `validate_resource_moves` + the read-site quartet + Tier 2a `validate_consume_sites` (with typed `consume_externs` registry promoted 2026-05-12) all fatal. Shallow copy of a resource is a compile-time error.
+> - **Phase A — PARTIAL.** `TypeMetadata` carries the field-set Phase A specified; Tier 1c locks coherence-at-construction. The big unshipped piece is §3.6's `RUNTIME_DECLS` / `resources.toml` build-tooling pipeline (~3-4 weeks).
+> - **Tier E — ongoing in parallel.** Validator framework, drop-flag hygiene, SSA invariants all shipped piecemeal.
+
+**Already shipped** (subsets of Phase A, delivered by the LIR audit): `Inst::CallRuntime` + `RuntimeFn` enum (LIR A1/A2 — typed runtime call boundary), `Inst::CollectionCtor` (LIR A3 — typed collection ctor with `ElemMeta` replacing `original_name` parsing in three downstream passes). What's left of Phase A is the GIR-side type-metadata consolidation (substantially done — see Tier 1c) and the runtime declaration table extension.
 
 ---
 
@@ -657,18 +663,24 @@ Stage D3: Migrate consumers one at a time. Easiest first (`is_owned_local`, `is_
 
 Stage D4: Delete `local_ownership: FxHashMap`, the six sidecar maps (`string_borrow_sources`, `cow_alias_sources`, `cow_ptr_params`, `move_override_params`, `mut_capture_locals`, `tuple_element_locals`), and the old `OwnershipState` enum.
 
-> **Status (2026-05-05):** D4 is mostly landed.
-> - `OwnershipState` enum: deleted (D6 column).
+> **Status (2026-05-12):** D1-D5 + D4.5 shipped. D6 partial.
+> - `OwnershipState` enum: deleted.
 > - 7-variant `LocalOwnershipState` enum: deleted.
 > - `cow_alias_sources`, `cow_ptr_params`, `string_borrow_sources` (writer side), `view_returning_temps`, `cow_collection_refs`, `cow_alias_targets`: retired in favor of `LocalOwnership::Borrowed` / `View` variants.
 > - `move_override_params`: retired from `HashSet<String>` to `FxHashSet<LocalId>` (typed key).
-> - `local_ownership: FxHashMap<LocalId, LocalOwnership>`: **deferred to D4.5** — see TODO. The map remains the active store during lowering; `flush_ownership_to_locals` copies onto `Local.ownership` at the GIR/LIR boundary. Promoting `Local.ownership` to the active store touches every setter / reader (~30 sites) and `SavedScope`, distinct in shape from the sidecar pass.
+> - **D4.5 — `local_ownership: FxHashMap` retired (shipped, date unrecorded).** Every setter now writes directly to `builder.locals[idx].ownership`; `SavedScope` captures `pre_save_ownership: Vec<LocalOwnership>` as a typed array. `flush_ownership_to_locals` survives as a vestige — its body only derives `slot_kind` per (type, ownership) now; the "flush" semantics is gone. The doc-comment at `src/ir/lowering/context.rs:2280` documents the retirement.
 
 Stage D5: Introduce `ReadMode` as the shared enum. Migrate `AssignMode`, `FieldLoadMode`, `IndexLoad.borrow`, `ArgOwnership` to be typed views of it. Update the validator (§5.4) to use the unified `validate_read()` rule.
 
+> **Status (2026-05-12): D5 shipped.** `pub enum ReadMode { Copy, Move, Clone, Borrow }` lives at `src/ir/instructions.rs:92`; `AssignMode = ReadMode` (type alias, not a wrapper struct) so all existing emission and consumer sites unify on one vocabulary. `IndexLoad.read: ReadMode` joined; `EnumFieldLoadMode` migrated (Snag #34 follow-on). `validate_read()` at `src/ir/validate.rs` consumes the unified enum.
+
 Stage D6: Persist `LocalOwnership` through GIR → LIR (`Slot.origin: Option<BorrowOrigin>`). This unblocks future borrow-aware codegen optimisations.
 
-Estimated effort: 2 weeks. Risk: medium. Each consumer migration is independent and revertable. Stage D4 is the dangerous one — if any consumer was reading the sidecar without going through the new accessor, deletion breaks it. Mitigation: keep the sidecars as `cfg(debug_assertions)` cross-checks for one release.
+> **Status (2026-05-12): D6 partial.** `Local.ownership: LocalOwnership` flows through to LIR via `flush_ownership_to_locals` (which now derives `Slot.slot_kind` per the §6.8 Stage 3 rule). But the LIR side reads ownership indirectly via `slot_kind` (`Value` / `OwnedPtr` / `BorrowedPtr`); it does not yet expose a typed `Slot.origin: Option<BorrowOrigin>` field for downstream borrow-aware codegen. That last step is the future enhancement gating cross-pass borrow optimisations.
+
+**Residual: Tier 3b proxy-read ratchet.** Phase D3's migration retired the sidecar maps but left ~77 callsites still going through proxy fns (`is_named_local`, `is_owned_local`, `drops.is_registered`, `drops.is_moved`). All of these are typed-field reads under the hood — the proxies just hide the field accessor. Tracked by `tests/lints.rs::no_growth_in_phase_d_proxy_reads` (BUDGET=77, one-way ratchet). Mechanical migration; no soundness impact. See `structural-guards.md` Tier 3b for the ratchet's design.
+
+Estimated effort (2026-05-12, historical): Phase D as a whole was ~2 weeks. D6's final hop and the Tier 3b ratchet burn-down are the remaining incremental items.
 
 ### 6.7 What Phase D enables
 
@@ -711,7 +723,7 @@ Estimated effort: 2 commits, folded into Phase D's overall window. Subsumes A4 e
 
 Phase A unblocks D and C — both need authoritative metadata. Phase D is the IR-side counterpart to A, and is what makes Phase C tractable. Phase C is the principled fix for the entire shallow-alias bug class. Phase B (deferred, §4) would be the runtime backstop *if* Phase C ever stalls — not part of the active plan.
 
-Active landing order: **A → D → C**. (D before C is mandatory — Phase C without D is a 3-week IR-tour; with D it's a ~1-week typed-match walker.) Each phase is independently shippable. Tier E (§8) proceeds in parallel throughout. §9 describes how this order interacts with self-host work and how to keep the per-phase contracts from drifting once implementation starts.
+Planned landing order was **A → D → C** with D before C mandatory (Phase C without D is a 3-week IR-tour; with D it's a ~1-week typed-match walker). Actual landing (2026-05-12): A's type-metadata side substantially shipped (locked by Tier 1c coherence-at-construction validator); D shipped (D1-D5 + D4.5 in, D6 partial); C shipped (Phase C validators + Tier 2a `validate_consume_sites` all fatal). The remaining open piece is **A's §3.6 `RUNTIME_DECLS` / `resources.toml` build-tooling pipeline** — orthogonal to D/C, doesn't block any other phase. Tier E (§8) proceeded in parallel throughout. §9 describes how this order interacted with self-host work.
 
 ---
 
@@ -974,18 +986,26 @@ These continue to be addressed individually.
 
 ## 13. Summary
 
-We keep finding double-free / UAF / shallow-alias bugs because the architecture has them baked in. **Three** structural changes close the recurring class, plus a parallel track of independent LIR hygiene work, plus a documented runtime fallback we explicitly hope never to ship:
+We kept finding double-free / UAF / shallow-alias bugs because the architecture had them baked in. **Three** structural changes close the recurring class; the active path was **A → D → C** with Tier E running throughout, plus Phase B documented as a deferred runtime fallback.
 
-- **Phase A** — consolidate type-axis metadata (one `ResourceMetadata`, sixteen lookup sites collapse to one). Includes the `RUNTIME_DECLS` runtime-function table. Partly shipped via the LIR audit (`Inst::CallRuntime`, `Inst::CollectionCtor`).
-- **Phase D** — consolidate local-axis state (one `LocalOwnership` with first-class `BorrowOrigin`, seven sidecar maps collapse to one field). The IR-side mirror of Phase A. Subsumes the LIR roadmap's per-value origin metadata refactor — same pattern at the LIR layer.
-- **Phase C** — strict move/clone/borrow validation (compile error on shallow copy of a resource; aliased mutable state becomes impossible). Plugs into Tier E's per-pass validator framework. ~1 week of work once Phase D's typed state is in place.
-- **Tier E** — LIR-side correctness and shape work (drop-flag dataflow init, critical-edge splitting, post-SSA invariants, validator-runs-after-every-pass, optimizer fixpoint, typed `LirType::FuncRef`). Independent of resources; runs in parallel.
-- **Phase B *(deferred fallback)*** — universal view/owner discrimination at runtime. Documented in §4 with full design and revival triggers, but not on the active road. The permanent ABI cost (`Box[T]` doubles, closures and tasks +50 %) is decisively net-negative once Phase C lands; we bet on Phase C and keep Phase B as recorded fallback if that bet ever fails.
+**Status (2026-05-12):**
 
-Active path: **A → D → C**, with Tier E running throughout, fully parallel with self-host. A and D are pure refactors; together they consolidate the *type* and *local* axes of the IR's ownership story. C is the compile-time guarantee — small once D is in place, since the validator collapses to a typed-match rule over `LocalOwnership`.
+- **Phase D — SHIPPED.** D1-D5 + D4.5 all in. `LocalOwnership` with first-class `BorrowOrigin` is the active typed store on every `Local`. Six historical sidecar maps retired; `local_ownership: FxHashMap` retired (every setter writes directly to `Local.ownership`, `SavedScope` captures typed). `ReadMode` unification shipped (D5); `AssignMode` is a type alias of it. D6 partial — `BorrowOrigin` flows GIR → LIR via `slot_kind` but no typed `Slot.origin` field for downstream borrow-aware optimisations yet. Residual: Tier 3b proxy-read ratchet (BUDGET=77 cosmetic callsites) — see `structural-guards.md` Tier 3b.
 
-Total active cost: ~6 weeks for A → D → C, plus ~1 week of Tier E hygiene that can land in spare cycles. **Zero forced sync windows with self-host.** Zero permanent ABI growth. Returns: roughly halves the SECURITY-tagged TODO discovery rate going forward; makes the README's "Rust-grade memory safety, no lifetime annotations" promise mechanical instead of aspirational. The CoW-with-typed-provenance design (Phase D's `BorrowOrigin`) is the actual Gorget invention — it's how the language gets Rust-grade safety without lifetime parameters.
+- **Phase C — SHIPPED.** `validate_resource_moves` + the read-site quartet (`_field_reads`, `_index_reads`, `_enum_reads`, `_call_args`) plus Tier 2a `validate_consume_sites` (with the typed `consume_externs` registry promoted 2026-05-12) all fatal. Shallow copy of a resource is a compile-time error.
 
-The metadata source is one canonical `resources.toml`; every consumer (Rust compiler, self-host, C runtime header) gets a generated artifact, version-stamped. No language is privileged; drift between Rust and self-host is mechanically impossible.
+- **Phase A — PARTIAL.** Type-axis metadata consolidation has substantially shipped (`TypeMetadata` carries the field-set Phase A specified — `drop_strategy`, `copy_semantics`, `collection_kind`, `enum_kind`, `c_runtime_alias`, `clone_fn`, etc.). Tier 1c's `validate_type_metadata_coherence` locks coherence-at-construction. The big unshipped piece is **§3.6's `RUNTIME_DECLS` runtime-function table + `resources.toml` build-tooling pipeline** — the single declarative source that generates Rust const + C runtime header + self-host Gorget form. ~3-4 weeks; not yet started.
 
-Land Phase A and we're already winning. Land Phase D and the IR's ownership story becomes singular and inspectable. Land Phase C and the bug class is dead.
+- **Tier E — ongoing.** Drop-flag hygiene shipped (Snag #30 always-`DropIfAlive` contract). Validator framework shipped (`assert_module_valid` with VALIDATORS registry, per-pass invariants under debug + `GG_VALIDATE_PASSES`). Critical-edge splitting + post-SSA invariants in place. Typed `LirType::FuncRef` partly shipped. Remaining items are incremental — none gate other phases.
+
+- **Phase B — STILL DEFERRED.** §4 design preserved; revival triggers documented. Not on the road.
+
+**The two genuinely unshipped pieces today:**
+
+1. **Phase A's `RUNTIME_DECLS` / `resources.toml`** (~3-4 weeks). The largest open structural project. Generates Rust const data + C runtime header + self-host form from one TOML at `build.rs` time. Closes the "frontend disagrees with runtime" bug class structurally and unblocks parallel backends (LLVM, WASM) with zero drift risk.
+
+2. **Phase C self-host moves-class burn-down (~89k violations).** Long-running; the validator suite for self-host's lowerer is shipped and ratchets in place. Burn-down compounds: every cluster closed improves both the language definition and the self-host's role as the elegance-showcase. Multi-week sustained work.
+
+**What shipped:** the bug class IS dead at the Rust compiler layer. CoW-with-typed-provenance — Phase D's `BorrowOrigin` — is the actual Gorget invention. The structural-guards framework (`docs/internals/structural-guards.md`) is the enforcement mechanism; URM Phases A/D defined the typed metadata, structural-guards Tiers 1-3 validate it at every build.
+
+What's left turns "Rust-grade memory safety, no lifetime annotations" from "true at the Rust compiler" to "true at every layer of the toolchain, mechanically enforced from a single source of truth."
