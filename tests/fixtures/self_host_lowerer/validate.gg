@@ -439,11 +439,17 @@ void validate_lir_after(String after, LirModule &m):
 
 # Per-function LIR structural checks:
 #   • Block ids are sequential (block.id == position).
-#   • Each terminator's successor block ids are in range.
 #   • Each block param's value_id is unique across the function (no
 #     duplicate value definitions from block params).
+#   • Each instruction's slot references are in `[0, num_slots)`
+#     (ISlotLoad / ISlotStore / ISlotAddr / IMoveSlot / IClosurePack).
+#   • Each terminator's successor block ids are in range AND its args
+#     list length matches the target block's `params` list length —
+#     the precise bug class the §6.4 pending_phis retirement hit when
+#     phi params and branch args fell out of sync.
 void validate_lir_function(LirFunction func, Vector[String] &errors):
     int num_blocks = func.blocks.len()
+    int num_slots = func.slots.len()
     Dict[int, bool] seen_values = {}
     int bi = 0
     while bi < num_blocks:
@@ -459,31 +465,83 @@ void validate_lir_function(LirFunction func, Vector[String] &errors):
             else:
                 seen_values.put(bp.value_id, true)
             pi += 1
-        # Terminator successor sanity.
-        check_term_successors(blk.term, blk.id, num_blocks, func.name, &errors)
+        # Per-instruction slot-reference bounds.
+        int ii = 0
+        while ii < blk.insts.len():
+            check_inst_slot_refs(blk.insts.get(ii).unwrap(), blk.id, num_slots, func.name, &errors)
+            ii += 1
+        # Terminator successor sanity + args-length-matches-target-params.
+        check_term_successors(blk.term, blk.id, num_blocks, &func, &errors)
         bi += 1
 
-void check_term_successors(LirTerm term, int blk_id, int num_blocks, String fn_name, Vector[String] &errors):
+void check_inst_slot_refs(LirInst inst, int blk_id, int num_slots, String fn_name, Vector[String] &errors):
+    int slot = -1
+    String label = ""
+    match inst:
+        case ISlotStore(s, _, _):
+            slot = s
+            label = "ISlotStore"
+        case ISlotLoad(_, s, _):
+            slot = s
+            label = "ISlotLoad"
+        case ISlotAddr(_, s):
+            slot = s
+            label = "ISlotAddr"
+        case IMoveSlot(s):
+            slot = s
+            label = "IMoveSlot"
+        case IClosurePack(s, _, _, _):
+            slot = s
+            label = "IClosurePack"
+        else:
+            return
+    if slot < 0 or slot >= num_slots:
+        errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": " + label + " references slot s" + int_to_str(slot) + " out of range (0.." + int_to_str(num_slots) + ")")
+
+void check_term_successors(LirTerm term, int blk_id, int num_blocks, LirFunction &func, Vector[String] &errors):
     match term:
-        case TJump(tgt, _):
+        case TJump(tgt, args):
             if tgt < 0 or tgt >= num_blocks:
-                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TJump target bb" + int_to_str(tgt) + " out of range (0.." + int_to_str(num_blocks) + ")")
-        case TBranch(_, then_bb, _, else_bb, _):
+                errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TJump target bb" + int_to_str(tgt) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            else:
+                check_args_match_params("TJump", tgt, args.len(), blk_id, &func, &errors)
+        case TBranch(_, then_bb, then_args, else_bb, else_args):
             if then_bb < 0 or then_bb >= num_blocks:
-                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TBranch then-target bb" + int_to_str(then_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+                errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TBranch then-target bb" + int_to_str(then_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            else:
+                check_args_match_params("TBranch.then", then_bb, then_args.len(), blk_id, &func, &errors)
             if else_bb < 0 or else_bb >= num_blocks:
-                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TBranch else-target bb" + int_to_str(else_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
-        case TSwitch(_, cases, default_bb, _):
+                errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TBranch else-target bb" + int_to_str(else_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            else:
+                check_args_match_params("TBranch.else", else_bb, else_args.len(), blk_id, &func, &errors)
+        case TSwitch(_, cases, default_bb, default_args):
             if default_bb < 0 or default_bb >= num_blocks:
-                errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TSwitch default bb" + int_to_str(default_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+                errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TSwitch default bb" + int_to_str(default_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
+            else:
+                check_args_match_params("TSwitch.default", default_bb, default_args.len(), blk_id, &func, &errors)
             int ci = 0
             while ci < cases.len():
                 SwitchCase sc = cases.get(ci).unwrap()
                 if sc.target < 0 or sc.target >= num_blocks:
-                    errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": TSwitch case-" + int_to_str(ci) + " target bb" + int_to_str(sc.target) + " out of range (0.." + int_to_str(num_blocks) + ")")
+                    errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TSwitch case-" + int_to_str(ci) + " target bb" + int_to_str(sc.target) + " out of range (0.." + int_to_str(num_blocks) + ")")
+                else:
+                    check_args_match_params("TSwitch.case-" + int_to_str(ci), sc.target, sc.args.len(), blk_id, &func, &errors)
                 ci += 1
         else:
             pass
+
+# Each terminator that targets a block passes `args` values that must
+# match the destination block's `params` list 1:1. This is the bug
+# class that bit the §6.4 pending_phis retirement when args order
+# fell out of sync with params order — the validator now catches it
+# at the post-pass hook.
+void check_args_match_params(String shape, int target_bb, int args_len, int src_bb, LirFunction &func, Vector[String] &errors):
+    if target_bb < 0 or target_bb >= func.blocks.len():
+        return  # already flagged by out-of-range check
+    LirBlock target = func.blocks.get(target_bb).unwrap()
+    int params_len = target.params.len()
+    if args_len != params_len:
+        errors.push("@" + func.name + " bb" + int_to_str(src_bb) + ": " + shape + " → bb" + int_to_str(target_bb) + " args.len()=" + int_to_str(args_len) + " ≠ params.len()=" + int_to_str(params_len))
 
 # Render a pass-tagged violation block to stdout. Header matches the
 # pattern `phase_c_closed_classes_remain_at_zero_self_host`'s FATAL
