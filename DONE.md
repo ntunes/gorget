@@ -1,5 +1,21 @@
 # DONE
 
+- [2026-05-12] **Tier 2a `consume_externs` burn-down — three probe iterations, root cause refined; ship deferred pending Callable type-resolution work.** Followed up the 2026-05-11 Tier 2a strengthening (commit `31250be5`) which shipped the typed registry as infrastructure with `is_consume_extern` gated `#[allow(dead_code)]`. Goal: close the 27-violation latent class so the validator promotion lands.
+
+  **Iteration 1 (writer-side, Move params).** Hypothesis: `lower_function:632` only tags string `!` (Move) params as `Owned`; extend to all `is_resource_type(base_type)` Move params. Closed 2 of 27. The dominant class is `Ownership::Borrow` (default), not Move — hypothesis incomplete.
+
+  **Iteration 2 (var-decl FnPtr auto-clone).** Hypothesis: the var-decl `Callable h = hook` doesn't propagate borrow→owned for the destination; add a var-decl branch in `lower_var_decl` that auto-clones FnPtr / Named-with-`c_runtime_alias = GorgetClosure` sources via `gorget_closure_clone_to_owned`, tag dst `FreshOwned`. Worked on minimal repro (`Callable[int(int)] hook`) but httpserver tests still failed — 39 fails (worse than 27, because the validator promotion was also live and the var-decl change introduced cascade regressions in some Callable-loop / spawn paths).
+
+  **Iteration 3 (debug print).** Added an `eprintln!` inside the var-decl branch to see what inferred type the httpserver tests had. Discovered: **Router::use's `hook` param has `inferred_type = Unit`** (not FnPtr, not Named-with-alias). The simpler repro worked because `Callable[int(int)]` resolves to `FnPtr` via primitive-arg path; the httpserver shape `Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]` (user-typed signature) falls into a missing type-resolution path that returns `Unit`.
+
+  **Actual structural blocker.** Callable param-type resolution gap. `map_ast_type` for `ast::Type::Callable { args, ret }` with user-typed args doesn't register the type — returns `Unit`. The simple primitive-arg case works because of a different code path. Until this is fixed, neither the var-decl branch nor the validator promotion can close the class.
+
+  **Outcome.** All probe changes reverted. The `is_consume_extern` helper stays `#[allow(dead_code)]` for now. TODO refined with the three-iteration narrative and the actual fix path (audit `map_ast_type` for user-typed Callable signatures, then re-apply var-decl branch + validator promotion). The infrastructure (consume_externs registry on Module, populated at finalization) stays shipped — ready for the eventual promotion.
+
+  **Layering discipline value.** Even with the burn-down deferred, the three probes produced useful structural knowledge: (a) the issue is at the param-type-resolution layer, not the var-decl layer; (b) the dominant class is Borrow not Move; (c) the validator strengthening surfaces the right class but waits on upstream type-resolution work. This is the structural-guards.md framework working correctly — register, probe, refine, defer with sharp TODO.
+
+  Files modified during probe (all reverted): `src/ir/lowering/functions.rs`, `src/ir/lowering/stmts/mod.rs`, `src/ir/validate.rs` (validator promotion). Stays live: `TODO.md` (refined entry).
+
 - [2026-05-11] **Tier 2a typed `consume_externs` registry shipped as infrastructure; TupleLiteral hint propagation + parallel typecheck fixes; validator promotion deferred pending Callable-param ownership burn-down.** Follow-up to the dict-literal investigation answering the architectural question "is this an isolated gap or a class?".
 
   **What's structural.** The runtime double-free fix at `lower_dict_literal` (commit `077f756e`) was a writer-side correctness fix. The validator that SHOULD have caught the class — Tier 2a's `validate_consume_sites` — was looking at the wrong name: `is_runtime_collection_mutator` is a name allowlist of post-mono runtime symbols (`gorget_map_put`), but the IR-stage call uses the mangled name (`Dict__K__V__put`). The validator was structurally blind to mangled-name collection-mutator consume sites. Per CLAUDE.md "No name matching" this is the wrong layer.

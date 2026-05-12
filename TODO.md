@@ -2,15 +2,28 @@
 
 ## High
 
-- **Tier 2a strengthening — promote `is_consume_extern` after Callable-param ownership burn-down.** Infrastructure shipped 2026-05-11 (commit `<dict-fix>`): `Module::consume_externs` typed registry populated at module finalization from (i) writer-site direct registrations (e.g. `lower_dict_literal` registers the mangled `Dict__K__V__put`), and (ii) derivation from `fn_param_ownerships` (any fn with at least one `Ownership::Move` param). The validator's `is_consume_extern(module, name)` helper exists in `src/ir/validate.rs` but is intentionally UNUSED — promoting it requires burn-down of latent violations the strengthening surfaces.
+- **Tier 2a strengthening — promote `is_consume_extern` after Callable param-type resolution gap closes.** Infrastructure shipped 2026-05-11 (commit `31250be5`): `Module::consume_externs` typed registry populated at module finalization. The validator's `is_consume_extern(module, name)` helper exists in `src/ir/validate.rs` (marked `#[allow(dead_code)]`) but is UNUSED.
 
-  **Probe sweep 2026-05-11 (test_threads=4, full integration):** 27 violations across 25 fixtures, dominated by `Vector__Callable__GorgetClosure__push` at Router::use / Router::before / various eval_* sites (gorget-js). Pattern: `_3 : ty1382 — untracked source consumed` — Callable Move-ownership parameter at fn entry is `LocalOwnership::Untracked`, then the push consumes it without a tracked ownership state.
+  **Probe sweeps 2026-05-11/12 — three iterations, each revealed a deeper layer:**
 
-  **Root cause.** `src/ir/lowering/functions.rs:632` tags string `!` (Move) params as `Owned`, but the analogous tagging is missing for OTHER resource Move params (Callable, Vector, Dict, etc.). Fix: extend the line-632 block to `if ctx.type_registry.is_resource_type(base_type) && Move` → `ctx.set_owned(...)`, mirroring the existing string-only carve-out. Risk: may surface secondary cascades; needs sweep with the writer-side change. Estimated 1-2 sessions including burn-down.
+  1. **Initial probe (2026-05-11):** 27 violations, all `Vector__Callable__GorgetClosure__push` at Router::use etc. Hypothesis: `lower_function` only tags string `!` params as Owned; extending to all resource types closes the class.
 
-  **Why the existing strengthening matters.** `is_runtime_collection_mutator` is a name allowlist of post-mono runtime symbols (`gorget_array_push`, `gorget_map_put`, etc.). The IR validator sees the IR-stage mangled name (`Vector__T__push`, `Dict__K__V__put`) — different lexical strings. Tier 2a's classifier therefore misses mangled-name consume-mutator calls today. The dict-literal-resource-value double-free fix (commit `077f756e`) was a writer-side correctness fix; the validator extension would lock the rule so a future regression at the writer side halts the build. Per CLAUDE.md "No name matching".
+  2. **First fix (2026-05-12):** extended `lower_function`'s `set_owned` from string-only to all `is_resource_type(base_type)` Move params. Closed only 2 of 27 (27 → 25). Hypothesis incomplete — the dominant class isn't Move param tagging.
 
-  Files for the burn-down: `src/ir/lowering/functions.rs:632` (resource Move param tagging), then `src/ir/validate.rs` (swap `is_runtime_collection_mutator` → `is_consume_extern` at the two call-sites in `validate_consume_sites`), then retire the dead-code allowance on `is_consume_extern`. [added: 2026-05-11]
+  3. **Second fix (2026-05-12):** added a var-decl auto-clone branch in `lower_var_decl` (`src/ir/lowering/stmts/mod.rs` around line 425) for `GirType::FnPtr` and Named-with-`c_runtime_alias = GorgetClosure` sources. Worked on a minimal repro (`Callable[int(int)] hook`) but the httpserver tests still failed. Debug print revealed: **the Router::use hook param has `inferred_type = Unit`** (NOT `FnPtr` or `Named`-with-alias). The param type info is missing entirely at the var-decl site for Callable params with user-typed signatures like `Callable[HttpServerResponse(HttpRequest, HttpServerResponse)]`.
+
+  **Actual structural blocker.** Callable param-type resolution gap: when the Callable's signature references user-defined types (HttpServerResponse, HttpRequest, etc.), `ctx.type_mapper.map_ast_type(&p.node.type_.node)` returns `Unit` instead of registering a proper `Callable__T_args` Named type (or even an FnPtr). The simple `Callable[int(int)]` case works because primitive-arg Callables resolve to `FnPtr` directly. This is a missing type-resolution path, not a var-decl bug.
+
+  **Fix path** (multi-session, sequenced):
+  1. Audit `map_ast_type` and related type-resolution paths for `ast::Type::Callable { args, return_type }` with user-typed args. Should register a `Callable__<mangled_args>__<mangled_ret>` Named TypeDef with `c_runtime_alias = "GorgetClosure"`, mirroring how Vector__T monomorphizes.
+  2. Verify with a debug probe that param's `gir_type` is no longer `Unit` for the httpserver shape.
+  3. Re-apply the var-decl FnPtr/Named-with-alias auto-clone branch.
+  4. Re-apply validator promotion (`is_runtime_collection_mutator` → `is_consume_extern` at two callsites).
+  5. Retire `#[allow(dead_code)]` on `is_consume_extern`.
+
+  Probably 2-3 sessions including the type-resolution audit. The infrastructure (consume_externs registry) is shipped and ready; promotion is gated on the Callable type-resolution work.
+
+  Files: type resolution path for user-typed Callable sigs (likely `src/ir/lowering/types.rs`); `src/ir/lowering/stmts/mod.rs` (var-decl FnPtr branch); `src/ir/validate.rs` (promote callers + retire allowance). [added: 2026-05-11, root cause refined 2026-05-12]
 
 - **Phase C self-host validator burn-down — moves class open, 100,170 baseline.** Three validators shipped (`tests/fixtures/self_host_lowerer/validate.gg`); two classes closed:
   - ✅ `validate_resource_field_reads`: 4,365 → 0 (commit `8cfc94ff`, step 5a). Regression test `phase_c_field_reads_at_zero_self_host`.
