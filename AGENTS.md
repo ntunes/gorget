@@ -75,12 +75,18 @@ Backends should be at parity; a regression on one but not the other usually mean
 
 ## Ownership at Consuming Positions (push/put/set/insert/send)
 
-CoW's default everywhere is **borrow** — assignments, regular function
-call args, collection reads all propagate Ptr aliases at zero cost.
-Clones happen only at ownership boundaries, where the destination must
-own (collection puts, returns, struct/enum field init, closure
-captures). Even there, the compiler prefers move when liveness allows
-it.
+CoW's default everywhere is **borrow** — bare-identifier assignments
+(`Spanned b = a`), regular function call args, match scrutinees,
+collection reads all propagate Ptr aliases at zero cost. Clones happen
+only at ownership boundaries, where the destination must own
+(collection puts, returns, struct/enum field init, closure captures).
+Even there, the compiler prefers move when liveness allows it.
+
+The carve-outs to CoW-default-borrow on bare-assign are: closures /
+`Callable[T]`, `Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard`.
+These are single-owner-by-design — the safety pass still emits
+`MoveWithoutOperator` (E_MoveWithoutOperator) at bare-assign sites for
+these, forcing the user to write `!source` or `source.clone()`.
 
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,
 `v[i] = x`) the collection must own. The compiler picks per-arg from

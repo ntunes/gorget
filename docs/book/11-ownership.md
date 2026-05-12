@@ -15,25 +15,25 @@ dangling pointer bugs — at compile time, not runtime.
 
 ---
 
-## Copy vs Move Types
+## Copy vs Resource Types
 
 Not every type follows move semantics. Small, simple types are **copied** implicitly:
 
-**Copy types** (no `!` needed):
+**Copy types** (always cheap to duplicate):
 - All integers: `int`, `int8`, `int16`, `int32`, `uint`, `uint8`, etc.
 - All floats: `float`, `float32`
 - `bool`
 - Tuples of copy types
 
-**Resource types** (require `!` to transfer ownership):
+**Resource types** (own heap data, follow copy-on-write — see below):
 - `String`
 - All structs and enums with resource fields
-- Collections: `Vector`, `Dict`, `Set`
+- Collections: `Vector`, `Dict`, `Set`, `HashMap`, `HashSet`, `Deque`
 
-Resource types are **never** implicitly copied. When passed to a function
-without `!`, the compiler creates an immutable borrow (a pointer) — no
-data is copied. The only ways to get an owned resource are: construction,
-`.clone()`, or `!move`.
+For resource types, bare-identifier assignment creates a **borrow** (a
+pointer to the same heap data) — no data is copied. The variables share
+storage until one of them mutates, at which point the compiler clones
+behind the scenes so each variable owns an independent copy.
 
 ```gorget
 # Copy types — freely duplicated
@@ -41,12 +41,35 @@ int a = 42
 int b = a          # a is still valid
 print(f"{a} {b}")   # 42 42
 
-# Move types — ownership transfers
+# Resource types — bare-assign borrows (zero cost)
 String s1 = "hello"
-String s2 = !s1    # s1 is now invalid
-print(f"{s2}")      # hello
-# print(f"{s1}")    # COMPILE ERROR: use after move
+String s2 = s1     # s2 borrows from s1
+print(s1)          # "hello"  — both names still valid
+print(s2)          # "hello"
+s2 = s2 + "!"      # mutation triggers clone — s1 unaffected
+print(s1)          # "hello"
+print(s2)          # "hello!"
+
+# `!` is the explicit move opt-in
+String s3 = "world"
+String s4 = !s3    # explicit move — s3 now invalid
+# print(s3)        # COMPILE ERROR: use after move
 ```
+
+### When `!` is still required
+
+A few resource types still require the explicit `!` operator to
+transfer ownership:
+
+- `Box[T]`, `Task`, `TaskGroup`, `Guard` — single-owner heap
+  allocations whose value-semantics ARE move-semantics
+- `Callable[...]` and closure values — closures hold captured-env
+  references that aren't safe to alias
+- `Owned[T]` — when you've explicitly asked the type system to track
+  ownership transfers
+
+For these, `Box[int] b = a` is a compile error; write `Box[int] b = !a`
+(or `.clone()` for an independent copy).
 
 ---
 
@@ -224,35 +247,62 @@ If any branch moves a variable, the compiler treats it as moved after the branch
 
 ## Copy-on-Write
 
-For resource types (String, Vector, Dict, etc.), Gorget uses copy-on-write semantics.
-Assignments create **borrows** (pointers to the original data), not copies. A clone
-only happens when someone mutates:
+For resource types (`String`, `Vector`, `Dict`, user structs/enums with
+resource fields, etc.), Gorget uses copy-on-write semantics across all
+the consume positions you'd reach for in everyday code: bare-identifier
+assignment, function parameters, match scrutinees, closure captures,
+and collection reads. Each of those produces a **borrow** (a pointer
+to the original data) — no clone happens. The compiler inserts a clone
+only at the first mutation through one of the aliases, giving the
+mutator its own independent copy.
 
 ```gorget
 Vector[int] a = [1, 2, 3]
-auto b = a                 # b borrows from a — zero cost
+Vector[int] b = a          # b borrows from a — zero cost
 print(b.len())             # read through borrow — zero cost
-b.push(4)                  # mutation → compiler clones a into b first
+b.push(4)                  # mutation → compiler clones for b
                            # a is still [1, 2, 3], b is [1, 2, 3, 4]
+```
+
+The same applies to user structs and enums:
+
+```gorget
+struct Spanned:
+    String text
+    int start
+
+Spanned a = Spanned("hello", 0)
+Spanned b = a              # b borrows from a — zero cost
+print(b.text)              # "hello" — read through borrow
+a.text = "world"           # mutation → clone for a, b keeps "hello"
+print(a.text)              # "world"
+print(b.text)              # "hello"
 ```
 
 ### `auto` vs Explicit Type
 
-`auto` preserves the borrow — zero cost, but the variable is a reference:
+`auto` and an explicit type behave the same for bare-assign — both
+produce a borrow that CoW-severs on mutation:
 
 ```gorget
-auto x = obj.name          # x is a reference to obj's name field
-print(x)                   # read — zero cost
+auto x = obj.name              # x borrows from obj.name
+String y = obj.name            # y also borrows from obj.name
 ```
 
-To get an owned copy, use `.clone()`:
+The difference is in inference: `auto` lets the compiler pick the
+type, an explicit type is a check that the RHS matches.
+
+To get an independent owned copy up front (before any mutation), use
+`.clone()`:
 
 ```gorget
-String x = obj.name.clone()  # x is an independent owned copy
+String x = obj.name.clone()    # x is an independent owned copy
 ```
 
-The compiler handles all of this automatically. You don't need to think about
-when clones happen — the rule is simple: borrows are free, ownership costs a clone.
+The compiler handles all of this automatically. You don't need to think
+about when clones happen — the rule is simple: borrows are free,
+ownership costs a clone, and clones only happen when they're actually
+needed.
 
 ---
 
@@ -261,8 +311,11 @@ when clones happen — the rule is simple: borrows are free, ownership costs a c
 | Concept | Syntax | Meaning |
 |---------|--------|---------|
 | Copy type | `int b = a` | Implicit copy, both valid |
-| Move | `!expr` | Transfer ownership |
+| Resource bare-assign | `String b = a` | Borrow, CoW-severs on mutation |
+| Explicit move | `Type b = !a` | Transfer ownership; `a` invalid after |
+| Explicit clone | `Type b = a.clone()` | Independent owned copy |
 | Move parameter | `void f(Type !name)` | Function takes ownership |
+| Box / closure assign | `Box[int] b = !a` | Still requires explicit `!` |
 | Use after move | — | Compile error |
 | Drop | `equip T with Drop: void drop(!self)` | Cleanup on scope exit |
 | `with` statement | `with expr as name:` | Scoped resource management |

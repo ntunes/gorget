@@ -46,7 +46,7 @@ $ gg run mail.gg
 
 We think safe languages shouldn't have to be verbose. Here's what that means in practice:
 
-- **Ownership without lifetime annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are marked at call sites (`&` for mutable borrow, `!` for move), so ownership transfers are visible where they happen. When you put a non-Copy value into a collection / struct field / enum variant, the compiler picks the cheapest correct strategy automatically:
+- **Ownership without lifetime annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are marked at call sites (`&` for mutable borrow, `!` for move), so ownership transfers are visible where they happen. Inside a function, bare-identifier assignment (`Spanned b = a`) borrows by default and clones only when something mutates. When you put a non-Copy value into a collection / struct field / enum variant, the compiler picks the cheapest correct strategy automatically:
 
   | Source state                          | Action                  |
   |---------------------------------------|-------------------------|

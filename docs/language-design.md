@@ -511,7 +511,7 @@ Never both simultaneously. Enforced at compile time. This prevents data races an
 
 **Gorget requires zero lifetime annotations.** The compiler's borrow checker internally tracks the *origin* of every borrowed value — which parameter, local, or field a reference derives from — to catch use-after-move and dangling-return errors at compile time. This analysis is fully automatic; programmers never annotate lifetimes.
 
-This is possible because Gorget's ownership model draws a hard line: **Move types (non-Copy types like `String`, `Vector[T]`, structs with Move fields) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
+This is possible because Gorget's ownership model draws a hard line at function boundaries: **resource types (`String`, `Vector[T]`, structs with resource fields, etc.) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame, and a function's return value is always an independent owned value. Within a function body, bare-identifier assignment of resource-typed locals (`Spanned b = a`) follows copy-on-write — see §3.4 below — but the cross-function-boundary contract is unchanged. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
 
 ```gorget
 # The compiler tracks that x and y are borrowed parameters.

@@ -2198,12 +2198,20 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
-3. Ownership can be **transferred** (moved) using `!`.
-4. After a move, the source variable is invalid. Any use is a compile-time error (**use-after-move**).
-5. A variable cannot be moved more than once (**double-move** error).
-6. A variable cannot be moved inside a loop body (**move-in-loop** error).
-7. **Copy types** (primitives, small value types) are implicitly copied on assignment; no `!` is needed.
-8. Reassigning a moved variable revives it — the new value makes it live again.
+3. **Copy types** (primitives, small value types) are implicitly copied on assignment.
+4. **Resource types** (`String`, collections, structs/enums with resource fields)
+   follow copy-on-write semantics for bare-identifier assignment, function
+   parameters, match scrutinees, and closure captures — see §9.6.
+5. Ownership can be explicitly **transferred** (moved) using `!` at the use site.
+6. After a move, the source variable is invalid. Any use is a compile-time error (**use-after-move**).
+7. A variable cannot be moved more than once (**double-move** error).
+8. A variable cannot be moved inside a loop body (**move-in-loop** error).
+9. Reassigning a moved variable revives it — the new value makes it live again.
+10. A small set of resource types still requires the explicit `!` operator on
+    bare-identifier assignment because they're single-owner-by-design:
+    `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Owned[T]`, and closure/`Callable`
+    values. For these, `T b = a` is a **`MoveWithoutOperator`** error; write
+    `T b = !a` or `T b = a.clone()`.
 
 ### 9.2 Borrowing Rules
 
@@ -2254,7 +2262,16 @@ print(s)  # ERROR: use after move
 
 ### 9.6 Copy-on-Write Semantics
 
-Resource types use **copy-on-write** (CoW): assignments, parameters, and field reads produce pointers (borrows) to the source data. The first mutation triggers a clone, giving the mutator its own copy. If no mutation occurs, no clone happens.
+Resource types use **copy-on-write** (CoW): bare-identifier assignment
+(`Spanned b = a`), function parameter passing, match scrutinees, closure
+captures, and collection element reads all produce pointers (borrows) to
+the source data — no clone happens. The first mutation through one of
+the aliases triggers a clone, giving the mutator its own copy.
+
+The compiler also optimises last-use: if the source isn't live past the
+assign, the IR-lowering picks Move instead of Borrow (still no clone,
+and the source becomes invalid as if `!`-moved). See
+`docs/internals/copy-on-write.md` for the full Phase D4 decision tree.
 
 **Materialization points** — the compiler materializes (clones) a borrowed value when it crosses an ownership boundary:
 
@@ -4496,7 +4513,7 @@ Core functions:
 | `ReturnOutsideFunction`      | `return` outside of function                         |
 | `ThrowInNonThrowingFunction` | `throw` in function without `throws`                 |
 | `UseAfterMove`               | Variable used after ownership was moved              |
-| `MoveWithoutOperator`        | Non-Copy type passed without `!`                   |
+| `MoveWithoutOperator`        | Single-owner type (`Box[T]`, `Task`, closures, …) bare-assigned without `!` |
 | `BorrowConflict`             | Borrow exclusivity violated (aliasing in call)       |
 | `MoveInLoop`                 | Moving a variable inside a loop body                 |
 | `DoubleMove`                 | Same variable moved more than once                   |
