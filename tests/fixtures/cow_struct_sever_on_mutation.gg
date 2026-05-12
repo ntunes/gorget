@@ -1,0 +1,18 @@
+# CoW-by-default: bare-assign + sever on mutation.
+#
+# After `Spanned b = a` (Phase D4 Branch C), `a` and `b` share the
+# heap-allocated field data via a Ptr alias. The first mutation
+# through either name triggers `cow_before_mutation`, which clones
+# the heap data into a fresh allocation owned by the OTHER alias so
+# the mutator gets an independent copy. Reading the un-mutated alias
+# afterwards sees the pre-mutation value.
+struct Spanned:
+    String text
+    int start
+
+void main():
+    Spanned a = Spanned("hello", 0)
+    Spanned b = a
+    a.text = "world"        # CoW-sever: b is materialised before a mutates
+    print(a.text)            # "world"
+    print(b.text)            # "hello"

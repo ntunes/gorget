@@ -1,0 +1,22 @@
+# CoW-by-default: bare-assign of a non-Copy user enum with resource payload.
+#
+# Same machinery as the struct case (Phase D4 Branch C/F), exercised
+# through a payload-bearing enum.
+enum Token:
+    Ident(String)
+    Number(int)
+
+String name_of(Token t):
+    return match t:
+        case Token.Ident(s): s
+        case Token.Number(_): "num"
+
+void main():
+    Token a = Token.Ident("hello")
+    Token b = a
+    print(name_of(b))
+
+    Token c = Token.Number(42)
+    Token d = c
+    print(name_of(c))
+    print(name_of(d))

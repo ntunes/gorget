@@ -3126,6 +3126,49 @@ blue",
 }
 
 #[test]
+fn cow_struct_bare_assign() {
+    // CoW-by-default for bare-identifier on VarDecl RHS: non-Copy
+    // user struct now flows through the IR-lowering's Phase D4
+    // decision tree (Branch C for live source / Branch F for dead),
+    // closing the params/scrutinees vs assign asymmetry.
+    run_gg(
+        "cow_struct_bare_assign.gg",
+        "\
+hello
+world
+world
+moved",
+    );
+}
+
+#[test]
+fn cow_struct_sever_on_mutation() {
+    // After `b = a` (Branch C Ptr alias), mutating `a` triggers
+    // `cow_before_mutation` which materialises `b` from the shared
+    // heap data before the mutation lands. Reading the un-mutated
+    // alias sees the pre-mutation value.
+    run_gg(
+        "cow_struct_sever_on_mutation.gg",
+        "\
+world
+hello",
+    );
+}
+
+#[test]
+fn cow_enum_bare_assign() {
+    // Bare-assign of a non-Copy user enum with resource payload —
+    // same Phase D4 Branch C / Branch F coverage as the struct case.
+    run_gg(
+        "cow_enum_bare_assign.gg",
+        "\
+hello
+num
+num",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

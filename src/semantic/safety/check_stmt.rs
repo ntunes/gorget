@@ -1196,18 +1196,45 @@ impl<'a> BorrowChecker<'a> {
                             return;
                         }
                         // Collection types (Vector, Dict, Set) are auto-cloned on assignment —
-                        // no `!` needed. Other non-Copy types (user structs) still require `!`.
-                        let is_collection = matches!(self.types.get(type_id), ResolvedType::Generic(def_id, _) if {
-                            let name = self.scopes.get_def(*def_id).name.as_str();
-                            matches!(name, "Vector" | "Dict" | "Set" | "HashMap" | "HashSet" | "Deque")
-                        });
-                        if !is_collection && !is_copy_type(type_id, self.types, self.scopes) {
-                            self.error(
-                                SemanticErrorKind::MoveWithoutOperator {
-                                    name: def.name.clone(),
-                                },
-                                value.span,
-                            );
+                        // no `!` needed.
+                        //
+                        // **CoW-by-default for bare-assign RHS (2026-05-12).** User struct /
+                        // enum non-Copy types are also routed through CoW: the IR-lowering's
+                        // Phase D4 decision tree (`lower_var_decl_assign_mode` Branch C/D) lifts
+                        // resource-typed user types into a Ptr alias (`set_ref`) when CoW-safe,
+                        // and falls back to clone-and-Move when CoW-unsafe (assignment to the
+                        // destination later). Bare-assign now mirrors the other consume
+                        // positions (function params, match scrutinees, closure captures): all
+                        // borrow by default with CoW-sever on mutation. Explicit `!` is kept
+                        // as the use-site move opt-in; explicit `.clone()` stays for explicit
+                        // independent-copy intent.
+                        if !is_copy_type(type_id, self.types, self.scopes) {
+                            // Specific shapes that still require explicit `!` — these are not
+                            // CoW-eligible (closures hold env captures whose semantics are
+                            // load-bearing on the move, Box[T] semantics are by-value-of-heap,
+                            // and the safety pass models Owned[T] explicitly).
+                            let resolved = self.types.get(type_id).clone();
+                            let needs_explicit_move = match resolved {
+                                ResolvedType::Function { .. }
+                                | ResolvedType::CallableTrait(_)
+                                | ResolvedType::MutCallableTrait(_)
+                                | ResolvedType::ConsumeCallableTrait(_)
+                                | ResolvedType::BoxedCallable { .. }
+                                | ResolvedType::Owned(_) => true,
+                                ResolvedType::Generic(def_id, _) => {
+                                    matches!(self.scopes.get_def(def_id).name.as_str(),
+                                        "Box" | "Task" | "TaskGroup" | "Guard")
+                                }
+                                _ => false,
+                            };
+                            if needs_explicit_move {
+                                self.error(
+                                    SemanticErrorKind::MoveWithoutOperator {
+                                        name: def.name.clone(),
+                                    },
+                                    value.span,
+                                );
+                            }
                         }
                     }
                 }

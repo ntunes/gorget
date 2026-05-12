@@ -1,0 +1,43 @@
+# CoW-by-default: bare-assign of a non-Copy user struct.
+#
+# Pre-fix (2026-05-12): `Spanned b = a` errored with "non-Copy type
+# requires `!` or `move` to transfer". Bare-assign was the only consume
+# position that didn't permit borrowing — function params, match
+# scrutinees, closure captures all borrowed-by-default with CoW. Forcing
+# explicit `!` / `.clone()` here was an asymmetry, not a design choice.
+#
+# Post-fix: `b = a` flows through the IR-lowering's Phase D4 decision
+# tree (`lower_var_decl_assign_mode`). Resource-typed struct sources
+# route to:
+#   - Branch C (Ptr alias + set_ref + cow_register_alias) when `a` is
+#     used past the var-decl;
+#   - Branch F (Move) when `a` is dead at the var-decl site (last-use
+#     optimisation — no clone needed).
+#
+# This fixture covers BOTH paths plus the explicit-move-with-`!` opt-in
+# at a consume-mode call site.
+struct Spanned:
+    String text
+    int start
+
+String text_of(Spanned s):
+    return s.text
+
+String consume_text_of(Spanned !s):
+    return s.text
+
+void main():
+    # Branch F: `a` not used after this stmt → Move
+    Spanned a = Spanned("hello", 0)
+    Spanned b = a
+    print(text_of(b))
+
+    # Branch C: `c` reused after the assign → Ptr alias
+    Spanned c = Spanned("world", 1)
+    Spanned d = c
+    print(text_of(c))
+    print(text_of(d))
+
+    # Explicit `!` move opt-in (use-site, not binding-site)
+    Spanned e = Spanned("moved", 2)
+    print(consume_text_of(!e))

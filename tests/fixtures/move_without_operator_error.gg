@@ -1,6 +1,12 @@
-struct Wrapper:
-    String data
-
+# Bare-identifier assign of a Box[T] still requires explicit `!`.
+#
+# Per the CoW-by-default rule (2026-05-12), bare assign of non-Copy
+# user structs / enums / collections / strings now flows through the
+# IR-lowering's Phase D4 CoW machinery — `b = a` borrows `a` and CoW-
+# severs on mutation. Box[T] is the exception: it's a single-owner
+# heap allocation whose value semantics ARE move semantics, so the
+# safety pass still rejects bare assignment.
 void main():
-    Wrapper s = Wrapper("hello" + "")
-    Wrapper t = s
+    Box[int] a = Box(42)
+    Box[int] b = a
+    print(b)
