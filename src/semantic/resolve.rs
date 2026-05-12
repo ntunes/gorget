@@ -42,6 +42,16 @@ pub struct FunctionInfo {
     /// Default value expressions for each parameter (None if no default).
     pub param_defaults: Vec<Option<Spanned<Expr>>>,
     pub throws: bool,
+    /// For `throws E` functions, the TypeId of `E`. The function's "raw"
+    /// return type is `T` (stored in `return_type_id`), but the
+    /// `Result[T, E]` wrapping happens at the call-site boundary — so the
+    /// inferred type of a Call to this function is `Result[T, E]`, not `T`.
+    /// `None` for non-throws functions. Populated by the typechecker's
+    /// `register_function_signature` after resolving the throws-type AST.
+    /// Snag #35: without this, the typechecker can't model the
+    /// Result[T, E] return-at-call-site and silently coerces the Result
+    /// handle into a bare-T destination.
+    pub throws_type_id: Option<TypeId>,
     pub is_async: bool,
     pub is_blocking: bool,
     /// `noreturn` extern functions — call never returns; type system treats
@@ -320,6 +330,9 @@ fn collect_item(
 
                     validate_default_param_ordering(&f.params, errors);
 
+                    let throws_type_id = f.throws.as_ref().and_then(|t| {
+                        types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
+                    });
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
                     let trait_bounds = extract_generic_bounds(&f.generic_params);
                     ctx.function_info.insert(
@@ -332,6 +345,7 @@ fn collect_item(
                             param_names,
                             param_defaults,
                             throws: f.throws.is_some(),
+                            throws_type_id,
                             is_async: f.qualifiers.is_async,
                             is_blocking: f.qualifiers.is_blocking,
                             is_noreturn: f.qualifiers.is_noreturn,
@@ -510,6 +524,9 @@ fn collect_item(
                             })
                             .collect();
                         validate_default_param_ordering(&f.params, errors);
+                        let throws_type_id = f.throws.as_ref().and_then(|t| {
+                            types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
+                        });
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
                         let trait_bounds = extract_generic_bounds(&f.generic_params);
                         ctx.function_info.insert(
@@ -522,6 +539,7 @@ fn collect_item(
                                 param_names,
                                 param_defaults,
                                 throws: f.throws.is_some(),
+                                throws_type_id,
                                 is_async: f.qualifiers.is_async,
                                 is_blocking: f.qualifiers.is_blocking,
                             is_noreturn: f.qualifiers.is_noreturn,
@@ -573,6 +591,9 @@ fn collect_item(
                             ).ok())
                             .collect();
                         let param_count = func.node.params.len();
+                        let throws_type_id = func.node.throws.as_ref().and_then(|t| {
+                            types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
+                        });
                         let generic_param_names = extract_generic_param_names(&func.node.generic_params);
                         ctx.function_info.insert(def_id, FunctionInfo {
                             def_id,
@@ -582,6 +603,7 @@ fn collect_item(
                             param_names,
                             param_defaults: vec![None; param_count],
                             throws: func.node.throws.is_some(),
+                            throws_type_id,
                             is_async: func.node.qualifiers.is_async,
                             is_blocking: func.node.qualifiers.is_blocking,
                             is_noreturn: func.node.qualifiers.is_noreturn,

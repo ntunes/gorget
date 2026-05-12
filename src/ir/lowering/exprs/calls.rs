@@ -1156,6 +1156,16 @@ pub(super) fn lower_call(
                     ctx.func_state.expected_type = Some(pt);
                 }
                 let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i);
+                // Snag #35: a throws-call result at this arg site is a
+                // Result[T, E] operand. The typecheck pass already
+                // certified that this is either a capture (param type is
+                // Result[T, E], the destination grabs the whole Result —
+                // no unwrap) or an auto-propagation (param type is T and
+                // the enclosing function can propagate — unwrap here).
+                // maybe_auto_propagate's `expected_type` check returns the
+                // operand unchanged for the capture case and emits the
+                // Result-unwrap-or-return chain for the propagation case.
+                let op = super::maybe_auto_propagate(ctx, builder, op);
                 ctx.func_state.expected_type = prev_expected;
                 op
             })

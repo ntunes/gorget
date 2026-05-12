@@ -1,0 +1,16 @@
+# Snag #35 (arg-position bonus): passing a `throws E` call result to a
+# function expecting a plain `T` parameter, from a non-throws context,
+# is a compile error. The destination is the param type (`int` here),
+# not `Result[int, String]`, so the same Result-handle silent
+# corruption applied before the fix.
+
+int might(int x) throws String:
+    return x * 2
+
+int double_it(int x):
+    return x * 2
+
+int main():
+    int n = double_it(might(5))   # ERROR: type mismatch at the might(5) arg
+    print(f"{n}")
+    return 0

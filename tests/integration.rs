@@ -2997,6 +2997,34 @@ fn dict_nested_pattern_noncopy_enum() {
 }
 
 #[test]
+fn throws_call_into_bare_t_error() {
+    check_gg_fails(
+        "throws_call_into_bare_t_error.gg",
+        "expected `int`, found `Result[int, String]`",
+    );
+}
+
+#[test]
+fn throws_call_arg_into_bare_t_error() {
+    check_gg_fails(
+        "throws_call_arg_into_bare_t_error.gg",
+        "expected `int`, found `Result[int, String]`",
+    );
+}
+
+#[test]
+fn throws_call_capture_and_propagate() {
+    run_gg(
+        "throws_call_capture_and_propagate.gg",
+        "\
+capture: 10
+vardecl-prop: 11
+argprop: 20
+arg-capture: 10",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

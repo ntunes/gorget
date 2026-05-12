@@ -1,0 +1,15 @@
+# Snag #35 regression: calling a `throws E` function from a non-throws
+# context and binding the result to a plain `T` (instead of
+# `Result[T, E]`) is a compile error.
+#
+# Before Snag #35 was fixed, this typechecked silently and the IR
+# lowering coerced a Result handle into the int slot → C-level
+# pointer/int garbage at runtime.
+
+int might(int x) throws String:
+    return x * 2
+
+int main():
+    int n = might(5)   # ERROR: type mismatch: expected `int`, found `Result[int, String]`
+    print(f"n={n}")
+    return 0

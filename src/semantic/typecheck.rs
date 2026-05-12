@@ -1303,7 +1303,22 @@ impl<'a> TypeChecker<'a> {
                                 self.decl_type_hint = Some(param_type);
                                 let arg_type = self.infer_expr(&arg.node.value);
                                 self.decl_type_hint = prev_hint;
-                                self.unify(param_type, arg_type, arg.span);
+                                // Snag #35: a throws-call result (Result[T, E])
+                                // passed where the param is `T` is fine when
+                                // the enclosing function can propagate, AND a
+                                // throws-call result passed where the param is
+                                // `Result[T, E]` is the capture form. Same
+                                // policy as `Stmt::VarDecl` at line ~2520.
+                                // Without this, the new throws-returns-Result
+                                // typing rule (Call inference above) would
+                                // false-positive at every auto-prop call-arg
+                                // site (`f(throws_call())` from inside a
+                                // throws function).
+                                if !self.is_auto_propagation_compatible(param_type, arg_type)
+                                    && !self.is_result_capture_compatible(param_type, arg_type)
+                                {
+                                    self.unify(param_type, arg_type, arg.span);
+                                }
                                 self.validate_closure_arg_kind(param_type, &arg.node.value);
                             }
                         }
@@ -1363,6 +1378,22 @@ impl<'a> TypeChecker<'a> {
                         // type via `unify` (e.g., as a divergent match arm).
                         if func_info.map_or(false, |fi| fi.is_noreturn) {
                             self.types.never_id
+                        } else if let Some(err_ty) = func_info.and_then(|fi| fi.throws_type_id) {
+                            // Snag #35: throws functions return `Result[T, E]`
+                            // at the call boundary. Modelling this in the type
+                            // system means `int n = throws_fn()` correctly fails
+                            // unification (Result[int, E] vs int) UNLESS the
+                            // VarDecl/arg site explicitly opts into capture
+                            // (declared `Result[T, E]`) or the enclosing
+                            // function can propagate (`throws E` or returns
+                            // `Result[T, E]`). The IR-lowering's
+                            // `maybe_auto_propagate` then performs the unwrap
+                            // at consumption.
+                            if let Some(result_def_id) = self.scopes.lookup("Result") {
+                                self.types.intern_generic(result_def_id, vec![return_type, err_ty])
+                            } else {
+                                return_type
+                            }
                         } else {
                             return_type
                         }
@@ -2469,6 +2500,15 @@ impl<'a> TypeChecker<'a> {
             Expr::Catch { expr: inner, recovery, .. } => {
                 let inner_type = self.infer_expr(inner);
                 self.infer_expr(recovery);
+                // Snag #35: throws calls now type as `Result[T, E]` at the
+                // call site. `catch` resolves the Result, so the
+                // expression's type is the OK type, not the Result.
+                let resolved = self.resolve_type(inner_type);
+                if let ResolvedType::Generic(def_id, ref args) = self.types.get(resolved).clone() {
+                    if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
+                        return args[0];
+                    }
+                }
                 inner_type
             }
         }
@@ -3933,7 +3973,12 @@ impl<'a> TypeChecker<'a> {
                     let arg_type = self.infer_expr(&arg.node.value);
                     self.decl_type_hint = prev_hint;
                     if pos < param_types.len() {
-                        self.unify(param_types[pos], arg_type, arg.span);
+                        // Snag #35: skip unify for auto-prop / capture-compatible throws-call args.
+                        if !self.is_auto_propagation_compatible(param_types[pos], arg_type)
+                            && !self.is_result_capture_compatible(param_types[pos], arg_type)
+                        {
+                            self.unify(param_types[pos], arg_type, arg.span);
+                        }
                         self.validate_closure_arg_kind(param_types[pos], &arg.node.value);
                     }
                 } else {
@@ -3958,7 +4003,12 @@ impl<'a> TypeChecker<'a> {
                     let arg_type = self.infer_expr(&arg.node.value);
                     self.decl_type_hint = prev_hint;
                     if i < param_types.len() {
-                        self.unify(param_types[i], arg_type, arg.span);
+                        // Snag #35: skip unify for auto-prop / capture-compatible throws-call args.
+                        if !self.is_auto_propagation_compatible(param_types[i], arg_type)
+                            && !self.is_result_capture_compatible(param_types[i], arg_type)
+                        {
+                            self.unify(param_types[i], arg_type, arg.span);
+                        }
                         self.validate_closure_arg_kind(param_types[i], &arg.node.value);
                     }
                 } else {
