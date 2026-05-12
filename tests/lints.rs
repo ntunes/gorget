@@ -15,9 +15,14 @@ use std::path::Path;
 /// Every mangled monomorphized-type prefix the compiler emits. Adding a new
 /// builtin protocol with a `base_name: "X"` requires adding `X` here so the
 /// ratchet covers `starts_with("X__")` checks against it.
+///
+/// Includes both surface-language prefixes (`Vector__`, `Dict__`, `Mutex__`,
+/// ...) and the runtime-form prefixes the self-host emits as type aliases
+/// (`GorgetMap__`, `GorgetSet__`, `GorgetDict__`) — the lint catches new
+/// `starts_with("X__")` dispatch sites against either form.
 const MANGLED_PREFIXES: &[&str] = &[
     "Vector", "Deque",
-    "Dict", "HashMap",
+    "Dict", "HashMap", "Map", "OrderedDict",
     "Set", "HashSet",
     "Mutex", "RWLock", "Channel", "Shared", "Weak",
     "Guard", "ReadGuard", "WriteGuard",
@@ -25,6 +30,15 @@ const MANGLED_PREFIXES: &[&str] = &[
     "Tuple",
     "Callable", "MutCallable", "ConsumeCallable",
     "Option", "Result",
+    // Concurrency / synchronisation handles (Phase A's `opaque-handle`
+    // family) — name-prefix dispatch on these is the same layering
+    // violation as on Vector/Dict.
+    "AtomicInt", "AtomicBool",
+    "Thread", "TaskGroup", "WaitGroup", "Barrier", "CondVar",
+    "Semaphore", "OnceFlag",
+    // Self-host runtime-form aliases — generated as `GorgetMap__K__V`
+    // alongside the surface-form `HashMap__K__V` / `Dict__K__V`.
+    "GorgetMap", "GorgetSet", "GorgetDict",
 ];
 
 /// Walk `src/**/*.rs` and count `starts_with("X__")` calls where `X` is a
@@ -175,7 +189,15 @@ fn no_growth_in_name_prefix_routing() {
     /// filter excluding `Box__`-named drop fns from the new
     /// per-mono-wrapper scan (Box has its own slot-ABI emission path
     /// through `emit_box_drop_wrappers`). Registrar-adjacent.
-    const BUDGET: usize = 297;
+    /// Bumped 297 → 309 (2026-05-12): MANGLED_PREFIXES extended to cover
+    /// concurrency/atomic/threading families (`AtomicInt`, `AtomicBool`,
+    /// `Thread`, `Barrier`, `CondVar`, `Semaphore`, `OnceFlag`, etc.)
+    /// + Self-host runtime-form aliases (`GorgetMap`, `GorgetSet`). The
+    /// +12 new src/ matches surface existing registrar-adjacent
+    /// dispatchers in c_lir/c_runtime registration that the previous
+    /// MANGLED_PREFIXES list silently undercounted — bringing them
+    /// into the ratchet so future name-prefix additions are caught.
+    const BUDGET: usize = 309;
 
     let count = count_name_prefix_sites();
     assert!(
@@ -597,9 +619,19 @@ fn container_literal_arms_count() {
 }
 
 /// Baseline 2026-05-10: 52 (after Phase A.1–A.4 + 12/N migrations).
+/// Bumped 52 → 69 (2026-05-12): MANGLED_PREFIXES extended with
+/// concurrency/atomic/threading prefixes (`AtomicInt`, `AtomicBool`,
+/// `Thread`, `TaskGroup`, `WaitGroup`, `Barrier`, `Semaphore`,
+/// `OnceFlag`) + Self-host runtime-form aliases (`GorgetMap`,
+/// `GorgetSet`, `GorgetDict`, `OrderedDict`, `Map`). The +17 matches
+/// surface the legitimate `build_resource_metadata`-cascade arms for
+/// each new family plus a handful of per-handle dispatch sites that
+/// the old prefix list silently undercounted. Bringing them in
+/// brings the ratchet's scope in line with the actual self-host
+/// dispatch surface.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
-    const BUDGET: usize = 52;
+    const BUDGET: usize = 69;
 
     let count = count_name_prefix_sites_self_host();
     assert!(
