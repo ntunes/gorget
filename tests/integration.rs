@@ -3084,6 +3084,40 @@ fn catch_into_noncopy_dest() {
 }
 
 #[test]
+fn variant_mixed_arm_match_error() {
+    // Path A from Snag #36 mixed-arm discussion: variant calls now
+    // type as Generic(parent_enum, [...]) at the typecheck layer, so
+    // mixed-typed match arms (bare T vs Ok(T')) no longer absorb into
+    // error_id — the type mismatch surfaces on the offending arm.
+    check_gg_fails(
+        "variant_mixed_arm_match_error.gg",
+        "type mismatch: expected `int`, found `Result[int,",
+    );
+}
+
+#[test]
+fn variant_auto_ok_inference() {
+    run_gg(
+        "variant_auto_ok_inference.gg",
+        "\
+ok 99
+ok 42
+err boom
+none",
+    );
+}
+
+#[test]
+fn variant_user_enum_call_type() {
+    run_gg(
+        "variant_user_enum_call_type.gg",
+        "\
+red
+blue",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

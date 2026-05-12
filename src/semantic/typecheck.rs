@@ -620,6 +620,11 @@ impl<'a> TypeChecker<'a> {
     /// Uses the definition name for `Defined`/`Generic` types instead of the
     /// unhelpful `"<defined>"` from `TypeTable::display`.
     fn describe_resolved_type(&self, type_id: TypeId) -> String {
+        // Resolve through the substitution map so diagnostics show the
+        // bound type, not the fresh-Var placeholder. Composite types
+        // (Generic args, etc.) recurse through this same function so
+        // each leaf gets resolved.
+        let type_id = self.resolve_type(type_id);
         match self.types.get(type_id) {
             ResolvedType::Defined(def_id) => self.scopes.get_def(*def_id).name.clone(),
             ResolvedType::Generic(def_id, args) => {
@@ -1461,6 +1466,12 @@ impl<'a> TypeChecker<'a> {
                                         }
                                         return self.types.defined_id(def_id);
                                     }
+                                    DefKind::Variant => {
+                                        let hint = self.decl_type_hint;
+                                        return self.infer_variant_constructor(
+                                            def_id, args, hint, expr.span,
+                                        );
+                                    }
                                     _ => {}
                                 }
                             }
@@ -1483,7 +1494,7 @@ impl<'a> TypeChecker<'a> {
                         let def_kind = def.kind;
                         let def_name = def.name.clone();
                         match def_kind {
-                            DefKind::Struct | DefKind::Variant | DefKind::Newtype => {
+                            DefKind::Struct | DefKind::Newtype => {
                                 // Infer argument types
                                 let mut arg_types = Vec::new();
                                 for arg in args {
@@ -1494,6 +1505,12 @@ impl<'a> TypeChecker<'a> {
                                     return self.types.intern_generic(def_id, arg_types);
                                 }
                                 self.types.defined_id(def_id)
+                            }
+                            DefKind::Variant => {
+                                let hint = self.decl_type_hint;
+                                self.infer_variant_constructor(
+                                    def_id, args, hint, expr.span,
+                                )
                             }
                             _ => {
                                 for arg in args {
@@ -1510,11 +1527,17 @@ impl<'a> TypeChecker<'a> {
                             if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
                                 let def = self.scopes.get_def(def_id);
                                 match def.kind {
-                                    DefKind::Struct | DefKind::Variant | DefKind::Newtype => {
+                                    DefKind::Struct | DefKind::Newtype => {
                                         for arg in args {
                                             self.infer_expr(&arg.node.value);
                                         }
                                         return self.types.defined_id(def_id);
+                                    }
+                                    DefKind::Variant => {
+                                        let hint = self.decl_type_hint;
+                                        return self.infer_variant_constructor(
+                                            def_id, args, hint, expr.span,
+                                        );
                                     }
                                     DefKind::Function => {
                                         // Function without resolved type — just infer args
@@ -1555,6 +1578,37 @@ impl<'a> TypeChecker<'a> {
                 if let Expr::Identifier(name) = &receiver.node {
                     if let Some(ret) = self.resolve_static_method_type(name, &method.node, args, expr.span) {
                         return ret;
+                    }
+                }
+
+                // Qualified enum-variant constructor: `Color.Red()`,
+                // `Maybe.Just(42)`. Receiver is an identifier resolving to
+                // an enum DefId; method name matches a variant of that
+                // enum. Route through the unified variant-inference helper
+                // so the call types as `Generic(parent_enum, [...args])`
+                // rather than `error_id` (the historical fall-through).
+                // Mirrors the IR-lowering check at `methods.rs:222-237`.
+                if let Expr::Identifier(rname) = &receiver.node {
+                    if let Some(rec_def_id) = self.resolve_name(receiver.span.start, rname) {
+                        if self.scopes.get_def(rec_def_id).kind == DefKind::Enum {
+                            let variant_def_id = self
+                                .enum_variants
+                                .get(&rec_def_id)
+                                .and_then(|info| {
+                                    info.variants
+                                        .iter()
+                                        .find(|(n, _)| n == &method.node)
+                                        .map(|(_, vid)| *vid)
+                                });
+                            if let Some(vdid) = variant_def_id {
+                                let hint = self.decl_type_hint;
+                                let ret = self.infer_variant_constructor(
+                                    vdid, args, hint, expr.span,
+                                );
+                                self.expr_types.insert(expr.span, ret);
+                                return ret;
+                            }
+                        }
                     }
                 }
 
@@ -3416,6 +3470,192 @@ impl<'a> TypeChecker<'a> {
             }
         }
         false
+    }
+
+    /// Find the parent enum DefId for a given variant DefId. Scans the
+    /// `enum_variants` side table; returns `None` for non-variant DefIds.
+    /// Path A from the Snag #36 mixed-arm discussion: variant constructors
+    /// (`Ok(x)`, `Some(x)`, `Color.Red()`, etc.) should type as the parent
+    /// enum's instantiated `Result[T, E]` / `Option[T]` / `Color` — not as
+    /// `Defined(variant_def_id)` (the variant's own DefId) or `error_id`.
+    fn find_variant_parent_enum(&self, variant_def_id: DefId) -> Option<(DefId, EnumVariantInfo)> {
+        self.enum_variants
+            .iter()
+            .find(|(_, info)| info.variants.iter().any(|(_, vid)| *vid == variant_def_id))
+            .map(|(eid, info)| (*eid, info.clone()))
+    }
+
+    /// Infer the type of a variant constructor call. Returns the parent
+    /// enum's `Generic(parent_def_id, [type_args])` (or `Defined(parent)` for
+    /// non-generic user enums) with type-args bound from the resolved
+    /// argument types and `expected_type`; unbound positions become fresh
+    /// type vars so subsequent unification can pin them.
+    ///
+    /// Handles ALL variant constructors uniformly:
+    ///   - Prelude variants `Ok`/`Error`/`Some`/`None` (parent built-in
+    ///     enums whose `EnumVariantInfo` carries empty `variant_field_types`
+    ///     and `generic_param_names` — params/fields are hardcoded here).
+    ///   - User-defined enums (generic and non-generic) using
+    ///     `EnumVariantInfo`'s recorded AST field types.
+    ///
+    /// Crucially, args are inferred *inside* this helper with the
+    /// per-arg `decl_type_hint` set to the variant's resolved field
+    /// type. Nested variant calls (`Some(Some(100))` against destination
+    /// `Option[Option[int]]`) need that hint to recurse correctly — the
+    /// inner `Some` must see `Option[int]` as its expected type, not the
+    /// outer `Option[Option[int]]`. Mirrors the IR-lowering's
+    /// per-arg expected_type override at `methods.rs:201-221`.
+    ///
+    /// Replaces the previous behaviour where variant calls returned
+    /// `Defined(variant_def_id)` or `error_id`, both of which silently
+    /// absorbed mismatches via `unify`'s error-type absorption.
+    fn infer_variant_constructor(
+        &mut self,
+        variant_def_id: DefId,
+        args: &[Spanned<CallArg>],
+        expected_type: Option<TypeId>,
+        call_span: Span,
+    ) -> TypeId {
+        let parent = self.find_variant_parent_enum(variant_def_id);
+        let (parent_enum_def_id, info) = match parent {
+            Some(x) => x,
+            None => {
+                // Unknown variant: infer args without hint and fall back.
+                for arg in args {
+                    self.infer_expr(&arg.node.value);
+                }
+                return self.types.defined_id(variant_def_id);
+            }
+        };
+
+        let parent_name = self.scopes.get_def(parent_enum_def_id).name.clone();
+        let variant_name = info
+            .variants
+            .iter()
+            .find(|(_, vid)| *vid == variant_def_id)
+            .map(|(n, _)| n.clone())
+            .unwrap_or_default();
+
+        // Determine parent's generic param names (hardcode for built-ins;
+        // user enums get them from `EnumVariantInfo`).
+        let generic_params: Vec<String> = match parent_name.as_str() {
+            "Option" => vec!["T".to_string()],
+            "Result" => vec!["T".to_string(), "E".to_string()],
+            _ => info.generic_param_names.clone(),
+        };
+
+        // Non-generic user enum: `Color.Red()` types as `Defined(Color)`.
+        // Still infer args so side-effects/usage of inner expressions are
+        // walked, matching the rest of the call path.
+        if generic_params.is_empty() {
+            for arg in args {
+                self.infer_expr(&arg.node.value);
+            }
+            return self.types.defined_id(parent_enum_def_id);
+        }
+
+        // Seed bindings: param_index → optional TypeId. Pre-fill from
+        // `expected_type` when it's `Generic(parent_enum, [...args])` —
+        // this lets `Result[int, String] r = Ok(99)` bind `E=String`
+        // before the arg-type refinement step.
+        let mut bindings: Vec<Option<TypeId>> = vec![None; generic_params.len()];
+        if let Some(et) = expected_type {
+            let resolved = self.resolve_type(et);
+            if let ResolvedType::Generic(eid, args_g) = self.types.get(resolved).clone() {
+                if eid == parent_enum_def_id && args_g.len() == generic_params.len() {
+                    for (i, &arg) in args_g.iter().enumerate() {
+                        bindings[i] = Some(arg);
+                    }
+                }
+            }
+        }
+
+        // Compute each variant field's expected TypeId — derived from
+        // the current bindings — so args can be inferred with a precise
+        // `decl_type_hint`. For built-in Option/Result the field type
+        // *is* a parent generic param (Some(T), Ok(T), Error(E)); for
+        // user enums it comes from the variant's AST field types under
+        // the name→TypeId substitution.
+        //
+        // Promote any None binding to a fresh type-var first so nested
+        // T positions share a single TypeId across all field-type
+        // resolutions and across subsequent arg unification.
+        for b in bindings.iter_mut() {
+            if b.is_none() {
+                *b = Some(self.fresh_type_var());
+            }
+        }
+        let subst: FxHashMap<String, TypeId> = generic_params
+            .iter()
+            .zip(bindings.iter())
+            .map(|(n, b)| (n.clone(), b.expect("populated above")))
+            .collect();
+
+        let field_type_ids: Vec<Option<TypeId>> = match parent_name.as_str() {
+            "Option" => match variant_name.as_str() {
+                "Some" => vec![Some(subst["T"])],
+                _ => vec![],
+            },
+            "Result" => match variant_name.as_str() {
+                "Ok" => vec![Some(subst["T"])],
+                "Error" => vec![Some(subst["E"])],
+                _ => vec![],
+            },
+            _ => {
+                let field_ast_types = info
+                    .variant_field_types
+                    .iter()
+                    .find(|(n, _)| *n == variant_name)
+                    .map(|(_, ts)| ts.clone())
+                    .unwrap_or_default();
+                field_ast_types
+                    .iter()
+                    .map(|ast_field| {
+                        Some(self.resolve_ast_type_with_subst(
+                            &ast_field.node,
+                            ast_field.span,
+                            &subst,
+                        ))
+                    })
+                    .collect()
+            }
+        };
+
+        // Infer each arg with its expected field type as decl_type_hint,
+        // then unify the resolved arg type with the field type so any
+        // fresh type vars get bound. Mirrors the VarDecl carve-out for
+        // collection-typed destinations: `Some([1, 2, 3])` against an
+        // expected field type of `Vector[int]` shouldn't require
+        // `int[3] == Vector[int]` (the IR-lowering handles the array→
+        // Vector coercion at the construction site, same as for
+        // `Vector[int] v = [1, 2, 3]`).
+        let prev_hint = self.decl_type_hint;
+        for (i, arg) in args.iter().enumerate() {
+            let field_tid = field_type_ids.get(i).and_then(|f| *f);
+            self.decl_type_hint = field_tid;
+            let arg_ty = self.infer_expr(&arg.node.value);
+            self.decl_type_hint = prev_hint;
+            if let Some(ftid) = field_tid {
+                if !self.is_collection_assignment(ftid, arg_ty) {
+                    self.unify(ftid, arg_ty, arg.span);
+                }
+            }
+        }
+        // Span-anchor unification for the call as a whole — keeps
+        // diagnostics pointing at the call expression itself when an
+        // unrelated bound (e.g. expected_type pre-seed) contradicts the
+        // computed shape.
+        let _ = call_span;
+
+        // Any remaining unbound position became a fresh type-var above;
+        // expose the (possibly-bound-via-unify) TypeIds in the final
+        // Generic.
+        let final_args: Vec<TypeId> = bindings
+            .into_iter()
+            .map(|b| b.expect("populated above"))
+            .collect();
+
+        self.types.intern_generic(parent_enum_def_id, final_args)
     }
 
     /// Check if auto-propagation allows assigning a `Result[T, E]` value to a `T`-typed

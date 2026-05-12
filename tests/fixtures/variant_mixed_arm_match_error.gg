@@ -1,0 +1,16 @@
+# Path A from Snag #36 mixed-arm discussion.
+#
+# Pre-fix: the typechecker silently accepted this — `Ok(99)` typed as
+# `error_id`, and `unify(int, error_id)` succeeded via absorbing
+# semantics, masking the inconsistency between the two match arms.
+#
+# Post-fix: `Ok(99)` types as `Result[int, ?fresh_E]`. The match's
+# arms must agree, and `int` ≠ `Result[int, _]` surfaces a typed
+# mismatch error at the offending arm.
+bool helper(int x) throws String:
+    return match x:
+        case 0: 42
+        else: Ok(99)
+
+void main():
+    print("unreachable")
