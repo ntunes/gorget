@@ -3157,7 +3157,8 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
             if drop_fn != "":
                 field_drops.push(FieldDrop(finfo.name, drop_fn, finfo.type_name))
             fi += 1
-        if field_drops.len() > 0:
+        bool is_resource_struct = gmod.resource_types.contains(type_name)
+        if field_drops.len() > 0 or is_resource_struct:
             String tname = type_name
             m.recursive_drop_structs.put(tname, field_drops)
             # Also add to type_drop_fns for unified emission
@@ -3201,7 +3202,8 @@ void populate_drop_metadata(LirModule &m, GirModule &gmod):
                     variant_drops.push(EnumVariantDrop(vi, vinfo.name, c_field, drop_fn, finfo.type_name))
                 vfi += 1
             vi += 1
-        if variant_drops.len() > 0:
+        bool is_resource_enum = gmod.resource_types.contains(type_name)
+        if variant_drops.len() > 0 or is_resource_enum:
             String tname = type_name
             m.recursive_drop_enums.put(tname, variant_drops)
             # Also add to type_drop_fns

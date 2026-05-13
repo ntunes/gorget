@@ -3150,9 +3150,19 @@ String resolve_payload_clone_fn(String tname, GirModule &gmod):
                         return "gorget_closure_clone_to_owned"
                     return fn
                 case None:
-                    return ""
+                    pass
         case None:
-            return ""
+            pass
+    # §7 row 1 (2026-05-13): user-type fallback. `T__clone` is emitted
+    # by `populate_drop_metadata` in `lir_lower.gg` for every type
+    # registered as a resource AND not imported from another module
+    # (the imported-type skip there avoids duplicate definitions).
+    # We mirror that filter here so we never emit a call to a clone
+    # symbol that the lir_codegen pass would skip.
+    if gmod.resource_types.contains(tname) and gmod.type_infos.contains(tname):
+        if not gmod.imported_fns.contains("__imported_type__" + tname):
+            return tname + "__clone"
+    return ""
 
 # Emit a variant-payload read. `variant_name` + `field_idx` determines
 # which struct field to read; result binds into `dst_type`.
