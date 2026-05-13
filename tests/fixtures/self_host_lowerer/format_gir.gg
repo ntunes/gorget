@@ -15,33 +15,35 @@ from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 # ── Type name formatting ─────────────────────────────────
 
 String format_type_id(int tid, GirModule &gmod):
-    if tid == BOOL_TYPE:
-        return "bool"
-    if tid == I8_TYPE:
-        return "i8"
-    if tid == I16_TYPE:
-        return "i16"
-    if tid == I32_TYPE:
-        return "i32"
-    if tid == I64_TYPE:
-        return "i64"
-    if tid == U8_TYPE:
-        return "u8"
-    if tid == U16_TYPE:
-        return "u16"
-    if tid == U32_TYPE:
-        return "u32"
-    if tid == U64_TYPE:
-        return "u64"
-    if tid == F32_TYPE:
-        return "f32"
-    if tid == F64_TYPE:
-        return "f64"
-    if tid == UNIT_TYPE:
-        return "unit"
+    match tid:
+        case BOOL_TYPE:
+            return "bool"
+        case I8_TYPE:
+            return "i8"
+        case I16_TYPE:
+            return "i16"
+        case I32_TYPE:
+            return "i32"
+        case I64_TYPE:
+            return "i64"
+        case U8_TYPE:
+            return "u8"
+        case U16_TYPE:
+            return "u16"
+        case U32_TYPE:
+            return "u32"
+        case U64_TYPE:
+            return "u64"
+        case F32_TYPE:
+            return "f32"
+        case F64_TYPE:
+            return "f64"
+        case UNIT_TYPE:
+            return "unit"
+        else:
+            pass
     if tid >= 0 and tid < gmod.type_table.len():
-        GirType gt = gmod.type_table.get(tid).unwrap()
-        match gt:
+        match gmod.type_table.get(tid).unwrap():
             case GtNamed(name):
                 return name
             case GtPtr(inner):
@@ -50,14 +52,11 @@ String format_type_id(int tid, GirModule &gmod):
                 return "*mut " + format_type_id(inner, &gmod)
             case GtFnPtr(fn_params, fn_ret):
                 String fn_str = "fn("
-                int fpi = 0
-                for fp_tid in fn_params:
-                    if fpi > 0:
+                for (i, fp_tid) in fn_params.enumerate():
+                    if i > 0:
                         fn_str = fn_str + ", "
                     fn_str = fn_str + format_type_id(fp_tid, &gmod)
-                    fpi += 1
-                fn_str = fn_str + ") -> " + format_type_id(fn_ret, &gmod)
-                return fn_str
+                return fn_str + ") -> " + format_type_id(fn_ret, &gmod)
             else:
                 pass
     return "?type" + int_to_str(tid)
@@ -94,75 +93,74 @@ String format_operand(Operand op, GirModule &gmod):
 # ── Binary op name ───────────────────────────────────────
 
 String binop_name(int op):
-    if op == OP_ADD:
-        return "add"
-    if op == OP_SUB:
-        return "sub"
-    if op == OP_MUL:
-        return "mul"
-    if op == OP_DIV:
-        return "div"
-    if op == OP_REM:
-        return "rem"
-    if op == OP_MOD:
-        return "mod"
-    if op == OP_ADD_WRAP:
-        return "add_wrap"
-    if op == OP_SUB_WRAP:
-        return "sub_wrap"
-    if op == OP_MUL_WRAP:
-        return "mul_wrap"
-    if op == OP_BITAND:
-        return "bitand"
-    if op == OP_BITOR:
-        return "bitor"
-    if op == OP_BITXOR:
-        return "bitxor"
-    if op == OP_SHL:
-        return "shl"
-    if op == OP_SHR:
-        return "shr"
-    return "?op" + int_to_str(op)
+    match op:
+        case OP_ADD:
+            return "add"
+        case OP_SUB:
+            return "sub"
+        case OP_MUL:
+            return "mul"
+        case OP_DIV:
+            return "div"
+        case OP_REM:
+            return "rem"
+        case OP_MOD:
+            return "mod"
+        case OP_ADD_WRAP:
+            return "add_wrap"
+        case OP_SUB_WRAP:
+            return "sub_wrap"
+        case OP_MUL_WRAP:
+            return "mul_wrap"
+        case OP_BITAND:
+            return "bitand"
+        case OP_BITOR:
+            return "bitor"
+        case OP_BITXOR:
+            return "bitxor"
+        case OP_SHL:
+            return "shl"
+        case OP_SHR:
+            return "shr"
+        else:
+            return "?op" + int_to_str(op)
 
 String unop_name(int op):
-    if op == UNOP_NEG:
-        return "neg"
-    if op == UNOP_NOT:
-        return "not"
-    if op == UNOP_BITNOT:
-        return "bitnot"
-    return "?unop" + int_to_str(op)
+    match op:
+        case UNOP_NEG:
+            return "neg"
+        case UNOP_NOT:
+            return "not"
+        case UNOP_BITNOT:
+            return "bitnot"
+        else:
+            return "?unop" + int_to_str(op)
 
 String cmpop_name(int op):
-    if op == CMP_EQ:
-        return "cmp_eq"
-    if op == CMP_NE:
-        return "cmp_ne"
-    if op == CMP_LT:
-        return "cmp_lt"
-    if op == CMP_LE:
-        return "cmp_le"
-    if op == CMP_GT:
-        return "cmp_gt"
-    if op == CMP_GE:
-        return "cmp_ge"
-    return "?cmp" + int_to_str(op)
+    match op:
+        case CMP_EQ:
+            return "cmp_eq"
+        case CMP_NE:
+            return "cmp_ne"
+        case CMP_LT:
+            return "cmp_lt"
+        case CMP_LE:
+            return "cmp_le"
+        case CMP_GT:
+            return "cmp_gt"
+        case CMP_GE:
+            return "cmp_ge"
+        else:
+            return "?cmp" + int_to_str(op)
 
 # ── Instruction formatting ───────────────────────────────
 
 String format_args(Vector[Operand] args, GirModule &gmod):
-    # `for (i, arg) in args.enumerate():` is the idiomatic shape but
-    # hits a snag — tuple-destructuring in a for-loop iterator pattern
-    # produces empty output when wrapped in a function. See TODO
-    # "for-loop tuple destructure over EnumerateIter silently empty".
-    # Manual index counter as the workaround until that's fixed.
     String result = ""
-    int i = 0
-    for arg in args:
+    for (i, arg) in args.enumerate():
         if i > 0:
             result = result + ", "
         result = result + format_operand(arg, &gmod)
-        i = i + 1
     return result
 
 String format_instruction(Instruction inst, GirModule &gmod):
@@ -176,15 +174,11 @@ String format_instruction(Instruction inst, GirModule &gmod):
         case GICmp(dst, op, tid, lhs, rhs):
             return "        _" + int_to_str(dst) + " = " + cmpop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
         case GICall(dst, name, args):
-            String args_str = format_args(args, &gmod)
-            if dst >= 0:
-                return "        _" + int_to_str(dst) + " = call @" + name + "(" + args_str + ")"
-            return "        call @" + name + "(" + args_str + ")"
+            String prefix = if dst >= 0: "        _" + int_to_str(dst) + " = " else: "        "
+            return prefix + "call @" + name + "(" + format_args(args, &gmod) + ")"
         case GICallExtern(dst, name, args):
-            String args_str = format_args(args, &gmod)
-            if dst >= 0:
-                return "        _" + int_to_str(dst) + " = call_extern @" + name + "(" + args_str + ")"
-            return "        call_extern @" + name + "(" + args_str + ")"
+            String prefix = if dst >= 0: "        _" + int_to_str(dst) + " = " else: "        "
+            return prefix + "call_extern @" + name + "(" + format_args(args, &gmod) + ")"
         case GIDrop(lid):
             return "        drop _" + int_to_str(lid)
         case GIDropIfAlive(lid):
@@ -212,20 +206,15 @@ String format_terminator(Terminator term, GirModule &gmod):
 String format_function(GirFunction func, GirModule &gmod):
     # Signature: fn @name(param_types) -> return_type {
     String params_str = ""
-    int pi = 0
-    for pt in func.param_types:
-        if pi > 0:
+    for (i, pt) in func.param_types.enumerate():
+        if i > 0:
             params_str = params_str + ", "
         params_str = params_str + format_type_id(pt, &gmod)
-        pi += 1
     String sig = "fn @" + func.name + "(" + params_str + ") -> " + format_type_id(func.return_type, &gmod) + " {"
 
-    # Locals — index drives the `_N` label so we keep a manual counter
-    # alongside the for-loop. Once the EnumerateIter tuple-destructure
-    # snag is closed (see TODO), this collapses to a single line.
+    # Locals
     String locals_str = "    locals:"
-    int li = 0
-    for loc in func.locals:
+    for (li, loc) in func.locals.enumerate():
         String line = "        _" + int_to_str(li) + ": " + format_type_id(loc.type_id, &gmod)
         match loc.name_hint:
             case Some(h):
@@ -233,12 +222,10 @@ String format_function(GirFunction func, GirModule &gmod):
             else:
                 pass
         locals_str = locals_str + "\n" + line
-        li += 1
 
     # Blocks
     String blocks_str = ""
-    int bi = 0
-    for bb in func.blocks:
+    for (bi, bb) in func.blocks.enumerate():
         blocks_str = blocks_str + "\n    bb" + int_to_str(bi) + ":"
         for inst in bb.insts:
             blocks_str = blocks_str + "\n" + format_instruction(inst, &gmod)
@@ -247,7 +234,6 @@ String format_function(GirFunction func, GirModule &gmod):
                 pass
             else:
                 blocks_str = blocks_str + "\n" + format_terminator(bb.term, &gmod)
-        bi += 1
 
     return sig + "\n" + locals_str + "\n" + blocks_str + "\n}"
 
@@ -263,13 +249,11 @@ String format_module(GirModule &gmod):
         result = result + "\n"
     # Functions — same-file always kept; imported only if registered
     # in `fn_sigs` (i.e., transitively called).
-    int fi = 0
-    for func in gmod.functions:
+    for (fi, func) in gmod.functions.enumerate():
         bool is_imported = gmod.imported_fns.contains(func.name)
         bool keep = not is_imported or gmod.fn_sigs.contains(func.name)
         if keep:
             if fi > 0:
                 result = result + "\n"
             result = result + format_function(func, &gmod) + "\n"
-        fi += 1
     return result
