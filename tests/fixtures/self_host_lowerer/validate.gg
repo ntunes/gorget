@@ -92,19 +92,10 @@ String fmt_loc(String fn_name, int bi, int ii):
 # Mirrors Rust's `validate_resource_moves` (`src/ir/validate.rs`).
 Vector[String] validate_resource_moves(GirModule &gmod):
     Vector[String] violations = []
-    int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction func = gmod.functions.get(fi).unwrap()
-        int bi = 0
-        while bi < func.blocks.len():
-            BasicBlock blk = func.blocks.get(bi).unwrap()
-            int ii = 0
-            while ii < blk.insts.len():
-                Instruction inst = blk.insts.get(ii).unwrap()
+    for (fi, func) in gmod.functions.enumerate():
+        for (bi, blk) in func.blocks.enumerate():
+            for (ii, inst) in blk.insts.enumerate():
                 check_inst_for_copy(inst, &func, &gmod, &violations, fi, bi, ii)
-                ii += 1
-            bi += 1
-        fi += 1
     return violations
 
 # Check every Operand argument in a single Instruction for OpCopy on
@@ -123,15 +114,11 @@ void check_inst_for_copy(Instruction inst, GirFunction &func, GirModule &gmod, V
             check_operand_for_copy(lhs, &func, &gmod, &violations, fi, bi, ii)
             check_operand_for_copy(rhs, &func, &gmod, &violations, fi, bi, ii)
         case GICall(_, _, args):
-            int ai = 0
-            while ai < args.len():
-                check_operand_for_copy(args.get(ai).unwrap(), &func, &gmod, &violations, fi, bi, ii)
-                ai += 1
+            for arg in args:
+                check_operand_for_copy(arg, &func, &gmod, &violations, fi, bi, ii)
         case GICallExtern(_, _, args):
-            int ai = 0
-            while ai < args.len():
-                check_operand_for_copy(args.get(ai).unwrap(), &func, &gmod, &violations, fi, bi, ii)
-                ai += 1
+            for arg in args:
+                check_operand_for_copy(arg, &func, &gmod, &violations, fi, bi, ii)
         else:
             pass
 
@@ -174,19 +161,10 @@ void check_operand_for_copy(Operand op, GirFunction &func, GirModule &gmod, Vect
 # (`src/ir/validate.rs` IFieldLoad-mode-Copy class).
 Vector[String] validate_resource_field_reads(GirModule &gmod):
     Vector[String] violations = []
-    int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction func = gmod.functions.get(fi).unwrap()
-        int bi = 0
-        while bi < func.blocks.len():
-            BasicBlock blk = func.blocks.get(bi).unwrap()
-            int ii = 0
-            while ii < blk.insts.len():
-                Instruction inst = blk.insts.get(ii).unwrap()
+    for (fi, func) in gmod.functions.enumerate():
+        for (bi, blk) in func.blocks.enumerate():
+            for (ii, inst) in blk.insts.enumerate():
                 check_inst_for_field_read(inst, &func, &gmod, &violations, fi, bi, ii)
-                ii += 1
-            bi += 1
-        fi += 1
     return violations
 
 void check_inst_for_field_read(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
@@ -249,19 +227,10 @@ void check_inst_for_field_read(Instruction inst, GirFunction &func, GirModule &g
 # (`src/ir/validate.rs` Call/CallExtern arg-mode class).
 Vector[String] validate_resource_call_args(GirModule &gmod):
     Vector[String] violations = []
-    int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction func = gmod.functions.get(fi).unwrap()
-        int bi = 0
-        while bi < func.blocks.len():
-            BasicBlock blk = func.blocks.get(bi).unwrap()
-            int ii = 0
-            while ii < blk.insts.len():
-                Instruction inst = blk.insts.get(ii).unwrap()
+    for (fi, func) in gmod.functions.enumerate():
+        for (bi, blk) in func.blocks.enumerate():
+            for (ii, inst) in blk.insts.enumerate():
                 check_inst_for_call_arg(inst, &func, &gmod, &violations, fi, bi, ii)
-                ii += 1
-            bi += 1
-        fi += 1
     return violations
 
 void check_inst_for_call_arg(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
@@ -274,9 +243,7 @@ void check_inst_for_call_arg(Instruction inst, GirFunction &func, GirModule &gmo
             pass
 
 void check_call_args(String callee, Vector[Operand] args, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
-    int ai = 0
-    while ai < args.len():
-        Operand op = args.get(ai).unwrap()
+    for (ai, op) in args.enumerate():
         match op:
             case OpMove(lid):
                 if lid >= 0 and lid < func.locals.len():
@@ -289,7 +256,6 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction &func, Gir
                             pass
             else:
                 pass
-        ai += 1
 # ── Validator dispatch ────────────────────────────────────
 #
 # Phase C step 5a / 5b / 5c shipped the burn-downs for three classes:
@@ -351,10 +317,8 @@ void run_validators(GirModule &gmod):
 # for validator panics.)
 void print_violations_to_stderr(String name, Vector[String] vs):
     print("# " + name + ": " + int_to_str(vs.len()) + " violation(s)")
-    int i = 0
-    while i < vs.len():
-        print(vs.get(i).unwrap())
-        i += 1
+    for v in vs:
+        print(v)
 
 # Write the burn-down class's violations to its env-named log file.
 # Header line `# <name>: N violation(s)` is the parse-anchor for
@@ -362,10 +326,8 @@ void print_violations_to_stderr(String name, Vector[String] vs):
 void write_violations(String path, String name, Vector[String] vs):
     String hdr = "# " + name + ": " + int_to_str(vs.len()) + " violation(s)\n"
     write_file(path, hdr)
-    int i = 0
-    while i < vs.len():
-        append_file(path, vs.get(i).unwrap() + "\n")
-        i += 1
+    for v in vs:
+        append_file(path, v + "\n")
 
 # ── §6.2: validator-runs-after-every-pass ─────────────────────
 #
@@ -401,20 +363,14 @@ void validate_gir_after(String after, GirModule &gmod):
         return
     Vector[String] errors = []
     Vector[String] fr_v = validate_resource_field_reads(&gmod)
-    int i = 0
-    while i < fr_v.len():
-        errors.push("[field_reads] " + fr_v.get(i).unwrap())
-        i += 1
+    for v in fr_v:
+        errors.push("[field_reads] " + v)
     Vector[String] ca_v = validate_resource_call_args(&gmod)
-    i = 0
-    while i < ca_v.len():
-        errors.push("[call_args] " + ca_v.get(i).unwrap())
-        i += 1
+    for v in ca_v:
+        errors.push("[call_args] " + v)
     Vector[String] mv_v = validate_resource_moves(&gmod)
-    i = 0
-    while i < mv_v.len():
-        errors.push("[moves] " + mv_v.get(i).unwrap())
-        i += 1
+    for v in mv_v:
+        errors.push("[moves] " + v)
     if errors.len() > 0:
         print_pass_violations("GIR invariant violated after " + after, errors)
         exit(1)
@@ -428,11 +384,8 @@ void validate_lir_after(String after, LirModule &m):
     if not validate_passes_enabled():
         return
     Vector[String] errors = []
-    int fi = 0
-    while fi < m.functions.len():
-        LirFunction func = m.functions.get(fi).unwrap()
+    for func in m.functions:
         validate_lir_function(func, &errors)
-        fi += 1
     if errors.len() > 0:
         print_pass_violations("LIR invariant violated after " + after, errors)
         exit(1)
@@ -451,28 +404,20 @@ void validate_lir_function(LirFunction func, Vector[String] &errors):
     int num_blocks = func.blocks.len()
     int num_slots = func.slots.len()
     Dict[int, bool] seen_values = {}
-    int bi = 0
-    while bi < num_blocks:
-        LirBlock blk = func.blocks.get(bi).unwrap()
+    for (bi, blk) in func.blocks.enumerate():
         if blk.id != bi:
             errors.push("@" + func.name + " bb" + int_to_str(blk.id) + " at position " + int_to_str(bi) + " (non-sequential block id)")
         # Block params define values — check uniqueness.
-        int pi = 0
-        while pi < blk.params.len():
-            BlockParam bp = blk.params.get(pi).unwrap()
+        for bp in blk.params:
             if seen_values.contains(bp.value_id):
                 errors.push("@" + func.name + " bb" + int_to_str(blk.id) + ": duplicate value definition v" + int_to_str(bp.value_id) + " (also defined earlier in this function)")
             else:
                 seen_values.put(bp.value_id, true)
-            pi += 1
         # Per-instruction slot-reference bounds.
-        int ii = 0
-        while ii < blk.insts.len():
-            check_inst_slot_refs(blk.insts.get(ii).unwrap(), blk.id, num_slots, func.name, &errors)
-            ii += 1
+        for inst in blk.insts:
+            check_inst_slot_refs(inst, blk.id, num_slots, func.name, &errors)
         # Terminator successor sanity + args-length-matches-target-params.
         check_term_successors(blk.term, blk.id, num_blocks, &func, &errors)
-        bi += 1
 
 void check_inst_slot_refs(LirInst inst, int blk_id, int num_slots, String fn_name, Vector[String] &errors):
     int slot = -1
@@ -519,14 +464,11 @@ void check_term_successors(LirTerm term, int blk_id, int num_blocks, LirFunction
                 errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TSwitch default bb" + int_to_str(default_bb) + " out of range (0.." + int_to_str(num_blocks) + ")")
             else:
                 check_args_match_params("TSwitch.default", default_bb, default_args.len(), blk_id, &func, &errors)
-            int ci = 0
-            while ci < cases.len():
-                SwitchCase sc = cases.get(ci).unwrap()
+            for (ci, sc) in cases.enumerate():
                 if sc.target < 0 or sc.target >= num_blocks:
                     errors.push("@" + func.name + " bb" + int_to_str(blk_id) + ": TSwitch case-" + int_to_str(ci) + " target bb" + int_to_str(sc.target) + " out of range (0.." + int_to_str(num_blocks) + ")")
                 else:
                     check_args_match_params("TSwitch.case-" + int_to_str(ci), sc.target, sc.args.len(), blk_id, &func, &errors)
-                ci += 1
         else:
             pass
 
@@ -551,7 +493,5 @@ void check_args_match_params(String shape, int target_bb, int args_len, int src_
 # specifically.
 void print_pass_violations(String header, Vector[String] errors):
     print("# validate_passes (FATAL): " + header + " — " + int_to_str(errors.len()) + " violation(s)")
-    int i = 0
-    while i < errors.len():
-        print(errors.get(i).unwrap())
-        i += 1
+    for e in errors:
+        print(e)
