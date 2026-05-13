@@ -3495,6 +3495,33 @@ done",
 }
 
 #[test]
+fn is_field_payload_binding() {
+    // `if struct_field is Some(payload):` payload-binding form.
+    // Snag 2026-05-13: pre-fix, EnumFieldLoad's LIR lowering was
+    // missing the `is_ref_local` skip that FieldLoad already had.
+    // For a struct-field LHS whose field_load produces a
+    // `BorrowedPtr`-tagged local, the extra `Inst::Load` emitted by
+    // EnumFieldLoad dereferenced the pointer one too many times,
+    // reading the enum's tag+padding bytes as a void* and chasing
+    // random memory in the Some-arm. The match form on the same
+    // field worked, as did the local-LHS is-form.
+    run_gg(
+        "is_field_payload_binding.gg",
+        "\
+num 42
+msg hi
+ins there
+has-num
+no-num
+no-msg
+no-ins
+nope
+local local-payload
+local-none",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

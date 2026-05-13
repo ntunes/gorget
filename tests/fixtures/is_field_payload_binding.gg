@@ -1,0 +1,70 @@
+# `if struct_field is Some(payload):` payload-binding form.
+#
+# Pre-fix (2026-05-13): when the LHS of `is` with a payload-binding
+# pattern was a struct field access (e.g. `item.tag`), the IR-lowering
+# produced miscompiled C — either type errors at cc time
+# (`incompatible types when assigning to type 'Str' from type 'int64_t'`)
+# or a binary that silently emitted nothing for the Some-arm. The
+# `match` form on the same field worked correctly; the `is`-form on a
+# LOCAL variable also worked.
+#
+# Root cause: `Instruction::EnumFieldLoad`'s LIR lowering at
+# `src/lir/lower/insts.rs:1249-1263` was missing the `is_ref_local`
+# check that `Instruction::FieldLoad` already had (line 789-792). For
+# a struct field access whose `field_load` produces a `BorrowedPtr`-
+# tagged local (any resource-typed field auto-tagged via
+# `set_field_borrow`), `lower_place_addr` already emits a `SlotLoad`
+# that returns the pointer value directly. The extra `Inst::Load`
+# emitted by `EnumFieldLoad` then dereferenced the pointer ONCE more,
+# reading the enum's tag+padding bytes interpreted as a void* — a
+# bogus address that the subsequent `FieldPtr` projection chased into
+# random memory.
+#
+# Fix: mirror the `is_ref_local` skip from `FieldLoad`.
+#
+# Covers: int payload, String payload (resource), struct payload
+# (transitively resource), `is not None` shape, and local-LHS shape
+# (must keep working).
+struct Inner:
+    String name
+
+struct Item:
+    int x
+    Option[int] num
+    Option[String] msg
+    Option[Inner] ins
+
+void check(Item item):
+    if item.num is Some(h):
+        print(f"num {h}")
+    else:
+        print("no-num")
+
+    if item.msg is Some(s):
+        print(f"msg {s}")
+    else:
+        print("no-msg")
+
+    if item.ins is Some(inn):
+        print(f"ins {inn.name}")
+    else:
+        print("no-ins")
+
+    if item.num is not None:
+        print("has-num")
+    else:
+        print("nope")
+
+void check_local(Option[String] opt):
+    if opt is Some(s):
+        print(f"local {s}")
+    else:
+        print("local-none")
+
+void main():
+    Item a = Item(1, Some(42), Some("hi"), Some(Inner("there")))
+    Item b = Item(2, None, None, None)
+    check(a)
+    check(b)
+    check_local(Some("local-payload"))
+    check_local(None)

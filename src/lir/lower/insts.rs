@@ -1251,8 +1251,22 @@ impl<'a> FuncLowering<'a> {
                 // If after resolving projections we still have a pointer type,
                 // the base_val is a SlotAddr of a pointer local — load the pointer
                 // to get the actual enum struct address.
+                //
+                // BUT skip the extra Load when `base` is a BorrowedPtr ref local:
+                // `lower_place_addr` already emitted a `SlotLoad` for it
+                // (returning the pointer value directly), so an additional
+                // `Load` would dereference the pointee struct AS a pointer,
+                // reading the first 8 bytes of the enum (its tag + padding)
+                // as a bogus address. Mirrors the same `is_ref_local` skip
+                // that `Instruction::FieldLoad` (line 789-792) has. Pre-fix,
+                // `if item.tag is Some(h):` where `item.tag` is a struct
+                // field whose `field_load` produces a `BorrowedPtr`-tagged
+                // local silently mis-extracted `Some_0`.
+                let is_ref_local = base.projections.is_empty()
+                    && self.gir_func.locals.get(base.local.0 as usize)
+                        .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
                 let effective_ty = self.effective_place_type(base);
-                if let Some(GirType::Ptr(_) | GirType::MutPtr(_)) = self.gir_types.get(effective_ty) {
+                if !is_ref_local && matches!(self.gir_types.get(effective_ty), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
                     let deref = self.lir_func.next_value();
                     self.lir_func.block_mut(bb).insts.push(Inst::Load {
                         dst: deref,
