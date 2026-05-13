@@ -66,11 +66,10 @@ String format_type(SpannedType st):
             return result
         case TArray(elem, size):
             String es = format_type(*elem)
-            String ss = int_to_str(size)
-            return "[" + es + "; " + ss + "]"
+            return f"[{es}; {size}]"
         case TSlice(elem):
             String es = format_type(*elem)
-            return "[" + es + "]"
+            return f"[{es}]"
         case TTuple(elems):
             String result = "("
             for (i, e) in elems.enumerate():
@@ -160,11 +159,11 @@ String format_expr(SpannedExpr se):
                 return "true"
             return "false"
         case EStringLiteral(s, _):
-            return "\"" + s + "\""
+            return f"\"{s}\""
         case ECharLiteral(c):
             if c.len() == 0:
                 return "'\\0'"
-            return "'" + c + "'"
+            return f"'{c}'"
         case ENoneLiteral:
             return "None"
         case EIdentifier(name):
@@ -174,10 +173,10 @@ String format_expr(SpannedExpr se):
         case EBinaryOp(l, op, r):
             String ls = format_expr(*l)
             String rs = format_expr(*r)
-            return "(" + ls + " " + op + " " + rs + ")"
+            return f"({ls} {op} {rs})"
         case EUnaryOp(op, operand):
             String os = format_expr(*operand)
-            return "(" + op + " " + os + ")"
+            return f"({op} {os})"
         case ECall(callee, args, targs):
             String cs = format_expr(*callee)
             String result = cs + "("
@@ -189,7 +188,7 @@ String format_expr(SpannedExpr se):
             return result
         case EMethodCall(obj, name, args, targs):
             String os = format_expr(*obj)
-            String result = os + "." + name + "("
+            String result = f"{os}.{name}("
             for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
@@ -198,11 +197,11 @@ String format_expr(SpannedExpr se):
             return result
         case EFieldAccess(obj, name):
             String os = format_expr(*obj)
-            return os + "." + name
+            return f"{os}.{name}"
         case EIndex(obj, idx):
             String os = format_expr(*obj)
             String is_ = format_expr(*idx)
-            return os + "[" + is_ + "]"
+            return f"{os}[{is_}]"
         case ERange(lo, hi):
             String result = ""
             if has_opt_boxed_expr(lo):
@@ -212,31 +211,27 @@ String format_expr(SpannedExpr se):
                 result = result + format_expr(get_opt_boxed_expr(hi))
             return result
         case EIf(cond, body, branches):
-            String result = "if " + format_expr(*cond) + ":"
-            result = result + format_block(body)
+            String result = f"if {format_expr(*cond)}:{format_block(body)}"
             for br in branches:
                 match br.condition:
                     case Some(c):
-                        result = result + " elif " + format_expr(c) + ":"
+                        result = result + f" elif {format_expr(c)}:"
                     else:
                         result = result + " else:"
                 result = result + format_block(br.body)
             return result
         case EMatch(subject, arms):
-            String result = "match " + format_expr(*subject) + ":"
+            String result = f"match {format_expr(*subject)}:"
             for arm in arms:
-                String arm_str = " case " + format_pattern(arm.pattern)
-                result = result + arm_str + ":"
-                result = result + format_block(arm.body)
+                result = result + f" case {format_pattern(arm.pattern)}:" + format_block(arm.body)
             return result
         case EClosure(params, body):
             String result = "("
             for (i, p) in params.enumerate():
                 if i > 0:
                     result = result + ", "
-                result = result + format_type(p.param_type) + " " + p.param_name
-            result = result + "):"
-            result = result + format_block(body)
+                result = result + f"{format_type(p.param_type)} {p.param_name}"
+            result = result + "):" + format_block(body)
             return result
         case EIt():
             return "it"
@@ -266,11 +261,11 @@ String format_expr(SpannedExpr se):
                 if i > 0:
                     result = result + ", "
                 SpannedExpr v = vals.get(i).unwrap()
-                result = result + format_expr(k) + ": " + format_expr(v)
+                result = result + f"{format_expr(k)}: {format_expr(v)}"
             result = result + close_b
             return result
         case EStructLiteral(name, fields, vals):
-            String result = name + "("
+            String result = f"{name}("
             for (i, v) in vals.enumerate():
                 if i > 0:
                     result = result + ", "
@@ -279,8 +274,8 @@ String format_expr(SpannedExpr se):
             return result
         case EDotShorthand(name, args):
             if args.len() == 0:
-                return "." + name
-            String result = "." + name + "("
+                return f".{name}"
+            String result = f".{name}("
             for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
@@ -288,68 +283,68 @@ String format_expr(SpannedExpr se):
             result = result + ")"
             return result
         case ETry(inner):
-            return format_expr(*inner) + "?"
+            return f"{format_expr(*inner)}?"
         case EMove(inner):
-            return "!" + format_expr(*inner)
+            return f"!{format_expr(*inner)}"
         case EMutableBorrow(inner):
-            return "&" + format_expr(*inner)
+            return f"&{format_expr(*inner)}"
         case EDeref(inner):
-            return "*" + format_expr(*inner)
+            return f"*{format_expr(*inner)}"
         case EAs(inner, ty):
-            return format_expr(*inner) + " as " + format_type(*ty)
+            return f"{format_expr(*inner)} as {format_type(*ty)}"
         case EBlock(stmts):
-            return "block:" + format_block(stmts)
+            return f"block:{format_block(stmts)}"
         case EListComp(expr, var, iter, cond):
-            String result = "[" + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            String result = f"[{format_expr(*expr)} for {var} in {format_expr(*iter)}"
             if has_opt_boxed_expr(cond):
-                result = result + " if " + format_expr(get_opt_boxed_expr(cond))
+                result = result + f" if {format_expr(get_opt_boxed_expr(cond))}"
             result = result + "]"
             return result
         case ESetComp(expr, var, iter, cond):
             String lb = r"{"
             String rb = r"}"
-            String sc_result = lb + format_expr(*expr) + " for " + var + " in " + format_expr(*iter)
+            String sc_result = lb + f"{format_expr(*expr)} for {var} in {format_expr(*iter)}"
             # Check if cond is a non-dummy expression (dummy = EIntLiteral(0) at span 0,0)
             match (*cond).expr:
                 case EIntLiteral(n):
                     if n != 0:
-                        sc_result = sc_result + " if " + format_expr(*cond)
+                        sc_result = sc_result + f" if {format_expr(*cond)}"
                 else:
-                    sc_result = sc_result + " if " + format_expr(*cond)
+                    sc_result = sc_result + f" if {format_expr(*cond)}"
             sc_result = sc_result + rb
             return sc_result
         case EDictComp(key, val, var, iter):
             String lb = r"{"
             String rb = r"}"
-            return lb + format_expr(*key) + ": " + format_expr(*val) + " for " + var + " in " + format_expr(*iter) + rb
+            return lb + f"{format_expr(*key)}: {format_expr(*val)} for {var} in {format_expr(*iter)}" + rb
         case EDefaultOp(l, r):
-            return "(" + format_expr(*l) + " ?? " + format_expr(*r) + ")"
+            return f"({format_expr(*l)} ?? {format_expr(*r)})"
         case EIs(expr, negated, pat):
             String es = format_expr(*expr)
             String ps = format_pattern(*pat)
             if negated:
-                return "(" + es + " is not " + ps + ")"
-            return "(" + es + " is " + ps + ")"
+                return f"({es} is not {ps})"
+            return f"({es} is {ps})"
         case EDo(body):
-            return "do:" + format_block(body)
+            return f"do:{format_block(body)}"
         case EAwait(inner):
-            return format_expr(*inner) + ".await()"
+            return f"{format_expr(*inner)}.await()"
         case ESpawn(inner):
-            return "spawn " + format_expr(*inner)
+            return f"spawn {format_expr(*inner)}"
         case ESpawnBlocking(inner):
-            return "spawn blocking " + format_expr(*inner)
+            return f"spawn blocking {format_expr(*inner)}"
         case ERethrow(expr, err_name, err_type, transform):
             String rhs = format_expr(*expr)
             match err_name:
                 case Some(name):
                     SpannedType et = *err_type.unwrap()
-                    rhs = rhs + " rethrow (" + format_type(et) + " " + name + "): "
+                    rhs = rhs + f" rethrow ({format_type(et)} {name}): "
                 case None:
                     rhs = rhs + " rethrow "
             rhs = rhs + format_expr(*transform)
             return rhs
         case ECatch(expr, name, recovery):
-            return format_expr(*expr) + " catch (" + name + "): " + format_expr(*recovery)
+            return f"{format_expr(*expr)} catch ({name}): {format_expr(*recovery)}"
         else:
             return "?"
 
@@ -358,27 +353,25 @@ String format_expr(SpannedExpr se):
 String format_stmt(Stmt s):
     match s:
         case SVarDecl(ty, name, init, own, sk, name_span):
-            String ts = format_type(ty)
-            String is_ = format_expr(init)
-            return ts + " " + name + " = " + is_
+            return f"{format_type(ty)} {name} = {format_expr(init)}"
         case SAssign(lhs, rhs):
-            return format_expr(lhs) + " = " + format_expr(rhs)
+            return f"{format_expr(lhs)} = {format_expr(rhs)}"
         case SCompoundAssign(lhs, op, rhs):
-            return format_expr(lhs) + " " + op + " " + format_expr(rhs)
+            return f"{format_expr(lhs)} {op} {format_expr(rhs)}"
         case SExpr(expr):
             return format_expr(expr)
         case SReturn(val):
             match val:
                 case Some(v):
-                    return "return " + format_expr(v)
+                    return f"return {format_expr(v)}"
                 else:
                     return "return"
         case SThrow(val):
-            return "throw " + format_expr(val)
+            return f"throw {format_expr(val)}"
         case SBreak(val):
             match val:
                 case Some(v):
-                    return "break " + format_expr(v)
+                    return f"break {format_expr(v)}"
                 else:
                     return "break"
         case SContinue:
@@ -394,64 +387,62 @@ String format_stmt(Stmt s):
         case SMetaIf(then_body, branches):
             return "meta"
         case SFor(pat, iter, body, own, _):
-            return "for " + format_pattern(pat) + " in " + format_expr(iter) + ":" + format_block(body)
+            return f"for {format_pattern(pat)} in {format_expr(iter)}:{format_block(body)}"
         case SWhile(cond, body):
-            return "while " + format_expr(cond) + ":" + format_block(body)
+            return f"while {format_expr(cond)}:{format_block(body)}"
         case SLoop(body):
-            return "loop:" + format_block(body)
+            return f"loop:{format_block(body)}"
         case SIf(cond, body, branches):
-            String result = "if " + format_expr(cond) + ":" + format_block(body)
+            String result = f"if {format_expr(cond)}:{format_block(body)}"
             for br in branches:
                 match br.condition:
                     case Some(c):
-                        result = result + " elif " + format_expr(c) + ":"
+                        result = result + f" elif {format_expr(c)}:"
                     else:
                         result = result + " else:"
                 result = result + format_block(br.body)
             return result
         case SMatch(subject, arms):
-            String result = "match " + format_expr(subject) + ":"
+            String result = f"match {format_expr(subject)}:"
             for arm in arms:
-                String arm_str = " case " + format_pattern(arm.pattern)
-                result = result + arm_str + ":"
-                result = result + format_block(arm.body)
+                result = result + f" case {format_pattern(arm.pattern)}:" + format_block(arm.body)
             return result
         case SWith(resource, name, body):
-            return "with " + format_expr(resource) + " as " + name + ":" + format_block(body)
+            return f"with {format_expr(resource)} as {name}:{format_block(body)}"
         case SNamedScope(label, body):
-            return label + ":" + format_block(body)
+            return f"{label}:{format_block(body)}"
         case SSelect(arms):
             String result = "select:"
             for arm in arms:
                 match arm.op:
                     case SORecv(name, _, channel):
-                        result = result + " case " + name + " = " + format_expr(channel) + ".recv():"
+                        result = result + f" case {name} = {format_expr(channel)}.recv():"
                     case SOSend(channel, value):
-                        result = result + " case " + format_expr(channel) + ".send(" + format_expr(value) + "):"
+                        result = result + f" case {format_expr(channel)}.send({format_expr(value)}):"
                 result = result + format_block(arm.body)
             return result
         case SOnError(body):
-            return "on error:" + format_block(body)
+            return f"on error:{format_block(body)}"
         case SAssert(cond, msg):
-            String result = "assert " + format_expr(cond)
+            String result = f"assert {format_expr(cond)}"
             match msg:
                 case Some(m):
-                    result = result + ", \"" + m + "\""
+                    result = result + f", \"{m}\""
                 else:
                     pass
             return result
         case SAssertReturn(cond, msg):
-            String result = "assert return " + format_expr(cond)
+            String result = f"assert return {format_expr(cond)}"
             match msg:
                 case Some(m):
-                    result = result + ", \"" + m + "\""
+                    result = result + f", \"{m}\""
                 else:
                     pass
             return result
         case SItem(item):
             return format_item(item)
         case SSnapshot(name, _, value):
-            return "snapshot \"" + name + "\" " + format_expr(value)
+            return f"snapshot \"{name}\" {format_expr(value)}"
         else:
             return "?"
 
@@ -481,10 +472,10 @@ String format_item(Item item):
             return format_import(imp)
         case IDirective(name, value):
             if value == "":
-                return "directive " + name
-            return "directive " + name + " " + value
+                return f"directive {name}"
+            return f"directive {name} {value}"
         case ITypeAlias(name, tps, ty):
-            String result = "type " + name
+            String result = f"type {name}"
             if tps.len() > 0:
                 result = result + "["
                 for (i, tp) in tps.enumerate():
@@ -492,18 +483,18 @@ String format_item(Item item):
                         result = result + ", "
                     result = result + tp
                 result = result + "]"
-            result = result + " = " + format_type(ty)
+            result = result + f" = {format_type(ty)}"
             return result
         case INewtype(name, inner):
-            return "newtype " + name + "(" + format_type(inner) + ")"
+            return f"newtype {name}({format_type(inner)})"
         case IConstDecl(ty, name, val):
-            return "const " + format_type(ty) + " " + name + " = " + format_expr(val)
+            return f"const {format_type(ty)} {name} = {format_expr(val)}"
         case IMetaConst(ty, name, val):
-            return "meta " + format_type(ty) + " " + name + " = " + format_expr(val)
+            return f"meta {format_type(ty)} {name} = {format_expr(val)}"
         case IMetaType(name, rhs):
-            return "meta type " + name + " = <rhs>"
+            return f"meta type {name} = <rhs>"
         case IMetaTypeFunc(name):
-            return "meta type " + name + "(...)"
+            return f"meta type {name}(...)"
         case IMetaAssert():
             return "meta assert ..."
         case IMetaIf():
@@ -511,25 +502,25 @@ String format_item(Item item):
         case IMetaLog():
             return "meta log ..."
         case IStaticDecl(ty, name, val):
-            return "static " + format_type(ty) + " " + name + " = " + format_expr(val)
+            return f"static {format_type(ty)} {name} = {format_expr(val)}"
         case IExternBlock(fns):
             String result = "extern:"
             for f in fns:
-                result = result + " " + format_function(f) + ";"
+                result = result + f" {format_function(f)};"
             return result
         case ITest(name, _, _, body):
-            return "test \"" + name + "\":" + format_block(body)
+            return f"test \"{name}\":{format_block(body)}"
         case IBench(name, body):
-            return "bench \"" + name + "\":" + format_block(body)
+            return f"bench \"{name}\":{format_block(body)}"
         case ISuiteSetup(body):
-            return "suite_setup:" + format_block(body)
+            return f"suite_setup:{format_block(body)}"
         case ISuiteTeardown(body):
-            return "suite_teardown:" + format_block(body)
+            return f"suite_teardown:{format_block(body)}"
         else:
             return "?"
 
 String format_function(FunctionDef fd):
-    String result = format_type(fd.return_type) + " " + fd.name
+    String result = f"{format_type(fd.return_type)} {fd.name}"
     if fd.type_params.len() > 0:
         result = result + "["
         for (i, tp) in fd.type_params.enumerate():
@@ -549,7 +540,7 @@ String format_function(FunctionDef fd):
             else:
                 result = result + "self"
         else:
-            result = result + format_type(p.param_type) + " " + p.param_name
+            result = result + f"{format_type(p.param_type)} {p.param_name}"
     result = result + ")"
     if fd.is_expr_body:
         if fd.body.len() > 0:
@@ -558,17 +549,17 @@ String format_function(FunctionDef fd):
                 case SReturn(val):
                     match val:
                         case Some(v):
-                            result = result + " = " + format_expr(v)
+                            result = result + f" = {format_expr(v)}"
                         else:
                             pass
                 else:
                     pass
     else:
-        result = result + ":" + format_block(fd.body)
+        result = result + f":{format_block(fd.body)}"
     return result
 
 String format_struct(StructDef sd):
-    String result = "struct " + sd.name
+    String result = f"struct {sd.name}"
     if sd.type_params.len() > 0:
         result = result + "["
         for (i, tp) in sd.type_params.enumerate():
@@ -578,11 +569,11 @@ String format_struct(StructDef sd):
         result = result + "]"
     result = result + ":"
     for f in sd.fields:
-        result = result + " " + format_type(f.param_type) + " " + f.param_name + ";"
+        result = result + f" {format_type(f.param_type)} {f.param_name};"
     return result
 
 String format_enum(EnumDef ed):
-    String result = "enum " + ed.name
+    String result = f"enum {ed.name}"
     if ed.type_params.len() > 0:
         result = result + "["
         for (i, tp) in ed.type_params.enumerate():
@@ -592,7 +583,7 @@ String format_enum(EnumDef ed):
         result = result + "]"
     result = result + ":"
     for v in ed.variants:
-        result = result + " " + v.name
+        result = result + f" {v.name}"
         if v.fields.len() > 0:
             result = result + "("
             for (j, ft) in v.fields.enumerate():
@@ -604,7 +595,7 @@ String format_enum(EnumDef ed):
     return result
 
 String format_trait(TraitDef td):
-    String result = "trait " + td.name
+    String result = f"trait {td.name}"
     if td.type_params.len() > 0:
         result = result + "["
         for (i, tp) in td.type_params.enumerate():
@@ -620,27 +611,27 @@ String format_trait(TraitDef td):
             result = result + e
     result = result + ":"
     for m in td.methods:
-        result = result + " " + format_function(m) + ";"
+        result = result + f" {format_function(m)};"
     return result
 
 String format_equip(EquipBlock eq):
-    String result = "equip " + format_type(eq.target)
+    String result = f"equip {format_type(eq.target)}"
     match eq.trait_name:
         case Some(tn):
-            result = result + " via " + tn
+            result = result + f" via {tn}"
         else:
             pass
     result = result + ":"
     for m in eq.methods:
-        result = result + " " + format_function(m) + ";"
+        result = result + f" {format_function(m)};"
     return result
 
 String format_import(ImportStmt imp):
     if imp.names.len() > 0:
-        String result = "from " + imp.module_path + " import "
+        String result = f"from {imp.module_path} import "
         for (i, n) in imp.names.enumerate():
             if i > 0:
                 result = result + ", "
             result = result + n
         return result
-    return "import " + imp.module_path
+    return f"import {imp.module_path}"

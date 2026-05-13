@@ -40,9 +40,9 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             result = result + ")"
             return result
         case RTArray(elem_id, size):
-            return "[" + describe_type(elem_id, scopes, types) + "; " + int_to_str(size) + "]"
+            return f"[{describe_type(elem_id, scopes, types)}; {size}]"
         case RTSlice(elem_id):
-            return "[" + describe_type(elem_id, scopes, types) + "]"
+            return f"[{describe_type(elem_id, scopes, types)}]"
         case RTFunction(params, ownerships, ret_id):
             String ret_str = describe_type(ret_id, scopes, types)
             String result = ret_str + "("
@@ -54,15 +54,15 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return result
         case RTTraitObject(def_id):
             DefInfo d = scopes.get_def(def_id)
-            return "Box[" + d.name + "]"
+            return f"Box[{d.name}]"
         case RTCallableTrait(func_id):
-            return "Callable[" + describe_type(func_id, scopes, types) + "]"
+            return f"Callable[{describe_type(func_id, scopes, types)}]"
         case RTMutCallableTrait(func_id):
-            return "MutCallable[" + describe_type(func_id, scopes, types) + "]"
+            return f"MutCallable[{describe_type(func_id, scopes, types)}]"
         case RTConsumeCallableTrait(func_id):
-            return "ConsumeCallable[" + describe_type(func_id, scopes, types) + "]"
+            return f"ConsumeCallable[{describe_type(func_id, scopes, types)}]"
         case RTBoxedCallable(kind_name, func_id):
-            return "Box[" + kind_name + "[" + describe_type(func_id, scopes, types) + "]]"
+            return f"Box[{kind_name}[{describe_type(func_id, scopes, types)}]]"
         case RTVar(id):
             # Vars allocated as the binding-side demotion of a
             # generic-param render as "<error>" (matching Rust's
@@ -70,7 +70,7 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             # vars keep "?N".
             if types.generic_var_ids.contains(id):
                 return "<error>"
-            return "?" + int_to_str(id)
+            return f"?{id}"
         case RTError():
             return "<error>"
         case RTVoid():
@@ -89,7 +89,7 @@ String format_types(ScopeTable scopes, TypeTable types):
         DefInfo d = scopes.get_def(i)
         if d.type_id >= 0:
             String type_str = describe_type(d.type_id, scopes, types)
-            String line = "TYPE " + int_to_str(i) + " " + quote(d.name) + " = " + type_str
+            String line = f"TYPE {i} {quote(d.name)} = {type_str}"
             lines.push(line)
         i = i + 1
     return join_lines(lines)
@@ -97,8 +97,7 @@ String format_types(ScopeTable scopes, TypeTable types):
 # ── Helpers ─────────────────────────────────────────────────
 
 String quote(String s):
-    String dq = "\""
-    return dq + s + dq
+    return f"\"{s}\""
 
 String join_lines(Vector[String] lines):
     if lines.len() == 0:
