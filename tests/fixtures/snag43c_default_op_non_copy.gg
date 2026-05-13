@@ -1,0 +1,22 @@
+enum JsValue:
+    Undefined
+    StringV(String)
+    NumberV(float)
+
+String render(JsValue v):
+    match v:
+        case JsValue.StringV(s):
+            return s
+        case JsValue.Undefined:
+            return "undef"
+        case JsValue.NumberV(_):
+            return "num"
+
+void main():
+    Option[JsValue] some_val = Some(JsValue.StringV("world"))
+    JsValue r1 = some_val ?? JsValue.Undefined
+    print(f"some: {render(r1)}")
+
+    Option[JsValue] none_val = None
+    JsValue r2 = none_val ?? JsValue.StringV("default")
+    print(f"none: {render(r2)}")

@@ -2921,6 +2921,32 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag43c_default_op_non_copy() {
+    // Snag #43 companion — `??` (DefaultOp) on `Option[T]` for non-Copy T
+    // produced shallow-copy alias of the inner T's resource pointers
+    // between lhs_local and result_id; resource-moves validator aborted
+    // with "shallow copy of resource _N : Option__JsValue". The previous
+    // lowering at `Expr::DefaultOp` typed `result_id` as the full
+    // Option[T] (not T) and copied the whole Option into it on the
+    // Some-path — never extracted Some_0.
+    //
+    // Fix: type result_id as the inner T (from variant 0's field 0).
+    // Some-path uses `enum_field_load_move(lhs_local, "Some", 0, T)` to
+    // extract with Move semantics (the LIR zeros lhs_local's Some_0
+    // field). None-path lowers rhs and assigns into result_id, Move-mode
+    // for resource T. result_id is marked Owned + drop-registered when T
+    // needs it.
+    //
+    // Variant name (Some / Ok) is looked up from the type def rather
+    // than hardcoded — same lowering handles Result[T,E] ?? default
+    // (variant 0 = "Ok") if anyone ever wires that shape up.
+    run_gg(
+        "snag43c_default_op_non_copy.gg",
+        "some: world\nnone: default",
+    );
+}
+
+#[test]
 fn snag43_throws_call_inline_arg() {
     // Snag #43 — auto-propagated throws-fn call as inline argument
     // lost non-Copy fields. `v.push(sub())` where `sub() throws E`

@@ -665,16 +665,69 @@ fn lower_expr_inner(
         }
 
         Expr::DefaultOp { lhs, rhs } => {
-            // lhs ?? rhs: check if lhs is None, if so evaluate rhs
+            // `lhs ?? rhs`: if lhs is Some/Ok, unwrap to T; else evaluate rhs.
+            //
+            // Snag #43 companion (2026-05-13): previously the result_id was
+            // typed `Option[T]` (same as lhs_type) and the Some-branch copied
+            // the whole Option into result_id — a shallow alias on Option's
+            // Some_0 field. For non-Copy T (e.g. Option[JsValue]) this fired
+            // the resource-moves validator (`shallow copy of resource _N :
+            // Option__JsValue`) and aborted compilation. Surfaced by the
+            // gorget-js eval.gg's `object_get_own(...) ?? JsValue.Undefined`.
+            //
+            // Fix: type result_id as the inner T (extracted from the first
+            // variant's field 0). The Some-branch uses `enum_field_load_move`
+            // to extract field 0 with Move semantics — the LIR zeros the
+            // source's payload field, preventing the alias. The None-branch
+            // assigns rhs_val (already typed T) into result_id with a mode
+            // chosen to avoid shallow-copy when T is a resource.
             let lhs_val = lower_expr(ctx, builder, lhs);
             let lhs_type = infer_operand_type_full(ctx, &lhs_val, builder);
-            let lhs_local = builder.add_local(lhs_type, None);
-            builder.assign(Place::local(lhs_local), lhs_val);
 
-            // Check tag: if tag != None_tag, use lhs; else evaluate rhs
+            // Inner T = variant 0's field 0 type. Variant name = "Some" for
+            // Option, "Ok" for Result — derive from the type def rather than
+            // hardcoding, so user-defined `__some/__none`-shaped enums also
+            // work if anyone wires them up.
+            let (variant_name, inner_type) = {
+                let mut found: Option<(String, TypeId)> = None;
+                if let Some(name) = ctx.type_registry.type_name(lhs_type) {
+                    if let Some(td) = ctx.type_registry.get_type_def(&name) {
+                        if let crate::ir::types::TypeDefKind::Enum(ref e) = td.kind {
+                            if let Some(v) = e.variants.first() {
+                                if let Some(f) = v.fields.first() {
+                                    found = Some((v.name.clone(), f.type_id));
+                                }
+                            }
+                        }
+                    }
+                }
+                found.unwrap_or_else(|| (String::from("Some"), lhs_type))
+            };
+
+            // Stage lhs into lhs_local. For owned resource sources, use
+            // Move + zero-source — matches `emit_result_auto_propagate`'s
+            // staging at exprs/mod.rs:2450-2462; otherwise plain assign.
+            let lhs_local = builder.add_local(lhs_type, None);
+            let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = lhs_val {
+                if p.projections.is_empty() { Some(p.local) } else { None }
+            } else { None };
+            if src_local.is_some() && ctx.type_registry.is_resource_type(lhs_type) {
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    Place::local(lhs_local),
+                    lhs_val,
+                );
+                if let Some(local) = src_local {
+                    if !ctx.drops.is_moved(local) {
+                        ctx.move_zero_and_mark(builder, local);
+                    }
+                }
+            } else {
+                builder.assign(Place::local(lhs_local), lhs_val);
+            }
+
+            // Tag check: variant 0 (Some/Ok) means "has value".
             let tag = builder.tag_of(FunctionBuilder::copy(lhs_local));
-            // None is conventionally the last variant (tag = num_variants - 1)
-            // Use 0 as "has value" heuristic: tag == 0 means first variant (Some/Ok)
             let is_some = builder.cmp(
                 CmpOp::Eq,
                 I32_TYPE,
@@ -682,25 +735,63 @@ fn lower_expr_inner(
                 Operand::Constant(Constant::I32(0)),
             );
 
-            let result_id = builder.add_local(lhs_type, None);
+            // result_id typed T (the inner type) — NOT Option[T].
+            let result_id = builder.add_local(inner_type, None);
             let then_bb = builder.new_block();
             let else_bb = builder.new_block();
             let merge_bb = builder.new_block();
 
             builder.branch(FunctionBuilder::copy(is_some), then_bb, else_bb);
 
-            // Has value: extract it (field 0 of variant 0)
+            // Some/Ok path: extract field 0 with Move semantics (zeros the
+            // source's payload field), then Move the extracted T into
+            // result_id. The extracted local owns the bytes after
+            // enum_field_load_move — mark Owned + register for drop so the
+            // Tier 2a "AssignIntoOwnedSlot from untracked source" validator
+            // sees a tracked Owned source on the subsequent Move.
             builder.switch_to(then_bb);
-            builder.assign(Place::local(result_id), FunctionBuilder::copy(lhs_local));
+            let extracted = builder.enum_field_load_move(
+                Place::local(lhs_local),
+                variant_name,
+                0,
+                inner_type,
+            );
+            if ctx.type_registry.is_resource_type(inner_type) {
+                ctx.set_owned(builder, extracted);
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    Place::local(result_id),
+                    FunctionBuilder::copy(extracted),
+                );
+            } else {
+                builder.assign(Place::local(result_id), FunctionBuilder::copy(extracted));
+            }
             builder.jump(merge_bb);
 
-            // None: evaluate rhs
+            // None path: lower rhs and assign into result_id. Move mode for
+            // resource T so a fresh-constructed rhs (e.g. `JsValue.Undefined`)
+            // doesn't shallow-alias result_id.
             builder.switch_to(else_bb);
             let rhs_val = lower_expr(ctx, builder, rhs);
-            builder.assign(Place::local(result_id), rhs_val);
+            if ctx.type_registry.is_resource_type(inner_type) {
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    Place::local(result_id),
+                    rhs_val,
+                );
+            } else {
+                builder.assign(Place::local(result_id), rhs_val);
+            }
             builder.jump(merge_bb);
 
             builder.switch_to(merge_bb);
+            // Register result_id for drop when T needs one (resource T).
+            // result_id owns the data after either branch — Some-path moved
+            // it out of lhs_local, None-path moved it from a fresh rhs.
+            if ctx.type_registry.needs_drop(inner_type) {
+                ctx.drops.register_local(result_id, inner_type, &ctx.type_registry);
+                ctx.set_owned(builder, result_id);
+            }
             FunctionBuilder::copy(result_id)
         }
 
