@@ -51,10 +51,9 @@ String format_type_id(int tid, GirModule &gmod):
             case GtFnPtr(fn_params, fn_ret):
                 String fn_str = "fn("
                 int fpi = 0
-                while fpi < fn_params.len():
+                for fp_tid in fn_params:
                     if fpi > 0:
                         fn_str = fn_str + ", "
-                    int fp_tid = fn_params.get(fpi).unwrap()
                     fn_str = fn_str + format_type_id(fp_tid, &gmod)
                     fpi += 1
                 fn_str = fn_str + ") -> " + format_type_id(fn_ret, &gmod)
@@ -76,9 +75,7 @@ String format_operand(Operand op, GirModule &gmod):
         case OpBorrow(lid):
             return "borrow _" + int_to_str(lid)
         case OpConstBool(b):
-            if b:
-                return "const true"
-            return "const false"
+            return if b: "const true" else: "const false"
         case OpConstI32(v):
             return "const " + int_to_str(v) + "i32"
         case OpConstI64(v):
@@ -154,12 +151,16 @@ String cmpop_name(int op):
 # ── Instruction formatting ───────────────────────────────
 
 String format_args(Vector[Operand] args, GirModule &gmod):
+    # `for (i, arg) in args.enumerate():` is the idiomatic shape but
+    # hits a snag — tuple-destructuring in a for-loop iterator pattern
+    # produces empty output when wrapped in a function. See TODO
+    # "for-loop tuple destructure over EnumerateIter silently empty".
+    # Manual index counter as the workaround until that's fixed.
     String result = ""
     int i = 0
-    while i < args.len():
+    for arg in args:
         if i > 0:
             result = result + ", "
-        Operand arg = args.get(i).unwrap()
         result = result + format_operand(arg, &gmod)
         i = i + 1
     return result
@@ -212,50 +213,41 @@ String format_function(GirFunction func, GirModule &gmod):
     # Signature: fn @name(param_types) -> return_type {
     String params_str = ""
     int pi = 0
-    while pi < func.param_types.len():
+    for pt in func.param_types:
         if pi > 0:
             params_str = params_str + ", "
-        int pt = func.param_types.get(pi).unwrap()
         params_str = params_str + format_type_id(pt, &gmod)
-        pi = pi + 1
+        pi += 1
     String sig = "fn @" + func.name + "(" + params_str + ") -> " + format_type_id(func.return_type, &gmod) + " {"
 
-    # Locals
+    # Locals — index drives the `_N` label so we keep a manual counter
+    # alongside the for-loop. Once the EnumerateIter tuple-destructure
+    # snag is closed (see TODO), this collapses to a single line.
     String locals_str = "    locals:"
     int li = 0
-    while li < func.locals.len():
-        GirLocal loc = func.locals.get(li).unwrap()
+    for loc in func.locals:
         String line = "        _" + int_to_str(li) + ": " + format_type_id(loc.type_id, &gmod)
-        # Access name_hint without intermediate Option copy to avoid
-        # double-free from CoW aliasing with the GirLocal's field.
-        int hint_tid = loc.type_id
-        if hint_tid >= 0:
-            match loc.name_hint:
-                case Some(h):
-                    line = line + "         ; " + h
-                else:
-                    pass
+        match loc.name_hint:
+            case Some(h):
+                line = line + "         ; " + h
+            else:
+                pass
         locals_str = locals_str + "\n" + line
-        li = li + 1
+        li += 1
 
     # Blocks
     String blocks_str = ""
     int bi = 0
-    while bi < func.blocks.len():
+    for bb in func.blocks:
         blocks_str = blocks_str + "\n    bb" + int_to_str(bi) + ":"
-        BasicBlock bb = func.blocks.get(bi).unwrap()
-        int ii = 0
-        while ii < bb.insts.len():
-            Instruction inst = bb.insts.get(ii).unwrap()
+        for inst in bb.insts:
             blocks_str = blocks_str + "\n" + format_instruction(inst, &gmod)
-            ii = ii + 1
-        Terminator t = bb.term
-        match t:
+        match bb.term:
             case GTNone():
                 pass
             else:
-                blocks_str = blocks_str + "\n" + format_terminator(t, &gmod)
-        bi = bi + 1
+                blocks_str = blocks_str + "\n" + format_terminator(bb.term, &gmod)
+        bi += 1
 
     return sig + "\n" + locals_str + "\n" + blocks_str + "\n}"
 
@@ -264,33 +256,20 @@ String format_function(GirFunction func, GirModule &gmod):
 String format_module(GirModule &gmod):
     String result = ""
     # Extern declarations
-    int ei = 0
-    while ei < gmod.externs.len():
-        GirExtern ext = gmod.externs.get(ei).unwrap()
-        String variadic = ""
-        if ext.is_variadic:
-            variadic = "..."
+    for ext in gmod.externs:
+        String variadic = if ext.is_variadic: "..." else: ""
         result = result + "extern fn @" + ext.name + "(" + variadic + ") -> " + format_type_id(ext.return_type, &gmod) + "\n"
-        ei = ei + 1
     if gmod.externs.len() > 0:
         result = result + "\n"
-    # Functions — filter imported functions.
-    # Same-file functions are always kept.
-    # Imported functions (tracked in gmod.imported_fns) are kept only
-    # if they're registered in fn_sigs (meaning they're called).
+    # Functions — same-file always kept; imported only if registered
+    # in `fn_sigs` (i.e., transitively called).
     int fi = 0
-    while fi < gmod.functions.len():
-        GirFunction func = gmod.functions.get(fi).unwrap()
-        bool keep = true
-        String fname = func.name.clone()
-        if gmod.imported_fns.contains(fname):
-            # Imported function — only keep if in fn_sigs
-            if not gmod.fn_sigs.contains(fname):
-                keep = false
+    for func in gmod.functions:
+        bool is_imported = gmod.imported_fns.contains(func.name)
+        bool keep = not is_imported or gmod.fn_sigs.contains(func.name)
         if keep:
             if fi > 0:
                 result = result + "\n"
-            result = result + format_function(func, &gmod)
-            result = result + "\n"
-        fi = fi + 1
+            result = result + format_function(func, &gmod) + "\n"
+        fi += 1
     return result
