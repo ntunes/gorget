@@ -1228,6 +1228,21 @@ match value:
         print("other")
 ```
 
+**Nested patterns.** A constructor pattern can match the shape of its inner value as well, so you don't need to write nested `match` statements just to drill in:
+
+```gorget
+String render(Option[JsValue] o):
+    match o:
+        case Some(JsValue.StringV(s)):
+            return s
+        case Some(JsValue.NumberV(n)):
+            return f"num: {n}"
+        else:
+            return ""
+```
+
+The `else` arm catches both the `None` case and any `Some(...)` case the explicit patterns missed. Use this rather than the longer `case Some(v): match v: ...` idiom — it parses and lowers identically, and the `else` arm avoids one level of nesting.
+
 ### 6.11 For Loop
 
 ```ebnf
@@ -1655,6 +1670,15 @@ Unwraps the left operand if `Some`; otherwise evaluates the right operand. The r
 ```gorget
 String name = user?.name ?? "anonymous"
 ```
+
+The right-hand side may be a **divergent expression** (`throw`, `return`, or a noreturn call) — useful for the "unwrap-or-throw" idiom:
+
+```gorget
+JsValue v = arg ?? throw "missing argument"      # throws if None, in a `throws E` fn
+int port = parsed ?? return Error("config")      # early-returns if None
+```
+
+Divergent right-hand sides type-check as compatible with any expected `T` (they never produce a value), so the overall `??` expression keeps the type of the success side.
 
 ### 7.13 Type-Directed Result Capture
 
@@ -2398,6 +2422,22 @@ void main():
 On success, the expression's value passes through unchanged. On failure, the error is bound to the identifier and the recovery expression is evaluated. The recovery expression must produce the same type as the success value.
 
 Unlike `rethrow`, `catch` does **not** require the enclosing function to declare `throws` — it fully handles the error, so nothing escapes.
+
+**Wildcard binding** — use `_` when the error value isn't needed:
+
+```gorget
+int x = risky() catch (_): default_value
+```
+
+**Multi-line recovery body** — the recovery expression may be a multi-line indented block; the block's last expression is the value:
+
+```gorget
+int x = risky() catch (e):
+    log_error(e)
+    default_value
+```
+
+The block form lets the recovery run side-effecting statements (logging, cleanup, etc.) before producing the fallback value. Statements inside the block can be `return`, `throw` (if the enclosing function declares `throws`), or any normal control flow — the type checker treats divergent recoveries as compatible with any expected type.
 
 ### 10.6 Throws on Main
 

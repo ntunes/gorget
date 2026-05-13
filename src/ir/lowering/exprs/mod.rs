@@ -700,7 +700,20 @@ fn lower_expr_inner(
             // assigns rhs_val (already typed T) into result_id with a mode
             // chosen to avoid shallow-copy when T is a resource.
             let lhs_val = lower_expr(ctx, builder, lhs);
-            let lhs_type = infer_operand_type_full(ctx, &lhs_val, builder);
+            let raw_lhs_type = infer_operand_type_full(ctx, &lhs_val, builder);
+            // Non-Copy params pass by pointer (`*Option[T]`); peel one layer
+            // so the variant lookup hits the actual enum's TypeDef. Without
+            // this, gorget-js critique item #2 follow-on bug: `??` on an
+            // Option-typed param mis-classifies the variant (lhs_type stays
+            // Ptr) and the lowering emits an Option-clone wrapped around a
+            // T-typed phi — the LIR phi typed the merged path's bytes as
+            // Option[T], called Option__T__clone on a T pointer, and the
+            // returned "Option" was garbage.
+            let lhs_type = match ctx.type_registry.get(raw_lhs_type) {
+                Some(crate::ir::types::GirType::Ptr(inner))
+                | Some(crate::ir::types::GirType::MutPtr(inner)) => *inner,
+                _ => raw_lhs_type,
+            };
 
             // Inner T = variant 0's field 0 type. Variant name = "Some" for
             // Option, "Ok" for Result — derive from the type def rather than
@@ -722,30 +735,66 @@ fn lower_expr_inner(
                 found.unwrap_or_else(|| (String::from("Some"), lhs_type))
             };
 
-            // Stage lhs into lhs_local. For owned resource sources, use
-            // Move + zero-source — matches `emit_result_auto_propagate`'s
-            // staging at exprs/mod.rs:2450-2462; otherwise plain assign.
-            let lhs_local = builder.add_local(lhs_type, None);
-            let src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = lhs_val {
-                if p.projections.is_empty() { Some(p.local) } else { None }
+            // Pick the right staging shape for the source.
+            //   (a) Source is a bare named local that owns its data — use
+            //       directly as `scrut_place`; subsequent Move-extract
+            //       zeros the source's Some_0 (correct: source's drop is
+            //       a no-op on zeroed payload via cap=0 / NULL-pointer).
+            //   (b) Source is a borrowed Ptr (non-Copy param) — clone the
+            //       whole Option into a fresh owned local first, then use
+            //       that. Necessary because Move-extracting from a borrow
+            //       would zero the caller's slot, and Borrow-extracting
+            //       + cloning the inner value tripped a separate alias
+            //       (the user's match-on-result_id later observed both an
+            //       extracted-then-zeroed scrut and the alive result_id).
+            //   (c) Source is a constant / complex operand — stage Copy
+            //       into a fresh local.
+            let raw_src_place = if let Operand::Copy(ref p) | Operand::Move(ref p) = lhs_val {
+                if p.projections.is_empty() { Some(p.clone()) } else { None }
             } else { None };
-            if src_local.is_some() && ctx.type_registry.is_resource_type(lhs_type) {
-                builder.assign_mode(
-                    crate::ir::instructions::AssignMode::Move,
-                    Place::local(lhs_local),
-                    lhs_val,
-                );
-                if let Some(local) = src_local {
-                    if !ctx.drops.is_moved(local) {
-                        ctx.move_zero_and_mark(builder, local);
-                    }
+            let src_is_borrowed = if let Some(ref p) = raw_src_place {
+                let lty = builder.local_type(p.local);
+                matches!(
+                    ctx.type_registry.get(lty),
+                    Some(crate::ir::types::GirType::Ptr(_) | crate::ir::types::GirType::MutPtr(_))
+                ) || ctx.is_ref_local(builder, p.local)
+            } else { false };
+            let scrut_place = if src_is_borrowed {
+                // Clone the whole Option via its `_clone` runtime helper
+                // so the rest of the lowering sees an owned scrutinee.
+                // Mirrors `lower_call_arg`'s Ownership::Move from-borrow
+                // path at `src/ir/lowering/exprs/calls.rs:237-245`.
+                let p = raw_src_place.expect("borrowed source implies place");
+                if let Some(clone_fn) = ctx.clone_fn_for_ptr(lhs_type) {
+                    let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(p.local)], lhs_type);
+                    let lhs_local = builder.add_local(lhs_type, None);
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(lhs_local),
+                        FunctionBuilder::copy(cloned),
+                    );
+                    ctx.drops.register_local(lhs_local, lhs_type, &ctx.type_registry);
+                    ctx.set_owned(builder, lhs_local);
+                    Place::local(lhs_local)
+                } else {
+                    // No clone fn available — fall through to plain
+                    // assign as a best-effort. Should be unreachable for
+                    // resource-typed Options (they all have generated
+                    // clones), but guard against type-registry races.
+                    let lhs_local = builder.add_local(lhs_type, None);
+                    builder.assign(Place::local(lhs_local), lhs_val);
+                    Place::local(lhs_local)
                 }
+            } else if let Some(p) = raw_src_place {
+                p
             } else {
+                let lhs_local = builder.add_local(lhs_type, None);
                 builder.assign(Place::local(lhs_local), lhs_val);
-            }
+                Place::local(lhs_local)
+            };
 
             // Tag check: variant 0 (Some/Ok) means "has value".
-            let tag = builder.tag_of(FunctionBuilder::copy(lhs_local));
+            let tag = builder.tag_of(Operand::Copy(scrut_place.clone()));
             let is_some = builder.cmp(
                 CmpOp::Eq,
                 I32_TYPE,
@@ -768,8 +817,11 @@ fn lower_expr_inner(
             // Tier 2a "AssignIntoOwnedSlot from untracked source" validator
             // sees a tracked Owned source on the subsequent Move.
             builder.switch_to(then_bb);
+            // scrut is now always owned (the borrowed-source clone above
+            // forces it). Move-extract zeros source's Some_0 and gives us
+            // an owned T; Move-assign that into result_id.
             let extracted = builder.enum_field_load_move(
-                Place::local(lhs_local),
+                scrut_place.clone(),
                 variant_name,
                 0,
                 inner_type,

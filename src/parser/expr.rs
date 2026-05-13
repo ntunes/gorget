@@ -425,6 +425,35 @@ impl Parser {
                 Ok(Spanned::new(Expr::It, start))
             }
 
+            // Divergent expressions: `throw expr` and `return [expr]` are
+            // accepted in expression position so they can flow into things
+            // like `?? throw err()`, `if cond: return 0 else: value`, and
+            // single-line catch / match arm forms. Wraps the resulting
+            // statement in a synthetic `Expr::Block` so downstream lowering
+            // — which already handles Block-as-expr — emits the early-exit
+            // terminator. The block's value is irrelevant: the typecheck
+            // pass treats divergent expressions as compatible with any
+            // expected type, and the LIR's `set_terminator` no-op rule
+            // (Cluster B fix, 2026-05-12) prevents post-divergent assigns
+            // / jumps from clobbering the early exit. Gorget-js critique
+            // item #2 (2026-05-13).
+            Token::Keyword(Keyword::Throw) => {
+                let throw_stmt = self.parse_throw_stmt()?;
+                let span = throw_stmt.span;
+                Ok(Spanned::new(
+                    Expr::Block(Block { stmts: vec![throw_stmt], span }),
+                    span,
+                ))
+            }
+            Token::Keyword(Keyword::Return) => {
+                let return_stmt = self.parse_return_stmt()?;
+                let span = return_stmt.span;
+                Ok(Spanned::new(
+                    Expr::Block(Block { stmts: vec![return_stmt], span }),
+                    span,
+                ))
+            }
+
             // Unary not
             Token::Keyword(Keyword::Not) => {
                 self.advance();
@@ -973,9 +1002,21 @@ impl Parser {
             }
             InfixOp::Catch => {
                 self.advance(); // consume `catch`
-                // Always binding form: catch (name): recovery
+                // Always binding form: `catch (name): recovery`. The name can
+                // be `_` (wildcard) — gorget-js critique point #1, 2026-05-13.
+                // The underscore is stored as the binding name "_"; it's not
+                // a valid expression-position identifier so the recovery body
+                // can't reference it, which gives the right "wildcard" semantic
+                // without changing the AST shape. Mirrors how match arms accept
+                // `_` as a wildcard pattern.
                 self.expect(&Token::LParen)?;
-                let error_name = self.expect_identifier()?;
+                let error_name = if matches!(self.peek(), Token::Underscore) {
+                    let span = self.peek_span();
+                    self.advance();
+                    Spanned::new(String::from("_"), span)
+                } else {
+                    self.expect_identifier()?
+                };
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::Colon)?;
                 let recovery = self.parse_body_or_expr(start)?;

@@ -2921,6 +2921,55 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn catch_wildcard_binding() {
+    // gorget-js critique #1 (2026-05-13): `catch (_)` was rejected as a
+    // parse error; users had to write `catch (_e)` and tolerate an
+    // unused-binding warning (or suppress it with the underscore-prefix
+    // convention). The wildcard binding aligns catch with match arms
+    // which already accept `_` as a non-binding pattern. Parser now
+    // accepts `Token::Underscore` and stores the binding as the literal
+    // name "_" — that name can't be referenced from expression position
+    // (the lexer tokenises bare `_` as Underscore, not Identifier), so
+    // the recovery body silently gets a write-only binding.
+    run_gg(
+        "catch_wildcard_binding.gg",
+        "a=42\nb=-1",
+    );
+}
+
+#[test]
+fn dop_throw_rhs() {
+    // gorget-js critique #2 (2026-05-13): `option ?? throw err()` was
+    // rejected as a parse error because `throw` was a statement
+    // keyword. The "unwrap-or-throw" idiom is common in interpreter
+    // code; users had to write a full match: `case Some(v): v / case
+    // None: throw …`.
+    //
+    // Fix has three parts:
+    //  (a) Parser accepts `throw expr` and `return [expr]` as expression
+    //      prefixes — wraps them in a synthetic `Expr::Block` containing
+    //      the corresponding statement so downstream lowering treats
+    //      them uniformly (Block-as-expr already handles early-exit
+    //      terminators via Cluster B's `set_terminator` no-op rule).
+    //  (b) DefaultOp safety-pass walker saves/restores branch state
+    //      around the rhs walk so a divergent rhs (throw/return/exit)
+    //      doesn't leak its diverged flag past the ?? boundary —
+    //      mirrors Snag #39's Catch/Rethrow fix. Without this, the
+    //      Some-path continuation got flagged "unreachable code".
+    //  (c) ?? lowering for borrowed (non-Copy param) source clones the
+    //      whole Option up front via its `_clone` runtime helper so the
+    //      downstream Move-extract path operates on owned bytes. The
+    //      pre-existing `??` lowering's `assign(lhs_local, lhs_val)`
+    //      with a Ptr-typed source was the source of both the "wrong
+    //      variant" silent corruption AND the segfault under the
+    //      Snag #43 companion fix.
+    run_gg(
+        "dop_throw_rhs.gg",
+        "got: hello\nerr: no value\ni: 42\nerr: no int",
+    );
+}
+
+#[test]
 fn snag41_audit_box_string_deref() {
     // Snag #41 audit follow-up — `Box[String]` deref was the only site
     // that reached the value-typed Borrow fallback path at

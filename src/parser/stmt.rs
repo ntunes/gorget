@@ -93,7 +93,7 @@ impl Parser {
         Ok(Spanned::new(stmt, start.merge(end)))
     }
 
-    fn parse_return_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+    pub(super) fn parse_return_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Return)?;
 
@@ -119,7 +119,7 @@ impl Parser {
         Ok(Spanned::new(Stmt::Return(value), start.merge(end)))
     }
 
-    fn parse_throw_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+    pub(super) fn parse_throw_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Throw)?;
         let value = self.parse_expr()?;

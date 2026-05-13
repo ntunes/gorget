@@ -519,8 +519,20 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::DefaultOp { lhs, rhs } => {
+                // `lhs ?? rhs`: lhs is always evaluated; rhs runs only on
+                // None/Error. If rhs diverges (throw/return/exit), the
+                // overall expression is NOT divergent — the Some/Ok path
+                // still reaches the post-?? continuation. Save/restore
+                // branch state around the rhs walk so the conditional
+                // divergence doesn't leak past the ?? boundary. Same
+                // shape as Snag #39's `Expr::Catch` / `Expr::Rethrow`
+                // fix; surfaces when item #2 from the gorget-js critique
+                // (`o ?? throw err()`) lowered the rhs as a divergent
+                // Expr::Block.
                 self.check_expr(lhs);
+                let before = self.save_branch_state();
                 self.check_expr(rhs);
+                self.restore_branch_state(&before);
             }
 
             Expr::Await { expr: inner } => {

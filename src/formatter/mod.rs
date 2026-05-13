@@ -1791,6 +1791,32 @@ impl Formatter {
                 self.emitter.dedent();
             }
             Expr::Block(block) => {
+                // gorget-js critique #2 (2026-05-13): `throw expr` and
+                // `return [expr]` parse as expression prefixes by wrapping
+                // the corresponding statement in a synthetic `Expr::Block`.
+                // The formatter must round-trip those as the inline
+                // expression form, not as `do:\n    throw expr` — the do-
+                // wrapped form breaks `fmt_idempotent` (re-parsing the
+                // do-block re-wraps it, then drops the surrounding var
+                // decl as the syntactic shape drifts).
+                if block.stmts.len() == 1 {
+                    match &block.stmts[0].node {
+                        Stmt::Throw(value) => {
+                            self.emitter.write("throw ");
+                            self.format_expr(value);
+                            return;
+                        }
+                        Stmt::Return(value) => {
+                            self.emitter.write("return");
+                            if let Some(v) = value {
+                                self.emitter.write(" ");
+                                self.format_expr(v);
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 self.emitter.write("do:");
                 self.emitter.newline();
                 self.emitter.indent();

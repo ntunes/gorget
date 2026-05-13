@@ -1,0 +1,38 @@
+enum JsValue:
+    Undefined
+    StringV(String)
+    NumberV(float)
+
+JsValue inner(Option[JsValue] o) throws String:
+    JsValue v = o ?? throw "no value"
+    return v
+
+int int_inner(Option[int] o) throws String:
+    int v = o ?? throw "no int"
+    return v
+
+void main():
+    match inner(Some(JsValue.StringV("hello"))):
+        case Ok(v):
+            match v:
+                case JsValue.StringV(s):
+                    print(f"got: {s}")
+                case _:
+                    print("other")
+        case Error(e):
+            print(f"err: {e}")
+    match inner(None):
+        case Ok(_):
+            print("ok")
+        case Error(e):
+            print(f"err: {e}")
+    match int_inner(Some(42)):
+        case Ok(v):
+            print(f"i: {v}")
+        case Error(e):
+            print(f"err: {e}")
+    match int_inner(None):
+        case Ok(v):
+            print(f"i: {v}")
+        case Error(e):
+            print(f"err: {e}")
