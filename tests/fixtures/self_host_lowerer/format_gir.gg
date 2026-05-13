@@ -229,11 +229,8 @@ String format_function(GirFunction func, GirModule &gmod):
         blocks_str = f"{blocks_str}\n    bb{bi}:"
         for inst in bb.insts:
             blocks_str = f"{blocks_str}\n{format_instruction(inst, &gmod)}"
-        match bb.term:
-            case GTNone():
-                pass
-            else:
-                blocks_str = f"{blocks_str}\n{format_terminator(bb.term, &gmod)}"
+        if bb.term is not GTNone():
+            blocks_str = f"{blocks_str}\n{format_terminator(bb.term, &gmod)}"
 
     return f"{sig}\n{locals_str}\n{blocks_str}\n}}"
 
