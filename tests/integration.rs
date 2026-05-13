@@ -2921,6 +2921,40 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag43_throws_call_inline_arg() {
+    // Snag #43 — auto-propagated throws-fn call as inline argument
+    // lost non-Copy fields. `v.push(sub())` where `sub() throws E`
+    // and `outer() throws E` produced a Token with an empty String
+    // field, while the workaround `T tmp = sub(); v.push(!tmp)`
+    // worked. Bisect ingredients: both fns must throw same E, the
+    // call must be auto-propagated inline (not via local match), T
+    // must have a non-Copy field (String/Vector/Box), outer's return
+    // must be a non-Copy container (Vector — not bare T).
+    //
+    // Root cause: method-call args lowering (`lower_method_call`,
+    // methods.rs:1746) called `lower_call_arg` without the
+    // subsequent `maybe_auto_propagate` step that free-function-call
+    // args lowering (`lower_call`, calls.rs:1168) ran. The result
+    // operand stayed at type `Result[T, E]` (40 bytes for this
+    // case), but the push expected T (8 bytes for thin-pointer
+    // String). The runtime memcpy'd the Result struct's first
+    // sizeof(T) bytes — the tag — into the collection slot, so reads
+    // of the collection element saw tag/padding instead of T's
+    // String pointer.
+    //
+    // Fix: hoist `maybe_auto_propagate` inside `lower_call_arg`
+    // itself so all callers pay it uniformly. Set `expected_type`
+    // per-arg in method-call args lowering for known consuming
+    // positions (push/add/extend/send/push_back/push_front → arg 0
+    // expects element type) so `Vector[Result[T,E]].push(Ok(...))`
+    // doesn't get over-unwrapped.
+    run_gg(
+        "snag43_throws_call_inline_arg.gg",
+        "text: 'hello'",
+    );
+}
+
+#[test]
 fn snag42_scrutinee_move_inside_arm() {
     // Snag #42 — regression introduced by the initial Snag #41 fix.
     // `match c: case C.Normal(_): last = !c` moves the scrutinee

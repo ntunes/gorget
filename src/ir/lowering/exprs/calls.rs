@@ -131,6 +131,24 @@ pub(super) fn lower_call_arg(
         }
     }
     let val = lower_expr(ctx, builder, &arg.node.value);
+    // Snag #43 (2026-05-13): a throws-call passed in arg position
+    // (`v.push(sub())` where `sub() throws E`, in a fn that itself
+    // `throws E`) is type `Result[T, E]`, but the callee's param
+    // expects `T`. The auto-propagation must fire HERE — without it,
+    // the LIR pushes the whole Result struct's bytes into the
+    // collection slot, and reads of the collection element see the
+    // Result's tag/padding instead of T's fields. Previously this
+    // step lived only in the free-function-call args lowering
+    // (`lower_call` at calls.rs:1168), and method-call args
+    // (`lower_method_call` at methods.rs:1746) routed through
+    // `lower_call_arg` without it — so `v.push(throws_fn())` silently
+    // corrupted non-Copy fields of the returned T while
+    // `T tmp = throws_fn(); v.push(!tmp)` worked. Hoisting the
+    // auto-prop step inside `lower_call_arg` makes every caller pay
+    // it uniformly; the `expected_type` gate (set by the caller when
+    // the param type is itself a Result, e.g. `Vector[Result[T,E]]
+    // .push(Ok(...))`) prevents over-unwrapping.
+    let val = super::maybe_auto_propagate(ctx, builder, val);
     match arg.node.ownership {
         Ownership::MutableBorrow => {
             // GlobalRef → GlobalRefPtr: emit &global_name directly.

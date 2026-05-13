@@ -1743,13 +1743,43 @@ pub(super) fn lower_method_call(
         // by THIS method call's argument lowering (not from nested/prior calls).
         let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
 
+        // Snag #43 (2026-05-13) prep: set `expected_type` per consuming
+        // arg position so the auto-propagation step inside
+        // `lower_call_arg` knows whether to unwrap a throws-call result
+        // (param type is T → unwrap) or keep it (param type is
+        // `Result[T,E]` → leave alone, e.g.
+        // `Vector[Result[int, String]].push(Ok(1))`). For
+        // GIR-lowered equip methods, `method_param_types` already
+        // carries the typed signature; for builtin collection runtime
+        // methods, derive the element type from the receiver's
+        // `Vector__T` / `Set__T` / `HashSet__T` name. Dict / HashMap
+        // value-position typing skipped here — the key/value split
+        // requires Dict-specific name parsing the existing helper
+        // doesn't cover; the runtime contract for those methods
+        // forwards values by pointer so the over-unwrap risk is lower
+        // (a tag-bytes write would be caught at the C boundary).
+        let elem_type_hint = extract_elem_type_id_from_type_name(ctx, &type_name);
+        let value_arg_idx_for_method: Option<usize> = match method_name {
+            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
+            _ => None,
+        };
         let mut lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
+                let prev_expected = ctx.func_state.expected_type;
                 let callee_pt = method_param_types.get(i).copied();
+                if let Some(pt) = callee_pt {
+                    ctx.func_state.expected_type = Some(pt);
+                } else if Some(i) == value_arg_idx_for_method {
+                    if let Some(et) = elem_type_hint {
+                        ctx.func_state.expected_type = Some(et);
+                    }
+                }
                 // Method args: i is 0-based for non-self args, but fn_param_ownerships
                 // includes self at index 0, so offset by 1.
-                lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1)
+                let op = lower_call_arg(ctx, builder, arg, callee_pt, &effective_name, i + 1);
+                ctx.func_state.expected_type = prev_expected;
+                op
             })
             .collect();
         // Positions that semantically consume (take ownership of) their arg.
