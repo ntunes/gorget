@@ -323,10 +323,7 @@ equip ScopeTable:
         return false
 
     int lookup_def_by_span(self, String name, Span span):
-        int i = 0
-        while i < self.definitions.len():
-            DefInfo d = get_def_at(self.definitions, i)
+        for (i, d) in self.definitions.enumerate():
             if d.name == name and d.span.start == span.start and d.span.end == span.end:
                 return i
-            i = i + 1
         return NO_DEF

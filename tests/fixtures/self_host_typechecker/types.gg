@@ -218,16 +218,13 @@ equip TypeTable:
         if prim_name == "void":
             return self.void_id
         # Other numeric types — search or insert
-        int i = 0
-        while i < self.types.len():
-            ResolvedType t = get_rtype_at(self.types, i)
+        for (i, t) in self.types.enumerate():
             match t:
                 case RTPrimitive(name):
                     if name == prim_name:
                         return i
                 else:
                     pass
-            i = i + 1
         return self.add_type(RTPrimitive(prim_name))
 
 # ── AST Type → TypeId conversion ────────────────────────────
@@ -290,12 +287,9 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                     if generic_args.len() == 0:
                         return types.defined_id(def_id)
                     Vector[int] resolved_args = Vector[int]()
-                    int i = 0
-                    while i < generic_args.len():
-                        SpannedType arg = get_stype_at(generic_args, i)
+                    for arg in generic_args:
                         int arg_id = ast_type_to_resolved(arg.ty, arg.span, scopes, &types)
                         resolved_args.push(arg_id)
-                        i = i + 1
                     # Box[Trait] → TraitObject
                     if name == "Box" and resolved_args.len() == 1:
                         int inner_tid = get_int_at(resolved_args, 0)
@@ -336,12 +330,9 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                     if generic_args.len() == 0:
                         return types.defined_id(alias_def)
                     Vector[int] resolved_args = Vector[int]()
-                    int j = 0
-                    while j < generic_args.len():
-                        SpannedType arg = get_stype_at(generic_args, j)
+                    for arg in generic_args:
                         int arg_id = ast_type_to_resolved(arg.ty, arg.span, scopes, &types)
                         resolved_args.push(arg_id)
-                        j = j + 1
                     return types.add_type(RTGeneric(alias_def, resolved_args))
                 return types.error_id
             # Unknown type
@@ -357,21 +348,15 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
 
         case TTuple(elements):
             Vector[int] elem_ids = Vector[int]()
-            int i = 0
-            while i < elements.len():
-                SpannedType elem = get_stype_at(elements, i)
+            for elem in elements:
                 elem_ids.push(ast_type_to_resolved(elem.ty, elem.span, scopes, &types))
-                i = i + 1
             return types.add_type(RTTuple(elem_ids))
 
         case TFunction(return_type, params, param_ownerships):
             int ret_id = ast_type_to_resolved((*return_type).ty, (*return_type).span, scopes, &types)
             Vector[int] param_ids = Vector[int]()
-            int i = 0
-            while i < params.len():
-                SpannedType p = get_stype_at(params, i)
+            for p in params:
                 param_ids.push(ast_type_to_resolved(p.ty, p.span, scopes, &types))
-                i = i + 1
             return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
 
         case TSelf():

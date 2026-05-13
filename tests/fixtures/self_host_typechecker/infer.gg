@@ -170,12 +170,9 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # (e.g. `Vector[int](...)` → RTGeneric).
                         if targs.len() > 0:
                             Vector[int] targ_ids = Vector[int]()
-                            int ti = 0
-                            while ti < targs.len():
-                                SpannedType ta = get_stype_at(targs, ti)
+                            for ta in targs:
                                 int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
                                 targ_ids.push(ta_id)
-                                ti = ti + 1
                             return types.add_type(RTGeneric(def_id, targ_ids))
                         return callee_type
                     case RTGeneric(def_id, type_args):
@@ -206,12 +203,9 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         if is_struct or is_enum:
                             if targs.len() > 0:
                                 Vector[int] targ_ids = Vector[int]()
-                                int ti = 0
-                                while ti < targs.len():
-                                    SpannedType ta = get_stype_at(targs, ti)
+                                for ta in targs:
                                     int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
                                     targ_ids.push(ta_id)
-                                    ti = ti + 1
                                 return types.add_type(RTGeneric(def_id, targ_ids))
                             return types.defined_id(def_id)
                 else:
@@ -311,11 +305,8 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     # types up front and feed them to the shape resolver.
                     int reg_ret = reg_res.sig.return_type
                     Vector[int] reg_arg_types = Vector[int]()
-                    int rai = 0
-                    while rai < args.len():
-                        SpannedExpr a = args.get(rai).unwrap()
+                    for a in args:
                         reg_arg_types.push(infer_expr_type(a, scopes, &types, ctx))
-                        rai = rai + 1
                     ShapeResolution sh = resolve_method_shape(types.trait_registry, reg_obj_type, method_name)
                     if sh.found:
                         Vector[int] bound = infer_method_targs(sh.shape, reg_arg_types, scopes, types)
@@ -538,12 +529,9 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case ETupleLiteral(elements):
             Vector[int] elem_ids = Vector[int]()
-            int i = 0
-            while i < elements.len():
-                SpannedExpr elem = elements.get(i).unwrap()
+            for elem in elements:
                 int et = infer_expr_type(elem, scopes, &types, ctx)
                 elem_ids.push(et)
-                i = i + 1
             return types.add_type(RTTuple(elem_ids))
 
         case EDictLiteral(keys, values):
@@ -569,14 +557,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             Vector[int] param_ownerships = Vector[int]()
             # Build param name → type map for local inference
             Dict[String, int] param_types = Dict[String, int]()
-            int pi = 0
-            while pi < params.len():
-                Param p = params.get(pi).unwrap()
+            for p in params:
                 int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
                 param_type_ids.push(p_type_id)
                 param_ownerships.push(p.ownership)
                 param_types.put(p.param_name, p_type_id)
-                pi = pi + 1
             # Infer return type from last statement in body
             int ret_id = types.void_id
             if body.len() > 0:

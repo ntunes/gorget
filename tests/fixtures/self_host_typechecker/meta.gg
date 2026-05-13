@@ -110,9 +110,7 @@ void expand_meta_types(Module &m, TypeTable &types):
     Dict[String, bool] bool_consts = Dict[String, bool]()
     Dict[String, String] str_consts = Dict[String, String]()
 
-    int i = 0
-    while i < m.items.len():
-        Item item = m.items.get(i).unwrap()
+    for item in m.items:
         match item:
             case IMetaConst(mc_type, mc_name, mc_expr):
                 String type_name = meta_type_to_name(mc_type.ty)
@@ -128,15 +126,12 @@ void expand_meta_types(Module &m, TypeTable &types):
                             pass
             else:
                 pass
-        i = i + 1
 
     # Add platform builtins
     int_consts["arch_word_bits"] = 64
 
     # Pass 2: resolve meta type aliases
-    i = 0
-    while i < m.items.len():
-        Item item = m.items.get(i).unwrap()
+    for item in m.items:
         match item:
             case IMetaType(mt_name, mt_rhs):
                 match mt_rhs:
@@ -183,7 +178,6 @@ void expand_meta_types(Module &m, TypeTable &types):
                         pass
             else:
                 pass
-        i = i + 1
 
 # ── Meta-for-in-match expansion ─────────────────────────────
 #

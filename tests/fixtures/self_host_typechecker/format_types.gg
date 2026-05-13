@@ -25,24 +25,18 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
         case RTGeneric(def_id, args):
             DefInfo d = scopes.get_def(def_id)
             String result = d.name + "["
-            int i = 0
-            while i < args.len():
+            for (i, arg_id) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                int arg_id = get_int_at(args, i)
                 result = result + describe_type(arg_id, scopes, types)
-                i = i + 1
             result = result + "]"
             return result
         case RTTuple(elems):
             String result = "("
-            int i = 0
-            while i < elems.len():
+            for (i, elem_id) in elems.enumerate():
                 if i > 0:
                     result = result + ", "
-                int elem_id = get_int_at(elems, i)
                 result = result + describe_type(elem_id, scopes, types)
-                i = i + 1
             result = result + ")"
             return result
         case RTArray(elem_id, size):
@@ -52,13 +46,10 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
         case RTFunction(params, ownerships, ret_id):
             String ret_str = describe_type(ret_id, scopes, types)
             String result = ret_str + "("
-            int i = 0
-            while i < params.len():
+            for (i, p_id) in params.enumerate():
                 if i > 0:
                     result = result + ", "
-                int p_id = get_int_at(params, i)
                 result = result + describe_type(p_id, scopes, types)
-                i = i + 1
             result = result + ")"
             return result
         case RTTraitObject(def_id):
@@ -112,9 +103,9 @@ String quote(String s):
 String join_lines(Vector[String] lines):
     if lines.len() == 0:
         return ""
-    String result = lines.get(0).unwrap()
-    int i = 1
-    while i < lines.len():
-        result = result + "\n" + lines.get(i).unwrap()
-        i = i + 1
+    String result = ""
+    for (i, line) in lines.enumerate():
+        if i > 0:
+            result = result + "\n"
+        result = result + line
     return result
