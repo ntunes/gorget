@@ -1,7 +1,7 @@
 # GIR text formatter — produces output matching `gg build --emit-gir`.
 
 from std.collections import Vector
-from std.conv import int_to_str, float_to_str
+from std.conv import float_to_str
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction
 from gir import Terminator, Operand, GirType, GirExtern
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
@@ -47,48 +47,48 @@ String format_type_id(int tid, GirModule &gmod):
             case GtNamed(name):
                 return name
             case GtPtr(inner):
-                return "*" + format_type_id(inner, &gmod)
+                return f"*{format_type_id(inner, &gmod)}"
             case GtMutPtr(inner):
-                return "*mut " + format_type_id(inner, &gmod)
+                return f"*mut {format_type_id(inner, &gmod)}"
             case GtFnPtr(fn_params, fn_ret):
                 String fn_str = "fn("
                 for (i, fp_tid) in fn_params.enumerate():
                     if i > 0:
-                        fn_str = fn_str + ", "
-                    fn_str = fn_str + format_type_id(fp_tid, &gmod)
-                return fn_str + ") -> " + format_type_id(fn_ret, &gmod)
+                        fn_str = f"{fn_str}, "
+                    fn_str = f"{fn_str}{format_type_id(fp_tid, &gmod)}"
+                return f"{fn_str}) -> {format_type_id(fn_ret, &gmod)}"
             else:
                 pass
-    return "?type" + int_to_str(tid)
+    return f"?type{tid}"
 
 # ── Operand formatting ───────────────────────────────────
 
 String format_operand(Operand op, GirModule &gmod):
     match op:
         case OpCopy(lid):
-            return "copy _" + int_to_str(lid)
+            return f"copy _{lid}"
         case OpMove(lid):
-            return "move _" + int_to_str(lid)
+            return f"move _{lid}"
         case OpClone(lid):
-            return "clone _" + int_to_str(lid)
+            return f"clone _{lid}"
         case OpBorrow(lid):
-            return "borrow _" + int_to_str(lid)
+            return f"borrow _{lid}"
         case OpConstBool(b):
             return if b: "const true" else: "const false"
         case OpConstI32(v):
-            return "const " + int_to_str(v) + "i32"
+            return f"const {v}i32"
         case OpConstI64(v):
-            return "const " + int_to_str(v) + "i64"
+            return f"const {v}i64"
         case OpConstF64(v):
-            return "const " + float_to_str(v) + "f64"
+            return f"const {float_to_str(v)}f64"
         case OpConstStr(s):
-            return "const " + "\"" + s + "\""
+            return f"const \"{s}\""
         case OpConstUnit():
             return "const unit"
         case OpConstNull():
             return "const null"
         case OpSizeOf(tid):
-            return "const sizeof(" + format_type_id(tid, &gmod) + ")"
+            return f"const sizeof({format_type_id(tid, &gmod)})"
 
 # ── Binary op name ───────────────────────────────────────
 
@@ -123,7 +123,7 @@ String binop_name(int op):
         case OP_SHR:
             return "shr"
         else:
-            return "?op" + int_to_str(op)
+            return f"?op{op}"
 
 String unop_name(int op):
     match op:
@@ -134,7 +134,7 @@ String unop_name(int op):
         case UNOP_BITNOT:
             return "bitnot"
         else:
-            return "?unop" + int_to_str(op)
+            return f"?unop{op}"
 
 String cmpop_name(int op):
     match op:
@@ -151,7 +151,7 @@ String cmpop_name(int op):
         case CMP_GE:
             return "cmp_ge"
         else:
-            return "?cmp" + int_to_str(op)
+            return f"?cmp{op}"
 
 # ── Instruction formatting ───────────────────────────────
 
@@ -159,34 +159,34 @@ String format_args(Vector[Operand] args, GirModule &gmod):
     String result = ""
     for (i, arg) in args.enumerate():
         if i > 0:
-            result = result + ", "
-        result = result + format_operand(arg, &gmod)
+            result = f"{result}, "
+        result = f"{result}{format_operand(arg, &gmod)}"
     return result
 
 String format_instruction(Instruction inst, GirModule &gmod):
     match inst:
         case GIAssign(dst, val):
-            return "        _" + int_to_str(dst) + " = " + format_operand(val, &gmod)
+            return f"        _{dst} = {format_operand(val, &gmod)}"
         case GIBinOp(dst, op, tid, lhs, rhs):
-            return "        _" + int_to_str(dst) + " = " + binop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
+            return f"        _{dst} = {binop_name(op)} {format_type_id(tid, &gmod)} {format_operand(lhs, &gmod)}, {format_operand(rhs, &gmod)}"
         case GIUnOp(dst, op, tid, operand):
-            return "        _" + int_to_str(dst) + " = " + unop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(operand, &gmod)
+            return f"        _{dst} = {unop_name(op)} {format_type_id(tid, &gmod)} {format_operand(operand, &gmod)}"
         case GICmp(dst, op, tid, lhs, rhs):
-            return "        _" + int_to_str(dst) + " = " + cmpop_name(op) + " " + format_type_id(tid, &gmod) + " " + format_operand(lhs, &gmod) + ", " + format_operand(rhs, &gmod)
+            return f"        _{dst} = {cmpop_name(op)} {format_type_id(tid, &gmod)} {format_operand(lhs, &gmod)}, {format_operand(rhs, &gmod)}"
         case GICall(dst, name, args):
-            String prefix = if dst >= 0: "        _" + int_to_str(dst) + " = " else: "        "
-            return prefix + "call @" + name + "(" + format_args(args, &gmod) + ")"
+            String prefix = if dst >= 0: f"        _{dst} = " else: "        "
+            return f"{prefix}call @{name}({format_args(args, &gmod)})"
         case GICallExtern(dst, name, args):
-            String prefix = if dst >= 0: "        _" + int_to_str(dst) + " = " else: "        "
-            return prefix + "call_extern @" + name + "(" + format_args(args, &gmod) + ")"
+            String prefix = if dst >= 0: f"        _{dst} = " else: "        "
+            return f"{prefix}call_extern @{name}({format_args(args, &gmod)})"
         case GIDrop(lid):
-            return "        drop _" + int_to_str(lid)
+            return f"        drop _{lid}"
         case GIDropIfAlive(lid):
-            return "        drop_if_alive _" + int_to_str(lid)
+            return f"        drop_if_alive _{lid}"
         case GIMoveZero(lid):
-            return "        move_zero _" + int_to_str(lid)
+            return f"        move_zero _{lid}"
         case GIDeref(dst, src, _):
-            return "        _" + int_to_str(dst) + " = deref _" + int_to_str(src)
+            return f"        _{dst} = deref _{src}"
         case GINop():
             return "        nop"
 
@@ -195,11 +195,11 @@ String format_instruction(Instruction inst, GirModule &gmod):
 String format_terminator(Terminator term, GirModule &gmod):
     match term:
         case GTReturn(val):
-            return "        return " + format_operand(val, &gmod)
+            return f"        return {format_operand(val, &gmod)}"
         case GTJump(bid):
-            return "        jump bb" + int_to_str(bid)
+            return f"        jump bb{bid}"
         case GTBranch(cond, then_bb, else_bb):
-            return "        br " + format_operand(cond, &gmod) + ", bb" + int_to_str(then_bb) + ", bb" + int_to_str(else_bb)
+            return f"        br {format_operand(cond, &gmod)}, bb{then_bb}, bb{else_bb}"
 
 # ── Function formatting ──────────────────────────────────
 
@@ -208,34 +208,34 @@ String format_function(GirFunction func, GirModule &gmod):
     String params_str = ""
     for (i, pt) in func.param_types.enumerate():
         if i > 0:
-            params_str = params_str + ", "
-        params_str = params_str + format_type_id(pt, &gmod)
-    String sig = "fn @" + func.name + "(" + params_str + ") -> " + format_type_id(func.return_type, &gmod) + " {"
+            params_str = f"{params_str}, "
+        params_str = f"{params_str}{format_type_id(pt, &gmod)}"
+    String sig = f"fn @{func.name}({params_str}) -> {format_type_id(func.return_type, &gmod)} {{"
 
     # Locals
     String locals_str = "    locals:"
     for (li, loc) in func.locals.enumerate():
-        String line = "        _" + int_to_str(li) + ": " + format_type_id(loc.type_id, &gmod)
+        String line = f"        _{li}: {format_type_id(loc.type_id, &gmod)}"
         match loc.name_hint:
             case Some(h):
-                line = line + "         ; " + h
+                line = f"{line}         ; {h}"
             else:
                 pass
-        locals_str = locals_str + "\n" + line
+        locals_str = f"{locals_str}\n{line}"
 
     # Blocks
     String blocks_str = ""
     for (bi, bb) in func.blocks.enumerate():
-        blocks_str = blocks_str + "\n    bb" + int_to_str(bi) + ":"
+        blocks_str = f"{blocks_str}\n    bb{bi}:"
         for inst in bb.insts:
-            blocks_str = blocks_str + "\n" + format_instruction(inst, &gmod)
+            blocks_str = f"{blocks_str}\n{format_instruction(inst, &gmod)}"
         match bb.term:
             case GTNone():
                 pass
             else:
-                blocks_str = blocks_str + "\n" + format_terminator(bb.term, &gmod)
+                blocks_str = f"{blocks_str}\n{format_terminator(bb.term, &gmod)}"
 
-    return sig + "\n" + locals_str + "\n" + blocks_str + "\n}"
+    return f"{sig}\n{locals_str}\n{blocks_str}\n}}"
 
 # ── Module formatting ────────────────────────────────────
 
@@ -244,9 +244,9 @@ String format_module(GirModule &gmod):
     # Extern declarations
     for ext in gmod.externs:
         String variadic = if ext.is_variadic: "..." else: ""
-        result = result + "extern fn @" + ext.name + "(" + variadic + ") -> " + format_type_id(ext.return_type, &gmod) + "\n"
+        result = f"{result}extern fn @{ext.name}({variadic}) -> {format_type_id(ext.return_type, &gmod)}\n"
     if gmod.externs.len() > 0:
-        result = result + "\n"
+        result = f"{result}\n"
     # Functions — same-file always kept; imported only if registered
     # in `fn_sigs` (i.e., transitively called).
     for (fi, func) in gmod.functions.enumerate():
@@ -254,6 +254,6 @@ String format_module(GirModule &gmod):
         bool keep = not is_imported or gmod.fn_sigs.contains(func.name)
         if keep:
             if fi > 0:
-                result = result + "\n"
-            result = result + format_function(func, &gmod) + "\n"
+                result = f"{result}\n"
+            result = f"{result}{format_function(func, &gmod)}\n"
     return result
