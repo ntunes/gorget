@@ -92,15 +92,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
     # Load each imported module
     int pi = 0
     while pi < import_paths.len():
-        # `mod_path` is cloned (not bare-borrowed) because the inner
-        # while-loop below pushes onto `import_paths` when new transitive
-        # imports are discovered. That push can realloc the data buffer,
-        # invalidating any `Ref<String>` still held into the old slot.
-        # The clone detaches `mod_path` from `import_paths.data` so it
-        # survives the inner-loop mutations. Without it, the CoW
-        # invariant trips at heap-fragmentation thresholds where realloc
-        # moves the buffer (see TODO entry retired 2026-05-13).
-        String mod_path = import_paths.get(pi).unwrap().clone()
+        String mod_path = import_paths.get(pi).unwrap()
         String mod_prefix = mangle_prefix(mod_path)
 
         # Try local directory first, then lib directory

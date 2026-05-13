@@ -558,7 +558,34 @@ fn lower_var_decl(
                         // which emits the sound clone-then-Move IR up
                         // front and skips the reassign-time
                         // materialise.
-                        if source_is_cow_borrow && safe_in_loop
+                        // Source-mutation check (2026-05-13 follow-up to the
+                        // `expand_derives` for-loop investigation): if the
+                        // source collection is mutated later on any forward
+                        // path from this var-decl, the CowBorrow propagation
+                        // would dangle. cow_before_mutation IS triggered at
+                        // the mutation site and emits a clone, but the
+                        // resulting owned local's rebinding doesn't survive
+                        // the enclosing loop's `save_locals`/`restore_locals`
+                        // boundary — instructions emitted in the loop-exit
+                        // block (or after the loop) still reference the
+                        // original Ptr-typed local, which points into the
+                        // now-freed buffer. Falling through to the eager-
+                        // clone branch below produces an owned local at the
+                        // var-decl site, safely outliving any subsequent
+                        // mutation. Mirrors the self-host `loader.gg`
+                        // `String mod_path = ... .clone()` defensive pattern.
+                        let source_mut_unsafe = if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
+                            if let Some(coll) = ctx.cow_borrow_source(p.local).cloned() {
+                                let path: Option<String> = match coll {
+                                    crate::ir::lowering::context::CollectionId::Local(loc) => {
+                                        builder.local_name(loc).map(|s| s.to_string())
+                                    }
+                                    crate::ir::lowering::context::CollectionId::FieldPath(p) => Some(p),
+                                };
+                                path.map_or(false, |p| ctx.is_source_mut_unsafe_at(&p, stmt_span.start))
+                            } else { false }
+                        } else { false };
+                        if source_is_cow_borrow && safe_in_loop && !source_mut_unsafe
                             && ctx.type_registry.is_resource_type(_inner)
                         {
                             // Propagate CowBorrow as CollectionRef — typed binding

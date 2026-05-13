@@ -1,0 +1,35 @@
+# CoW invariant: `String s = vec.get(i).unwrap()` borrow held across
+# `vec.push(...)` was silently invalidated by realloc.
+#
+# Pre-fix (2026-05-13 follow-up to the `expand_derives` for-loop
+# investigation): the safety pass DID detect this pattern and emit a
+# `CowBorrowMutation` warning ("`v` mutated while `s` holds an element
+# — clone is inserted automatically"), but the actual clone was placed
+# INSIDE the loop body via `cow_materialize_collection_ref`. The
+# rebinding of `s` → owned_local didn't survive the enclosing loop's
+# `save_locals`/`restore_locals` boundary, so post-loop instructions
+# still referenced the original Ptr-typed local pointing into the
+# freed buffer.
+#
+# Manifested as a heap-fragmentation-threshold UAF: small inputs
+# realloc in-place (buffer stays, stale-but-valid pointer), large
+# inputs force buffer moves (stale-and-invalid). The self-host's
+# `loader.gg::load_imports` hit this on httpserver-router imports.
+#
+# Fix: at the var-decl site in `lower_var_decl`, check
+# `is_source_mut_unsafe_at(source_path, stmt_span_start)`. If the
+# source collection is mutated later, skip the CowBorrow propagation
+# and fall through to the eager-clone branch. The destination becomes
+# an owned String at the var-decl site, safely outliving any
+# subsequent mutation. Mirrors the `mod_path.clone()` defensive
+# pattern users would otherwise write by hand.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 20:
+        v.push("filler")
+        i = i + 1
+    print(f"s = {s}")
+    print(f"v[0] = {v.get(0).unwrap()}")
+    print(f"v.len() = {v.len()}")

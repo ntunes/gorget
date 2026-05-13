@@ -3522,6 +3522,27 @@ local-none",
 }
 
 #[test]
+fn cow_borrow_outlives_push() {
+    // CoW invariant: `String s = vec.get(i).unwrap()` borrow must
+    // survive subsequent `vec.push(...)` realloc. Pre-fix the safety
+    // pass detected the alias and emitted a "clone is inserted
+    // automatically" warning, but the actual clone (via
+    // `cow_materialize_collection_ref` at the mutation site) didn't
+    // survive the enclosing loop's `save_locals` boundary — post-loop
+    // reads of `s` still saw the original Ptr into a now-freed buffer.
+    // Fix: at the var-decl, check `is_source_mut_unsafe_at` and
+    // fall through to the eager-clone branch when the source is
+    // mutated later. `s` becomes an owned String at the var-decl.
+    run_gg(
+        "cow_borrow_outlives_push.gg",
+        "\
+s = hello
+v[0] = hello
+v.len() = 22",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
