@@ -22,13 +22,10 @@ String format_type_inner(Type ty):
                 return name
             String result = name
             result = result + "["
-            int i = 0
-            while i < args.len():
+            for (i, arg) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedType arg = args.get(i).unwrap()
                 result = result + format_ast_type(arg)
-                i = i + 1
             result = result + "]"
             return result
         case TSelf:
@@ -44,12 +41,10 @@ String generic_suffix(Vector[String] tps):
     if tps.len() == 0:
         return ""
     String result = "["
-    int i = 0
-    while i < tps.len():
+    for (i, tp) in tps.enumerate():
         if i > 0:
             result = result + ", "
-        result = result + tps.get(i).unwrap()
-        i = i + 1
+        result = result + tp
     result = result + "]"
     return result
 
@@ -269,9 +264,7 @@ String field_read_decl(String name, String type_name):
 
 void inject_items(String source, Vector[Item] &new_items):
     Module parsed = parse_source(source)
-    int i = 0
-    while i < parsed.items.len():
-        Item item = parsed.items.get(i).unwrap()
+    for item in parsed.items:
         match item:
             case IEquip(eb):
                 new_items.push(IEquip(eb))
@@ -279,7 +272,6 @@ void inject_items(String source, Vector[Item] &new_items):
                 new_items.push(IFunction(fd))
             else:
                 pass
-        i = i + 1
 
 # ── Variant prefix ──────────────────────────────────────────
 
@@ -297,13 +289,10 @@ String gen_struct_equatable(String name, String gs, String gp, Vector[Param] fie
         src = src + "        return true\n"
     else:
         String cmp = ""
-        int i = 0
-        while i < fields.len():
-            Param f = fields.get(i).unwrap()
+        for (i, f) in fields.enumerate():
             if i > 0:
                 cmp = cmp + " and "
             cmp = cmp + "self." + f.param_name + " == other." + f.param_name
-            i = i + 1
         src = src + "        return " + cmp + "\n"
     return src
 
@@ -314,13 +303,10 @@ String gen_struct_displayable(String name, String gs, String gp, Vector[Param] f
         src = src + "        return \"" + name + "()\"\n"
     else:
         String parts = ""
-        int i = 0
-        while i < fields.len():
-            Param f = fields.get(i).unwrap()
+        for (i, f) in fields.enumerate():
             if i > 0:
                 parts = parts + ", "
             parts = parts + f.param_name + "={self." + f.param_name + "}"
-            i = i + 1
         src = src + "        return f\"" + name + "(" + parts + ")\"\n"
     return src
 
@@ -331,13 +317,10 @@ String gen_struct_debuggable(String name, String gs, String gp, Vector[Param] fi
         src = src + "        return \"" + name + "()\"\n"
     else:
         String parts = ""
-        int i = 0
-        while i < fields.len():
-            Param f = fields.get(i).unwrap()
+        for (i, f) in fields.enumerate():
             if i > 0:
                 parts = parts + ", "
             parts = parts + f.param_name + "={self." + f.param_name + "}"
-            i = i + 1
         src = src + "        return f\"" + name + "(" + parts + ")\"\n"
     return src
 
@@ -345,13 +328,10 @@ String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fie
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
     String args = ""
-    int i = 0
-    while i < fields.len():
-        Param f = fields.get(i).unwrap()
+    for (i, f) in fields.enumerate():
         if i > 0:
             args = args + ", "
         args = args + "self." + f.param_name
-        i = i + 1
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
@@ -382,25 +362,19 @@ String gen_struct_hashable(String name, String gs, String gp, Vector[Param] fiel
     if fields.len() == 0:
         src = src + "        h.write_int(0)\n"
     else:
-        int i = 0
-        while i < fields.len():
-            Param f = fields.get(i).unwrap()
+        for f in fields:
             String ftype = format_ast_type(f.param_type)
             src = src + hashable_field_line("self." + f.param_name, ftype)
-            i = i + 1
     return src
 
 String gen_struct_default(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with Default:\n"
     src = src + "    " + name + gs + " default():\n"
     String args = ""
-    int i = 0
-    while i < fields.len():
-        Param f = fields.get(i).unwrap()
+    for (i, f) in fields.enumerate():
         if i > 0:
             args = args + ", "
         args = args + field_default(format_ast_type(f.param_type))
-        i = i + 1
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
@@ -408,39 +382,30 @@ String gen_struct_serializable(String name, String gs, String gp, Vector[Param] 
     String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        ser.begin_struct(\"" + name + "\", " + int_to_str(fields.len()) + ")\n"
-    int i = 0
-    while i < fields.len():
-        Param f = fields.get(i).unwrap()
+    for (i, f) in fields.enumerate():
         String fname = f.param_name
         String ftype = format_ast_type(f.param_type)
         src = src + "        ser.field(\"" + fname + "\", " + int_to_str(i) + ")\n"
         src = src + field_write_lines("self." + fname, ftype, "        ")
-        i = i + 1
     src = src + "        ser.end_struct()\n"
     return src
 
 String gen_struct_deserializable(String name, String gs, Vector[Param] fields):
     String src = "Result[" + name + gs + ", String] deserialize_" + name + "(Box[Deserializer] de):\n"
     src = src + "    de.begin_struct()\n"
-    int i = 0
-    while i < fields.len():
-        Param f = fields.get(i).unwrap()
+    for f in fields:
         String fname = f.param_name
         String ftype = format_ast_type(f.param_type)
         src = src + "    de.field(\"" + fname + "\")\n"
         src = src + field_read_lines(fname, ftype, "    ")
-        i = i + 1
     src = src + "    de.end_struct()\n"
     src = src + "    if de.has_error():\n"
     src = src + "        return Error(de.error())\n"
     String args = ""
-    int j = 0
-    while j < fields.len():
-        Param f = fields.get(j).unwrap()
+    for (j, f) in fields.enumerate():
         if j > 0:
             args = args + ", "
         args = args + f.param_name
-        j = j + 1
     src = src + "    return Ok(" + name + gs + "(" + args + "))\n"
     return src
 
@@ -467,9 +432,7 @@ String gen_struct_try_from(String name, String gs, String gp, Vector[Param] fiel
 String gen_struct_from_row(String name, String gs, String gp, Vector[Param] fields):
     String src = "equip " + gp + name + gs + " with FromRow:\n"
     src = src + "    " + name + gs + " from_row(Row row):\n"
-    int i = 0
-    while i < fields.len():
-        Param f = fields.get(i).unwrap()
+    for f in fields:
         String fname = f.param_name
         String ftype = format_ast_type(f.param_type)
         if ftype == "str" or ftype == "String":
@@ -482,15 +445,11 @@ String gen_struct_from_row(String name, String gs, String gp, Vector[Param] fiel
             src = src + "        bool " + fname + " = row.get_bool(\"" + fname + "\")\n"
         else:
             src = src + "        String " + fname + " = row.get(\"" + fname + "\")\n"
-        i = i + 1
     String args = ""
-    int j = 0
-    while j < fields.len():
-        Param f = fields.get(j).unwrap()
+    for (j, f) in fields.enumerate():
         if j > 0:
             args = args + ", "
         args = args + f.param_name
-        j = j + 1
     src = src + "        return " + name + gs + "(" + args + ")\n"
     return src
 
@@ -500,170 +459,131 @@ String gen_enum_equatable(String name, String gs, String gp, Vector[EnumVariant]
     String src = "equip " + gp + name + gs + " with Equatable:\n"
     src = src + "    bool eq(self, " + name + gs + " other):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
+    for v in variants:
         int fc = v.fields.len()
         String self_binds = ""
         String other_binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 self_binds = self_binds + ", "
                 other_binds = other_binds + ", "
             self_binds = self_binds + "a" + int_to_str(fi)
             other_binds = other_binds + "b" + int_to_str(fi)
-            fi = fi + 1
         String self_pat = pfx + v.name + "(" + self_binds + ")"
         String other_pat = pfx + v.name + "(" + other_binds + ")"
         String cmp = "true"
         if fc > 0:
             cmp = ""
-            int ci = 0
-            while ci < fc:
+            for (ci, _) in v.fields.enumerate():
                 if ci > 0:
                     cmp = cmp + " and "
                 cmp = cmp + "a" + int_to_str(ci) + " == b" + int_to_str(ci)
-                ci = ci + 1
         src = src + "            case " + self_pat + ":\n"
         src = src + "                match other:\n"
         src = src + "                    case " + other_pat + ":\n"
         src = src + "                        return " + cmp + "\n"
         src = src + "                    else:\n"
         src = src + "                        return false\n"
-        vi = vi + 1
     return src
 
 String gen_enum_displayable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Displayable:\n"
     src = src + "    String display(self):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
+    for v in variants:
         int fc = v.fields.len()
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         if fc == 0:
             src = src + "            case " + pat + ":\n"
             src = src + "                return \"" + v.name + "()\"\n"
         else:
             String parts = ""
-            int pi = 0
-            while pi < fc:
+            for (pi, _) in v.fields.enumerate():
                 if pi > 0:
                     parts = parts + ", "
                 parts = parts + "{a" + int_to_str(pi) + "}"
-                pi = pi + 1
             src = src + "            case " + pat + ":\n"
             src = src + "                return f\"" + v.name + "(" + parts + ")\"\n"
-        vi = vi + 1
     return src
 
 String gen_enum_debuggable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Debuggable:\n"
     src = src + "    String debug(self):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
+    for v in variants:
         int fc = v.fields.len()
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         if fc == 0:
             src = src + "            case " + pat + ":\n"
             src = src + "                return \"" + v.name + "()\"\n"
         else:
             String parts = ""
-            int pi = 0
-            while pi < fc:
+            for (pi, _) in v.fields.enumerate():
                 if pi > 0:
                     parts = parts + ", "
                 parts = parts + "{a" + int_to_str(pi) + "}"
-                pi = pi + 1
             src = src + "            case " + pat + ":\n"
             src = src + "                return f\"" + v.name + "(" + parts + ")\"\n"
-        vi = vi + 1
     return src
 
 String gen_enum_cloneable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Cloneable:\n"
     src = src + "    " + name + gs + " clone(self):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
-        int fc = v.fields.len()
+    for v in variants:
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         src = src + "                return " + pfx + v.name + "(" + binds + ")\n"
-        vi = vi + 1
     return src
 
 String gen_enum_hashable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Hashable:\n"
     src = src + "    void hash[Hasher H](self, H &h):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
-        int fc = v.fields.len()
+    for (vi, v) in variants.enumerate():
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         src = src + "                h.write_int(" + int_to_str(vi) + ")\n"
-        int hi = 0
-        while hi < fc:
-            String ftype = format_ast_type(v.fields.get(hi).unwrap())
+        for (hi, ft) in v.fields.enumerate():
+            String ftype = format_ast_type(ft)
             String access = "a" + int_to_str(hi)
             # Same primitive-vs-non-primitive split as the struct case;
             # match arm bodies sit at 16-space indent while
             # `hashable_field_line` returns 8 — pad with 8 more.
             src = src + "        " + hashable_field_line(access, ftype)
-            hi = hi + 1
-        vi = vi + 1
     return src
 
 String gen_enum_serializable(String name, String gs, String gp, Vector[EnumVariant] variants, String pfx):
     String src = "equip " + gp + name + gs + " with Serializable:\n"
     src = src + "    void serialize(self, Box[Serializer] ser):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
+    for v in variants:
         int fc = v.fields.len()
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         if fc == 0:
@@ -672,16 +592,12 @@ String gen_enum_serializable(String name, String gs, String gp, Vector[EnumVaria
             src = src + "                ser.begin_struct(\"" + v.name + "\", 1)\n"
             src = src + "                ser.field(\"" + v.name + "\", 0)\n"
             src = src + "                ser.begin_seq(" + int_to_str(fc) + ")\n"
-            int si = 0
-            while si < fc:
+            for (si, ft) in v.fields.enumerate():
                 src = src + "                ser.elem(" + int_to_str(si) + ")\n"
-                SpannedType ft = v.fields.get(si).unwrap()
                 String ftype = format_ast_type(ft)
                 src = src + "                " + field_write_call("a" + int_to_str(si), ftype) + "\n"
-                si = si + 1
             src = src + "                ser.end_seq()\n"
             src = src + "                ser.end_struct()\n"
-        vi = vi + 1
     return src
 
 String gen_enum_deserializable(String name, String gs, Vector[EnumVariant] variants, String pfx):
@@ -689,59 +605,45 @@ String gen_enum_deserializable(String name, String gs, Vector[EnumVariant] varia
     # Separate unit and data variants
     Vector[String] unit_names = Vector[String]()
     Vector[EnumVariant] data_variants = Vector[EnumVariant]()
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
+    for v in variants:
         if v.fields.len() == 0:
             unit_names.push(v.name)
         else:
-            data_variants.push(v)
-        vi = vi + 1
+            data_variants.push(v.clone())
     if unit_names.len() > 0:
         src = src + "    if de.is_string():\n"
         src = src + "        String de_tag = de.read_str()\n"
-        int ui = 0
-        while ui < unit_names.len():
-            String uname = unit_names.get(ui).unwrap()
+        for (ui, uname) in unit_names.enumerate():
             if ui == 0:
                 src = src + "        if de_tag == \"" + uname + "\":\n"
             else:
                 src = src + "        elif de_tag == \"" + uname + "\":\n"
             src = src + "            return Ok(" + pfx + uname + "())\n"
-            ui = ui + 1
         src = src + "        return Error(\"unknown variant\")\n"
     if data_variants.len() > 0:
         src = src + "    de.begin_struct()\n"
-        int di = 0
-        while di < data_variants.len():
-            EnumVariant dv = data_variants.get(di).unwrap()
+        for (di, dv) in data_variants.enumerate():
             String cond = "if"
             if di > 0:
                 cond = "elif"
             src = src + "    " + cond + " de.has_field(\"" + dv.name + "\"):\n"
             src = src + "        de.field(\"" + dv.name + "\")\n"
             src = src + "        int de_seq_len = de.begin_seq()\n"
-            int dfi = 0
-            while dfi < dv.fields.len():
+            for (dfi, ft) in dv.fields.enumerate():
                 src = src + "        de.elem(" + int_to_str(dfi) + ")\n"
-                SpannedType ft = dv.fields.get(dfi).unwrap()
                 String ftype = format_ast_type(ft)
                 String var_name = "a" + int_to_str(dfi)
                 src = src + "        " + field_read_decl(var_name, ftype) + "\n"
-                dfi = dfi + 1
             src = src + "        de.end_seq()\n"
             src = src + "        de.end_struct()\n"
             src = src + "        if de.has_error():\n"
             src = src + "            return Error(de.error())\n"
             String dargs = ""
-            int dai = 0
-            while dai < dv.fields.len():
+            for (dai, _) in dv.fields.enumerate():
                 if dai > 0:
                     dargs = dargs + ", "
                 dargs = dargs + "a" + int_to_str(dai)
-                dai = dai + 1
             src = src + "        return Ok(" + pfx + dv.name + "(" + dargs + "))\n"
-            di = di + 1
         src = src + "    de.end_struct()\n"
     src = src + "    return Error(\"unknown variant\")\n"
     return src
@@ -750,21 +652,15 @@ String gen_enum_ordinal(String name, String gs, String gp, Vector[EnumVariant] v
     String src = "equip " + gp + name + gs + " with Ordinal:\n"
     src = src + "    int ordinal(self):\n"
     src = src + "        match self:\n"
-    int vi = 0
-    while vi < variants.len():
-        EnumVariant v = variants.get(vi).unwrap()
-        int fc = v.fields.len()
+    for (vi, v) in variants.enumerate():
         String binds = ""
-        int fi = 0
-        while fi < fc:
+        for (fi, _) in v.fields.enumerate():
             if fi > 0:
                 binds = binds + ", "
             binds = binds + "a" + int_to_str(fi)
-            fi = fi + 1
         String pat = pfx + v.name + "(" + binds + ")"
         src = src + "            case " + pat + ":\n"
         src = src + "                return " + int_to_str(vi) + "\n"
-        vi = vi + 1
     return src
 
 # ── Core expansion ──────────────────────────────────────────
@@ -773,9 +669,7 @@ void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
     String name = sd.name
     String gs = generic_suffix(sd.type_params)
     String gp = equip_prefix(sd.type_params)
-    int i = 0
-    while i < sd.derives.len():
-        String trait_name = sd.derives.get(i).unwrap()
+    for trait_name in sd.derives:
         String source = ""
         if trait_name == "Equatable":
             source = gen_struct_equatable(name, gs, gp, sd.fields)
@@ -801,16 +695,13 @@ void expand_struct_derives(StructDef sd, Vector[Item] &new_items):
             source = gen_struct_from_row(name, gs, gp, sd.fields)
         if source != "":
             inject_items(source, &new_items)
-        i = i + 1
 
 void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
     String name = ed.name
     String gs = generic_suffix(ed.type_params)
     String gp = equip_prefix(ed.type_params)
     String pfx = variant_prefix(name, ed.type_params)
-    int i = 0
-    while i < ed.derives.len():
-        String trait_name = ed.derives.get(i).unwrap()
+    for trait_name in ed.derives:
         String source = ""
         if trait_name == "Equatable":
             source = gen_enum_equatable(name, gs, gp, ed.variants, pfx)
@@ -830,10 +721,14 @@ void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
             source = gen_enum_ordinal(name, gs, gp, ed.variants, pfx)
         if source != "":
             inject_items(source, &new_items)
-        i = i + 1
 
 void expand_derives(Module &m):
     Vector[Item] new_items = Vector[Item]()
+    # NOTE: keep this as while-index instead of `for item in m.items:`.
+    # When m is `&m` (mutable borrow) and items are owning enum payloads
+    # passed into helpers by-value (StructDef sd / EnumDef ed), the
+    # for-loop path silently segfaults at runtime on httpserver_router.gg
+    # — the explicit `.unwrap()` clone preserves ownership properly.
     int i = 0
     while i < m.items.len():
         Item item = m.items.get(i).unwrap()
