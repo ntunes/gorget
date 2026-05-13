@@ -73,9 +73,7 @@ int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveCon
     # would beat the user's direct-parent match because std.iter's
     # entry comes first in fn_scope_names.
     int best = -1
-    int i = 0
-    while i < ctx.fn_scope_names.len():
-        String sn = ctx.fn_scope_names.get(i).unwrap()
+    for (i, sn) in ctx.fn_scope_names.enumerate():
         if sn == name:
             int sid = ctx.fn_scope_ids.get(i).unwrap()
             int p = scopes.scope_parent_of(sid)
@@ -83,10 +81,7 @@ int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveCon
                 return sid
             if best < 0:
                 best = sid
-        i = i + 1
-    int j = 0
-    while j < ctx.fn_scope_names.len():
-        String sn = ctx.fn_scope_names.get(j).unwrap()
+    for (j, sn) in ctx.fn_scope_names.enumerate():
         if sn == name:
             int sid = ctx.fn_scope_ids.get(j).unwrap()
             int p = scopes.scope_parent_of(sid)
@@ -94,7 +89,6 @@ int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveCon
                 int gp = scopes.scope_parent_of(p)
                 if gp == parent_scope:
                     return sid
-        j = j + 1
     return best
 
 # ── Find the next SkEquipBlock scope ───────────────────────
@@ -219,28 +213,22 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
         case RTGeneric(gen_def_id, args):
             Vector[int] new_args = Vector[int]()
             bool any_changed = false
-            int i = 0
-            while i < args.len():
-                int arg_tid = get_int_at(args, i)
+            for arg_tid in args:
                 int new_arg_tid = demote_generic_param_to_var(arg_tid, scopes, &types)
                 if new_arg_tid != arg_tid:
                     any_changed = true
                 new_args.push(new_arg_tid)
-                i = i + 1
             if any_changed:
                 return types.add_type(RTGeneric(gen_def_id, new_args))
             return type_id
         case RTTuple(elems):
             Vector[int] new_elems = Vector[int]()
             bool any_changed = false
-            int i = 0
-            while i < elems.len():
-                int elem_tid = get_int_at(elems, i)
+            for elem_tid in elems:
                 int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
                 if new_elem_tid != elem_tid:
                     any_changed = true
                 new_elems.push(new_elem_tid)
-                i = i + 1
             if any_changed:
                 return types.add_type(RTTuple(new_elems))
             return type_id
@@ -295,14 +283,11 @@ int demote_through_function_type(int type_id, ScopeTable scopes, TypeTable &type
         case RTFunction(params, ownerships, ret_id):
             Vector[int] new_params = Vector[int]()
             bool any_changed = false
-            int i = 0
-            while i < params.len():
-                int p_id = get_int_at(params, i)
+            for p_id in params:
                 int new_p_id = demote_generic_param_to_var(p_id, scopes, &types)
                 if new_p_id != p_id:
                     any_changed = true
                 new_params.push(new_p_id)
-                i = i + 1
             int new_ret_id = demote_generic_param_to_var(ret_id, scopes, &types)
             if new_ret_id != ret_id:
                 any_changed = true
@@ -333,9 +318,7 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
     int ret_id = ast_type_to_resolved(func.return_type.ty, func.return_type.span, scopes, &types)
     Vector[int] param_type_ids = Vector[int]()
     Vector[int] param_ownerships = Vector[int]()
-    int pi = 0
-    while pi < func.params.len():
-        Param p = func.params.get(pi).unwrap()
+    for p in func.params:
         int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
         param_type_ids.push(p_type_id)
         param_ownerships.push(p.ownership)
@@ -346,9 +329,7 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
         # loader keeps both bodies but only the first wins the module-scope
         # name; without iterating, the second's params never get typed.
         int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
-        int fsi = 0
-        while fsi < ctx.fn_scope_names.len():
-            String fs_name = ctx.fn_scope_names.get(fsi).unwrap()
+        for (fsi, fs_name) in ctx.fn_scope_names.enumerate():
             if fs_name == func.name:
                 int bs = ctx.fn_scope_ids.get(fsi).unwrap()
                 int bp = scopes.scope_parent_of(bs)
@@ -360,8 +341,6 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
                     int param_def = scopes.lookup_in_scope(bs, p.param_name)
                     if param_def >= 0:
                         scopes.set_def_type(param_def, binding_type_id)
-            fsi = fsi + 1
-        pi = pi + 1
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
@@ -415,27 +394,21 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
         case PConstructor(variant_name, fields):
             # Resolve variant payload types from the scrutinee type
             Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
-            int i = 0
-            while i < fields.len():
-                SpannedPattern field = fields.get(i).unwrap()
+            for (i, field) in fields.enumerate():
                 int ft = -1
                 if i < field_types.len():
                     ft = get_int_at(field_types, i)
                 if ft >= 0:
                     assign_pattern_types(field, ft, scope_id, &scopes, &types)
-                i = i + 1
 
         case PDotShorthand(variant_name, fields):
             Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
-            int i = 0
-            while i < fields.len():
-                SpannedPattern field = fields.get(i).unwrap()
+            for (i, field) in fields.enumerate():
                 int ft = -1
                 if i < field_types.len():
                     ft = get_int_at(field_types, i)
                 if ft >= 0:
                     assign_pattern_types(field, ft, scope_id, &scopes, &types)
-                i = i + 1
 
         case PTuple(elements):
             # Destructure tuple type
@@ -443,15 +416,12 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
                 ResolvedType rt = get_rtype_at(types.types, scrutinee_type)
                 match rt:
                     case RTTuple(elem_ids):
-                        int i = 0
-                        while i < elements.len():
-                            SpannedPattern elem = elements.get(i).unwrap()
+                        for (i, elem) in elements.enumerate():
                             int et = -1
                             if i < elem_ids.len():
                                 et = get_int_at(elem_ids, i)
                             if et >= 0:
                                 assign_pattern_types(elem, et, scope_id, &scopes, &types)
-                            i = i + 1
                     else:
                         pass
 
@@ -511,10 +481,8 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
                     ResolvedType vrt = get_rtype_at(types.types, vft)
                     match vrt:
                         case RTTuple(elems):
-                            int ei = 0
-                            while ei < elems.len():
-                                result.push(get_int_at(elems, ei))
-                                ei = ei + 1
+                            for e in elems:
+                                result.push(e)
                             return result
                         else:
                             pass
@@ -533,10 +501,8 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
             ResolvedType fb_vrt = get_rtype_at(types.types, fb_vft)
             match fb_vrt:
                 case RTTuple(fb_elems):
-                    int fb_ei = 0
-                    while fb_ei < fb_elems.len():
-                        result.push(get_int_at(fb_elems, fb_ei))
-                        fb_ei = fb_ei + 1
+                    for e in fb_elems:
+                        result.push(e)
                 else:
                     result.push(fb_vft)
     return result
@@ -661,9 +627,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                     else:
                         pass
             # Assign types to closure parameters
-            int pi = 0
-            while pi < params.len():
-                Param p = params.get(pi).unwrap()
+            for (pi, p) in params.enumerate():
                 int p_type_id = ast_type_to_resolved(p.param_type.ty, p.param_type.span, scopes, &types)
                 # If the param type is <error> or void (inferred), use expected type
                 if (p_type_id < 0 or p_type_id == types.error_id or p_type_id == types.void_id) and pi < expected_params.len():
@@ -676,7 +640,6 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                     if param_def >= 0:
                         int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
                         scopes.set_def_type(param_def, binding_type_id)
-                pi = pi + 1
             # Walk closure body for VarDecls and nested closures
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
         else:
@@ -699,14 +662,11 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         call_param_types = ptypes
                     else:
                         pass
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for (ai, arg) in args.enumerate():
                 if ai < call_param_types.len():
                     walk_expr_closures_with_type(arg, get_int_at(call_param_types, ai), scope_id, &scopes, &types, ctx)
                 else:
                     walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
-                ai = ai + 1
 
         case EMethodCall(obj, method_name, args, targs):
             walk_expr_closures(*obj, scope_id, &scopes, &types, ctx)
@@ -733,9 +693,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         mres = resolve_method_by_name(types.trait_registry, recv_name, method_name)
                 if mres.found:
                     method_param_types = mres.sig.params
-            int ai = 0
-            while ai < args.len():
-                SpannedExpr arg = args.get(ai).unwrap()
+            for (ai, arg) in args.enumerate():
                 int expected = -1
                 if elem_type >= 0:
                     if (method_name == "filter" or method_name == "any" or method_name == "all" or method_name == "each") and ai == 0:
@@ -771,7 +729,6 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                     walk_expr_closures_with_type(arg, expected, scope_id, &scopes, &types, ctx)
                 else:
                     walk_expr_closures(arg, scope_id, &scopes, &types, ctx)
-                ai = ai + 1
 
         case EBinaryOp(left, op, right):
             walk_expr_closures(*left, scope_id, &scopes, &types, ctx)
@@ -787,22 +744,16 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # F-string interpolation segments are pre-parsed into real
             # SpannedExpr by the parser; walk them so closures inside
             # `{...}` get their params/body typed.
-            int fei = 0
-            while fei < exprs.len():
-                SpannedExpr fe = exprs.get(fei).unwrap()
+            for fe in exprs:
                 walk_expr_closures(fe, scope_id, &scopes, &types, ctx)
-                fei = fei + 1
 
         case EMatch(scrutinee, arms):
             # Match-as-expression: assign pattern binding types and walk arm bodies.
             int scrut_type = infer_expr_type(SpannedExpr((*scrutinee).expr, (*scrutinee).span), scopes, &types, ctx)
-            int ai = 0
-            while ai < arms.len():
-                MatchArm arm = arms.get(ai).unwrap()
+            for arm in arms:
                 if scrut_type >= 0:
                     assign_pattern_types(arm.pattern, scrut_type, scope_id, &scopes, &types)
                 type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
-                ai = ai + 1
 
         else:
             pass
@@ -817,9 +768,7 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
     Vector[int] param_ownerships = Vector[int]()
     Vector[int] param_def_ids = Vector[int]()
     Dict[String, int] param_types = Dict[String, int]()
-    int pi = 0
-    while pi < cl_params.len():
-        Param p = cl_params.get(pi).unwrap()
+    for p in cl_params:
         # Find the param def with a type-var type (distinguishes from earlier same-name defs)
         int p_def = find_typevar_def(scope_id, p.param_name, &scopes, &types)
         int p_tid = types.error_id
@@ -831,7 +780,6 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
         param_ownerships.push(p.ownership)
         param_def_ids.push(p_def)
         param_types.put(p.param_name, p_tid)
-        pi = pi + 1
     # Infer return type from closure body with typed params
     int ret_id = types.void_id
     if cl_body.len() > 0:
@@ -866,11 +814,8 @@ int find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &t
 # has type vars in its function type. Propagate concrete arg types back.
 
 void resolve_closure_types_from_calls(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
+    for s in stmts:
         resolve_call_in_stmt(s, scope_id, &scopes, &types, ctx)
-        i = i + 1
 
 void resolve_call_in_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
     match s:
@@ -895,27 +840,22 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                             match fn_rt:
                                 case RTFunction(param_tids, ownerships, ret_id):
                                     bool has_var = false
-                                    int vi = 0
-                                    while vi < param_tids.len():
-                                        int ptid = get_int_at(param_tids, vi)
+                                    for ptid in param_tids:
                                         ResolvedType prt = get_rtype_at(types.types, ptid)
                                         match prt:
                                             case RTVar(_):
                                                 has_var = true
                                             else:
                                                 pass
-                                        vi = vi + 1
                                     if has_var and args.len() == param_tids.len():
                                         # Build mapping from type var → concrete type
                                         Dict[int, int] var_map = Dict[int, int]()
                                         Vector[int] new_params = Vector[int]()
-                                        int ai = 0
-                                        while ai < args.len():
+                                        for (ai, arg) in args.enumerate():
                                             int old_ptid = get_int_at(param_tids, ai)
                                             ResolvedType old_prt = get_rtype_at(types.types, old_ptid)
                                             match old_prt:
                                                 case RTVar(var_id):
-                                                    SpannedExpr arg = args.get(ai).unwrap()
                                                     int arg_type = infer_expr_type(arg, scopes, &types, ctx)
                                                     if arg_type >= 0 and arg_type != types.error_id:
                                                         new_params.push(arg_type)
@@ -924,7 +864,6 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                                         new_params.push(old_ptid)
                                                 else:
                                                     new_params.push(old_ptid)
-                                            ai = ai + 1
                                         # Resolve return type: if it's a type var, map it
                                         int new_ret = ret_id
                                         ResolvedType ret_rt = get_rtype_at(types.types, ret_id)
@@ -949,15 +888,12 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                                 else:
                                                     pass
                                         # Update param defs with concrete types before moving new_params
-                                        int pi = 0
-                                        while pi < new_params.len():
-                                            int np_tid = get_int_at(new_params, pi)
+                                        for (pi, np_tid) in new_params.enumerate():
                                             int old_ptid = get_int_at(param_tids, pi)
                                             if np_tid != old_ptid:
                                                 # Find the param def that has the old type var
                                                 # and update it to the concrete type
                                                 resolve_param_type_var(old_ptid, np_tid, scope_id, &scopes, &types)
-                                            pi = pi + 1
                                         # Update function type
                                         int new_fn_type = types.add_type(RTFunction(!new_params, ownerships, new_ret))
                                         scopes.set_def_type(callee_def, new_fn_type)
@@ -980,11 +916,8 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 # ── Type-check statements (looking for VarDecl with explicit types) ──
 
 void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext ctx):
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
+    for s in stmts:
         type_check_stmt(s, scope_id, &scopes, &types, ctx)
-        i = i + 1
     # Second pass: propagate call-site argument types to closure type vars
     resolve_closure_types_from_calls(stmts, scope_id, &scopes, &types, ctx)
 
@@ -1017,12 +950,9 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 ResolvedType vrt = get_rtype_at(types.types, var_type_id)
                 match vrt:
                     case RTFunction(fn_params, _, fn_ret):
-                        int fi = 0
-                        while fi < fn_params.len():
-                            int fp_tid = get_int_at(fn_params, fi)
+                        for fp_tid in fn_params:
                             if fp_tid == types.error_id:
                                 has_errors = true
-                            fi = fi + 1
                         if fn_ret == types.error_id:
                             has_errors = true
                     else:
@@ -1039,15 +969,12 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             if has_is_patterns(cond.expr):
                 assign_is_condition_types(cond, scope_id, &scopes, &types, ctx)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
-            int ei = 0
-            while ei < else_branches.len():
-                ElseBranch eb = else_branches.get(ei).unwrap()
+            for eb in else_branches:
                 if has_opt_sexpr(eb.condition):
                     SpannedExpr econd = unwrap_opt_sexpr(eb.condition)
                     if has_is_patterns(econd.expr):
                         assign_is_condition_types(econd, scope_id, &scopes, &types, ctx)
                 type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
-                ei = ei + 1
 
         case SFor(pat, iter_expr, body, flags, else_body):
             # Infer iterable type and assign element type to loop variable
@@ -1086,13 +1013,10 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
         case SMatch(expr, arms):
             # Infer scrutinee type and assign to pattern bindings
             int scrutinee_type = infer_expr_type(expr, scopes, &types, ctx)
-            int ai = 0
-            while ai < arms.len():
-                MatchArm arm = arms.get(ai).unwrap()
+            for arm in arms:
                 if scrutinee_type >= 0:
                     assign_pattern_types(arm.pattern, scrutinee_type, scope_id, &scopes, &types)
                 type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
-                ai = ai + 1
 
         case SWith(expr, name, body):
             # Infer the type of the with binding (e.g., `with Resource() as r`)
@@ -1120,9 +1044,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 walk_expr_closures(unwrap_opt_sexpr(opt_expr), scope_id, &scopes, &types, ctx)
 
         case SSelect(arms):
-            int si = 0
-            while si < arms.len():
-                SelectArm arm = arms.get(si).unwrap()
+            for arm in arms:
                 # Type the recv binding from channel element type
                 match arm.op:
                     case SORecv(name, ch_idx, ch_expr):
@@ -1142,7 +1064,6 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                     else:
                         pass
                 type_check_stmts(arm.body, scope_id, &scopes, &types, ctx)
-                si = si + 1
 
         case SItem(item):
             type_check_item(item, scope_id, &scopes, &types, ctx)
@@ -1157,11 +1078,8 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
 
         case SMetaIf(then_body, else_branches):
             type_check_stmts(then_body, scope_id, &scopes, &types, ctx)
-            int ei = 0
-            while ei < else_branches.len():
-                ElseBranch eb = else_branches.get(ei).unwrap()
+            for eb in else_branches:
                 type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
-                ei = ei + 1
 
         else:
             pass
@@ -1177,29 +1095,21 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             # Extern function signatures are already registered in the pre-pass;
             # this arm ensures they're also handled when called outside the module-level
             # pre-pass (e.g. equip blocks or nested scopes). No body to check.
-            int efi = 0
-            while efi < efns.len():
-                FunctionDef efunc = efns.get(efi).unwrap()
+            for efunc in efns:
                 register_function_signature(efunc, scope_id, &scopes, &types, ctx, -1)
-                efi += 1
 
         case IStruct(sdef):
             # Build a field type lookup table for EFieldAccess inference.
             # Store struct_name.field_name → type_id in variant_field_types dict.
-            int fi = 0
-            while fi < sdef.fields.len():
-                Param field = sdef.fields.get(fi).unwrap()
+            for field in sdef.fields:
                 int field_type_id = ast_type_to_resolved(field.param_type.ty, field.param_type.span, scopes, &types)
                 if field_type_id >= 0:
                     String key = sdef.name + "." + field.param_name
                     types.variant_field_types.put(key, field_type_id)
-                fi = fi + 1
 
         case IEnum(edef):
             # Register variant payload types in the type table's variant map
-            int vi = 0
-            while vi < edef.variants.len():
-                EnumVariant var = edef.variants.get(vi).unwrap()
+            for var in edef.variants:
                 if var.fields.len() > 0:
                     if var.fields.len() == 1:
                         SpannedType ft = get_stype_at(var.fields, 0)
@@ -1208,15 +1118,11 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                     else:
                         # Multi-field variant: create tuple type
                         Vector[int] field_ids = Vector[int]()
-                        int fi = 0
-                        while fi < var.fields.len():
-                            SpannedType ft = get_stype_at(var.fields, fi)
+                        for ft in var.fields:
                             int ftid = ast_type_to_resolved(ft.ty, ft.span, scopes, &types)
                             field_ids.push(ftid)
-                            fi = fi + 1
                         int tuple_tid = types.add_type(RTTuple(field_ids))
                         types.variant_field_types.put(var.name, tuple_tid)
-                vi = vi + 1
 
         case IEquip(eqblk):
             # Find the equip block scope by scanning for the next SkEquipBlock
@@ -1260,11 +1166,8 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             types.equip_def_index = types.equip_def_index + 1
             if def_scope < 0:
                 def_scope = equip_scope
-            int mi = 0
-            while mi < eqblk.methods.len():
-                FunctionDef method = eqblk.methods.get(mi).unwrap()
+            for method in eqblk.methods:
                 type_check_function(method, equip_scope, &scopes, &types, ctx, def_scope)
-                mi = mi + 1
             types.trait_equip_scope_id = saved_trait_equip
             types.self_type_id = -1
             scopes.set_current(saved_scope)
@@ -1318,9 +1221,9 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
 
         case ITest(name, with_exprs, with_names, body):
             # Type with-clause bindings (test "name" with expr as var:)
-            int wi = 0
-            while wi < with_exprs.len() and wi < with_names.len():
-                SpannedExpr wexpr = with_exprs.get(wi).unwrap()
+            for (wi, wexpr) in with_exprs.enumerate():
+                if wi >= with_names.len():
+                    break
                 String wname = with_names.get(wi).unwrap()
                 # Unwrap EAs — the parser wraps `expr as name` into EAs(expr, name)
                 match wexpr.expr:
@@ -1333,7 +1236,6 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                     int wdef = scopes.lookup_in_subtree(scope_id, wname)
                     if wdef >= 0:
                         scopes.set_def_type(wdef, wtype)
-                wi = wi + 1
             # Walk test body for VarDecl types
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
@@ -1363,23 +1265,14 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
     # still -1 — and the auto-typed binding fails to resolve. Mirrors
     # Rust's `register_signatures_recursive` (typecheck.rs:5273) which
     # runs before the body-walk pass for exactly this reason.
-    int rs = 0
-    while rs < module.items.len():
-        Item r_item = module.items.get(rs).unwrap()
+    for r_item in module.items:
         match r_item:
             case IFunction(r_func):
                 register_function_signature(r_func, module_scope, &scopes, &types, ctx, -1)
             case IExternBlock(efns):
-                int efi = 0
-                while efi < efns.len():
-                    FunctionDef efunc = efns.get(efi).unwrap()
+                for efunc in efns:
                     register_function_signature(efunc, module_scope, &scopes, &types, ctx, -1)
-                    efi += 1
             else:
                 pass
-        rs = rs + 1
-    int i = 0
-    while i < module.items.len():
-        Item item = module.items.get(i).unwrap().clone()
+    for item in module.items:
         type_check_item(item, module_scope, &scopes, &types, ctx)
-        i = i + 1
