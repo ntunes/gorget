@@ -2198,9 +2198,26 @@ impl<'a> TypeChecker<'a> {
                 }
                 let saved_return_type = self.current_return_type;
                 self.current_return_type = Some(closure_ret_var);
+                // Snag #44 (2026-05-13): the closure body is a separate fn
+                // at the LIR level — its return type is independent of the
+                // enclosing fn's. A `throw E(...)` inside the closure body
+                // can't write to the enclosing fn's Result return slot (no
+                // longjmp at C). Save/restore `current_function_throws` so
+                // a throw inside a closure body in a `throws E` fn surfaces
+                // as a proper "ThrowInNonThrowingFunction" diagnostic
+                // rather than silently passing typecheck and crashing at
+                // C-emit (`gorget_throw(struct_value, …)` type mismatch).
+                // Closures that should be allowed to throw need either
+                // explicit `throws` syntax on the closure (not yet
+                // supported) or the enclosing fn's `?? throw E(...)` form,
+                // which lowers as a divergent expression in the calling
+                // frame rather than inside the closure body.
+                let saved_throws = self.current_function_throws;
+                self.current_function_throws = false;
 
                 let body_type = self.infer_expr(body);
 
+                self.current_function_throws = saved_throws;
                 self.current_return_type = saved_return_type;
 
                 // Determine the closure's return type: use the body's type for

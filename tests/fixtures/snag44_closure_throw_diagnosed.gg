@@ -1,0 +1,12 @@
+struct E:
+    String msg
+
+int unwrap(Option[int] x) throws E:
+    return x ?? throw E("missing")
+
+void main():
+    match unwrap(Some(42)):
+        case Ok(v):
+            print(f"ok {v}")
+        case Error(_):
+            print("err")

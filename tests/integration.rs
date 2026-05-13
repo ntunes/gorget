@@ -2921,6 +2921,37 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag44_closure_throw_diagnosed() {
+    // Snag #44 (2026-05-13): `option.unwrap_or_else((): throw E("..."))`
+    // inside a `throws E` fn passed semantic check but crashed at
+    // C-codegen with `incompatible type for argument 1 of 'gorget_throw'`
+    // (panic-style runtime call invoked with a struct value).
+    //
+    // Root cause: typecheck inherited the outer fn's
+    // `current_function_throws` flag through the closure body. The
+    // throw passed validation, but IR-lowering's `lower_throw` saw
+    // the closure's `current_throws_result_type` as None (closure's
+    // own return type is `int`, not `Result[int, E]`) and routed
+    // through the panic path — `call_extern("gorget_throw", [val,
+    // code])` where val was the E struct, mismatching gorget_throw's
+    // `const char* msg, int code` signature.
+    //
+    // Fix: save/restore `current_function_throws` around the closure
+    // body's type inference. Closures are separate fns at the LIR
+    // level; a `throw E(...)` inside one can't write to the
+    // enclosing fn's Result return slot. The throw now surfaces as
+    // a proper "ThrowInNonThrowingFunction" diagnostic.
+    //
+    // Workaround for the actual unwrap-or-throw idiom: `?? throw E
+    // (...)` (Snag #43 critique #2 fix). The fixture verifies the
+    // workaround works end-to-end.
+    run_gg(
+        "snag44_closure_throw_diagnosed.gg",
+        "ok 42",
+    );
+}
+
+#[test]
 fn void_throws() {
     // gorget-js critique 2026-05-13, new item #1: `void X() throws E`
     // produced a C compile error `void value not ignored as it ought
