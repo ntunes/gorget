@@ -24,7 +24,7 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return d.name
         case RTGeneric(def_id, args):
             DefInfo d = scopes.get_def(def_id)
-            String result = d.name + "["
+            String result = f"{d.name}["
             for (i, arg_id) in args.enumerate():
                 if i > 0:
                     result = result + ", "
@@ -45,7 +45,7 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
             return f"[{describe_type(elem_id, scopes, types)}]"
         case RTFunction(params, ownerships, ret_id):
             String ret_str = describe_type(ret_id, scopes, types)
-            String result = ret_str + "("
+            String result = f"{ret_str}("
             for (i, p_id) in params.enumerate():
                 if i > 0:
                     result = result + ", "
@@ -78,7 +78,7 @@ String describe_type(int type_id, ScopeTable scopes, TypeTable types):
         case RTNever():
             return "never"
         case RTRef(inner_id):
-            return describe_type(inner_id, scopes, types) + " &"
+            return f"{describe_type(inner_id, scopes, types)} &"
 
 # ── Format TYPE lines for all defs with assigned types ─────
 
