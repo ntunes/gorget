@@ -1816,7 +1816,7 @@ fn extract_generic_bounds(
 /// Collection types live in `std.collections`; traits and Option/Result are
 /// pre-registered in `collect_top_level`.
 fn is_builtin(name: &str) -> bool {
-    matches!(name, "print" | "format" | "len" | "type"
+    matches!(name, "print" | "format" | "len" | "type" | "panic"
         | "int" | "int8" | "int16" | "int32" | "int64"
         | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
         | "float" | "float32" | "float64"

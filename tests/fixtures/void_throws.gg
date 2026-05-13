@@ -1,0 +1,12 @@
+struct RuntimeException:
+    String msg
+
+void define_own_property(int obj_id, String key) throws RuntimeException:
+    print(f"set {key} on obj {obj_id}")
+
+void main():
+    match define_own_property(1, "foo"):
+        case Ok(_):
+            print("done")
+        case Error(_):
+            print("err")

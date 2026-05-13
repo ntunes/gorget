@@ -2921,6 +2921,58 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn void_throws() {
+    // gorget-js critique 2026-05-13, new item #1: `void X() throws E`
+    // produced a C compile error `void value not ignored as it ought
+    // to be` because `case Ok(_)` on the resulting `Result[void, E]`
+    // emitted `enum_field_load_move("Ok", 0, void_type)` — a load
+    // typed `void` that the C-emit rendered as `*(void*)Ok_0`.
+    //
+    // Root cause: `emit_pattern_bindings` Constructor handler
+    // unconditionally extracts every field, even Wildcard sub-patterns.
+    // For wildcard fields the extracted local is discarded anyway —
+    // the only side effect is the source-payload-zero step, which is
+    // a leak for resource fields and ill-typed for void/Unit fields.
+    //
+    // Fix: skip `enum_field_load_move` when `field_pat` is
+    // `Pattern::Wildcard`. The wildcard handler below is a no-op, so
+    // the prior extraction's discarded `dst` was pure waste.
+    run_gg(
+        "void_throws.gg",
+        "set foo on obj 1\ndone",
+    );
+}
+
+#[test]
+fn panic_builtin() {
+    // Deferred TODO from gorget-js critique #5: `panic(msg)` was
+    // hardcoded only via `assert` lowering's `call_extern("gorget_
+    // panic", …)` — calling `panic(...)` directly from user code hit
+    // the resolver's "undefined name" error, and even when forced
+    // through, the typecheck treated it as void (incompatible with
+    // match-arm / `??` RHS that expected T).
+    //
+    // Three-part fix (option (b) from the TODO):
+    //  (a) Resolver `is_builtin` accepts `panic`.
+    //  (b) Typecheck returns `never_id` for `panic` so it's compatible
+    //      with any expected type at the call site.
+    //  (c) `lower_call` special-cases `panic(msg)` to emit
+    //      `call_extern("gorget_panic", [msg])` followed by an
+    //      `unreachable` terminator. `gorget_panic` is also registered
+    //      in `noreturn_fns` for indirect call paths.
+    //
+    // Verified positions: match-as-expression arm, `??` RHS, catch
+    // recovery (single-line). Option (a) from the TODO (declare panic
+    // in stdlib as `extern noreturn`) remains the layering-correct
+    // long-term answer, but requires retiring the hardcoded
+    // `gorget_panic` lowering at `assert` — out of scope for this fix.
+    run_gg(
+        "panic_builtin.gg",
+        "a=99\nb=42",
+    );
+}
+
+#[test]
 fn catch_wildcard_binding() {
     // gorget-js critique #1 (2026-05-13): `catch (_)` was rejected as a
     // parse error; users had to write `catch (_e)` and tolerate an

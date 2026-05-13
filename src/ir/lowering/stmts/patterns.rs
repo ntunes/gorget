@@ -757,6 +757,20 @@ pub fn emit_pattern_bindings(
             ) || ctx.is_ref_local(builder, scrut_local);
 
             for (i, field_pat) in fields.iter().enumerate() {
+                // Skip extraction for wildcard sub-patterns — they bind
+                // nothing, so the only side effect of `enum_field_load_move`
+                // would be the source-payload-zero step (a leak for resource
+                // fields, ill-typed for void/Unit fields). Surfaced by
+                // gorget-js critique 2026-05-13: `void X() throws E`
+                // produces `Result[void, E]` whose Ok variant has a
+                // void/uint8_t payload; `case Ok(_)` previously emitted a
+                // `void` load (`*(void*)Ok_0`) and the C backend rejected
+                // it. The Rust `Pattern::Wildcard` handler below is a
+                // no-op anyway, so the prior extraction's discarded `dst`
+                // was pure waste.
+                if matches!(field_pat.node, Pattern::Wildcard) {
+                    continue;
+                }
                 // Determine the field type from the enum variant definition
                 let mut field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
                     if let TypeDefKind::Enum(ref e) = type_def.kind {

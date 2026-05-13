@@ -402,7 +402,23 @@ impl<'a> LoweringContext<'a> {
             fn_param_abis: FxHashMap::default(),
             fn_extern_abi_kinds: FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
-            noreturn_fns: rustc_hash::FxHashSet::default(),
+            noreturn_fns: {
+                // `gorget_panic` is the hardcoded C-symbol for `panic(msg)`
+                // (lowered at `stmts/mod.rs`'s `call_extern("gorget_panic",
+                // …)`). Pre-existing TODO recommended either declaring
+                // `panic` in stdlib as `extern noreturn` (layering-correct,
+                // multi-step) or registering the C symbol directly here.
+                // Going with option (b) since the hardcoded lowering site
+                // already knows to call `gorget_panic`; the noreturn flag
+                // just needs to propagate to call-site terminator emission
+                // so `panic()` in match-as-expression / `??` RHS / catch
+                // recovery positions is treated as a divergent expression
+                // (Never-typed) rather than a void call. Pairs with the
+                // typecheck change that returns `never_id` for `panic`.
+                let mut s = rustc_hash::FxHashSet::default();
+                s.insert(String::from("gorget_panic"));
+                s
+            },
             fn_return_abis: rustc_hash::FxHashMap::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),

@@ -1,0 +1,15 @@
+int compute(int x):
+    int v = match x:
+        case 0:
+            panic("zero not allowed")
+        case 1:
+            42
+        else:
+            panic("unknown")
+    return v
+
+void main():
+    Option[int] some_val = Some(99)
+    int a = some_val ?? panic("expected Some")
+    print(f"a={a}")
+    print(f"b={compute(1)}")

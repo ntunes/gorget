@@ -458,6 +458,22 @@ pub(super) fn lower_call(
             lower_print_call(ctx, builder, args);
             return Operand::Constant(Constant::Unit);
         }
+        // `panic(msg)` — noreturn builtin (option (b) from the pre-existing
+        // TODO entry / gorget-js critique #5, 2026-05-13). Routes through
+        // the same `gorget_panic` runtime symbol that `assert` lowering
+        // already uses, then emits `unreachable` so post-panic code is
+        // unreachable (matches Never-typed callsite contract). The
+        // typecheck pass at `semantic/typecheck.rs` returns `never_id` for
+        // `panic`, and the resolver's `is_builtin` predicate accepts
+        // `panic` so users can call it without an explicit import. Pairs
+        // with the `noreturn_fns` registration of `gorget_panic` so
+        // `lower_call_extern` would handle indirect uses too.
+        if name == "panic" && args.len() == 1 {
+            let msg_op = lower_expr(ctx, builder, &args[0].node.value);
+            builder.call_void("gorget_panic", vec![msg_op]);
+            builder.unreachable();
+            return Operand::Constant(Constant::Unit);
+        }
 
         // len(x) free function → dispatch to the correct runtime function
         // based on the argument type (string, vector, dict, set).

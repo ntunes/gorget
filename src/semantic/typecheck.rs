@@ -1480,9 +1480,20 @@ impl<'a> TypeChecker<'a> {
                         for arg in args {
                             self.infer_expr(&arg.node.value);
                         }
-                        // Known void-returning builtins: return void instead of error
+                        // Known void-returning builtins: return void instead of error.
+                        // `panic` is special — it never returns; type it as Never
+                        // so it's compatible with any expected type, particularly
+                        // when used as a match-arm or `??` RHS. Pre-existing TODO
+                        // (gorget-js round 6 / item 5 from the 2026-05-13 critique)
+                        // recommended this as option (b); option (a) (declare
+                        // `panic` in stdlib as `extern noreturn`) is the layering-
+                        // discipline answer but requires removing the hardcoded
+                        // `gorget_panic` lowering at `stmts/mod.rs`.
                         if let Expr::Identifier(cname) = &callee.node {
-                            if matches!(cname.as_str(), "print" | "assert" | "panic") {
+                            if cname.as_str() == "panic" {
+                                return self.types.never_id;
+                            }
+                            if matches!(cname.as_str(), "print" | "assert") {
                                 return self.types.void_id;
                             }
                         }
