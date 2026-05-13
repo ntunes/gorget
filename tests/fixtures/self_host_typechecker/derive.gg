@@ -724,14 +724,7 @@ void expand_enum_derives(EnumDef ed, Vector[Item] &new_items):
 
 void expand_derives(Module &m):
     Vector[Item] new_items = Vector[Item]()
-    # NOTE: keep this as while-index instead of `for item in m.items:`.
-    # When m is `&m` (mutable borrow) and items are owning enum payloads
-    # passed into helpers by-value (StructDef sd / EnumDef ed), the
-    # for-loop path silently segfaults at runtime on httpserver_router.gg
-    # — the explicit `.unwrap()` clone preserves ownership properly.
-    int i = 0
-    while i < m.items.len():
-        Item item = m.items.get(i).unwrap()
+    for item in m.items:
         match item:
             case IStruct(sd):
                 expand_struct_derives(sd, &new_items)
@@ -739,7 +732,6 @@ void expand_derives(Module &m):
                 expand_enum_derives(ed, &new_items)
             else:
                 pass
-        i = i + 1
     int j = 0
     while j < new_items.len():
         m.items.push(new_items.get(j).unwrap())
