@@ -1,0 +1,19 @@
+from std.collections import Vector
+
+String extract_via_param(Box[String] b):
+    return *b
+
+void main():
+    Box[String] b = Box("hello")
+    String s1 = *b
+    String s2 = *b
+    Vector[String] v = Vector[String]()
+    v.push(*b)
+    v.push(*b)
+    String r = extract_via_param(b)
+    print(s1)
+    print(s2)
+    print(v.get(0).unwrap())
+    print(v.get(1).unwrap())
+    print(r)
+    print(*b)

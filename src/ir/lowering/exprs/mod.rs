@@ -546,12 +546,30 @@ fn lower_expr_inner(
                         }
                     }
                 }
-                // For resource-containing non-String types, emit a deep clone
-                // via the type's `_clone` runtime helper so dst owns independent
-                // resources. The shallow memcpy aliases the Box's heap buffers;
-                // dropping the shallow copy would double-free.
+                // For resource-containing types, emit a deep clone via the
+                // type's `_clone` runtime helper so dst owns independent
+                // resources. The shallow memcpy aliases the Box's heap
+                // buffers; dropping the shallow copy would double-free.
+                //
+                // Snag #41 audit follow-up (2026-05-13): previously gated
+                // on `!is_string_type(deref_type)` — `Box[String]` deref
+                // fell through to the value-typed Borrow fallback below.
+                // The 1107-test sweep with GG_AUDIT_DEREF_FALLBACK
+                // confirmed the fallback fired ONLY for `Box[String]` (4
+                // sites) and all ran clean under valgrind because
+                // downstream `ensure_owned_at_boundary` /
+                // `auto_clone_if_ptr` at consume positions (push,
+                // struct-init, return, fn-arg) injected the clone
+                // anyway. The gate was defensive — left the architectural
+                // risk in place that any new consume site without the
+                // boundary helper would expose a double-free of the
+                // box's String heap. Removing the gate routes Box[String]
+                // through the same uniform clone path as other Box[T]
+                // resources; `clone_fn_for_ptr(GorgetString)` returns
+                // `gorget_str_clone` via the metadata-based protocol
+                // registration at `clone_fn_name_for_def`. Closes the
+                // remaining Snag #41-audit potential-bug entry.
                 if source_is_box
-                    && !ctx.type_mapper.is_string_type(deref_type)
                     && ctx.type_registry.is_resource_type(deref_type)
                 {
                     if let Some(clone_fn) = ctx.clone_fn_for_ptr(deref_type) {

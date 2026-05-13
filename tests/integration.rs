@@ -2921,6 +2921,34 @@ fn if_expr_resource_arms() {
 }
 
 #[test]
+fn snag41_audit_box_string_deref() {
+    // Snag #41 audit follow-up — `Box[String]` deref was the only site
+    // that reached the value-typed Borrow fallback path at
+    // `Expr::Deref` lowering. Audit (GG_AUDIT_DEREF_FALLBACK across the
+    // 1107-test sweep) showed 4 occurrences, all `Box[String]`. All ran
+    // clean under valgrind because downstream auto-clone at consume
+    // boundaries (push, struct-init, fn-arg, return) injected the
+    // clone — mitigation depended on every new consume site
+    // remembering to use `ensure_owned_at_boundary`.
+    //
+    // Fix: extend the top clone path to cover String too. The
+    // `clone_fn_for_ptr(GorgetString)` lookup returns
+    // `gorget_str_clone` via the metadata-based protocol registration,
+    // so `Box[String]` deref now uniformly emits a deep clone, same
+    // shape as other `Box[T]` resource types. Closes the architectural
+    // risk that any new consume site without the boundary helper would
+    // expose a double-free of the box's String heap.
+    //
+    // Fixture exercises the previously-fallback path with multiple
+    // consume sites (let-bind, push, fn-arg, return) to lock the fix
+    // in.
+    run_gg(
+        "snag41_audit_box_string_deref.gg",
+        "hello\nhello\nhello\nhello\nhello\nhello",
+    );
+}
+
+#[test]
 fn snag43c_default_op_non_copy() {
     // Snag #43 companion — `??` (DefaultOp) on `Option[T]` for non-Copy T
     // produced shallow-copy alias of the inner T's resource pointers
