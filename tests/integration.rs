@@ -3452,6 +3452,49 @@ num",
 }
 
 #[test]
+fn const_match_pattern() {
+    // `case CONST_NAME:` compares against the named constant instead
+    // of shadowing it as a fresh variable binding. Snag 2026-05-13:
+    // pre-fix, every input routed to the first case arm because
+    // `CONST_NAME` was always defined as a new local. Resolver now
+    // detects outer-scope `DefKind::Const` / `DefKind::Static` and
+    // routes to the IR-lowering's equality-compare path.
+    run_gg(
+        "const_match_pattern.gg",
+        "\
+foo
+bar
+baz
+other
+hi
+see you
+huh
+got 99",
+    );
+}
+
+#[test]
+fn for_enumerate_param() {
+    // `for (i, t) in xs.enumerate():` when xs is a function parameter
+    // (Ptr-typed receiver). Snag 2026-05-13: pre-fix, the enumerate
+    // path skipped the Ptr→value auto-deref the non-enumerate path
+    // does, so iter_local stayed Ptr-typed and the field-2 len-read
+    // accessed adjacent stack slots, manifesting as an out-of-bounds
+    // panic at the first post-end iteration.
+    run_gg(
+        "for_enumerate_param.gg",
+        "\
+0: a
+1: b
+2: c
+0: 10
+1: 20
+2: 30
+done",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

@@ -1,0 +1,34 @@
+# `for (i, t) in xs.enumerate():` when xs is a function parameter.
+#
+# Pre-fix (2026-05-13): the receiver-as-parameter case for
+# `lower_for_enumerate` skipped the Ptr→value auto-deref step that
+# the non-enumerate `lower_for` path already had. iter_local stayed
+# as `Ptr<GorgetArray>`; the subsequent `Field(2)` len-read accessed
+# adjacent stack slots instead of the pointed-to GorgetArray's `len`
+# field. Surface: out-of-bounds panic at the first post-end iteration
+# (or silent over-iteration) when `xs.enumerate()` was inside a
+# function body. Surfaced during self-host `format_gir.gg`
+# modernisation.
+#
+# Fix: mirror the deref step at the top of `lower_for_enumerate` —
+# when iter_op's type is a Ptr, deref before storing in iter_local.
+void show_strs(Vector[String] xs):
+    for (i, t) in xs.enumerate():
+        print(f"{i}: {t}")
+
+void show_ints(Vector[int] ns):
+    for (i, n) in ns.enumerate():
+        print(f"{i}: {n}")
+
+void show_empty(Vector[String] xs):
+    for (i, t) in xs.enumerate():
+        print(f"NOT REACHED: {i}: {t}")
+    print("done")
+
+void main():
+    Vector[String] v = ["a", "b", "c"]
+    show_strs(v)
+    Vector[int] ns = [10, 20, 30]
+    show_ints(ns)
+    Vector[String] e = []
+    show_empty(e)

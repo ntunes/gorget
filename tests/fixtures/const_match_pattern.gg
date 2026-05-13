@@ -1,0 +1,51 @@
+# `match x: case CONST_NAME:` compares against the named constant
+# instead of binding `CONST_NAME` as a fresh variable.
+#
+# Pre-fix (2026-05-13): the resolver always defined `CONST_NAME` as a
+# new variable shadowing the constant, so the FIRST `case` arm always
+# matched (every input went down it). Surfaced during self-host
+# `format_gir.gg` modernisation — the integer-tag dispatch shape
+# (`format_type_id`, `binop_name`, `unop_name`) was stuck on `if x ==
+# FOO: ...` chains.
+#
+# Fix: match-arm-specific `Pattern::Binding(name)` resolution. If
+# `name` resolves to a `DefKind::Const` / `DefKind::Static` in outer
+# scope, the resolver records the def_id in `resolution_map` and
+# SKIPS defining a new variable. IR-lowering reads the map entry and
+# emits an equality compare against the folded constant value.
+#
+# Covers: int constants, String constants, mixed match/else, variable
+# binding (`case x:` where `x` is NOT a constant — must still bind).
+const int FOO = 1
+const int BAR = 2
+const int BAZ = 3
+const String GREETING = "hello"
+const String FAREWELL = "bye"
+
+String int_name(int x):
+    return match x:
+        case FOO: "foo"
+        case BAR: "bar"
+        case BAZ: "baz"
+        else: "other"
+
+String reply(String msg):
+    return match msg:
+        case GREETING: "hi"
+        case FAREWELL: "see you"
+        else: "huh"
+
+String bind_check(int x):
+    # `n` is NOT a constant — pure variable binding shape, must still work.
+    return match x:
+        case n: f"got {n}"
+
+void main():
+    print(int_name(1))
+    print(int_name(2))
+    print(int_name(3))
+    print(int_name(42))
+    print(reply("hello"))
+    print(reply("bye"))
+    print(reply("unknown"))
+    print(bind_check(99))

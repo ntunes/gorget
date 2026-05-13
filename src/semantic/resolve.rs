@@ -1097,7 +1097,7 @@ fn resolve_stmt(
             resolve_expr(scrutinee, scopes, errors, resolution_map);
             for arm in arms.iter().filter_map(|i| i.arm()) {
                 scopes.push_scope(super::scope::ScopeKind::Block);
-                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors, false);
+                define_match_arm_pattern(&arm.pattern.node, arm.pattern.span, scopes, errors, resolution_map);
                 if let Some(guard) = &arm.guard {
                     resolve_expr(guard, scopes, errors, resolution_map);
                 }
@@ -1446,7 +1446,7 @@ fn resolve_expr(
             resolve_expr(scrutinee, scopes, errors, resolution_map);
             for arm in arms {
                 scopes.push_scope(super::scope::ScopeKind::Block);
-                define_pattern_bindings(&arm.pattern.node, arm.pattern.span, scopes, errors, false);
+                define_match_arm_pattern(&arm.pattern.node, arm.pattern.span, scopes, errors, resolution_map);
                 if let Some(guard) = &arm.guard {
                     resolve_expr(guard, scopes, errors, resolution_map);
                 }
@@ -1712,6 +1712,73 @@ fn define_pattern_bindings(
     is_mutable: bool,
 ) {
     define_pattern_bindings_with_kind(pattern, span, scopes, errors, DefKind::Variable, is_mutable);
+}
+
+/// Match-arm-specific pattern resolution: when a `Pattern::Binding(name)`
+/// at top level of a `case` pattern resolves to an outer-scope
+/// `DefKind::Const` or `DefKind::Static`, treat the pattern as a value
+/// comparison (`case FOO:` ≡ `case <FOO's value>:`) rather than a new
+/// variable binding. Records the resolution in `resolution_map` so
+/// IR-lowering can emit equality-compare instead of always-true.
+///
+/// Recursion handles tuple destructure (each element checked) and
+/// or-patterns (each alternative checked). Constructor and DotShorthand
+/// patterns delegate to the existing `define_pattern_bindings` path —
+/// their nested binding names are variable bindings against the
+/// destructured payload, not constant comparisons against the scrutinee.
+///
+/// Snag (2026-05-13): `match x: case CONST_NAME:` previously bound
+/// `CONST_NAME` as a fresh variable shadowing the constant, making
+/// every input route to the first arm. Filed against
+/// `format_type_id` / `binop_name` / etc. integer-tag dispatch shape.
+fn define_match_arm_pattern(
+    pattern: &Pattern,
+    span: Span,
+    scopes: &mut ScopeTable,
+    errors: &mut Vec<SemanticError>,
+    resolution_map: &mut ResolutionMap,
+) {
+    if let Pattern::Binding(name) = pattern {
+        if let Some(def_id) = scopes.lookup(name) {
+            let kind = scopes.get_def(def_id).kind;
+            if matches!(kind, DefKind::Const | DefKind::Static) {
+                resolution_map.insert(span.start, def_id);
+                return; // skip new-variable definition — pattern is a constant compare
+            }
+        }
+        // Fall through: not a constant, bind as variable.
+    }
+    if let Pattern::Tuple(elements) = pattern {
+        for elem in elements {
+            define_match_arm_pattern(&elem.node, elem.span, scopes, errors, resolution_map);
+        }
+        return;
+    }
+    if let Pattern::Or(alternatives) = pattern {
+        // Validate that all alternatives bind the same set of names.
+        if alternatives.len() >= 2 {
+            let first_names: std::collections::BTreeSet<_> =
+                collect_pattern_names(&alternatives[0].node).into_iter().collect();
+            for alt in &alternatives[1..] {
+                let alt_names: std::collections::BTreeSet<_> =
+                    collect_pattern_names(&alt.node).into_iter().collect();
+                if first_names != alt_names {
+                    let missing: Vec<_> = first_names.difference(&alt_names).cloned().collect();
+                    let extra: Vec<_> = alt_names.difference(&first_names).cloned().collect();
+                    errors.push(SemanticError {
+                        kind: SemanticErrorKind::OrPatternBindingMismatch { missing, extra },
+                        span: alt.span,
+                    });
+                }
+            }
+        }
+        for alt in alternatives {
+            define_match_arm_pattern(&alt.node, alt.span, scopes, errors, resolution_map);
+        }
+        return;
+    }
+    // Constructor / DotShorthand / Literal / Wildcard / Rest — delegate.
+    define_pattern_bindings(pattern, span, scopes, errors, false);
 }
 
 /// Define bindings introduced by a pattern with an explicit DefKind.

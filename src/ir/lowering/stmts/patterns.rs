@@ -496,6 +496,23 @@ pub fn lower_pattern_condition(
         }
 
         Pattern::Binding(name) => {
+            // Constant-pattern: resolver marked this `case CONST_NAME:`
+            // as a value comparison (Snag 2026-05-13). Emit equality
+            // compare against the constant's folded value.
+            if let Some(&def_id) = ctx.analysis.resolution_map.get(&pattern.span.start) {
+                let kind = ctx.analysis.scopes.get_def(def_id).kind;
+                if matches!(kind, crate::semantic::scope::DefKind::Const | crate::semantic::scope::DefKind::Static) {
+                    if let Some(const_value) = ctx.module_constants.get(name).cloned() {
+                        let cmp = builder.cmp(
+                            CmpOp::Eq,
+                            scrut_type,
+                            FunctionBuilder::copy(scrut_local),
+                            Operand::Constant(const_value),
+                        );
+                        return FunctionBuilder::copy(cmp);
+                    }
+                }
+            }
             // Check if this is an enum variant name (unit variant match)
             if let Some((enum_name, variant_name)) = ctx.resolve_enum_variant(name) {
                 let tag = builder.tag_of(FunctionBuilder::copy(scrut_local));

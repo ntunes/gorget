@@ -414,11 +414,40 @@ fn lower_for_enumerate(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    
-
     // Lower the receiver collection
-    let iter_op = lower_expr(ctx, builder, receiver);
-    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+    let mut iter_op = lower_expr(ctx, builder, receiver);
+    let raw_iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+
+    // Auto-deref Ptr-typed iterables (Snag 2026-05-13). When `receiver`
+    // is a borrowed parameter (`Vector[T] xs` → iter_op is
+    // Ptr<GorgetArray>), the downstream `iter_local.Field(2)` len-read
+    // and `index_load_borrow(iter_local, ...)` element-load assume
+    // iter_local is the value type, NOT the pointer type. Without the
+    // deref, the field access reads adjacent stack slots — manifests as
+    // an off-by-one (or worse) `index out of bounds` panic at the first
+    // post-end iteration. Mirrors the deref step at the top of `lower_for`
+    // for non-enumerate Ptr iterables.
+    let pointee = ctx.pointee_type(raw_iter_type);
+    let (iter_op, iter_type) = if let Some(inner) = pointee {
+        if let Operand::Copy(p) | Operand::Move(p) = &iter_op {
+            let deref_place = Place {
+                local: p.local,
+                projections: vec![Projection::Deref],
+            };
+            let tmp = builder.add_local(inner, None);
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Borrow,
+                Place::local(tmp),
+                Operand::Copy(deref_place),
+            );
+            (Operand::Copy(Place::local(tmp)), inner)
+        } else {
+            (iter_op, raw_iter_type)
+        }
+    } else {
+        let _ = &mut iter_op;
+        (iter_op, raw_iter_type)
+    };
 
     // Store the iterable in a local. Phase C: Borrow mode for resource
     // iters — non-owning view; original local owns the data.
