@@ -58,13 +58,10 @@ String format_type(SpannedType st):
             if args.len() == 0:
                 return "" + name
             String result = name + "["
-            int i = 0
-            while i < args.len():
+            for (i, arg) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedType arg = args.get(i).unwrap()
                 result = result + format_type(arg)
-                i = i + 1
             result = result + "]"
             return result
         case TArray(elem, size):
@@ -76,24 +73,18 @@ String format_type(SpannedType st):
             return "[" + es + "]"
         case TTuple(elems):
             String result = "("
-            int i = 0
-            while i < elems.len():
+            for (i, e) in elems.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedType e = elems.get(i).unwrap()
                 result = result + format_type(e)
-                i = i + 1
             result = result + ")"
             return result
         case TFunction(ret, params, owns):
             String result = format_type(*ret) + "("
-            int i = 0
-            while i < params.len():
+            for (i, p) in params.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedType p = params.get(i).unwrap()
                 result = result + format_type(p)
-                i = i + 1
             result = result + ")"
             return result
         case TSelf:
@@ -117,48 +108,36 @@ String format_pattern(SpannedPattern sp):
             if args.len() == 0:
                 return "" + name
             String result = name + "("
-            int i = 0
-            while i < args.len():
+            for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern a = args.get(i).unwrap()
                 result = result + format_pattern(a)
-                i = i + 1
             result = result + ")"
             return result
         case PDotShorthand(name, args):
             if args.len() == 0:
                 return "." + name
             String result = "." + name + "("
-            int i = 0
-            while i < args.len():
+            for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern a = args.get(i).unwrap()
                 result = result + format_pattern(a)
-                i = i + 1
             result = result + ")"
             return result
         case PTuple(elems):
             String result = "("
-            int i = 0
-            while i < elems.len():
+            for (i, e) in elems.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedPattern e = elems.get(i).unwrap()
                 result = result + format_pattern(e)
-                i = i + 1
             result = result + ")"
             return result
         case POr(alts):
             String result = ""
-            int i = 0
-            while i < alts.len():
+            for (i, a) in alts.enumerate():
                 if i > 0:
                     result = result + " | "
-                SpannedPattern a = alts.get(i).unwrap()
                 result = result + format_pattern(a)
-                i = i + 1
             return result
         case PRest:
             return ".."
@@ -202,25 +181,19 @@ String format_expr(SpannedExpr se):
         case ECall(callee, args, targs):
             String cs = format_expr(*callee)
             String result = cs + "("
-            int i = 0
-            while i < args.len():
+            for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
-                i = i + 1
             result = result + ")"
             return result
         case EMethodCall(obj, name, args, targs):
             String os = format_expr(*obj)
             String result = os + "." + name + "("
-            int i = 0
-            while i < args.len():
+            for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
-                i = i + 1
             result = result + ")"
             return result
         case EFieldAccess(obj, name):
@@ -241,36 +214,27 @@ String format_expr(SpannedExpr se):
         case EIf(cond, body, branches):
             String result = "if " + format_expr(*cond) + ":"
             result = result + format_block(body)
-            int i = 0
-            while i < branches.len():
-                ElseBranch br = branches.get(i).unwrap()
+            for br in branches:
                 match br.condition:
                     case Some(c):
                         result = result + " elif " + format_expr(c) + ":"
                     else:
                         result = result + " else:"
                 result = result + format_block(br.body)
-                i = i + 1
             return result
         case EMatch(subject, arms):
             String result = "match " + format_expr(*subject) + ":"
-            int i = 0
-            while i < arms.len():
-                MatchArm arm = arms.get(i).unwrap()
+            for arm in arms:
                 String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
-                i = i + 1
             return result
         case EClosure(params, body):
             String result = "("
-            int i = 0
-            while i < params.len():
+            for (i, p) in params.enumerate():
                 if i > 0:
                     result = result + ", "
-                Param p = params.get(i).unwrap()
                 result = result + format_type(p.param_type) + " " + p.param_name
-                i = i + 1
             result = result + "):"
             result = result + format_block(body)
             return result
@@ -280,62 +244,47 @@ String format_expr(SpannedExpr se):
             return format_expr(*inner)
         case EArrayLiteral(elems):
             String result = "["
-            int i = 0
-            while i < elems.len():
+            for (i, e) in elems.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr e = elems.get(i).unwrap()
                 result = result + format_expr(e)
-                i = i + 1
             result = result + "]"
             return result
         case ETupleLiteral(elems):
             String result = "("
-            int i = 0
-            while i < elems.len():
+            for (i, e) in elems.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr e = elems.get(i).unwrap()
                 result = result + format_expr(e)
-                i = i + 1
             result = result + ")"
             return result
         case EDictLiteral(keys, vals):
             String open_b = r"{"
             String close_b = r"}"
             String result = open_b
-            int i = 0
-            while i < keys.len():
+            for (i, k) in keys.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr k = keys.get(i).unwrap()
                 SpannedExpr v = vals.get(i).unwrap()
                 result = result + format_expr(k) + ": " + format_expr(v)
-                i = i + 1
             result = result + close_b
             return result
         case EStructLiteral(name, fields, vals):
             String result = name + "("
-            int i = 0
-            while i < vals.len():
+            for (i, v) in vals.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr v = vals.get(i).unwrap()
                 result = result + format_expr(v)
-                i = i + 1
             result = result + ")"
             return result
         case EDotShorthand(name, args):
             if args.len() == 0:
                 return "." + name
             String result = "." + name + "("
-            int i = 0
-            while i < args.len():
+            for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                SpannedExpr a = args.get(i).unwrap()
                 result = result + format_expr(a)
-                i = i + 1
             result = result + ")"
             return result
         case ETry(inner):
@@ -452,26 +401,20 @@ String format_stmt(Stmt s):
             return "loop:" + format_block(body)
         case SIf(cond, body, branches):
             String result = "if " + format_expr(cond) + ":" + format_block(body)
-            int i = 0
-            while i < branches.len():
-                ElseBranch br = branches.get(i).unwrap()
+            for br in branches:
                 match br.condition:
                     case Some(c):
                         result = result + " elif " + format_expr(c) + ":"
                     else:
                         result = result + " else:"
                 result = result + format_block(br.body)
-                i = i + 1
             return result
         case SMatch(subject, arms):
             String result = "match " + format_expr(subject) + ":"
-            int i = 0
-            while i < arms.len():
-                MatchArm arm = arms.get(i).unwrap()
+            for arm in arms:
                 String arm_str = " case " + format_pattern(arm.pattern)
                 result = result + arm_str + ":"
                 result = result + format_block(arm.body)
-                i = i + 1
             return result
         case SWith(resource, name, body):
             return "with " + format_expr(resource) + " as " + name + ":" + format_block(body)
@@ -479,16 +422,13 @@ String format_stmt(Stmt s):
             return label + ":" + format_block(body)
         case SSelect(arms):
             String result = "select:"
-            int i = 0
-            while i < arms.len():
-                SelectArm arm = arms.get(i).unwrap()
+            for arm in arms:
                 match arm.op:
                     case SORecv(name, _, channel):
                         result = result + " case " + name + " = " + format_expr(channel) + ".recv():"
                     case SOSend(channel, value):
                         result = result + " case " + format_expr(channel) + ".send(" + format_expr(value) + "):"
                 result = result + format_block(arm.body)
-                i = i + 1
             return result
         case SOnError(body):
             return "on error:" + format_block(body)
@@ -519,11 +459,8 @@ String format_block(Vector[Stmt] stmts):
     if stmts.len() == 0:
         return " pass"
     String result = ""
-    int i = 0
-    while i < stmts.len():
-        Stmt s = stmts.get(i).unwrap()
+    for s in stmts:
         result = result + " " + format_stmt(s) + ";"
-        i = i + 1
     return result
 
 # ── Item formatting ──────────────────────────────────────────
@@ -550,13 +487,10 @@ String format_item(Item item):
             String result = "type " + name
             if tps.len() > 0:
                 result = result + "["
-                int i = 0
-                while i < tps.len():
+                for (i, tp) in tps.enumerate():
                     if i > 0:
                         result = result + ", "
-                    String tp = tps.get(i).unwrap()
                     result = result + tp
-                    i = i + 1
                 result = result + "]"
             result = result + " = " + format_type(ty)
             return result
@@ -580,11 +514,8 @@ String format_item(Item item):
             return "static " + format_type(ty) + " " + name + " = " + format_expr(val)
         case IExternBlock(fns):
             String result = "extern:"
-            int i = 0
-            while i < fns.len():
-                FunctionDef f = fns.get(i).unwrap()
+            for f in fns:
                 result = result + " " + format_function(f) + ";"
-                i = i + 1
             return result
         case ITest(name, _, _, body):
             return "test \"" + name + "\":" + format_block(body)
@@ -601,20 +532,15 @@ String format_function(FunctionDef fd):
     String result = format_type(fd.return_type) + " " + fd.name
     if fd.type_params.len() > 0:
         result = result + "["
-        int i = 0
-        while i < fd.type_params.len():
+        for (i, tp) in fd.type_params.enumerate():
             if i > 0:
                 result = result + ", "
-            String tp = fd.type_params.get(i).unwrap()
             result = result + tp
-            i = i + 1
         result = result + "]"
     result = result + "("
-    int i = 0
-    while i < fd.params.len():
+    for (i, p) in fd.params.enumerate():
         if i > 0:
             result = result + ", "
-        Param p = fd.params.get(i).unwrap()
         if p.param_name == "self":
             if p.ownership == 1:
                 result = result + "&self"
@@ -624,7 +550,6 @@ String format_function(FunctionDef fd):
                 result = result + "self"
         else:
             result = result + format_type(p.param_type) + " " + p.param_name
-        i = i + 1
     result = result + ")"
     if fd.is_expr_body:
         if fd.body.len() > 0:
@@ -646,80 +571,56 @@ String format_struct(StructDef sd):
     String result = "struct " + sd.name
     if sd.type_params.len() > 0:
         result = result + "["
-        int i = 0
-        while i < sd.type_params.len():
+        for (i, tp) in sd.type_params.enumerate():
             if i > 0:
                 result = result + ", "
-            String tp = sd.type_params.get(i).unwrap()
             result = result + tp
-            i = i + 1
         result = result + "]"
     result = result + ":"
-    int i = 0
-    while i < sd.fields.len():
-        Param f = sd.fields.get(i).unwrap()
+    for f in sd.fields:
         result = result + " " + format_type(f.param_type) + " " + f.param_name + ";"
-        i = i + 1
     return result
 
 String format_enum(EnumDef ed):
     String result = "enum " + ed.name
     if ed.type_params.len() > 0:
         result = result + "["
-        int i = 0
-        while i < ed.type_params.len():
+        for (i, tp) in ed.type_params.enumerate():
             if i > 0:
                 result = result + ", "
-            String tp = ed.type_params.get(i).unwrap()
             result = result + tp
-            i = i + 1
         result = result + "]"
     result = result + ":"
-    int i = 0
-    while i < ed.variants.len():
-        EnumVariant v = ed.variants.get(i).unwrap()
+    for v in ed.variants:
         result = result + " " + v.name
         if v.fields.len() > 0:
             result = result + "("
-            int j = 0
-            while j < v.fields.len():
+            for (j, ft) in v.fields.enumerate():
                 if j > 0:
                     result = result + ", "
-                SpannedType ft = v.fields.get(j).unwrap()
                 result = result + format_type(ft)
-                j = j + 1
             result = result + ")"
         result = result + ";"
-        i = i + 1
     return result
 
 String format_trait(TraitDef td):
     String result = "trait " + td.name
     if td.type_params.len() > 0:
         result = result + "["
-        int i = 0
-        while i < td.type_params.len():
+        for (i, tp) in td.type_params.enumerate():
             if i > 0:
                 result = result + ", "
-            String tp = td.type_params.get(i).unwrap()
             result = result + tp
-            i = i + 1
         result = result + "]"
     if td.parent_traits.len() > 0:
         result = result + " extends "
-        int i = 0
-        while i < td.parent_traits.len():
+        for (i, e) in td.parent_traits.enumerate():
             if i > 0:
                 result = result + ", "
-            String e = td.parent_traits.get(i).unwrap()
             result = result + e
-            i = i + 1
     result = result + ":"
-    int i = 0
-    while i < td.methods.len():
-        FunctionDef m = td.methods.get(i).unwrap()
+    for m in td.methods:
         result = result + " " + format_function(m) + ";"
-        i = i + 1
     return result
 
 String format_equip(EquipBlock eq):
@@ -730,22 +631,16 @@ String format_equip(EquipBlock eq):
         else:
             pass
     result = result + ":"
-    int i = 0
-    while i < eq.methods.len():
-        FunctionDef m = eq.methods.get(i).unwrap()
+    for m in eq.methods:
         result = result + " " + format_function(m) + ";"
-        i = i + 1
     return result
 
 String format_import(ImportStmt imp):
     if imp.names.len() > 0:
         String result = "from " + imp.module_path + " import "
-        int i = 0
-        while i < imp.names.len():
+        for (i, n) in imp.names.enumerate():
             if i > 0:
                 result = result + ", "
-            String n = imp.names.get(i).unwrap()
             result = result + n
-            i = i + 1
         return result
     return "import " + imp.module_path
