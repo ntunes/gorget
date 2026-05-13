@@ -3543,6 +3543,28 @@ v.len() = 22",
 }
 
 #[test]
+fn fstring_cross_module_callee() {
+    // Two modules each containing an f-string interpolation of a
+    // function call. Pre-fix (2026-05-13), the parser's
+    // `next_interp_offset` always started at `1<<40` regardless of
+    // the source's `base_offset`, so both modules' first f-string
+    // tokens shared the same synthetic span. The resolver's
+    // `resolution_map[span_start]` last-write-wins on the collision,
+    // and `lower_call` (via `call_resolved_names`) emitted the WRONG
+    // mangled function name at the f-string interp site. Manifested
+    // in self-host as `derive___equip_prefix` calling
+    // `format_gir___format_type_id` instead of
+    // `derive___generic_suffix` — stage-1 cc failed with "too few
+    // arguments". Fix: shift `next_interp_offset` by `base_offset
+    // << 20` so each module's synthetic range is disjoint.
+    run_gg_dir(
+        "fstring_cross_module",
+        "main.gg",
+        "saw 3 items done",
+    );
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
