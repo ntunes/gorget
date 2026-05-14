@@ -23,30 +23,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 ### Other High-priority items
 
-- **Self-host snag #4 — `if x is Some(p):` miscompiles in `lexer.gg::lex_scan_word`'s keyword-recognition shape, even though the minimal-repro form works.** Surfaced 2026-05-14 trying to convert
-  ```gorget
-  match kw:
-      case Some(k):
-          self.lex_emit(TkKeyword(k), start, self.lex_pos)
-      else:
-          if word == "_":
-              self.lex_emit(TkUnderscore(), start, self.lex_pos)
-          else:
-              self.lex_emit(TkIdentifier(word), start, self.lex_pos)
-  ```
-  to the idiomatic `if kw is Some(k): ...; else: if word == "_": ...` form in `tests/fixtures/self_host_typechecker/lexer.gg:439-446`. With the conversion applied, `bootstrap_fixed_point` regresses: stage-1's binary lexes self-host source and emits `TkIdentifier("if")` / `TkIdentifier("while")` for the `if` / `while` keywords (when scanning `main` in driver.gg, `run_ssa` in lir_ssa.gg, etc.), causing the typechecker to emit `[bug] EIdentifier: unknown identifier 'if'` markers in stage-2 output. Same failure with both `elif word == "_":` and nested `else: if word == "_":` form, so it isn't the recently-fixed elif-walker bug (`d51500bc`).
-
-  **Repro (in tree):** apply the conversion above to `tests/fixtures/self_host_typechecker/lexer.gg::lex_scan_word`. Run `cargo test --release self_host_bootstrap_fixed_point`. Diff `/tmp/self_host_stage2.c /tmp/self_host_stage3.c` shows stage-2 has ~230 lines of `[bug]` markers + a duplicate "minimal C program" inserted around line 4195, stage-3 does not.
-
-  **Cannot reproduce in isolation.** Attempted reproducers:
-  - bare `Option[Kw]` with 20/80 unit-variant enum + direct call → works
-  - `Option[Kw]` from a function call + `is Some(k)` + constructor arg → works
-  - Method on `&self` calling `self.emit(TkKw(k))` from inside `is Some(k)` → works
-  - For-loop over `Vector[String]` with the above method → works
-  Likely requires the combination of (a) the Vec-of-Vec-of-something nested AST shape produced when stage-1 lexes itself, (b) the specific monomorphization set across self-host's ~13 source files, or (c) some interaction with the surrounding code in lex_scan_word that I haven't isolated.
-
-  **Workaround:** keep the `match opt: case Some(p): ...; else: ...` form for this site only. Three other `match esc: case Some(c): ...; else: ...` sites in the same file (lines 595/678/716, all `Option[String]` returned by `lex_parse_escape`) have the same shape and likely have the same latent issue — pre-rebase bisect showed they failed too, but I haven't re-verified post-rebase. Safe to leave all four match-Some patterns in `lexer.gg` alone until this is rooted-out. Suspect any other `if x is Some(p):` where `x` came from a function call returning `Option[Enum]` until a real repro is found. [added: 2026-05-14]
-
 - **Self-host's `lower_stmt` is missing a `case SFor` arm — every for-loop in self-host code silently emits `/* [lower_fail] unhandled in lower_stmt: SFor */` at stage-1 emit time.** Re-diagnosed 2026-05-13: the original hypothesis (Rust-side CoW fix gap) was wrong — the bug is purely in the self-host's lowering. `tests/fixtures/self_host_lowerer/lower.gg::lower_stmt` (~2705-2896) handles SVarDecl, SReturn, SExpr, SIf, SWhile, SAssign, SBreak, SContinue, SPass, SMeta, SMetaFor, SMetaIf, SMatch, SLoop, SCompoundAssign, with a trailing `else: lower_fail(...)`. There is NO `case SFor` arm. Every for-loop hits the fallback and emits only a C comment in the stage-1 output. The bootstrap_fixed_point test silently tolerated this for many `for x in coll:` conversions because: (1) stage-1's output is consistently broken in the same way as stage-2's (byte-equivalence preserved), and (2) the affected control flow paths were not exercised by the test fixtures' execution. `lir_ssa.gg::find_promotable_slots`'s for-loop conversion EXPOSED the bug because its iteration is on the SSA promotion hot path — empty `candidates` dict means downstream SSA construction reads wrong types and stage-2 crashes mid-emission. Other `lir_ssa.gg` / `loader.gg` / `derive.gg::expand_derives` conversions are silently broken too but happen to not crash the test suite.
   Repro (verified): convert any `int i = 0; while i < x.len(): T v = x.get(i).unwrap(); ...` to `for v in x:` or `for (i, v) in x.enumerate():` in any self-host `.gg` source. Stage-0 driver builds; stage-1 binary builds; runs `--lir-c` succeeds; output contains `/* [lower_fail] unhandled in lower_stmt: SFor */` comments at the affected sites. `bootstrap_fixed_point` may or may not fail depending on whether the missing iteration path is load-bearing.
   **Real fix**: add a `case SFor(pat, iter_expr, body, _own, else_body):` arm to `lower_stmt` in `tests/fixtures/self_host_lowerer/lower.gg`. Three sub-shapes to handle: (a) `for x in coll:` (single PBinding, value-typed Vector iter), (b) `for (i, x) in coll.enumerate():` (PTuple binding + EMethodCall("enumerate") with no args), (c) `for k, v in dict:` (dict iteration — less critical, used in fewer places). Lower as a desugar to the equivalent index-based while-loop pattern (mirror `lower_while`): allocate idx + len locals, emit header bb with `cmp_lt idx<len`, body bb with `gorget_array_safe_get` + deref + binding + `lower_stmts(body)` + idx increment + jump-header, exit bb. The `for-else` branch is rarely-used in self-host; can stay unhandled (or fail loudly) initially. Estimate: ~150 lines of self-host code. **This is a self-host modernization blocker** — the user's recent for-each conversion sweep across resolve.gg / typecheck.gg / traits.gg / derive.gg / etc. is mostly silent no-ops in stage-1 emit. Once `case SFor` lands, the modernization actually takes effect. [added: 2026-05-13, re-diagnosed correctly]

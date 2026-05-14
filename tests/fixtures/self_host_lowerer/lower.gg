@@ -2427,10 +2427,50 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         case EDefaultOp(lhs_box, rhs_box):
             lower_expr(&ctx, *lhs_box, &gmod)
             return lower_expr(&ctx, *rhs_box, &gmod)
-        case EIs(inner_box, _, _):
-            lower_expr(&ctx, *inner_box, &gmod)
+        case EIs(inner_box, negated, pattern):
+            # `x is Pattern` — test the scrutinee against the pattern and
+            # bind any sub-pattern names into the function-scope named
+            # locals. Mirrors Rust gg's `Expr::Is` lowering (src/ir/lowering/
+            # exprs/mod.rs:649) + `emit_is_bindings` (stmts/mod.rs:2643)
+            # collapsed into one site — `lower_pattern_match` does both
+            # the tag-test and the field-extract, and `nl_put` is
+            # function-scoped so the bindings remain visible in the
+            # then-branch of any enclosing `if x is Some(k):`.
+            int scrutinee = lower_expr(&ctx, *inner_box, &gmod)
+            int scr_tid = ctx.locals.get(scrutinee).unwrap().type_id
+            String type_name = type_id_to_name(scr_tid, &gmod)
+            # Unwrap Ptr/MutPtr — borrowed scrutinees show up as Ptr(T).
+            if scr_tid >= 0 and scr_tid < gmod.type_table.len():
+                GirType bt = gmod.type_table.get(scr_tid).unwrap()
+                match bt:
+                    case GtPtr(inner):
+                        type_name = type_id_to_name(inner, &gmod)
+                    case GtMutPtr(inner):
+                        type_name = type_id_to_name(inner, &gmod)
+                    else:
+                        pass
+            String enum_name = match_enum_type(type_name, &gmod)
+            int match_bb = new_block(&ctx)
+            int no_match_bb = new_block(&ctx)
+            int merge_bb = new_block(&ctx)
             int isdst = add_local(&ctx, BOOL_TYPE, NO_NAME)
-            emit(&ctx, GIAssign(isdst, OpConstBool(false)))
+            lower_pattern_match(&ctx, scrutinee, *pattern, enum_name, match_bb, no_match_bb, &gmod)
+            # Match path: scrutinee matched the pattern. Bindings already
+            # emitted in lower_pattern_match's bind_bb upstream.
+            switch_to(&ctx, match_bb)
+            bool match_val = true
+            if negated:
+                match_val = false
+            emit(&ctx, GIAssign(isdst, OpConstBool(match_val)))
+            set_terminator(&ctx, GTJump(merge_bb))
+            # No-match path.
+            switch_to(&ctx, no_match_bb)
+            bool no_match_val = false
+            if negated:
+                no_match_val = true
+            emit(&ctx, GIAssign(isdst, OpConstBool(no_match_val)))
+            set_terminator(&ctx, GTJump(merge_bb))
+            switch_to(&ctx, merge_bb)
             return isdst
         case EAwait(inner_box):
             return lower_expr(&ctx, *inner_box, &gmod)

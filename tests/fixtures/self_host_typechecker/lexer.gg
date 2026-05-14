@@ -436,14 +436,13 @@ equip Lexer:
                 break
         String word = owned_slice(self.lex_source, start, self.lex_pos)
         Option[Keyword] kw = keyword_from_str(word)
-        match kw:
-            case Some(k):
-                self.lex_emit(TkKeyword(k), start, self.lex_pos)
+        if kw is Some(k):
+            self.lex_emit(TkKeyword(k), start, self.lex_pos)
+        else:
+            if word == "_":
+                self.lex_emit(TkUnderscore(), start, self.lex_pos)
             else:
-                if word == "_":
-                    self.lex_emit(TkUnderscore(), start, self.lex_pos)
-                else:
-                    self.lex_emit(TkIdentifier(word), start, self.lex_pos)
+                self.lex_emit(TkIdentifier(word), start, self.lex_pos)
 
     # ── Number scanning ───────────────────────────────────────
 
@@ -594,12 +593,11 @@ equip Lexer:
             if self.lex_peek() == b'\\' and not is_raw:
                 self.lex_advance()
                 Option[String] esc = self.lex_parse_escape()
-                match esc:
-                    case Some(c):
-                        current_lit = current_lit + c
-                    else:
-                        self.lex_error = "unterminated string"
-                        break
+                if esc is Some(c):
+                    current_lit = current_lit + c
+                else:
+                    self.lex_error = "unterminated string"
+                    break
                 continue
 
             # String interpolation: {expr} — only in f-strings
@@ -678,13 +676,12 @@ equip Lexer:
             if self.lex_peek() == b'\\':
                 self.lex_advance()
                 Option[String] esc = self.lex_parse_escape()
-                match esc:
-                    case Some(c):
-                        lit = lit + c
-                    else:
-                        self.lex_error = "unterminated char literal"
-                        self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
-                        return
+                if esc is Some(c):
+                    lit = lit + c
+                else:
+                    self.lex_error = "unterminated char literal"
+                    self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
+                    return
             else:
                 lit = lit + owned_slice(self.lex_source, self.lex_pos, self.lex_pos + 1)
                 self.lex_advance()
@@ -717,14 +714,13 @@ equip Lexer:
         if self.lex_peek() == b'\\':
             self.lex_advance()
             Option[String] esc = self.lex_parse_escape()
-            match esc:
-                case Some(s):
-                    if s.byte_len() > 0:
-                        byte_val = s.byte_at(0) as int
-                else:
-                    self.lex_error = "invalid escape in byte literal"
-                    self.lex_emit(TkError("invalid byte escape"), start, self.lex_pos)
-                    return
+            if esc is Some(s):
+                if s.byte_len() > 0:
+                    byte_val = s.byte_at(0) as int
+            else:
+                self.lex_error = "invalid escape in byte literal"
+                self.lex_emit(TkError("invalid byte escape"), start, self.lex_pos)
+                return
         else:
             byte_val = self.lex_peek() as int
             self.lex_advance()
