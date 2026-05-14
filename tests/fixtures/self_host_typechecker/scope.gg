@@ -185,39 +185,39 @@ equip ScopeTable:
             i = i - 1
         return NO_DEF
 
-    int lookup(self, String name):
+    Option[int] lookup(self, String name):
         int scope_id = self.current
         while scope_id >= 0:
             int ni = self.find_name_entry(scope_id, name)
             if ni >= 0:
-                return self.name_def_ids.get(ni).unwrap()
+                return Some(self.name_def_ids.get(ni).unwrap())
             Scope s = get_scope_at(self.scopes, scope_id)
             scope_id = s.parent
-        return NO_DEF
+        return None()
 
-    int lookup_from_scope(self, int scope_id, String name):
+    Option[int] lookup_from_scope(self, int scope_id, String name):
         int sid = scope_id
         while sid >= 0:
             int ni = self.find_name_entry(sid, name)
             if ni >= 0:
-                return self.name_def_ids.get(ni).unwrap()
+                return Some(self.name_def_ids.get(ni).unwrap())
             Scope s = get_scope_at(self.scopes, sid)
             sid = s.parent
-        return NO_DEF
+        return None()
 
-    int lookup_in_scope(self, int scope_id, String name):
+    Option[int] lookup_in_scope(self, int scope_id, String name):
         int ni = self.find_name_entry(scope_id, name)
         if ni >= 0:
-            return self.name_def_ids.get(ni).unwrap()
-        return NO_DEF
+            return Some(self.name_def_ids.get(ni).unwrap())
+        return None()
 
     # Search scope and all descendant scopes for a name.
-    # Returns the first matching def_id or NO_DEF.
-    int lookup_in_subtree(self, int root_scope, String name):
+    # Returns the first matching def_id or None.
+    Option[int] lookup_in_subtree(self, int root_scope, String name):
         # Check root scope first
         int ni = self.find_name_entry(root_scope, name)
         if ni >= 0:
-            return self.name_def_ids.get(ni).unwrap()
+            return Some(self.name_def_ids.get(ni).unwrap())
         # Check all child scopes (any scope whose parent chain includes root_scope)
         int sid = root_scope + 1
         while sid < self.scopes.len():
@@ -236,20 +236,20 @@ equip ScopeTable:
             if is_child:
                 int cni = self.find_name_entry(sid, name)
                 if cni >= 0:
-                    return self.name_def_ids.get(cni).unwrap()
+                    return Some(self.name_def_ids.get(cni).unwrap())
             sid = sid + 1
-        return NO_DEF
+        return None()
 
     # Like lookup_in_subtree, but skips defs that already have a type assigned.
     # Used by assign_pattern_types to find the correct def when the same name
     # appears in multiple match arm scopes.
-    int lookup_in_subtree_untyped(self, int root_scope, String name):
+    Option[int] lookup_in_subtree_untyped(self, int root_scope, String name):
         int ni = self.find_name_entry(root_scope, name)
         if ni >= 0:
             int did = self.name_def_ids.get(ni).unwrap()
             DefInfo d = get_def_at(self.definitions, did)
             if d.type_id < 0:
-                return did
+                return Some(did)
         int sid = root_scope + 1
         while sid < self.scopes.len():
             bool is_child = false
@@ -269,9 +269,9 @@ equip ScopeTable:
                     int cdid = self.name_def_ids.get(cni).unwrap()
                     DefInfo cd = get_def_at(self.definitions, cdid)
                     if cd.type_id < 0:
-                        return cdid
+                        return Some(cdid)
             sid = sid + 1
-        return NO_DEF
+        return None()
 
     DefInfo get_def(self, int id):
         return get_def_at(self.definitions, id)

@@ -560,8 +560,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             pass
 
         case EIdentifier(name):
-            int def_id = scopes.lookup(name)
-            if def_id >= 0:
+            if scopes.lookup(name) is Some(def_id):
                 ctx.resolution_map.put(expr.span.start, def_id)
             elif not is_builtin(name):
                 pass
@@ -719,8 +718,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 resolve_expr(v, &scopes, &ctx)
 
         case EStructLiteral(name, _, args):
-            int def_id = scopes.lookup(name)
-            if def_id >= 0:
+            if scopes.lookup(name) is Some(def_id):
                 ctx.resolution_map.put(expr.span.start, def_id)
             for arg in args:
                 resolve_expr(arg, &scopes, &ctx)

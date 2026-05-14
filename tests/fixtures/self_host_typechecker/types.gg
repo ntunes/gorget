@@ -258,8 +258,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                         return types.add_type(RTConsumeCallableTrait(inner))
                     return types.error_id
 
-            int def_id = scopes.lookup(name)
-            if def_id >= 0:
+            if scopes.lookup(name) is Some(def_id):
                 DefKind dk = scopes.get_def(def_id).kind
                 bool is_type_def = false
                 match dk:
@@ -325,8 +324,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                         return types.primitive_id(alias_target)
                     return types.error_id
                 # Target is a named type — look it up in scope
-                int alias_def = scopes.lookup(alias_target)
-                if alias_def >= 0:
+                if scopes.lookup(alias_target) is Some(alias_def):
                     if generic_args.len() == 0:
                         return types.defined_id(alias_def)
                     Vector[int] resolved_args = Vector[int]()

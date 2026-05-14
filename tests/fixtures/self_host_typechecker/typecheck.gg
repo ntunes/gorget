@@ -326,17 +326,16 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
                     int bgp = scopes.scope_parent_of(bp)
                     ok = bgp == parent_scope
                 if ok:
-                    int param_def = scopes.lookup_in_scope(bs, p.param_name)
-                    if param_def >= 0:
+                    if scopes.lookup_in_scope(bs, p.param_name) is Some(param_def):
                         scopes.set_def_type(param_def, binding_type_id)
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
     int fn_def = -1
     if def_scope >= 0:
-        fn_def = scopes.lookup_in_scope(def_scope, func.name)
+        fn_def = scopes.lookup_in_scope(def_scope, func.name).unwrap_or(-1)
     if fn_def < 0:
-        fn_def = scopes.lookup_in_scope(parent_scope, func.name)
+        fn_def = scopes.lookup_in_scope(parent_scope, func.name).unwrap_or(-1)
     if fn_def < 0:
         fn_def = find_def_by_name(scopes, func.name, true)
     if fn_def >= 0:
@@ -366,8 +365,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
 void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_id, ScopeTable &scopes, TypeTable &types):
     match pattern.pat:
         case PBinding(name):
-            int def_id = scopes.lookup_in_subtree_untyped(scope_id, name)
-            if def_id >= 0:
+            if scopes.lookup_in_subtree_untyped(scope_id, name) is Some(def_id):
                 DefInfo d = scopes.get_def(def_id)
                 # Only assign to variable bindings (not variant names, structs, etc.)
                 bool is_variable = false
@@ -624,8 +622,7 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
                 if p_type_id < 0 or p_type_id == types.error_id or p_type_id == types.void_id:
                     p_type_id = types.fresh_var()
                 if p_type_id >= 0 and p_type_id != types.error_id:
-                    int param_def = scopes.lookup_in_subtree_untyped(scope_id, p.param_name)
-                    if param_def >= 0:
+                    if scopes.lookup_in_subtree_untyped(scope_id, p.param_name) is Some(param_def):
                         int binding_type_id = demote_generic_param_to_var(p_type_id, scopes, &types)
                         scopes.set_def_type(param_def, binding_type_id)
             # Walk closure body for VarDecls and nested closures
@@ -777,8 +774,7 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
             ret_id = inferred_ret
     # Build the new function type and update the variable
     int fn_type = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
-    int var_def = scopes.lookup_in_subtree(scope_id, var_name)
-    if var_def >= 0:
+    if scopes.lookup_in_subtree(scope_id, var_name) is Some(var_def):
         scopes.set_def_type(var_def, fn_type)
 
 int find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &types):
@@ -820,8 +816,7 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
             # Check if callee is an identifier with a function type containing type vars
             match (*callee).expr:
                 case EIdentifier(name):
-                    int callee_def = scopes.lookup_in_subtree(scope_id, name)
-                    if callee_def >= 0:
+                    if scopes.lookup_in_subtree(scope_id, name) is Some(callee_def):
                         DefInfo cd = scopes.get_def(callee_def)
                         if cd.type_id >= 0:
                             ResolvedType fn_rt = get_rtype_at(types.types, cd.type_id)
@@ -925,8 +920,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 # Phase 2: infer type from initializer expression
                 var_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
             if var_type_id >= 0:
-                int var_def = scopes.lookup_in_subtree_untyped(scope_id, name)
-                if var_def >= 0:
+                if scopes.lookup_in_subtree_untyped(scope_id, name) is Some(var_def):
                     int binding_type_id = demote_generic_param_to_var(var_type_id, scopes, &types)
                     scopes.set_def_type(var_def, binding_type_id)
             # Walk initializer for closures and block expressions
@@ -1009,8 +1003,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # Infer the type of the with binding (e.g., `with Resource() as r`)
             int with_type = infer_expr_type(expr, scopes, &types, ctx)
             if with_type >= 0:
-                int with_def = scopes.lookup_in_subtree(scope_id, name)
-                if with_def >= 0:
+                if scopes.lookup_in_subtree(scope_id, name) is Some(with_def):
                     scopes.set_def_type(with_def, with_type)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
@@ -1043,8 +1036,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                                     DefInfo d = scopes.get_def(def_id)
                                     if (d.name == "Channel" or d.name == "SharedChannel") and type_args.len() >= 1:
                                         int elem_type = get_int_at(type_args, 0)
-                                        int recv_def = scopes.lookup_in_subtree(scope_id, name)
-                                        if recv_def >= 0:
+                                        if scopes.lookup_in_subtree(scope_id, name) is Some(recv_def):
                                             scopes.set_def_type(recv_def, elem_type)
                                 else:
                                     pass
@@ -1165,17 +1157,16 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             else:
                 const_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
             if const_type_id >= 0:
-                int const_def = scopes.lookup_in_scope(scope_id, name)
+                int const_def = scopes.lookup_in_scope(scope_id, name).unwrap_or(-1)
                 if const_def < 0:
-                    const_def = scopes.lookup_in_subtree(scope_id, name)
+                    const_def = scopes.lookup_in_subtree(scope_id, name).unwrap_or(-1)
                 if const_def >= 0:
                     int binding_type_id = demote_generic_param_to_var(const_type_id, scopes, &types)
                     scopes.set_def_type(const_def, binding_type_id)
 
         case ITypeAlias(name, type_params, underlying):
             int alias_type_id = ast_type_to_resolved(underlying.ty, underlying.span, scopes, &types)
-            int alias_def = scopes.lookup_in_scope(scope_id, name)
-            if alias_def >= 0:
+            if scopes.lookup_in_scope(scope_id, name) is Some(alias_def):
                 int binding_type_id = demote_generic_param_to_var(alias_type_id, scopes, &types)
                 scopes.set_def_type(alias_def, binding_type_id)
 
@@ -1192,9 +1183,9 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             else:
                 static_type_id = infer_expr_type(init_expr, scopes, &types, ctx)
             if static_type_id >= 0:
-                int static_def = scopes.lookup_in_scope(scope_id, name)
+                int static_def = scopes.lookup_in_scope(scope_id, name).unwrap_or(-1)
                 if static_def < 0:
-                    static_def = scopes.lookup_in_subtree(scope_id, name)
+                    static_def = scopes.lookup_in_subtree(scope_id, name).unwrap_or(-1)
                 if static_def >= 0:
                     int binding_type_id = demote_generic_param_to_var(static_type_id, scopes, &types)
                     scopes.set_def_type(static_def, binding_type_id)
@@ -1213,8 +1204,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                         pass
                 int wtype = infer_expr_type(wexpr, scopes, &types, ctx)
                 if wtype >= 0:
-                    int wdef = scopes.lookup_in_subtree(scope_id, wname)
-                    if wdef >= 0:
+                    if scopes.lookup_in_subtree(scope_id, wname) is Some(wdef):
                         scopes.set_def_type(wdef, wtype)
             # Walk test body for VarDecl types
             type_check_stmts(body, scope_id, &scopes, &types, ctx)

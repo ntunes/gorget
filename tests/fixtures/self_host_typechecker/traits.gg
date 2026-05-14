@@ -100,8 +100,7 @@ int resolve_with_bindings(Type ty, Vector[String] bind_names, Vector[int] bind_t
                 if idx >= 0:
                     return bind_tids.get(idx).unwrap()
             if generic_args.len() > 0:
-                int def_id = scopes.lookup(name)
-                if def_id >= 0:
+                if scopes.lookup(name) is Some(def_id):
                     Vector[int] resolved_args = Vector[int]()
                     for arg in generic_args:
                         int aid = resolve_with_bindings(arg.ty, bind_names, bind_tids, scopes, &types)
@@ -157,9 +156,10 @@ String type_name_of(Type ty):
 # ── Collect a TraitDef into the registry ──────────────────────
 
 void collect_trait(TraitDef trait_def, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry):
-    int def_id = scopes.lookup(trait_def.name)
-    if def_id < 0:
+    Option[int] def_id_opt = scopes.lookup(trait_def.name)
+    if def_id_opt is None:
         return
+    int def_id = def_id_opt.unwrap()
     Vector[String] method_names = Vector[String]()
     Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
     Vector[bool] method_has_default = Vector[bool]()
@@ -181,8 +181,7 @@ void collect_trait(TraitDef trait_def, ScopeTable &scopes, TypeTable &types, Tra
             default_shape_shapes.push(build_method_sig_shape(method))
     Vector[int] parents = Vector[int]()
     for pname in trait_def.parent_traits:
-        int parent_id = scopes.lookup(pname)
-        if parent_id >= 0:
+        if scopes.lookup(pname) is Some(parent_id):
             parents.push(parent_id)
     TraitInfo info = TraitInfo(def_id, trait_def.name, method_names, method_sigs, method_has_default, shape_names, shape_shapes, trait_def.type_params, parents, default_shape_names, default_shape_shapes)
     registry.traits.push(info)
@@ -233,8 +232,7 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
     int trait_def_id = NO_DEF
     String trait_name = ""
     if eq.trait_name is Some(tn):
-        int td = scopes.lookup(tn)
-        if td >= 0:
+        if scopes.lookup(tn) is Some(td):
             trait_def_id = td
         trait_name = tn
     Vector[String] method_names = Vector[String]()
@@ -247,7 +245,7 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
         FunctionSig sig = build_function_sig(method, scopes, &types)
         int mdef = -1
         if equip_scope >= 0:
-            mdef = scopes.lookup_in_scope(equip_scope, method.name)
+            mdef = scopes.lookup_in_scope(equip_scope, method.name).unwrap_or(-1)
         method_names.push(method.name)
         method_def_ids.push(mdef)
         method_sigs.push(sig)
@@ -314,9 +312,10 @@ TraitInfo make_builtin_trait_one(int def_id, String name, String method, Functio
 # (resolver controls which builtins exist) or if it's already in the
 # registry from user collect_trait.
 void register_builtin_method(String trait_name, String method, FunctionSig sig, ScopeTable scopes, TraitRegistry &registry):
-    int def_id = scopes.lookup(trait_name)
-    if def_id < 0:
+    Option[int] def_id_opt = scopes.lookup(trait_name)
+    if def_id_opt is None:
         return
+    int def_id = def_id_opt.unwrap()
     if registry_has_trait_for_def_id(registry, def_id):
         return
     registry.traits.push(make_builtin_trait_one(def_id, trait_name, method, sig))
@@ -324,9 +323,10 @@ void register_builtin_method(String trait_name, String method, FunctionSig sig, 
 # Append a method to an existing builtin trait (used for multi-method
 # traits like Hasher).
 void append_builtin_method(String trait_name, String method, FunctionSig sig, ScopeTable scopes, TraitRegistry &registry):
-    int def_id = scopes.lookup(trait_name)
-    if def_id < 0:
+    Option[int] def_id_opt = scopes.lookup(trait_name)
+    if def_id_opt is None:
         return
+    int def_id = def_id_opt.unwrap()
     int i = 0
     while i < registry.traits.len():
         TraitInfo t = registry.traits.get(i).unwrap()
@@ -425,8 +425,8 @@ void register_builtin_traits(ScopeTable scopes, TypeTable types, TraitRegistry &
     # One: Self one() — static
     register_builtin_method("One", "one", sig_static_no_args(err), scopes, &registry)
     # Numeric: composite — empty methods, extends others
-    int numeric_def = scopes.lookup("Numeric")
-    if numeric_def >= 0 and not registry_has_trait_for_def_id(registry, numeric_def):
+    Option[int] numeric_def_opt = scopes.lookup("Numeric")
+    if numeric_def_opt is Some(numeric_def) and not registry_has_trait_for_def_id(registry, numeric_def):
         Vector[int] parents = Vector[int]()
         Vector[String] parent_names = Vector[String]()
         parent_names.push("Add")
@@ -440,8 +440,7 @@ void register_builtin_traits(ScopeTable scopes, TypeTable types, TraitRegistry &
         parent_names.push("Default")
         parent_names.push("One")
         for pn in parent_names:
-            int pd = scopes.lookup(pn)
-            if pd >= 0:
+            if scopes.lookup(pn) is Some(pd):
                 parents.push(pd)
         Vector[String] empty_mn = Vector[String]()
         Vector[FunctionSig] empty_ms = Vector[FunctionSig]()

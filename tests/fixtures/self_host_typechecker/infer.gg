@@ -145,8 +145,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 # (handles with-binding defs that shadow outer typed defs)
                 int pscope = scopes.scope_parent_of(d.scope_id)
                 if pscope >= 0:
-                    int alt_def = scopes.lookup_from_scope(pscope, name)
-                    if alt_def >= 0:
+                    if scopes.lookup_from_scope(pscope, name) is Some(alt_def):
                         DefInfo alt_d = scopes.get_def(alt_def)
                         if alt_d.type_id >= 0:
                             return alt_d.type_id
@@ -210,8 +209,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
 
         case EStructLiteral(name, field_names, field_values):
             # Look up struct by name
-            int def_id = scopes.lookup(name)
-            if def_id >= 0:
+            if scopes.lookup(name) is Some(def_id):
                 return types.defined_id(def_id)
             return NO_TYPE
 
@@ -346,8 +344,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             if method_name == "to_string" or method_name == "to_str" or method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "slice" or method_name == "substr" or method_name == "format" or method_name == "concat" or method_name == "trim_start" or method_name == "trim_end":
                 return types.string_id
             if method_name == "split":
-                int vec_def = scopes.lookup("Vector")
-                if vec_def >= 0:
+                if scopes.lookup("Vector") is Some(vec_def):
                     Vector[int] vec_args = Vector[int]()
                     vec_args.push(types.string_id)
                     return types.add_type(RTGeneric(vec_def, vec_args))
@@ -377,16 +374,14 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             if d.name == "Vector" or d.name == "Set" or d.name == "HashSet":
                                 if type_args.len() >= 1:
                                     # Returns Option[T &]
-                                    int option_def = scopes.lookup("Option")
-                                    if option_def >= 0:
+                                    if scopes.lookup("Option") is Some(option_def):
                                         int ref_tid = types.add_type(RTRef(get_int_at(type_args, 0)))
                                         Vector[int] opt_args = Vector[int]()
                                         opt_args.push(ref_tid)
                                         return types.add_type(RTGeneric(option_def, opt_args))
                             if d.name == "Dict" or d.name == "HashMap":
                                 if type_args.len() >= 2:
-                                    int option_def = scopes.lookup("Option")
-                                    if option_def >= 0:
+                                    if scopes.lookup("Option") is Some(option_def):
                                         int ref_tid = types.add_type(RTRef(get_int_at(type_args, 1)))
                                         Vector[int] opt_args = Vector[int]()
                                         opt_args.push(ref_tid)
@@ -402,8 +397,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         case RTGeneric(def_id, type_args):
                             DefInfo d = scopes.get_def(def_id)
                             if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 1:
-                                int vec_def = scopes.lookup("Vector")
-                                if vec_def >= 0:
+                                if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(get_int_at(type_args, 0))
                                     return types.add_type(RTGeneric(vec_def, vec_args))
@@ -417,8 +411,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         case RTGeneric(def_id, type_args):
                             DefInfo d = scopes.get_def(def_id)
                             if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
-                                int vec_def = scopes.lookup("Vector")
-                                if vec_def >= 0:
+                                if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(get_int_at(type_args, 1))
                                     return types.add_type(RTGeneric(vec_def, vec_args))
@@ -437,8 +430,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 tuple_elems.push(get_int_at(type_args, 0))
                                 tuple_elems.push(get_int_at(type_args, 1))
                                 int tuple_type = types.add_type(RTTuple(tuple_elems))
-                                int vec_def = scopes.lookup("Vector")
-                                if vec_def >= 0:
+                                if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(tuple_type)
                                     return types.add_type(RTGeneric(vec_def, vec_args))
@@ -462,8 +454,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             int prim_id = types.primitive_id(tname)
                             # int.parse → Result[int, String], float.parse → Result[float, String]
                             # but for int/float the stdlib uses Option[T]
-                            int option_def = scopes.lookup("Option")
-                            if option_def >= 0:
+                            if scopes.lookup("Option") is Some(option_def):
                                 Vector[int] opt_args = Vector[int]()
                                 opt_args.push(prim_id)
                                 return types.add_type(RTGeneric(option_def, opt_args))
@@ -478,8 +469,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         case RTGeneric(def_id, type_args):
                             DefInfo d = scopes.get_def(def_id)
                             if d.name == "Vector" and type_args.len() >= 1:
-                                int option_def = scopes.lookup("Option")
-                                if option_def >= 0:
+                                if scopes.lookup("Option") is Some(option_def):
                                     Vector[int] opt_args = Vector[int]()
                                     opt_args.push(get_int_at(type_args, 0))
                                     return types.add_type(RTGeneric(option_def, opt_args))
@@ -539,8 +529,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 int val_type = infer_expr_type(first_val, scopes, &types, ctx)
                 if key_type >= 0 and val_type >= 0:
                     # Look up Dict def
-                    int dict_def = scopes.lookup("Dict")
-                    if dict_def >= 0:
+                    if scopes.lookup("Dict") is Some(dict_def):
                         Vector[int] type_args = Vector[int]()
                         type_args.push(key_type)
                         type_args.push(val_type)
@@ -623,8 +612,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # and wrap the operand's inferred type.
             int sp_inner_type = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
             if sp_inner_type >= 0:
-                int task_def = scopes.lookup("Task")
-                if task_def >= 0:
+                if scopes.lookup("Task") is Some(task_def):
                     Vector[int] task_args = Vector[int]()
                     task_args.push(sp_inner_type)
                     return types.add_type(RTGeneric(task_def, task_args))
