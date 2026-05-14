@@ -104,6 +104,115 @@ void diag_warn(String site, String msg):
 
 # Return the variant name of a Stmt. Used by lower_fail diagnostics to
 # pinpoint which AST variant the self-host isn't handling.
+# Return the variant name of an Expr. Used by lower_fail diagnostics to
+# pinpoint which AST variant the self-host isn't handling. Mirrors
+# `stmt_kind` for the Expr side.
+String expr_kind(Expr e):
+    match e:
+        case EIntLiteral(_):
+            return "EIntLiteral"
+        case EFloatLiteral(_):
+            return "EFloatLiteral"
+        case EBoolLiteral(_):
+            return "EBoolLiteral"
+        case EStringLiteral(_, _):
+            return "EStringLiteral"
+        case ECharLiteral(_):
+            return "ECharLiteral"
+        case ENoneLiteral:
+            return "ENoneLiteral"
+        case EIdentifier(_):
+            return "EIdentifier"
+        case ESelfExpr:
+            return "ESelfExpr"
+        case EIt:
+            return "EIt"
+        case EBinaryOp(_, _, _):
+            return "EBinaryOp"
+        case EUnaryOp(_, _):
+            return "EUnaryOp"
+        case ECall(_, _, _):
+            return "ECall"
+        case EMethodCall(_, _, _, _):
+            return "EMethodCall"
+        case EFieldAccess(_, _):
+            return "EFieldAccess"
+        case EIndex(_, _):
+            return "EIndex"
+        case ERange(_, _):
+            return "ERange"
+        case EIf(_, _, _):
+            return "EIf"
+        case EMatch(_, _):
+            return "EMatch"
+        case EClosure(_, _):
+            return "EClosure"
+        case EImplicitClosure(_):
+            return "EImplicitClosure"
+        case EArrayLiteral(_):
+            return "EArrayLiteral"
+        case ETupleLiteral(_):
+            return "ETupleLiteral"
+        case EDictLiteral(_, _):
+            return "EDictLiteral"
+        case EStructLiteral(_, _, _):
+            return "EStructLiteral"
+        case EDotShorthand(_, _):
+            return "EDotShorthand"
+        case ETry(_):
+            return "ETry"
+        case EMove(_):
+            return "EMove"
+        case EMutableBorrow(_):
+            return "EMutableBorrow"
+        case EDeref(_):
+            return "EDeref"
+        case EAs(_, _):
+            return "EAs"
+        case EBlock(_):
+            return "EBlock"
+        case EListComp(_, _, _, _):
+            return "EListComp"
+        case ESetComp(_, _, _, _):
+            return "ESetComp"
+        case EDictComp(_, _, _, _):
+            return "EDictComp"
+        case EDefaultOp(_, _):
+            return "EDefaultOp"
+        case EIs(_, _, _):
+            return "EIs"
+        case EDo(_):
+            return "EDo"
+        case EAwait(_):
+            return "EAwait"
+        case ESpawn(_):
+            return "ESpawn"
+        case ESpawnBlocking(_):
+            return "ESpawnBlocking"
+        else:
+            return "?unknown_expr?"
+
+String pat_kind(Pattern p):
+    match p:
+        case PWildcard:
+            return "PWildcard"
+        case PBinding(_):
+            return "PBinding"
+        case PLiteral(_):
+            return "PLiteral"
+        case PConstructor(_, _):
+            return "PConstructor"
+        case PDotShorthand(_, _):
+            return "PDotShorthand"
+        case PTuple(_):
+            return "PTuple"
+        case POr(_):
+            return "POr"
+        case PRest:
+            return "PRest"
+        else:
+            return "?unknown_pat?"
+
 String stmt_kind(Stmt s):
     match s:
         case SVarDecl(_, _, _, _, _, _):
@@ -480,8 +589,6 @@ String spanned_type_to_name(SpannedType stype):
                 result = result + "__" + spanned_type_to_name(ta)
                 i += 1
             return result
-        case TRef(inner):
-            return spanned_type_to_name(inner)
         case TTuple(elems):
             if elems.len() == 0:
                 return "void"
@@ -2903,7 +3010,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # (int_consts[name] = val) and Vector[T] set patterns.
                     lower_index_assign(&ctx, *base_box, *idx_box, value_expr, &gmod)
                 else:
-                    lower_fail("SAssign target is neither EIdentifier, EFieldAccess, nor EIndex")
+                    lower_fail("SAssign target is neither EIdentifier, EFieldAccess, nor EIndex (got: " + expr_kind(target_expr.expr) + ")")
         case SBreak(_):
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
@@ -3548,8 +3655,25 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 int bound = add_local(&ctx, fty, bname_opt)
                 emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val)))
                 nl_put(&ctx, bname, bound)
+            case PLiteral(lit_expr):
+                # Literal sub-pattern: read the payload field, compare against
+                # the literal, branch to no_match_bb on mismatch. Used by
+                # `case Ok(0):` / `case Some(true):` shapes — without this,
+                # the arm match'd on tag alone and the literal check was
+                # silently dropped (broken behaviour: `case Ok(0)` matched
+                # ALL Ok values). Only primitives (int / bool / char / float)
+                # are wired here; string literal sub-patterns would need a
+                # `gorget_str_eq` call and aren't exercised today.
+                int lit_fty = lookup_ctor_field_type(effective_enum, effective_variant, fi, &gmod)
+                int lit_field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, lit_fty, &gmod)
+                int lit_val = lower_expr(&ctx, lit_expr, &gmod)
+                int lit_eq = add_local(&ctx, BOOL_TYPE, NO_NAME)
+                emit(&ctx, GICmp(lit_eq, CMP_EQ, lit_fty, OpCopy(lit_field_val), OpCopy(lit_val)))
+                int lit_continue_bb = new_block(&ctx)
+                set_terminator(&ctx, GTBranch(OpCopy(lit_eq), lit_continue_bb, no_match_bb))
+                switch_to(&ctx, lit_continue_bb)
             else:
-                lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback")
+                lower_fail("nested non-binding pattern in PConstructor — using wildcard fallback (got: " + pat_kind(sp.pat) + ")")
         fi += 1
     set_terminator(&ctx, GTJump(match_bb))
 

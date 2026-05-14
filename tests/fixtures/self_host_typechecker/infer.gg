@@ -578,16 +578,13 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
 
         case EMove(inner):
-            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
-            return it
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
 
         case EMutableBorrow(inner):
-            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
-            return it
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
 
         case EDeref(inner):
-            int it = infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
-            return it
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, ctx)
 
 
         case EIs(inner, negated, pattern):
