@@ -89,7 +89,7 @@ String strip_generic_prefix(String ty, String prefix):
         i = i + 1
     return result
 
-int find_top_comma(String s):
+Option[int] find_top_comma(String s):
     int depth = 0
     int i = 0
     while i < s.len():
@@ -99,9 +99,9 @@ int find_top_comma(String s):
         elif ch == "]":
             depth = depth - 1
         elif ch == "," and depth == 0:
-            return i
+            return Some(i)
         i = i + 1
-    return -1
+    return None()
 
 String substr_range(String s, int start, int end):
     String result = ""
@@ -141,10 +141,9 @@ String collection_key(String ty):
         inner = strip_generic_prefix(ty, "HashMap")
     if inner == "":
         return ""
-    int comma = find_top_comma(inner)
-    if comma < 0:
-        return ""
-    return trim_leading(substr_range(inner, 0, comma))
+    if find_top_comma(inner) is Some(comma):
+        return trim_leading(substr_range(inner, 0, comma))
+    return ""
 
 String collection_val(String ty):
     String inner = strip_generic_prefix(ty, "Dict")
@@ -152,10 +151,9 @@ String collection_val(String ty):
         inner = strip_generic_prefix(ty, "HashMap")
     if inner == "":
         return ""
-    int comma = find_top_comma(inner)
-    if comma < 0:
-        return ""
-    return trim_leading(substr_range(inner, comma + 1, inner.len()))
+    if find_top_comma(inner) is Some(comma):
+        return trim_leading(substr_range(inner, comma + 1, inner.len()))
+    return ""
 
 # ── Multi-line serialization codegen ────────────────────────
 
