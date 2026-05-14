@@ -32,11 +32,9 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
         case SExpr(sexpr):
             return infer_expr_type(sexpr, scopes, &types, ctx)
         case SReturn(opt_expr):
-            match opt_expr:
-                case Some(sexpr):
-                    return infer_expr_type(sexpr, scopes, &types, ctx)
-                case None:
-                    return types.void_id
+            if opt_expr is Some(sexpr):
+                return infer_expr_type(sexpr, scopes, &types, ctx)
+            return types.void_id
         else:
             return types.void_id
     return types.void_id
@@ -81,11 +79,9 @@ int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable 
         case SExpr(sexpr):
             return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
         case SReturn(opt_expr):
-            match opt_expr:
-                case Some(sexpr):
-                    return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
-                case None:
-                    return types.void_id
+            if opt_expr is Some(sexpr):
+                return infer_closure_expr_type(sexpr, param_types, scopes, &types, ctx)
+            return types.void_id
         else:
             return types.void_id
     return types.void_id
