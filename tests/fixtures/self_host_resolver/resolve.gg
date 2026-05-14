@@ -196,7 +196,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     # Collect all top-level items
     int i = 0
     while i < module.items.len():
-        Item item = module.items.get(i).unwrap().clone()
+        Item item = module.items.get(i).unwrap()
         collect_item(item, &scopes, &types)
         i = i + 1
 
@@ -317,7 +317,7 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
 void resolve_bodies(Module module, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     int i = 0
     while i < module.items.len():
-        Item item = module.items.get(i).unwrap().clone()
+        Item item = module.items.get(i).unwrap()
         resolve_item_body(item, &scopes, &types, &ctx)
         i = i + 1
 
