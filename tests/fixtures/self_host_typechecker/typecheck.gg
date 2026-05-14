@@ -26,15 +26,15 @@ from traits import build_trait_registry, resolve_method_full, resolve_method_by_
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
-# Returns the first match or NO_DEF.
+# Returns the first match or None.
 
-int find_def_by_name(ScopeTable scopes, String name, bool require_function):
+Option[int] find_def_by_name(ScopeTable scopes, String name, bool require_function):
     int i = 0
     while i < scopes.def_count():
         DefInfo d = scopes.get_def(i)
         if d.name == name:
             if not require_function:
-                return i
+                return Some(i)
             bool is_fn = false
             match d.kind:
                 case DkFunction():
@@ -42,9 +42,9 @@ int find_def_by_name(ScopeTable scopes, String name, bool require_function):
                 else:
                     pass
             if is_fn:
-                return i
+                return Some(i)
         i = i + 1
-    return NO_DEF
+    return None()
 
 # ── Find function body scope from parallel vectors ─────────
 # When multiple functions share the same name (e.g. `serialize` across
@@ -331,14 +331,14 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
     int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
-    int fn_def = -1
+    Option[int] fn_def_opt = None()
     if def_scope >= 0:
-        fn_def = scopes.lookup_in_scope(def_scope, func.name).unwrap_or(-1)
-    if fn_def < 0:
-        fn_def = scopes.lookup_in_scope(parent_scope, func.name).unwrap_or(-1)
-    if fn_def < 0:
-        fn_def = find_def_by_name(scopes, func.name, true)
-    if fn_def >= 0:
+        fn_def_opt = scopes.lookup_in_scope(def_scope, func.name)
+    if fn_def_opt is None:
+        fn_def_opt = scopes.lookup_in_scope(parent_scope, func.name)
+    if fn_def_opt is None:
+        fn_def_opt = find_def_by_name(scopes, func.name, true)
+    if fn_def_opt is Some(fn_def):
         scopes.set_def_type(fn_def, fn_type_id)
 
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
