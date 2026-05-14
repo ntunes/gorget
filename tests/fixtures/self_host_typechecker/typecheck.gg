@@ -52,7 +52,7 @@ Option[int] find_def_by_name(ScopeTable scopes, String name, bool require_functi
 # This helper searches all stored scopes, picks one whose parent chain
 # includes parent_scope.
 
-int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
+Option[int] find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveContext ctx):
     # Two-pass walk: direct-parent match always beats grandparent
     # match, regardless of order. Without this, when a user fixture
     # has a top-level fn named `chain` and std.iter is prepended
@@ -60,15 +60,15 @@ int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveCon
     # chain's grandparent match (module → equip → method-fn-scope)
     # would beat the user's direct-parent match because std.iter's
     # entry comes first in fn_scope_names.
-    int best = -1
+    Option[int] best = None()
     for (i, sn) in ctx.fn_scope_names.enumerate():
         if sn == name:
             int sid = ctx.fn_scope_ids.get(i).unwrap()
             int p = scopes.scope_parent_of(sid)
             if p == parent_scope:
-                return sid
-            if best < 0:
-                best = sid
+                return Some(sid)
+            if best is None:
+                best = Some(sid)
     for (j, sn) in ctx.fn_scope_names.enumerate():
         if sn == name:
             int sid = ctx.fn_scope_ids.get(j).unwrap()
@@ -76,14 +76,14 @@ int find_body_scope(String name, int parent_scope, ScopeTable scopes, ResolveCon
             if p >= 0:
                 int gp = scopes.scope_parent_of(p)
                 if gp == parent_scope:
-                    return sid
+                    return Some(sid)
     return best
 
 # ── Find the next SkEquipBlock scope ───────────────────────
 # Returns the next equip-block scope that is a child of parent_scope,
 # with scope ID > after_scope. Used for ordered equip block processing.
 
-int find_next_equip_scope(int parent_scope, int after_scope, ScopeTable scopes):
+Option[int] find_next_equip_scope(int parent_scope, int after_scope, ScopeTable scopes):
     int sid = after_scope + 1
     while sid < scopes.scope_count():
         Scope s = get_scope_at(scopes.scopes, sid)
@@ -111,16 +111,16 @@ int find_next_equip_scope(int parent_scope, int after_scope, ScopeTable scopes):
                         csid = scopes.scope_count()
                     csid = csid + 1
                 if has_fn_child:
-                    return sid
+                    return Some(sid)
         sid = sid + 1
-    return -1
+    return None()
 
 # ── Find the Nth pass-1 equip scope (contains method defs) ──
 # Pass-1 scopes are created during collect_top_level and contain method defs.
 # Pass-2 scopes are created during resolve_bodies and contain SkFunction children.
 # The Nth equip block in the AST corresponds to the Nth pass-1 scope.
 
-int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
+Option[int] find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
     int count = 0
     int sid = 0
     while sid < scopes.scope_count():
@@ -149,10 +149,10 @@ int find_nth_def_equip_scope(int n, int parent_scope, ScopeTable scopes):
                     csid = csid + 1
                 if not has_fn_child:
                     if count == n:
-                        return sid
+                        return Some(sid)
                     count = count + 1
         sid = sid + 1
-    return -1
+    return None()
 
 # ── Generic-param binding-side demotion ─────────────────────
 # Rust's typechecker uses two distinct values for the same generic
@@ -294,12 +294,11 @@ int demote_through_function_type(int type_id, ScopeTable scopes, TypeTable &type
 # the caller. Mirror of Rust's `register_function_signature`.
 void register_function_signature(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext ctx, int def_scope):
     bool is_generic = func.type_params.len() > 0
-    int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
-    bool has_body_scope = body_scope >= 0
-    if not has_body_scope:
-        if ctx.function_body_scopes.contains(func.name):
-            body_scope = ctx.function_body_scopes.get(func.name).unwrap()
-            has_body_scope = true
+    Option[int] body_scope_opt = find_body_scope(func.name, parent_scope, scopes, ctx)
+    if body_scope_opt is None and ctx.function_body_scopes.contains(func.name):
+        body_scope_opt = Some(ctx.function_body_scopes.get(func.name).unwrap())
+    bool has_body_scope = body_scope_opt is Some(_)
+    int body_scope = body_scope_opt.unwrap_or(-1)
     int saved_scope = scopes.current_scope()
     if is_generic and has_body_scope:
         scopes.set_current(body_scope)
@@ -350,13 +349,10 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     register_function_signature(func, parent_scope, &scopes, &types, ctx, def_scope)
 
     # Walk body for VarDecl types
-    int body_scope = find_body_scope(func.name, parent_scope, scopes, ctx)
-    bool has_body_scope = body_scope >= 0
-    if not has_body_scope:
-        if ctx.function_body_scopes.contains(func.name):
-            body_scope = ctx.function_body_scopes.get(func.name).unwrap()
-            has_body_scope = true
-    if has_body_scope:
+    Option[int] body_scope_opt = find_body_scope(func.name, parent_scope, scopes, ctx)
+    if body_scope_opt is None and ctx.function_body_scopes.contains(func.name):
+        body_scope_opt = Some(ctx.function_body_scopes.get(func.name).unwrap())
+    if body_scope_opt is Some(body_scope):
         type_check_stmts(func.body, body_scope, &scopes, &types, ctx)
 
 # ── Pattern type assignment ────────────────────────────────
@@ -755,7 +751,7 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
     Dict[String, int] param_types = Dict[String, int]()
     for p in cl_params:
         # Find the param def with a type-var type (distinguishes from earlier same-name defs)
-        int p_def = find_typevar_def(scope_id, p.param_name, &scopes, &types)
+        int p_def = find_typevar_def(scope_id, p.param_name, &scopes, &types).unwrap_or(-1)
         int p_tid = types.error_id
         if p_def >= 0:
             DefInfo pd = scopes.get_def(p_def)
@@ -777,7 +773,7 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
     if scopes.lookup_in_subtree(scope_id, var_name) is Some(var_def):
         scopes.set_def_type(var_def, fn_type)
 
-int find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &types):
+Option[int] find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &types):
     # Find a def named `name` in the subtree that has a type-var type
     int i = 0
     while i < scopes.def_count():
@@ -787,11 +783,11 @@ int find_typevar_def(int scope_id, String name, ScopeTable &scopes, TypeTable &t
             match rt:
                 case RTVar(_):
                     if scopes.is_descendant_of(d.scope_id, scope_id):
-                        return i
+                        return Some(i)
                 else:
                     pass
         i = i + 1
-    return -1
+    return None()
 
 # ── Call-site closure type var resolution ─────────────────────
 # After type_check_stmts, scan for calls like `add(3, 4)` where the callee
@@ -1106,11 +1102,10 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
         case IEquip(eqblk):
             # Find the equip block scope by scanning for the next SkEquipBlock
             # child of the module scope, using last_equip_scope for ordering.
-            int equip_scope = find_next_equip_scope(scope_id, types.last_equip_scope, scopes)
-            if equip_scope >= 0:
-                types.last_equip_scope = equip_scope
-            else:
-                equip_scope = scope_id
+            int equip_scope = scope_id
+            if find_next_equip_scope(scope_id, types.last_equip_scope, scopes) is Some(es):
+                equip_scope = es
+                types.last_equip_scope = es
             # Set current scope to equip scope so generic type params (T etc.)
             # are visible when resolving the target type and method signatures.
             int saved_scope = scopes.current_scope()
@@ -1134,10 +1129,8 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 types.trait_equip_scope_id = -1
             # Find the pass-1 equip scope (contains method def definitions)
             # Use equip_def_index to pair pass-1 with pass-2 by order.
-            int def_scope = find_nth_def_equip_scope(types.equip_def_index, scope_id, scopes)
+            int def_scope = find_nth_def_equip_scope(types.equip_def_index, scope_id, scopes).unwrap_or(equip_scope)
             types.equip_def_index = types.equip_def_index + 1
-            if def_scope < 0:
-                def_scope = equip_scope
             for method in eqblk.methods:
                 type_check_function(method, equip_scope, &scopes, &types, ctx, def_scope)
             types.trait_equip_scope_id = saved_trait_equip

@@ -186,7 +186,7 @@ void collect_trait(TraitDef trait_def, ScopeTable &scopes, TypeTable &types, Tra
 
 # ── Find the Nth pass-1 equip scope ──────────────────────────
 
-int registry_find_nth_equip_def_scope(int n, int parent_scope, ScopeTable scopes):
+Option[int] registry_find_nth_equip_def_scope(int n, int parent_scope, ScopeTable scopes):
     int count = 0
     int sid = 0
     while sid < scopes.scope_count():
@@ -214,10 +214,10 @@ int registry_find_nth_equip_def_scope(int n, int parent_scope, ScopeTable scopes
                     csid = csid + 1
                 if not has_fn_child:
                     if count == n:
-                        return sid
+                        return Some(sid)
                     count = count + 1
         sid = sid + 1
-    return -1
+    return None()
 
 # ── Collect an EquipBlock into the registry ──────────────────
 
@@ -471,7 +471,7 @@ TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable 
     for item_b in module.items:
         match item_b:
             case IEquip(eq):
-                int equip_scope = registry_find_nth_equip_def_scope(eq_idx, module_scope, scopes)
+                int equip_scope = registry_find_nth_equip_def_scope(eq_idx, module_scope, scopes).unwrap_or(-1)
                 collect_equip(eq, equip_scope, &scopes, &types, &registry)
                 eq_idx = eq_idx + 1
             else:
