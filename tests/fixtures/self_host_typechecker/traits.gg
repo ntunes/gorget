@@ -232,14 +232,11 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
     String self_name = type_name_of(eq.target.ty)
     int trait_def_id = NO_DEF
     String trait_name = ""
-    match eq.trait_name:
-        case Some(tn):
-            int td = scopes.lookup(tn)
-            if td >= 0:
-                trait_def_id = td
-            trait_name = tn
-        case None:
-            pass
+    if eq.trait_name is Some(tn):
+        int td = scopes.lookup(tn)
+        if td >= 0:
+            trait_def_id = td
+        trait_name = tn
     Vector[String] method_names = Vector[String]()
     Vector[int] method_def_ids = Vector[int]()
     Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
@@ -259,11 +256,8 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
             shape_names.push(method.name)
             shape_shapes.push(build_method_sig_shape(method))
     String via_name = ""
-    match eq.via_field:
-        case Some(v):
-            via_name = v
-        case None:
-            pass
+    if eq.via_field is Some(v):
+        via_name = v
     # Capture trait generic args (AST-level Type vector) for call-site
     # Self/T substitution. Empty for inherent impls or non-generic traits.
     Vector[Type] trait_args = Vector[Type]()

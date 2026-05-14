@@ -16,28 +16,6 @@ from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkFor
 from scope import get_def_at
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
 
-# ── Typed Option helpers ──
-
-bool has_opt_sexpr(Option[SpannedExpr] opt):
-    match opt:
-        case Some(_):
-            return true
-        else:
-            return false
-
-SpannedExpr unwrap_opt_sexpr(Option[SpannedExpr] opt):
-    return opt.unwrap()
-
-bool has_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
-    match opt:
-        case Some(_):
-            return true
-        else:
-            return false
-
-Box[SpannedExpr] unwrap_opt_box_sexpr(Option[Box[SpannedExpr]] opt):
-    return opt.unwrap()
-
 # ── Function-body scope register ────────────────────────────
 # The Dict gives O(1) lookup of the canonical (last-registered) body
 # scope for a name. The parallel Vectors preserve every registration so
@@ -432,15 +410,15 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_expr(value, &scopes, &ctx)
 
         case SReturn(opt_expr):
-            if has_opt_sexpr(opt_expr):
-                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+            if opt_expr is Some(sexpr):
+                resolve_expr(sexpr, &scopes, &ctx)
 
         case SThrow(expr):
             resolve_expr(expr, &scopes, &ctx)
 
         case SBreak(opt_expr):
-            if has_opt_sexpr(opt_expr):
-                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+            if opt_expr is Some(sexpr):
+                resolve_expr(sexpr, &scopes, &ctx)
 
         case SContinue():
             pass
@@ -484,8 +462,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
 
             for branch in elif_branches:
                 scopes.push_scope(SkBlock())
-                if has_opt_sexpr(branch.condition):
-                    SpannedExpr cond = unwrap_opt_sexpr(branch.condition)
+                if branch.condition is Some(cond):
                     if has_is_patterns(cond.expr):
                         resolve_is_condition(cond, &scopes, &ctx)
                     else:
@@ -498,8 +475,8 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             for arm in arms:
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
-                if has_opt_sexpr(arm.guard):
-                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
+                if arm.guard is Some(g):
+                    resolve_expr(g, &scopes, &ctx)
                 resolve_block(arm.body, &scopes, &types, &ctx)
                 scopes.pop_scope()
 
@@ -614,10 +591,10 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*index, &scopes, &ctx)
 
         case ERange(opt_start, opt_end):
-            if has_opt_box_sexpr(opt_start):
-                resolve_expr(*unwrap_opt_box_sexpr(opt_start), &scopes, &ctx)
-            if has_opt_box_sexpr(opt_end):
-                resolve_expr(*unwrap_opt_box_sexpr(opt_end), &scopes, &ctx)
+            if opt_start is Some(b):
+                resolve_expr(*b, &scopes, &ctx)
+            if opt_end is Some(b):
+                resolve_expr(*b, &scopes, &ctx)
 
         case EDefaultOp(lhs, rhs):
             resolve_expr(*lhs, &scopes, &ctx)
@@ -645,8 +622,8 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*condition, &scopes, &ctx)
             resolve_block_expr(then_body, &scopes, &ctx)
             for branch in elif_branches:
-                if has_opt_sexpr(branch.condition):
-                    resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
+                if branch.condition is Some(cond):
+                    resolve_expr(cond, &scopes, &ctx)
                 resolve_block_expr(branch.body, &scopes, &ctx)
 
         case EMatch(scrutinee, arms):
@@ -654,8 +631,8 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             for arm in arms:
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
-                if has_opt_sexpr(arm.guard):
-                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
+                if arm.guard is Some(g):
+                    resolve_expr(g, &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
                 scopes.pop_scope()
 
@@ -707,8 +684,8 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkForLoop())
             scopes.define(var_name, DkVariable(), Span(0, 0))
             resolve_expr(*comp_expr, &scopes, &ctx)
-            if has_opt_box_sexpr(opt_cond):
-                resolve_expr(*unwrap_opt_box_sexpr(opt_cond), &scopes, &ctx)
+            if opt_cond is Some(b):
+                resolve_expr(*b, &scopes, &ctx)
             scopes.pop_scope()
 
         case ESetComp(comp_expr, var_name, iterable, cond):
@@ -794,15 +771,15 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(value, &scopes, &ctx)
 
         case SReturn(opt_expr):
-            if has_opt_sexpr(opt_expr):
-                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+            if opt_expr is Some(sexpr):
+                resolve_expr(sexpr, &scopes, &ctx)
 
         case SThrow(expr):
             resolve_expr(expr, &scopes, &ctx)
 
         case SBreak(opt_expr):
-            if has_opt_sexpr(opt_expr):
-                resolve_expr(unwrap_opt_sexpr(opt_expr), &scopes, &ctx)
+            if opt_expr is Some(sexpr):
+                resolve_expr(sexpr, &scopes, &ctx)
 
         case SContinue():
             pass
@@ -839,8 +816,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             scopes.pop_scope()
             for branch in elif_branches:
                 scopes.push_scope(SkBlock())
-                if has_opt_sexpr(branch.condition):
-                    resolve_expr(unwrap_opt_sexpr(branch.condition), &scopes, &ctx)
+                if branch.condition is Some(cond):
+                    resolve_expr(cond, &scopes, &ctx)
                 resolve_block_expr(branch.body, &scopes, &ctx)
                 scopes.pop_scope()
 
@@ -849,8 +826,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             for arm in arms:
                 scopes.push_scope(SkBlock())
                 define_pattern_bindings(arm.pattern, &scopes)
-                if has_opt_sexpr(arm.guard):
-                    resolve_expr(unwrap_opt_sexpr(arm.guard), &scopes, &ctx)
+                if arm.guard is Some(g):
+                    resolve_expr(g, &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
                 scopes.pop_scope()
 

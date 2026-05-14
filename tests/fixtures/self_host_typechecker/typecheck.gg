@@ -24,18 +24,6 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
 
-# ── Option helpers ──────────────────────────────────────────
-
-bool has_opt_sexpr(Option[SpannedExpr] opt):
-    match opt:
-        case Some(_):
-            return true
-        case None:
-            return false
-
-SpannedExpr unwrap_opt_sexpr(Option[SpannedExpr] opt):
-    return opt.unwrap()
-
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
 # Returns the first match or NO_DEF.
@@ -970,8 +958,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 assign_is_condition_types(cond, scope_id, &scopes, &types, ctx)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
             for eb in else_branches:
-                if has_opt_sexpr(eb.condition):
-                    SpannedExpr econd = unwrap_opt_sexpr(eb.condition)
+                if eb.condition is Some(econd):
                     if has_is_patterns(econd.expr):
                         assign_is_condition_types(econd, scope_id, &scopes, &types, ctx)
                 type_check_stmts(eb.body, scope_id, &scopes, &types, ctx)
@@ -1040,8 +1027,8 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             walk_expr_closures(value, scope_id, &scopes, &types, ctx)
 
         case SReturn(opt_expr):
-            if has_opt_sexpr(opt_expr):
-                walk_expr_closures(unwrap_opt_sexpr(opt_expr), scope_id, &scopes, &types, ctx)
+            if opt_expr is Some(sexpr):
+                walk_expr_closures(sexpr, scope_id, &scopes, &types, ctx)
 
         case SSelect(arms):
             for arm in arms:
@@ -1148,14 +1135,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             # either case because their defs live in the method body
             # scope rather than the equip scope.
             int saved_trait_equip = types.trait_equip_scope_id
-            bool keep_impl_t = false
-            match eqblk.trait_name:
-                case Some(_):
-                    keep_impl_t = true
-                case None:
-                    pass
-            if eqblk.type_params.len() > 0:
-                keep_impl_t = true
+            bool keep_impl_t = eqblk.trait_name.is_some() or eqblk.type_params.len() > 0
             if keep_impl_t:
                 types.trait_equip_scope_id = equip_scope
             else:
