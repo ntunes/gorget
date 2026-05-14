@@ -3211,6 +3211,48 @@ fn snag42_scrutinee_move_inside_arm() {
 }
 
 #[test]
+fn snag46_throws_inline_in_ctor() {
+    // Snag #46 — a `throws`-marked function's return value passed inline
+    // to an enum-variant constructor (`Tagged.BoolV(fn_bool_throws())`)
+    // or a struct positional constructor (`Pair(fn_bool_throws(), ...)`)
+    // inside a `throws E` context yielded the slot type's zero-init
+    // default (false / 0 / "") instead of the actual return value.
+    //
+    // Root cause: the constructor-arg lowering called `lower_expr` per
+    // field but did NOT call `maybe_auto_propagate` after, while the
+    // sibling `lower_call_arg` path (`src/ir/lowering/exprs/calls.rs:151`
+    // and `:1202`) does. The Result[T, E] operand produced by the inner
+    // throws call therefore memcpy'd into the slot's T-sized field —
+    // which then read as zero-init (the Result's tag byte was 0 ≡ Ok,
+    // but the field at offset 0 of a Result is the discriminator, not
+    // the payload).
+    //
+    // Fix: mirror the call-arg pattern. After `lower_expr` for each
+    // constructor field, while `expected_type` is still set to the
+    // field type, call `maybe_auto_propagate` so a Result-typed operand
+    // is unwrapped (Ok → T, Error → re-wrap-and-return).
+    //
+    // Sites patched (all use the same shape):
+    // - `src/ir/lowering/exprs/methods.rs` — qualified `T.Variant(...)`
+    // - `src/ir/lowering/exprs/mod.rs::lower_struct_literal` — both
+    //   bare-name enum-variant paths AND the regular struct-literal path
+    // - `src/ir/lowering/exprs/calls.rs` — bare-name enum-variant paths
+    //
+    // Discovered by gorget-js while implementing §8.12.7 [[Delete]]:
+    // `return JsValue.BoolV(delete_own_property(...))` where
+    // `delete_own_property` is `bool ... throws RuntimeException`
+    // returned BoolV(false) regardless of the actual return value.
+    let expected = "\
+case A enum BoolV(inline throws-fn): expected true, got true\n\
+case B enum BoolV(local-bound):      expected true, got true\n\
+case C enum BoolV(inline plain fn):  expected true, got true\n\
+case D struct Pair(inline x2):       expected (true, 42), got (true, 42)\n\
+case E struct Pair(literal, inline): expected (true, 42), got (true, 42)\n\
+case F fn-arg ident(inline)        : expected true, got true";
+    run_gg("snag46_throws_inline_in_ctor.gg", expected);
+}
+
+#[test]
 fn snag41_match_scrutinee_consume() {
     // Snag #41: match-scrutinee staging emitted a value-typed Borrow
     // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,

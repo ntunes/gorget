@@ -1765,8 +1765,30 @@ fn lower_struct_literal(
         let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
             .map(|arg| Some(arg.span))
             .collect();
+        // Look up variant field types so each arg sees the correct expected_type;
+        // this gates auto-propagation (the lookup skips when the field itself is Result).
+        let variant_field_types: Vec<Option<TypeId>> = ctx.type_registry
+            .get_type_def(&enum_name)
+            .and_then(|td| match &td.kind {
+                crate::ir::types::TypeDefKind::Enum(ed) => Some(ed),
+                _ => None,
+            })
+            .and_then(|ed| ed.variants.iter().find(|v| v.name == variant_name))
+            .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
+            .unwrap_or_else(|| vec![None; args.len()]);
         let mut field_operands: Vec<Operand> = args.iter()
-            .map(|arg| lower_expr(ctx, builder, arg))
+            .enumerate()
+            .map(|(i, arg)| {
+                let prev = ctx.func_state.expected_type;
+                if let Some(ft) = variant_field_types.get(i).and_then(|f| *f) {
+                    ctx.func_state.expected_type = Some(ft);
+                }
+                let op = lower_expr(ctx, builder, arg);
+                // Snag #46: auto-propagate Result→T at the variant-field boundary.
+                let op = maybe_auto_propagate(ctx, builder, op);
+                ctx.func_state.expected_type = prev;
+                op
+            })
             .collect();
         // Clone multi-use resource args (loop-carried locals, field accesses, etc.)
         // that can't be safely moved into the enum variant.
@@ -1780,8 +1802,28 @@ fn lower_struct_literal(
         let arg_spans: Vec<Option<crate::span::Span>> = args.iter()
             .map(|arg| Some(arg.span))
             .collect();
+        let variant_field_types: Vec<Option<TypeId>> = ctx.type_registry
+            .get_type_def(&enum_name)
+            .and_then(|td| match &td.kind {
+                crate::ir::types::TypeDefKind::Enum(ed) => Some(ed),
+                _ => None,
+            })
+            .and_then(|ed| ed.variants.iter().find(|v| v.name == variant_name))
+            .map(|v| v.fields.iter().map(|f| Some(f.type_id)).collect())
+            .unwrap_or_else(|| vec![None; args.len()]);
         let mut field_operands: Vec<Operand> = args.iter()
-            .map(|arg| lower_expr(ctx, builder, arg))
+            .enumerate()
+            .map(|(i, arg)| {
+                let prev = ctx.func_state.expected_type;
+                if let Some(ft) = variant_field_types.get(i).and_then(|f| *f) {
+                    ctx.func_state.expected_type = Some(ft);
+                }
+                let op = lower_expr(ctx, builder, arg);
+                // Snag #46: auto-propagate Result→T at the variant-field boundary.
+                let op = maybe_auto_propagate(ctx, builder, op);
+                ctx.func_state.expected_type = prev;
+                op
+            })
             .collect();
         // Clone multi-use resource args for enum variant init.
         clone_multi_use_resource_args(ctx, builder, &mut field_operands, args);
@@ -1804,6 +1846,12 @@ fn lower_struct_literal(
                 ctx.func_state.expected_type = Some(ft);
             }
             let op = lower_expr(ctx, builder, arg);
+            // Snag #46: a throws-fn call result at a struct-field position is
+            // `Result[T, E]`, but the field expects `T`. Mirror `lower_call_arg`
+            // — auto-propagate Result → T at the boundary so the field receives
+            // the unwrapped value rather than a memcpy of the Result struct
+            // (which the field then reads as the type's zero-init default).
+            let op = maybe_auto_propagate(ctx, builder, op);
             ctx.func_state.expected_type = prev;
             op
         })

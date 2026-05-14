@@ -1,0 +1,104 @@
+# Snag #46 — `throws` fn return value passed inline to an enum
+# variant or struct constructor yields the type's zero-init default
+# (false / 0 / "") instead of the actual return value.
+#
+# Discovered while implementing §8.12.7 [[Delete]] in gorget-js. The
+# original site was inside a `throws` function `eval_delete`:
+#
+#     return JsValue.BoolV(delete_own_property(&realm, obj_id, ..., line, col))
+#
+# delete_own_property returned true, but BoolV(...) yielded BoolV(false).
+# Binding to a local first fixes it:
+#
+#     bool ok = delete_own_property(&realm, ..., line, col)
+#     return JsValue.BoolV(ok)
+#
+# Compiler: /workspace/gorget/target/debug/gg
+# Run:      gg run snag46.gg
+#
+# Expected output (all "got" values should match the "expected" ones):
+#
+#   case A enum BoolV(inline throws-fn): expected true, got true
+#   case B enum BoolV(local-bound):      expected true, got true
+#   case C enum BoolV(inline plain fn):  expected true, got true
+#   case D struct Pair(inline x2):       expected (true, 42), got (true, 42)
+#   case E struct Pair(literal, inline): expected (true, 42), got (true, 42)
+#   case F fn-arg ident(inline):         expected true, got true
+#
+# Actual output (only B, C, F work — the constructor-style positions
+# in A, D, E receive zero-init defaults):
+#
+#   case A enum BoolV(inline throws-fn): expected true, got false   ← BUG
+#   case B enum BoolV(local-bound):      expected true, got true
+#   case C enum BoolV(inline plain fn):  expected true, got true
+#   case D struct Pair(inline x2):       expected (true, 42), got (false, 0)  ← BUG
+#   case E struct Pair(literal, inline): expected (true, 42), got (true, 0)   ← BUG
+#   case F fn-arg ident(inline):         expected true, got true
+
+public struct MyException:
+    int code
+
+public enum Tagged:
+    BoolV(bool)
+    IntV(int)
+    StrV(String)
+
+public struct Pair:
+    bool b
+    int n
+
+bool fn_bool_throws() throws MyException:
+    return true
+
+int fn_int_throws() throws MyException:
+    return 42
+
+bool fn_bool_plain():
+    return true
+
+void ident_bool(String label, bool b):
+    print(f"{label}: expected true, got {b}")
+
+void run_all() throws MyException:
+    # ── Case A: enum constructor, inline throws-fn (BUG) ──
+    Tagged a = Tagged.BoolV(fn_bool_throws())
+    match a:
+        case Tagged.BoolV(b):
+            print(f"case A enum BoolV(inline throws-fn): expected true, got {b}")
+        else:
+            print("case A: wrong variant")
+
+    # ── Case B: enum constructor, local-bound (workaround) ──
+    bool tmp = fn_bool_throws()
+    Tagged b_t = Tagged.BoolV(tmp)
+    match b_t:
+        case Tagged.BoolV(b):
+            print(f"case B enum BoolV(local-bound):      expected true, got {b}")
+        else:
+            print("case B: wrong variant")
+
+    # ── Case C: enum constructor, inline non-throws fn (baseline) ──
+    Tagged c = Tagged.BoolV(fn_bool_plain())
+    match c:
+        case Tagged.BoolV(b):
+            print(f"case C enum BoolV(inline plain fn):  expected true, got {b}")
+        else:
+            print("case C: wrong variant")
+
+    # ── Case D: struct constructor, two inline throws-fn args (BUG) ──
+    Pair d = Pair(fn_bool_throws(), fn_int_throws())
+    print(f"case D struct Pair(inline x2):       expected (true, 42), got ({d.b}, {d.n})")
+
+    # ── Case E: struct constructor, literal + inline throws-fn (BUG) ──
+    Pair e = Pair(true, fn_int_throws())
+    print(f"case E struct Pair(literal, inline): expected (true, 42), got ({e.b}, {e.n})")
+
+    # ── Case F: plain fn arg with inline throws-fn (works) ──
+    ident_bool("case F fn-arg ident(inline)        ", fn_bool_throws())
+
+void main():
+    match run_all():
+        case Ok(_):
+            pass
+        case Error(_):
+            print("unexpected throw at top level")

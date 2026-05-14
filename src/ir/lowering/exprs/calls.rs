@@ -1026,6 +1026,8 @@ pub(super) fn lower_call(
                         ctx.func_state.expected_type = Some(ft);
                     }
                     let op = lower_expr(ctx, builder, &arg.node.value);
+                    // Snag #46: auto-propagate Result→T at the variant-field boundary.
+                    let op = super::maybe_auto_propagate(ctx, builder, op);
                     ctx.func_state.expected_type = prev;
                     op
                 })
@@ -1059,6 +1061,8 @@ pub(super) fn lower_call(
                         ctx.func_state.expected_type = Some(ft);
                     }
                     let op = lower_expr(ctx, builder, &arg.node.value);
+                    // Snag #46: auto-propagate Result→T at the variant-field boundary.
+                    let op = super::maybe_auto_propagate(ctx, builder, op);
                     ctx.func_state.expected_type = prev;
                     op
                 })

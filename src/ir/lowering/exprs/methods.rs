@@ -7,7 +7,7 @@ use crate::parser::ast::{self, Expr, Ownership};
 use crate::span::Spanned;
 
 use super::super::context::{LoweringContext, CollectionId, ParamABI};
-use super::{lower_expr, lower_call_arg, infer_operand_type_full, register_tuple_type,
+use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string};
@@ -215,6 +215,13 @@ pub(super) fn lower_method_call(
                             ctx.func_state.expected_type = Some(ft);
                         }
                         let op = lower_expr(ctx, builder, &arg.node.value);
+                        // Snag #46: a throws-fn call result here is `Result[T, E]`,
+                        // but the variant field expects `T`. Mirror `lower_call_arg`
+                        // (and `calls.rs:151`) — auto-propagate Result → T at the
+                        // boundary so the variant slot receives the unwrapped value
+                        // rather than a memcpy of the Result struct (which read as
+                        // the type's zero-init default).
+                        let op = maybe_auto_propagate(ctx, builder, op);
                         ctx.func_state.expected_type = prev;
                         op
                     })
