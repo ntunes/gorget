@@ -314,8 +314,8 @@ equip ScopeTable:
             sid = s.parent
         return false
 
-    int lookup_def_by_span(self, String name, Span span):
+    Option[int] lookup_def_by_span(self, String name, Span span):
         for (i, d) in self.definitions.enumerate():
             if d.name == name and d.span.start == span.start and d.span.end == span.end:
-                return i
-        return NO_DEF
+                return Some(i)
+        return None()
