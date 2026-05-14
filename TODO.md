@@ -130,8 +130,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 - **`meta is_pure(fn_name)` builtin**: Chicken-and-egg with pass ordering. [added: 2026-03-14]
 
-- **If-expression `elif` branches**: Parser limitation. Workaround: nested `else: if`. [updated: 2026-03-11]
-
 - **`shared_stress_yield` flaky deadlock**: Timing-dependent contention. [added: 2026-03-11]
 
 

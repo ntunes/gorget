@@ -5383,9 +5383,13 @@ pub fn apply_inferred_method_targs(
                 walk_expr(object, inferred);
                 walk_expr(index, inferred);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 walk_expr(condition, inferred);
                 walk_expr(then_branch, inferred);
+                for (cond, body) in elif_branches.iter_mut() {
+                    walk_expr(cond, inferred);
+                    walk_expr(body, inferred);
+                }
                 if let Some(eb) = else_branch {
                     walk_expr(eb, inferred);
                 }
@@ -5543,9 +5547,13 @@ pub fn apply_inferred_call_targs(
                 walk_expr(object, inferred);
                 walk_expr(index, inferred);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 walk_expr(condition, inferred);
                 walk_expr(then_branch, inferred);
+                for (cond, body) in elif_branches.iter_mut() {
+                    walk_expr(cond, inferred);
+                    walk_expr(body, inferred);
+                }
                 if let Some(eb) = else_branch { walk_expr(eb, inferred); }
             }
             Expr::Range { start, end, .. } => {
@@ -5714,9 +5722,13 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 walk_expr(object);
                 walk_expr(index);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 walk_expr(condition);
                 walk_expr(then_branch);
+                for (cond, body) in elif_branches.iter_mut() {
+                    walk_expr(cond);
+                    walk_expr(body);
+                }
                 if let Some(eb) = else_branch { walk_expr(eb); }
             }
             Expr::Range { start, end, .. } => {

@@ -635,9 +635,13 @@ impl FreeVarCollector<'_> {
                 self.visit_expr(&object.node);
                 self.visit_expr(&index.node);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 self.visit_expr(&condition.node);
                 self.visit_expr(&then_branch.node);
+                for (cond, body) in elif_branches {
+                    self.visit_expr(&cond.node);
+                    self.visit_expr(&body.node);
+                }
                 if let Some(eb) = else_branch {
                     self.visit_expr(&eb.node);
                 }

@@ -711,9 +711,13 @@ impl GenericCollector {
                 self.scan_expr(object);
                 self.scan_expr(index);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 self.scan_expr(condition);
                 self.scan_expr(then_branch);
+                for (cond, body) in elif_branches {
+                    self.scan_expr(cond);
+                    self.scan_expr(body);
+                }
                 if let Some(eb) = else_branch {
                     self.scan_expr(eb);
                 }
@@ -1069,9 +1073,13 @@ impl GenericCollector {
                 self.walk_expr_for_method_calls(object, env);
                 self.walk_expr_for_method_calls(index, env);
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If { condition, then_branch, elif_branches, else_branch } => {
                 self.walk_expr_for_method_calls(condition, env);
                 self.walk_expr_for_method_calls(then_branch, env);
+                for (cond, body) in elif_branches {
+                    self.walk_expr_for_method_calls(cond, env);
+                    self.walk_expr_for_method_calls(body, env);
+                }
                 if let Some(eb) = else_branch {
                     self.walk_expr_for_method_calls(eb, env);
                 }

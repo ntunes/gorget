@@ -84,3 +84,23 @@ void main():
     int score = 85
     String grade = if score > 70: "pass" else: "fail"
     print(grade)
+
+    # 18. If-expression with elif branches (matches 2nd elif)
+    int e = 3
+    int er = if e == 1: 10 elif e == 2: 20 elif e == 3: 30 else: 40
+    print(er)
+
+    # 19. Elif fall-through to final else
+    int er2 = if e == 0: 100 elif e == 1: 200 elif e == 2: 300 else: 999
+    print(er2)
+
+    # 20. Closure body capturing through elif branches
+    int c1 = 11
+    int c2 = 22
+    int c3 = 33
+    int c4 = 44
+    auto pick = (int n): if n == 1: c1 elif n == 2: c2 elif n == 3: c3 else: c4
+    print(pick(1))
+    print(pick(2))
+    print(pick(3))
+    print(pick(4))

@@ -17024,7 +17024,13 @@ fn test_if_expressions() {
 -1
 yes
 no
-pass",
+pass
+30
+999
+11
+22
+33
+44",
     );
 }
 

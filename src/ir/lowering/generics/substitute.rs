@@ -278,9 +278,13 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
             substitute_expr_types(object, subs);
             substitute_expr_types(index, subs);
         }
-        Expr::If { condition, then_branch, else_branch, .. } => {
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
             substitute_expr_types(condition, subs);
             substitute_expr_types(then_branch, subs);
+            for (cond, body) in elif_branches {
+                substitute_expr_types(cond, subs);
+                substitute_expr_types(body, subs);
+            }
             if let Some(eb) = else_branch {
                 substitute_expr_types(eb, subs);
             }

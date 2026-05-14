@@ -3086,9 +3086,12 @@ pub fn expr_has_await(expr: &crate::parser::ast::Expr) -> bool {
         }
         Expr::UnaryOp { operand, .. } => expr_has_await(&operand.node),
         Expr::Block(block) => block.stmts.iter().any(|s| stmt_has_await(&s.node)),
-        Expr::If { condition, then_branch, else_branch, .. } => {
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
             expr_has_await(&condition.node)
             || expr_has_await(&then_branch.node)
+            || elif_branches.iter().any(|(c, b)| {
+                expr_has_await(&c.node) || expr_has_await(&b.node)
+            })
             || else_branch.as_ref().map_or(false, |eb| expr_has_await(&eb.node))
         }
         Expr::Spawn { expr, .. } => expr_has_await(&expr.node),
@@ -3111,9 +3114,13 @@ pub fn stmt_has_await(stmt: &crate::parser::ast::Stmt) -> bool {
         Stmt::Assign { value, .. } => expr_has_await(&value.node),
         Stmt::CompoundAssign { value, .. } => expr_has_await(&value.node),
         Stmt::Return(Some(e)) => expr_has_await(&e.node),
-        Stmt::If { condition, then_body, else_body, .. } => {
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
             expr_has_await(&condition.node)
             || then_body.stmts.iter().any(|s| stmt_has_await(&s.node))
+            || elif_branches.iter().any(|(c, b)| {
+                expr_has_await(&c.node)
+                    || b.stmts.iter().any(|s| stmt_has_await(&s.node))
+            })
             || else_body.as_ref().map_or(false, |eb| eb.stmts.iter().any(|s| stmt_has_await(&s.node)))
         }
         Stmt::While { condition, body, .. } => {

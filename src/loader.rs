@@ -333,9 +333,12 @@ fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
         Expr::Index { object, index } => {
             expr_mentions_iter(object) || expr_mentions_iter(index)
         }
-        Expr::If { condition, then_branch, else_branch, .. } => {
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
             expr_mentions_iter(condition)
                 || expr_mentions_iter(then_branch)
+                || elif_branches.iter().any(|(c, b)| {
+                    expr_mentions_iter(c) || expr_mentions_iter(b)
+                })
                 || else_branch.as_ref().map_or(false, |e| expr_mentions_iter(e))
         }
         Expr::Range { start, end, .. } => {
