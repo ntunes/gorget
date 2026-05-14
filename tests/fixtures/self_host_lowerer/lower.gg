@@ -2105,12 +2105,40 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             bool need_writeback = false
             SpannedExpr wb_base = (*recv_box)
             String wb_field = ""
+            # Showcase blocker #1 (self-host side): the
+            # `coll.get(i).unwrap().mut_method(args)` chain ALSO needs a
+            # writeback. `emit_payload_read` clones the inner element for
+            # resource payloads (line 3243), so `recv` ends up holding an
+            # independently-allocated copy of `coll[i]`. Without a setback,
+            # the mutation lives on that clone and the original collection
+            # element stays unchanged — classic symptom: `preds.get(succ)
+            # .unwrap().push(bi)` on `Vector[Vector[int]]` leaves the inner
+            # Vector empty, corrupting SSA's `compute_preds` output and
+            # surfacing as cc errors in unrelated downstream functions.
+            #
+            # Pattern: `EMethodCall(EMethodCall(EMethodCall(coll, getter,
+            # [idx]), "unwrap"), mut_method, args)` where getter is
+            # "get"/"safe_get". Emit `coll.set(idx, !recv)` after the
+            # mutating call, mirroring the existing EFieldAccess writeback.
+            bool need_chain_writeback = false
+            SpannedExpr chain_coll = (*recv_box)
+            SpannedExpr chain_idx = SpannedExpr(EIntLiteral(0), Span(0, 0))
             if is_mutating:
                 match (*recv_box).expr:
                     case EFieldAccess(wb_base_box, wb_f):
                         need_writeback = true
                         wb_base = *wb_base_box
                         wb_field = wb_f
+                    case EMethodCall(unwrap_recv_box, unwrap_mname, _uargs, _utargs):
+                        if unwrap_mname == "unwrap":
+                            match (*unwrap_recv_box).expr:
+                                case EMethodCall(coll_box, gname, gargs, _gtargs):
+                                    if (gname == "get" or gname == "safe_get") and gargs.len() == 1:
+                                        need_chain_writeback = true
+                                        chain_coll = *coll_box
+                                        chain_idx = gargs.get(0).unwrap()
+                                else:
+                                    pass
                     else:
                         pass
             # Method call: lower receiver as first arg (&self), then args.
@@ -2128,11 +2156,19 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # `af687f3d`); validators downstream get the typed signal.
             Vector[Operand] call_args = []
             GirLocal recv_loc = ctx.locals.get(recv).unwrap()
-            match recv_loc.ownership:
-                case LoBorrowed():
-                    call_args.push(OpBorrow(recv))
-                else:
-                    call_args.push(OpMove(recv))
+            if need_chain_writeback:
+                # Chain writeback needs `recv` alive after the mut call so
+                # we can move it into the subsequent `coll.set(idx, !recv)`.
+                # OpBorrow keeps the local valid; the runtime push/set/etc.
+                # take self via pointer regardless of operand kind, so this
+                # is semantically a no-op for the mutating call itself.
+                call_args.push(OpBorrow(recv))
+            else:
+                match recv_loc.ownership:
+                    case LoBorrowed():
+                        call_args.push(OpBorrow(recv))
+                    else:
+                        call_args.push(OpMove(recv))
             int mi2 = 0
             while mi2 < margs.len():
                 SpannedExpr ma = margs.get(mi2).unwrap()
@@ -2156,6 +2192,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 emit(&ctx, GICallExtern(-1, full_name, call_args))
                 if need_writeback:
                     emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
+                if need_chain_writeback:
+                    emit_chain_writeback(&ctx, chain_coll, chain_idx, recv, &gmod)
                 int void_dst = add_local(&ctx, UNIT_TYPE, NO_NAME)
                 emit(&ctx, GIAssign(void_dst, OpConstUnit()))
                 return void_dst
@@ -2188,6 +2226,8 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GICallExtern(mdst, full_name, call_args))
             if need_writeback:
                 emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
+            if need_chain_writeback:
+                emit_chain_writeback(&ctx, chain_coll, chain_idx, recv, &gmod)
             return mdst
         case EFieldAccess(base_box, field_name):
             int base = lower_expr(&ctx, *base_box, &gmod)
@@ -3011,6 +3051,55 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
                 write_args.push(OpMove(base))
     write_args.push(op_consume(&ctx, &gmod, value_local))
     emit(&ctx, GICallExtern(-1, write_fn, write_args))
+
+# Showcase blocker #1 writeback: emit `coll.set(idx, !value_local)` after
+# a mutating method on `coll.get(idx).unwrap()`. The mutated value local
+# (independently cloned by emit_payload_read) is written back into the
+# collection element at idx so the mutation survives the chain.
+#
+# Coll + idx are re-lowered here from their AST forms — same trade-off
+# as `emit_field_write_from_local` re-lowering `base_expr`. For typical
+# self-host uses (named locals / params) this is side-effect-free; if a
+# user threads a complex side-effecting expression in either position
+# they get the same caveat as the field-writeback path.
+void emit_chain_writeback(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_expr, int value_local, GirModule &gmod):
+    int coll = lower_expr(&ctx, coll_expr, &gmod)
+    int idx = lower_expr(&ctx, idx_expr, &gmod)
+    int coll_tid = ctx.locals.get(coll).unwrap().type_id
+    String coll_tn = type_id_to_name(coll_tid, &gmod)
+    # Unwrap Ptr/MutPtr to get the inner collection type name.
+    if coll_tid >= 0 and coll_tid < gmod.type_table.len():
+        GirType ct = gmod.type_table.get(coll_tid).unwrap()
+        match ct:
+            case GtPtr(inner):
+                coll_tn = type_id_to_name(inner, &gmod)
+            case GtMutPtr(inner):
+                coll_tn = type_id_to_name(inner, &gmod)
+            else:
+                pass
+    # Vector/Deque → coll_tn + "__set"  (maps to gorget_array_set at LIR)
+    # Dict/HashMap → coll_tn + "__set"  (maps to gorget_map_put at LIR; "set"
+    #                                    is an alias for "put" — see
+    #                                    lir_lower.gg::map_dict_method)
+    # Other receivers fall through silently — better to lose the writeback
+    # than emit a bogus call.
+    bool is_vector = coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__")
+    bool is_dict = coll_tn.starts_with("Dict__") or coll_tn.starts_with("HashMap__")
+    if not (is_vector or is_dict):
+        return
+    String set_fn = coll_tn + "__set"
+    Vector[Operand] set_args = []
+    # gorget_array_set takes the array by pointer — OpBorrow keeps the
+    # collection live for any subsequent reads in the same block.
+    GirLocal coll_loc = ctx.locals.get(coll).unwrap()
+    match coll_loc.ownership:
+        case LoBorrowed():
+            set_args.push(OpBorrow(coll))
+        else:
+            set_args.push(OpBorrow(coll))
+    set_args.push(op_consume(&ctx, &gmod, idx))
+    set_args.push(OpMove(value_local))
+    emit(&ctx, GICallExtern(-1, set_fn, set_args))
 
 # ── Control flow lowering ────────────────────────────────
 

@@ -64,32 +64,7 @@ Vector[Vector[int]] compute_predecessors(LirFunction &f):
         int si = 0
         while si < succs.len():
             int succ = succs.get(si).unwrap()
-            # Rebuild the inner Vector from scratch + bi, then set it
-            # back. The idiomatic chained form `preds.get(succ).unwrap().push(bi)`
-            # silently loses the mutation because `.get(i).unwrap()`
-            # returns a byte-copy of the inner Vector struct rather
-            # than a mutable alias — `.push` grows the local copy and
-            # the original `preds[succ]` stays empty. Worse, stage-2's
-            # cc errors out in UNRELATED functions because empty preds
-            # corrupts SSA's phi insertion globally (e.g. stage-2
-            # `parser___token_float_val` ends up with mismatched
-            # return shape).
-            #
-            # Same compiler-level family as blocker-2's get_item_at
-            # retirement: when `.get(i).unwrap()` is followed by a
-            # mutating call, the compiler needs to either return a
-            # mutable alias OR thread `set()` back automatically.
-            # Both are part of the Phase C moves-class burn-down
-            # work — auto-resolution at value-passing boundaries.
-            # Until that lands, this workaround stays.
-            Vector[int] old_list = preds.get(succ).unwrap()
-            Vector[int] new_list = []
-            int oi = 0
-            while oi < old_list.len():
-                new_list.push(old_list.get(oi).unwrap())
-                oi += 1
-            new_list.push(bi)
-            preds.set(succ, new_list)
+            preds.get(succ).unwrap().push(bi)
             si += 1
         bi += 1
 
@@ -546,11 +521,13 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
             Vector[int] new_slots = [slot]
             target_slots.put(target_bb, !new_slots)
         else:
-            # Rebuild the inner Vector from scratch + slot, then put it back.
-            # The straightforward `get().push()` pattern silently loses the
-            # mutation for nested Vector[Vector[int]] in a Dict (the inner
-            # Vector returned by .get() is a borrow that doesn't persist
-            # through .put()). Rebuilding forces a fresh owned Vector.
+            # Dict[K, Vector[V]] chain `d.get(k).unwrap().push(x)` is still
+            # broken at the Rust-stage frontend (per the showcase blocker
+            # entry; standalone test in TODO shows rows come out empty for
+            # the Dict variant even though Vector[Vector[T]] works). Stage-1
+            # binary itself fails because its own code can't execute the
+            # chain. Keep the rebuild workaround until the Rust-stage Dict
+            # case is fixed too — then re-bootstrap and retire this.
             Vector[int] old_slots = target_slots.get(target_bb).unwrap()
             Vector[int] new_slots2 = []
             int osi = 0

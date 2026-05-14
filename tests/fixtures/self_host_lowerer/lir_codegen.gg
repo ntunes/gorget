@@ -383,10 +383,6 @@ Vector[int] topo_sort_structs(LirModule &m):
         in_degree.push(0)
         i += 1
 
-    # Use flat (parent, child) edge list — nested Vector[Vector[int]]
-    # `.get(i).push(j)` silently drops the mutation in stage-1
-    # (feedback_nested_vector_get_set.md). Rebuild inner vec via
-    # full-replace to dodge the bug.
     i = 0
     while i < n:
         LirStructDef sdef = m.structs.get(i).unwrap()
@@ -396,12 +392,8 @@ Vector[int] topo_sort_structs(LirModule &m):
             if field.ty >= LT_STRUCT_BASE:
                 int j = field.ty - LT_STRUCT_BASE
                 if j != i and j < n:
-                    Vector[int] dep_i = deps.get(i).unwrap()
-                    dep_i.push(j)
-                    deps.set(i, !dep_i)
-                    Vector[int] dependents_j = dependents.get(j).unwrap()
-                    dependents_j.push(i)
-                    dependents.set(j, !dependents_j)
+                    deps.get(i).unwrap().push(j)
+                    dependents.get(j).unwrap().push(i)
                     int cur = in_degree.get(i).unwrap()
                     in_degree.set(i, cur + 1)
             fi += 1
