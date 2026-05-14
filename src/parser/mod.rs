@@ -62,6 +62,14 @@ impl Parser {
     }
 
     pub fn new_with_offset(source: &str, base_offset: usize) -> Self {
+        // Synthetic f-string interp range: high-bit base at `1 << 40` (so
+        // synthetic offsets stay distinguishable from real source offsets),
+        // plus `base_offset << 20` per-module shift so each module's
+        // synthetic range is disjoint. Without the shift, every module's
+        // first f-string interp token shares span `1 << 40`, the resolver's
+        // `resolution_map[span_start]` collides last-write-wins, and
+        // `lower_call` emits the wrong mangled symbol at the interp site.
+        let interp_base = (1usize << 40).wrapping_add(base_offset.wrapping_shl(20));
         let lexer = Lexer::new_with_offset(source, base_offset);
         let all_tokens: Vec<Spanned<Token>> = lexer.collect();
 
@@ -91,7 +99,7 @@ impl Parser {
             call_arg_depth: 0,
             in_extern_c: false,
             comments,
-            next_interp_offset: 1usize << 40,
+            next_interp_offset: interp_base,
         }
     }
 

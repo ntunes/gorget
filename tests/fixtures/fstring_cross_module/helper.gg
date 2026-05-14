@@ -1,0 +1,8 @@
+# Helper module — also contains an f-string interpolation of a function
+# call so the collision with main.gg's interp span is observable.
+
+String inner():
+    return "done"
+
+String status():
+    return f"{inner()}"

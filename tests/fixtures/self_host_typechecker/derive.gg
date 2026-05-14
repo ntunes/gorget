@@ -51,7 +51,7 @@ String generic_suffix(Vector[String] tps):
 String equip_prefix(Vector[String] tps):
     if tps.len() == 0:
         return ""
-    return generic_suffix(tps) + " "
+    return f"{generic_suffix(tps)} "
 
 # Global counter for unique temp variable names
 int derive_var_counter = 0

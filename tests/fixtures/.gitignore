@@ -9,6 +9,8 @@
 !self_host_*/**
 !modules_pkg*/
 !modules_pkg*/**
+!fstring_cross_module/
+!fstring_cross_module/**
 !security/
 !security/*.gg
 !security/*.expected

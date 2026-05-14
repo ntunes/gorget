@@ -1,0 +1,16 @@
+# Regression fixture for the per-module synthetic f-string interp offset.
+# Both this file and helper.gg contain an f-string interpolation of a
+# function call. Pre-fix, both modules' first interp token shared the
+# same synthetic span (1 << 40), the resolver's resolution_map collided
+# last-write-wins, and lower_call emitted the wrong mangled symbol at
+# the interp site — surfacing as a stage-1 cc error or wrong runtime
+# output.
+
+from helper import status
+
+int count_items():
+    return 3
+
+void main():
+    String s = f"saw {count_items()} items {status()}"
+    print(s)
