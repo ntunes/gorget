@@ -20,7 +20,88 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
   **Fix shape.** When self-host's typechecker processes an `equip [Args] Target[...] with Trait[...]:` block, register each method as `<MangledTarget>__<methodname>` → return type in `gmod.fn_sigs`, with proper monomorphization for each `Target[X]` use site discovered during resolution. The mono'd entries are what `lower_for_iterator` (and any other typed-lookup site) reads. Pairs with the existing Phase A typed-metadata work in `tests/fixtures/self_host_typechecker/`. Estimated: medium, ~3-5 days; the resolver already tracks equip-block methods, the typechecker already monomorphizes — just connect the two via a fn_sigs write pass. [added: 2026-05-14, from `lower_for` iterator-protocol fallback validation]
 
-- **Rust frontend: unify the 7 `lower_for_*` functions into a single scaffold + per-type element extractor.** Architectural cleanup opportunity surfaced by the self-host's `case SFor` work (2026-05-14). `src/ir/lowering/stmts/for_loops.rs` has `lower_for_range` / `lower_for_string` / `lower_for_array` / `lower_for_enumerate` / `lower_for_dict` / `lower_for_set` / `lower_for_iterable` — each ~150 lines, each duplicating ~80% scaffold (idx/len allocation, header/body/incr/exit blocks, increment + jump, optional for-else handling). The self-host's `lower_for` (`tests/fixtures/self_host_lowerer/lower.gg`) now demonstrates the cleaner shape: **ONE scaffold parameterised at the element-extract step** (`lower_for_vector` for the Vector/Deque fast path + `lower_for_iterator` for the iterator-protocol fallback), with collection-type dispatch happening at exactly one place. Rust frontend should mirror this. Estimate: 2-3 days; mostly removing duplication, no semantic changes. [added: 2026-05-14, from self-host `case SFor` audit; revised 2026-05-14 with the protocol-fallback shape that landed]
+- **Rust frontend: unify the 7 `lower_for_*` functions into a single scaffold + per-type element extractor.** Architectural cleanup opportunity surfaced by the self-host's `case SFor` work (2026-05-14). `src/ir/lowering/stmts/for_loops.rs` has 1159 lines covering 7 collection-specific lowering functions, each duplicating ~80% scaffold. Self-host's reference-grade `lower_for` (in `tests/fixtures/self_host_lowerer/lower.gg`) demonstrates the cleaner shape: ONE scaffold parameterised at the element-extract step (`lower_for_vector` fast path + `lower_for_iterator` protocol fallback). Rust frontend should mirror this.
+
+  **Inventory** (`src/ir/lowering/stmts/for_loops.rs`):
+
+  | Function           | Lines | Element shape                          | Notes |
+  |--------------------|-------|----------------------------------------|---|
+  | `lower_for_range`  |    75 | `loop_var + 1`                         | Inclusive vs exclusive cmp op |
+  | `lower_for_string` |   160 | `gorget_str_codepoint_at` + `byte_pos += cplen` | Source-aware ptr setup (3 shapes: owning-named, ptr-typed, plain). UTF-8 codepoint-aware. |
+  | `lower_for_array`  |   105 | `index_load_borrow` + `idx += 1`       | Uniform layout (Field(2) len). Pattern destructure via `emit_pattern_bindings`. |
+  | `lower_for_enumerate` | 140 | Same as array + index binding          | Auto-deref Ptr-typed iterables (Snag 2026-05-13). Strips `.enumerate()` and binds tuple parts. |
+  | `lower_for_dict`   |   145 | `gorget_map_iter_state` filter + `gorget_map_iter_key` + `_value` via output params | `oi` outer index + `idx = oi`. Filter via `state_ok` branch (`elem_bb` vs `incr_bb`). |
+  | `lower_for_set`    |   155 | Ordered (`order_len` + `order[i]`) vs unordered (`cap` + state filter) | Two sub-shapes by `collection_kind == OrderedSet`. |
+  | `lower_for_iterable` | 180 | `Type__iter()` → `Iter__next()` → `Option[T]` | self-as-iterator detect; tag check; payload extract. Universal protocol. |
+
+  **Shared scaffold across all 7** (the duplication):
+  ```rust
+  let header_bb = builder.new_block();
+  let body_bb   = builder.new_block();
+  let incr_bb   = builder.new_block();    // skipped for protocol/iterable (next() advances)
+  let exit_bb   = builder.new_block();
+  let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
+      (builder.new_block(), builder.new_block())
+  } else {
+      (exit_bb, exit_bb)
+  };
+  builder.jump(header_bb);
+  // ... per-kind logic ...
+  // tail:
+  if let Some(else_body) = else_arm {
+      builder.switch_to(else_exit_bb);
+      lower_block_scoped(ctx, builder, else_body);
+      builder.jump(exit_bb);
+      builder.switch_to(break_exit_bb);
+      builder.jump(exit_bb);
+  }
+  builder.switch_to(exit_bb);
+  ```
+  Plus the Borrow-mode iter_local init (5 of 7 functions — array/enumerate/dict/set/iterable):
+  ```rust
+  let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+  let iter_local = builder.add_local(iter_type, None);
+  let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
+      AssignMode::Borrow
+  } else {
+      AssignMode::Copy
+  };
+  builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
+  ```
+  Plus the body scope discipline (push_loop, drops.push_scope, lower_block, drops.pop_scope, pop_loop, save_locals/restore_locals).
+
+  **Per-kind variability** (what doesn't unify cleanly):
+  - **`lower_for_string`**: source-aware ptr setup is genuinely string-specific (Stage 5 §6.8, three iter_op shapes). Not a target for unification.
+  - **`lower_for_range`**: doesn't use iter_op at all; just start/end values. `save_locals` wraps the WHOLE function (not body-scoped). Outlier.
+  - **`lower_for_dict` / `lower_for_set`**: state-check filter (`state_ok` branch) introduces an extra block (`elem_bb`) between body_bb and the actual body lowering. Pattern destructure uses output-parameter calls (different from array's `index_load_borrow`).
+  - **`lower_for_iterable`**: no `incr_bb` (next() advances internally); uses `header_bb` for continue. Different control flow.
+
+  **Recommended approach — Three layers**:
+
+  1. **Helper extraction** (low-risk, ~150 lines retired, no semantic change):
+     - `alloc_for_blocks(builder, has_else, has_incr) -> ForBlocks` — block allocation
+     - `emit_else_arm_tail(ctx, builder, else_arm, &blocks)` — else-handling tail
+     - `init_borrow_iter_local(ctx, builder, iter_op) -> (LocalId, TypeId)` — Borrow-mode init for the 5 collection types that share it
+     Apply to all 7 functions (range and string skip the `init_borrow_iter_local` helper). One PR. Tests stay green.
+
+  2. **Filter abstraction** for dict/set (medium-risk, ~30 lines retired):
+     - `with_state_filter(ctx, builder, state_check_op, incr_bb, |ctx, builder| { /* element extract + bind */ })` — emits the `state_ok → elem_bb else incr_bb` branch + the elem_bb body
+     Mostly tightens dict/set/ordered-set/unordered-set's parallel paths.
+
+  3. **Trait-based unification** (higher-risk, ~300-400 lines retired):
+     - `trait CollectionLowerer { type State; fn init(...) -> Self::State; fn cond(...) -> Operand; fn extract_and_bind(...); fn advance(...); }`
+     - One `lower_for_scaffold<L: CollectionLowerer>(ctx, builder, lowerer: L, ...)` shared scaffold
+     - 7 backends: `ArrayLowerer`, `StringLowerer`, `DictLowerer`, `SetLowerer`, `IterableLowerer`, `EnumerateLowerer`, `RangeLowerer`
+     - Each backend captures its specific state (idx/len, dict_ptr/oi/limit, byte_pos/cplen, etc.)
+     The string source-aware ptr setup stays in `StringLowerer::init`; range's no-iter-op stays in `RangeLowerer::init`. Filter behaviour can live in `extract_and_bind` returning an optional skip signal, OR in a separate `should_skip` hook.
+
+  **Verification strategy**: incremental — each of the three layers ships independently with full integration sweep (`cargo test --test integration --release --test-threads=4`). 1122/1122 must remain (the documented parallel-run flakes `vector_task_get` and `hot_reload_basic_lir` are pre-existing and pass in isolation).
+
+  **Reference implementation**: `tests/fixtures/self_host_lowerer/lower.gg::lower_for` (and its two sub-paths `lower_for_vector` + `lower_for_iterator`). The self-host shape is ~120 lines covering Vector/Deque + iterator-protocol; the Rust frontend should compress to roughly 7× that for the 7 backends, with the scaffold shared.
+
+  **Estimate**: Layer 1 alone is half a day. Layer 1+2 is a day. Layer 1+2+3 is 2-3 days. Layer 3 is the biggest win architecturally and the highest risk — recommend doing layers in order, with green tests gating each step.
+
+  **Tied-off TODOs after this lands**: the "Self-host: register trait-equipped methods in `fn_sigs`" entry above and the iter-chain fixture mismatches in `lowerer_comparison` both unblock once Rust + self-host have matching architectures. [added: 2026-05-14, scoped 2026-05-14 with full design sketch for off-loading to a dedicated agent]
 
 - **Rust frontend: unify the 7 `lower_for_*` functions into a single scaffold + per-type element extractor.** Architectural cleanup opportunity surfaced by the self-host's `case SFor` work (2026-05-14). `src/ir/lowering/stmts/for_loops.rs` has `lower_for_range` / `lower_for_string` / `lower_for_array` / `lower_for_enumerate` / `lower_for_dict` / `lower_for_set` / `lower_for_iterable` — each ~150 lines, each duplicating ~80% scaffold (idx/len allocation, header/body/incr/exit blocks, increment + jump, optional for-else handling). The self-host's `lower_for` (`tests/fixtures/self_host_lowerer/lower.gg::lower_for`) now demonstrates the cleaner shape: **ONE scaffold parameterised at the element-extract step**, with collection-type dispatch happening at exactly one place. Rust frontend should mirror this. Estimate: 2-3 days; mostly removing duplication, no semantic changes. Pairs with the iterator-protocol fallback work above. [added: 2026-05-14, from self-host `case SFor` audit]
 
