@@ -32,22 +32,6 @@ String format_float_decimal(float f):
     # (rare in parser canonical output — most large floats are integer-valued)
     return s
 
-# ── Option-on-Box helpers ──
-
-bool has_opt_boxed_expr(Option[Box[SpannedExpr]] opt):
-    match opt:
-        case Some(_):
-            return true
-        else:
-            return false
-
-SpannedExpr get_opt_boxed_expr(Option[Box[SpannedExpr]] opt):
-    match opt:
-        case Some(b):
-            return *b
-        else:
-            return SpannedExpr(EIntLiteral(0), Span(0, 0))
-
 # ── Type formatting ──────────────────────────────────────────
 
 String format_type(SpannedType st):
@@ -204,20 +188,19 @@ String format_expr(SpannedExpr se):
             return f"{os}[{is_}]"
         case ERange(lo, hi):
             String result = ""
-            if has_opt_boxed_expr(lo):
-                result = format_expr(get_opt_boxed_expr(lo))
+            if lo is Some(b):
+                result = format_expr(*b)
             result = result + ".."
-            if has_opt_boxed_expr(hi):
-                result = result + format_expr(get_opt_boxed_expr(hi))
+            if hi is Some(b):
+                result = result + format_expr(*b)
             return result
         case EIf(cond, body, branches):
             String result = f"if {format_expr(*cond)}:{format_block(body)}"
             for br in branches:
-                match br.condition:
-                    case Some(c):
-                        result = result + f" elif {format_expr(c)}:"
-                    else:
-                        result = result + " else:"
+                if br.condition is Some(c):
+                    result = result + f" elif {format_expr(c)}:"
+                else:
+                    result = result + " else:"
                 result = result + format_block(br.body)
             return result
         case EMatch(subject, arms):
@@ -296,8 +279,8 @@ String format_expr(SpannedExpr se):
             return f"block:{format_block(stmts)}"
         case EListComp(expr, var, iter, cond):
             String result = f"[{format_expr(*expr)} for {var} in {format_expr(*iter)}"
-            if has_opt_boxed_expr(cond):
-                result = result + f" if {format_expr(get_opt_boxed_expr(cond))}"
+            if cond is Some(b):
+                result = result + f" if {format_expr(*b)}"
             result = result + "]"
             return result
         case ESetComp(expr, var, iter, cond):
@@ -335,12 +318,11 @@ String format_expr(SpannedExpr se):
             return f"spawn blocking {format_expr(*inner)}"
         case ERethrow(expr, err_name, err_type, transform):
             String rhs = format_expr(*expr)
-            match err_name:
-                case Some(name):
-                    SpannedType et = *err_type.unwrap()
-                    rhs = rhs + f" rethrow ({format_type(et)} {name}): "
-                case None:
-                    rhs = rhs + " rethrow "
+            if err_name is Some(name):
+                SpannedType et = *err_type.unwrap()
+                rhs = rhs + f" rethrow ({format_type(et)} {name}): "
+            else:
+                rhs = rhs + " rethrow "
             rhs = rhs + format_expr(*transform)
             return rhs
         case ECatch(expr, name, recovery):
@@ -361,19 +343,15 @@ String format_stmt(Stmt s):
         case SExpr(expr):
             return format_expr(expr)
         case SReturn(val):
-            match val:
-                case Some(v):
-                    return f"return {format_expr(v)}"
-                else:
-                    return "return"
+            if val is Some(v):
+                return f"return {format_expr(v)}"
+            return "return"
         case SThrow(val):
             return f"throw {format_expr(val)}"
         case SBreak(val):
-            match val:
-                case Some(v):
-                    return f"break {format_expr(v)}"
-                else:
-                    return "break"
+            if val is Some(v):
+                return f"break {format_expr(v)}"
+            return "break"
         case SContinue:
             return "continue"
         case SPass:
