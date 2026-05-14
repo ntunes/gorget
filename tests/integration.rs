@@ -13279,6 +13279,50 @@ fn self_host_bootstrap_fixed_point() {
     let _ = std::fs::remove_file(&stage2_bin);
 }
 
+// Self-host snag #5 regression: the lowerer's `is_type` heuristic at
+// `tests/fixtures/self_host_lowerer/lower.gg:1915` historically treated any
+// identifier containing `__` as a monomorphized type name (so call sites like
+// `Heap__int64_t.new()` would route to the static-method path). Compiler-
+// synthesized locals like `__for_coll_N` (from a desugared SFor) tripped this
+// heuristic — `__for_coll_N.get(idx)` lowered to `__for_coll_N__get(idx)`,
+// an undefined symbol that broke stage-1 link.
+//
+// The fix added a named-local guard ahead of the type-name fallbacks; this
+// test feeds a fixture containing a `__`-prefixed local through the cached
+// self-host driver and asserts the generated C does NOT contain the misroute
+// AND DOES contain the proper `gorget_array_safe_get` call.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_snag5_synth_name_no_type_misroute() {
+    if skip_under_llvm() { return; }
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let repro = manifest_dir.join("tests/fixtures/_self_host_snag5_repro.gg");
+
+    let out = run_with_deadline(
+        Command::new(&driver_exe)
+            .arg(&repro)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_snag5 repro",
+        Duration::from_secs(60),
+    );
+    assert!(out.status.success(), "self-host driver failed on snag5 repro");
+    let c = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !c.contains("__for_coll__get"),
+        "self-host misrouted `__for_coll.get(...)` to static-method call \
+         `__for_coll__get(...)`. The is_type heuristic in \
+         tests/fixtures/self_host_lowerer/lower.gg should gate on \
+         nl_contains so synth locals containing `__` aren't treated as types."
+    );
+    assert!(
+        c.contains("gorget_array_safe_get"),
+        "self-host failed to emit gorget_array_safe_get for `__for_coll.get(idx)`"
+    );
+}
+
 // Phase C fatal-promotion regression sweep
 // (`docs/internals/self-host-resource-model.md` §5.2 step 5): once a
 // validator class's count is zero, the check is promoted to "fatal on

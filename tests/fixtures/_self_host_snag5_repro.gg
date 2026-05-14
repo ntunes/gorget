@@ -1,0 +1,20 @@
+# Regression repro for self-host snag #5 (2026-05-14).
+#
+# Synth-named locals containing `__` must NOT trip the lowerer's
+# static-method heuristic in lower.gg. Before the fix, `__for_coll.get(idx)`
+# emitted `__for_coll__get(idx)` — a static-method call on the synth name as
+# if it were a monomorphized type. After the fix, `__for_coll` is correctly
+# recognised as a named local (the nl_contains guard fires before the
+# `__`-infix fallback) and `.get(idx)` lowers to `gorget_array_safe_get`.
+#
+# The fixture is only meaningful when fed to the self-host lowerer; running it
+# through Rust gg succeeds either way (Rust gg's lower_expr doesn't have the
+# `__`-heuristic shape).
+
+void main():
+    Vector[int] v = [10, 20, 30]
+    auto __for_coll = v
+    int __for_idx = 0
+    while __for_idx < __for_coll.len():
+        print(__for_coll.get(__for_idx).unwrap())
+        __for_idx = __for_idx + 1

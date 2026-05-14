@@ -1864,9 +1864,22 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         String sub_name = type_id_to_name(sub_tid, &gmod)
                         if sub_name.len() > 0:
                             ident_name = sub_name
-                    bool is_type = gmod.type_infos.contains(ident_name)
+                    # Named locals shadow type names. Without this guard,
+                    # a synth local whose name happens to contain `__`
+                    # (e.g. `__for_coll_N` from a desugared SFor) gets
+                    # picked up by the `__`-infix fallback below and
+                    # misrouted to static-method dispatch
+                    # (`__for_coll_N.get(i)` → `__for_coll_N__get(i)`,
+                    # undefined symbol). The named-local check is also
+                    # the safe answer in general: if a binding exists in
+                    # scope, it's a value, regardless of name shape.
+                    # (Self-host snag #5, 2026-05-14.)
+                    bool is_local = nl_contains(&ctx, ident_name_raw)
+                    bool is_type = false
+                    if not is_local:
+                        is_type = gmod.type_infos.contains(ident_name)
                     # Also treat primitive type names as types.
-                    if not is_type:
+                    if not is_type and not is_local:
                         if ident_name == "int" or ident_name == "float" or ident_name == "bool":
                             is_type = true
                         elif ident_name == "String" or ident_name == "byte" or ident_name == "char":
