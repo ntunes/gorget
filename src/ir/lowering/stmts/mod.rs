@@ -479,11 +479,39 @@ fn lower_var_decl(
                                     | Some(crate::ir::LocalOwnership::FreshOwned)
                             );
                             let src_named = ctx.is_named_local(p.local);
+                            // Source type: is it a `Ptr<GorgetClosure>` from a
+                            // `coll.get(k).unwrap()` on a Callable-element
+                            // collection? (`Option__Ref__Callable__T.unwrap()`
+                            // produces a Ptr-typed temp marked `CowBorrow`.)
+                            // The default `!src_owned && src_named` rule
+                            // excludes temps — but THIS temp's pointee is a
+                            // closure handle, and unlike Vector/Dict/String
+                            // pointees, the downstream `g(args)` invocation
+                            // path doesn't auto-deref. Force the clone here so
+                            // `g` binds to a fresh `GorgetClosure` value and
+                            // direct-call works.
+                            let src_is_ptr_to_closure = src_local
+                                .map(|l| l.type_id)
+                                .and_then(|t| ctx.pointee_type(t))
+                                .map(|inner| {
+                                    matches!(
+                                        ctx.type_registry.get(inner),
+                                        Some(GirType::Named(n))
+                                            if ctx.type_registry.get_type_def(n)
+                                                .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                                                == Some("GorgetClosure")
+                                    )
+                                })
+                                .unwrap_or(false);
                             // Already Owned/FreshOwned (fresh local from
                             // call result) → no clone needed.
                             // Not named (closure literal temp) → ABI-
                             // incompatible source struct, skip clone.
-                            !src_owned && src_named
+                            // Ptr-to-closure → clone unconditionally (the
+                            // declared `Callable[T] g = …` demands a value
+                            // binding; CowBorrow propagation would retype to
+                            // Ptr and break direct invocation).
+                            (!src_owned && src_named) || src_is_ptr_to_closure
                         }
                     } else { false };
                     if should_clone {

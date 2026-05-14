@@ -646,11 +646,45 @@ pub(super) fn lower_method_call(
 
                 if method_name == "unwrap_or" {
                     // unwrap_or(default) → (tag == 0) ? data.Variant._0 : default
-                    let default_val = if !args.is_empty() {
+                    let mut default_val = if !args.is_empty() {
                         lower_expr(ctx, builder, &args[0].node.value)
                     } else {
                         Operand::Constant(Constant::I64(0))
                     };
+                    // Option__Ref__T parity: when the Option's payload is `Ptr(T)`
+                    // (collection borrow), the user-written default is the bare
+                    // pointee `T`. The LIR __option_unwrap_or stores both
+                    // payload and default into the same result slot — typed by
+                    // the struct field, which is `Ptr(T)` — so the bare-`T`
+                    // default would byte-clash with a `Ptr(T)` slot.
+                    //
+                    // Spill the default to a fresh slot and pass its address as
+                    // the default. Both branches now flow `Ptr(T)`. The result
+                    // is a `Ptr(T)` borrow that downstream sites (var-decl
+                    // eager-clone via `clone_fn_for_ptr`, return-value
+                    // auto-deref) handle the same way as bare `unwrap()`.
+                    if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(pointee)) if !matches!(default_val, Operand::Constant(Constant::Unit))
+                        && {
+                            let _ = pointee;
+                            true
+                        }
+                    ) {
+                        if let Some(GirType::Ptr(pointee)) = ctx.type_registry.get(inner_type).cloned() {
+                            let dv_type = infer_operand_type_full(ctx, &default_val, builder);
+                            // Only spill if the default isn't already a Ptr<pointee>.
+                            // (Some callsites — e.g. `unwrap_or(other_get_call)` —
+                            // already produce a Ptr<T>.)
+                            let already_ptr = matches!(ctx.type_registry.get(dv_type), Some(GirType::Ptr(_)));
+                            if !already_ptr {
+                                let tmp_slot = builder.add_local(pointee, None);
+                                builder.assign(Place::local(tmp_slot), default_val);
+                                let ptr_t = ctx.register_ptr_type(pointee);
+                                let borrow = builder.add_local(ptr_t, None);
+                                builder.emit_borrow(borrow, Place::local(tmp_slot));
+                                default_val = FunctionBuilder::copy(borrow);
+                            }
+                        }
+                    }
                     let extern_name = if is_result { "__result_unwrap_or" } else { "__option_unwrap_or" };
                     let dst = ctx.call_extern_tracked(builder,
                         extern_name,
@@ -662,6 +696,19 @@ pub(super) fn lower_method_call(
                     if inner_is_resource {
                         ctx.drops.unregister(place.local);
                         ctx.move_zero_and_mark(builder, place.local);
+                    }
+                    // For Option__Ref__T.unwrap_or: result is Ptr<T>. Mark as
+                    // CowBorrow with the receiver's collection provenance so a
+                    // downstream var-decl to a typed local eager-clones (the
+                    // None branch's stack-slot Ptr is short-lived but the
+                    // var-decl handler's `clone_fn_for_ptr` branch is what
+                    // actually fires for resource pointees — both paths
+                    // produce an owned fresh value).
+                    if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
+                        ctx.set_cow_borrow(builder, dst);
+                        if let Some(collection) = ctx.cow_borrow_source(place.local).cloned() {
+                            ctx.set_cow_borrow_source(dst, collection);
+                        }
                     }
                     return FunctionBuilder::copy(dst);
                 } else {
@@ -1910,19 +1957,23 @@ pub(super) fn lower_method_call(
                 }
             }
         }
-        // For Dict/HashMap.get(), auto-register Option[V] so get returns Option.
-        // Dict.get() uses value payload (not Ptr) because the GIR→LIR struct pipeline
-        // doesn't yet propagate Ptr payload types to the C backend's Option wrapping.
-        // dict[key] (IndexLoad) already returns Ptr for resource values via a separate path.
+        // For Dict/HashMap.get(), auto-register `Option[Ref[V]]` with a `Ptr(V)`
+        // payload — symmetric with Vector.get() above. `gorget_map_get` returns
+        // `void*` into the bucket's value slot, so the Option's Some payload IS
+        // the borrow. Keeps the IR's return type identical to the typechecker's
+        // `Option[Ref[V]]` (typecheck.rs:4565-4574) and makes
+        // `d.get(k).unwrap().push(x)` mutate the stored element instead of a
+        // byte-copy.
         if method_name == "get" && recv_is_map {
             let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
             if let Some(rest) = type_name.strip_prefix(prefix) {
                 if let Some(pos) = rest.find("__") {
                     let val_name = &rest[pos + 2..];
-                    let option_name = format!("Option__{val_name}");
+                    let option_name = format!("Option__Ref__{val_name}");
                     if ctx.lookup_type_by_name(&option_name).is_none() {
                         let inner_type = resolve_inner_type(ctx, val_name);
-                        ctx.ensure_option_type_registered(&option_name, inner_type);
+                        let ptr_type = ctx.type_registry.insert(GirType::Ptr(inner_type));
+                        ctx.ensure_option_type_registered(&option_name, ptr_type);
                     }
                 }
             }
@@ -1948,12 +1999,13 @@ pub(super) fn lower_method_call(
                 };
                 ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
             } else if method_name == "get" && recv_is_map {
-                // Dict/HashMap.get() returns Option[V]
+                // Dict/HashMap.get() returns Option[Ref[V]] with Ptr(V) payload
+                // (symmetric with Vector.get() — see auto-register block above).
                 let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                 if let Some(rest) = type_name.strip_prefix(prefix) {
                     if let Some(pos) = rest.find("__") {
                         let val_name = &rest[pos + 2..];
-                        let option_name = format!("Option__{val_name}");
+                        let option_name = format!("Option__Ref__{val_name}");
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }

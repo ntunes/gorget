@@ -1,0 +1,50 @@
+# Regression for `Dict[K, Vector[V]].get(k).unwrap().push(v)` mutation chain.
+#
+# Before the 2026-05-14 fix, `Dict.get` returned `Option[V]` (value payload)
+# at the IR layer despite the typechecker registering `Option[Ref[V]]`. The
+# unwrap extracted a byte-copy of the inner Vector; the chained `.push` then
+# mutated the copy and discarded the result, leaving the stored Vector empty.
+# This silently corrupted every Dict-of-collection accumulator pattern —
+# manifested as off-by-one groupby counts, undercounted join hash buckets,
+# and empty SSA predecessor sets in the self-host lowerer.
+#
+# The fix aligned the IR with the typechecker — `Dict.get` now returns
+# `Option[Ref[V]]` with a `Ptr(V)` payload. The unwrap extracts the borrow,
+# `.push` mutates through it, the actual stored Vector grows.
+
+void main():
+    Dict[int, Vector[int]] preds = {}
+    preds[0] = Vector[int]()
+    preds[1] = Vector[int]()
+
+    # The exact chain the self-host lowerer's `compute_predecessors` uses
+    # (and the dataframe groupby / join hash-index accumulators).
+    preds.get(0).unwrap().push(10)
+    preds.get(0).unwrap().push(20)
+    preds.get(0).unwrap().push(30)
+    preds.get(1).unwrap().push(99)
+
+    int i = 0
+    while i < 2:
+        Vector[int] v = preds.get(i).unwrap()
+        print(f"preds[{i}].len = {v.len()}")
+        int j = 0
+        while j < v.len():
+            print(f"  preds[{i}][{j}] = {v.get(j).unwrap()}")
+            j += 1
+        i += 1
+
+    # String-keyed Dict — same machinery, exercise hashable-key path.
+    # NOTE: explicit `Vector[String]()` instead of `[]` due to an unrelated
+    # empty-literal contextual-typing bug — `[]` defaults to elem_size=8
+    # (Ptr) regardless of the declared `Vector[String]` value type, causing
+    # the Str's data pointer to be truncated. Filed as a TODO; not in
+    # scope for this Dict.get alignment.
+    Dict[String, Vector[String]] groups = {}
+    groups["eng"] = Vector[String]()
+    groups.get("eng").unwrap().push("Alice")
+    groups.get("eng").unwrap().push("Bob")
+    Vector[String] eng = groups.get("eng").unwrap()
+    print(f"eng len = {eng.len()}")
+    print(f"  {eng.get(0).unwrap()}")
+    print(f"  {eng.get(1).unwrap()}")

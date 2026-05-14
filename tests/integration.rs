@@ -2332,6 +2332,42 @@ done",
 }
 
 #[test]
+fn dict_get_unwrap_push_chain() {
+    // Regression for the 2026-05-14 alignment of `Dict.get`'s IR-layer return
+    // type with the typechecker (`Option[Ref[V]]` with Ptr payload). Before
+    // the fix, the chained `.unwrap().push(v)` mutated a byte-copy and lost
+    // the push. After the fix, the borrow flows through unwrap → push and
+    // the stored Vector grows correctly.
+    run_gg(
+        "dict_get_unwrap_push_chain.gg",
+        "\
+preds[0].len = 3
+  preds[0][0] = 10
+  preds[0][1] = 20
+  preds[0][2] = 30
+preds[1].len = 1
+  preds[1][0] = 99
+eng len = 2
+  Alice
+  Bob",
+    );
+}
+
+#[test]
+fn vec_get_unwrap_push_chain() {
+    // Sibling to `dict_get_unwrap_push_chain` — pins the Vector outer case.
+    // Vector.get returned `Option[Ref[T]]` since 2026-04-25; the alignment
+    // of Dict.get in 2026-05-14 closed the asymmetry so a future refactor
+    // can't silently regress one branch.
+    run_gg(
+        "vec_get_unwrap_push_chain.gg",
+        "\
+preds[0].len = 3
+preds[1].len = 1",
+    );
+}
+
+#[test]
 fn dict_user_key_auto() {
     run_gg(
         "dict_user_key_auto.gg",
@@ -11542,6 +11578,12 @@ done",
 
 #[test]
 fn dataframe_tier2_joins() {
+    // 2026-05-14: line 7 changed from "2" to "3" with the `Dict.get → Ref[V]`
+    // alignment. The right-join's hash index uses the same
+    // `groups.get(key).unwrap().push(i)` chain in `df_left_join`'s row-bucket
+    // accumulator; before the fix only ONE matching left-row was stored per
+    // key. After the fix, both Alice(eng) and Charlie(eng) hit eng's bucket,
+    // so right-join produces 2 (eng matches) + 1 (hr-no-match) = 3 rows.
     run_gg(
         "dataframe_tier2_joins.gg",
         "\
@@ -11551,7 +11593,7 @@ int
 100
 true
 100
-2
+3
 4
 6
 4
@@ -11561,12 +11603,17 @@ done",
 
 #[test]
 fn dataframe_tier2_groupby() {
+    // 2026-05-14: line 3 changed from "1" to "2" with the `Dict.get → Ref[V]`
+    // alignment. Before the fix, `groups.get(key).unwrap().push(i)` at
+    // dataframe.gg:2131 silently dropped every push after the first, so every
+    // group's count column trivially read 1. After the fix, eng+jr correctly
+    // aggregates rows 0 and 4 → count=2.
     run_gg(
         "dataframe_tier2_groupby.gg",
         "\
 4
 3
-1
+2
 2
 int
 float

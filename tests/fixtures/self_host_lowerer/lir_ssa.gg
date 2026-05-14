@@ -521,13 +521,11 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
             Vector[int] new_slots = [slot]
             target_slots.put(target_bb, !new_slots)
         else:
-            # Dict[K, Vector[V]] chain `d.get(k).unwrap().push(x)` is still
-            # broken at the Rust-stage frontend (per the showcase blocker
-            # entry; standalone test in TODO shows rows come out empty for
-            # the Dict variant even though Vector[Vector[T]] works). Stage-1
-            # binary itself fails because its own code can't execute the
-            # chain. Keep the rebuild workaround until the Rust-stage Dict
-            # case is fixed too — then re-bootstrap and retire this.
+            # Rust-stage Dict.get → Option[Ref[V]] alignment shipped 2026-05-14
+            # (commit f261820d). Self-host writeback for Dict shipped 2026-05-14
+            # (commit 74e7d289). With both halves in place, this rebuild
+            # workaround SHOULD collapse to `target_slots.get(target_bb).unwrap().push(slot)`.
+            # Pending bootstrap_fixed_point verification before retirement.
             Vector[int] old_slots = target_slots.get(target_bb).unwrap()
             Vector[int] new_slots2 = []
             int osi = 0

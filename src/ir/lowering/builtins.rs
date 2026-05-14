@@ -179,9 +179,21 @@ fn ret_option_ref_or_val_elem(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
     (ctx.ensure_option)(&option_name, a.elem)
 }
 
-/// Returns Option[val] (for dict.get).
+/// Returns Option[val] (for consuming dict methods like `remove` — owned payload).
 fn ret_option_val(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
     let option_name = format!("Option__{}", ctx.val_name);
+    (ctx.ensure_option)(&option_name, a.val)
+}
+
+/// Returns `Option[Ref[V]]` for borrowing dict methods (`get`). Mirror of
+/// `ret_option_ref_or_val_elem` for the Dict val axis: the Some payload is
+/// `Ptr(V)` — the raw pointer into the bucket's value slot returned by
+/// `gorget_map_get` — regardless of whether V is a resource type. Keeps the
+/// IR return type identical to the typechecker's `Option[Ref[V]]`, so a
+/// chained `.unwrap().method(...)` on resource V mutates the actual stored
+/// element instead of a byte-copy.
+fn ret_option_ref_or_val_val(a: &BuiltinTypeArgs, ctx: &LookupCtx) -> TypeId {
+    let option_name = format!("Option__Ref__{}", ctx.val_name);
     (ctx.ensure_option)(&option_name, a.val)
 }
 
@@ -326,7 +338,7 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
     methods: &[
         BuiltinMethodDecl { name: "put", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
         BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_map_put"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_params, return_type: ret_void },
-        BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_map_get"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_param, return_type: ret_option_val },
+        BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_map_get"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_param, return_type: ret_option_ref_or_val_val },
         BuiltinMethodDecl { name: "get_or", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: key_val_default, return_type: ret_val },
         BuiltinMethodDecl { name: "get_or_put", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_val_default, return_type: ret_val },
         BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_map_remove_opt"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: key_param, return_type: ret_option_val },

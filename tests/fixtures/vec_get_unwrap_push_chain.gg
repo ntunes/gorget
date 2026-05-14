@@ -1,0 +1,21 @@
+# Sibling to `dict_get_unwrap_push_chain.gg` for the Vector outer-collection
+# case. Vector.get → Option[Ref[T]] was already correct before the 2026-05-14
+# Dict alignment; this fixture pins the chain semantics so a future refactor
+# of either collection's get() can't silently regress one branch while leaving
+# the other intact.
+
+void main():
+    Vector[Vector[int]] preds = []
+    preds.push([])
+    preds.push([])
+
+    preds.get(0).unwrap().push(10)
+    preds.get(0).unwrap().push(20)
+    preds.get(0).unwrap().push(30)
+    preds.get(1).unwrap().push(99)
+
+    int i = 0
+    while i < 2:
+        Vector[int] v = preds.get(i).unwrap()
+        print(f"preds[{i}].len = {v.len()}")
+        i += 1
