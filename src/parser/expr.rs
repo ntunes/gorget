@@ -1329,12 +1329,42 @@ impl Parser {
                 Some(Token::Keyword(Keyword::And))
                 | Some(Token::Keyword(Keyword::Or))
                 | Some(Token::Keyword(Keyword::Not))
+                // `as` / `is` are infix-only operators on values, never
+                // type-list separators. `(x as bool):` (if-condition that
+                // IS the cast) and `(x is Some(k)):` (if-condition that
+                // IS the pattern test) used to misfire as closure-param
+                // parsing producing `expected ',', found 'as'/'is'`.
+                | Some(Token::Keyword(Keyword::As))
+                | Some(Token::Keyword(Keyword::Is))
                 | Some(Token::EqEq)
                 | Some(Token::BangEq)
                 | Some(Token::LtEq)
                 | Some(Token::GtEq)
                 | Some(Token::Lt)
                 | Some(Token::Gt)
+                // Arithmetic / bitwise / shift / range operators that are
+                // never sigil characters and never appear in closure
+                // param lists. `+`, `/`, `%`, `|`, `^`, `<<`, `>>`, `..`
+                // — and their wrapping variants. (`-`, `*`, `&`, `!` are
+                // deliberately omitted because they double as unary /
+                // sigil tokens in param-type contexts: `-1` default,
+                // `*T` pointer, `&T` borrow, `!T` move.)
+                | Some(Token::Plus)
+                | Some(Token::Slash)
+                | Some(Token::Percent)
+                | Some(Token::Pipe)
+                | Some(Token::Caret)
+                | Some(Token::LtLt)
+                | Some(Token::GtGt)
+                | Some(Token::DotDot)
+                | Some(Token::DotDotEq)
+                | Some(Token::PlusPercent)
+                | Some(Token::MinusPercent)
+                | Some(Token::StarPercent)
+                // Optional / default-value operators on expressions.
+                | Some(Token::Question)
+                | Some(Token::DoubleQuestion)
+                | Some(Token::QuestionDot)
                 // Member access. Closure param types are simple-or-
                 // generic (`int`, `Dict[K, V]`, `Vector[T]`) — never
                 // dotted. A `.` inside the parens proves this is an

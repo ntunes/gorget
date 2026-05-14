@@ -17044,6 +17044,26 @@ all assertions passed",
 }
 
 #[test]
+fn paren_as_and_if_oneliner() {
+    run_gg(
+        "paren_as_and_if_oneliner.gg",
+        "\
+1
+42
+2
+1
+100
+7
+1
+22
+8
+80
+small
+0",
+    );
+}
+
+#[test]
 fn test_generic_functions() {
     run_gg(
         "test_generic_functions.gg",

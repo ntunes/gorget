@@ -1,0 +1,63 @@
+# Regression fixture: parser handles paren-wrapped expressions that contain
+# infix-only operators (as, is, ??, +, etc.) immediately followed by `:`,
+# AND supports single-statement bodies on the same line as `if`/`elif`/`else`.
+#
+# Before the fix, `looks_like_closure` in src/parser/expr.rs would scan past
+# `(x as T)` / `(x is Some(k))` / `(x ?? 0)` and see the `:` after `)`,
+# misclassifying the paren-expression as a closure parameter list. Result:
+# "expected `,`, found `as`" / `is` / `??` at the operator.
+#
+# This fixture also exercises self-host parser parity via parser_comparison.
+
+void main():
+    # 1. (x as T) as the entire if-condition — natural cast-to-bool shape.
+    int slen = 1
+    if (slen as bool):
+        print(1)
+
+    # 2. (x is Some(p)) as the entire if-condition — natural pattern test.
+    Option[int] kw = Some(42)
+    if (kw is Some(k)):
+        print(k)
+
+    # 3. (x as T) as a while-condition.
+    int countdown = 2
+    while (countdown as bool):
+        print(countdown)
+        countdown -= 1
+
+    # 4. Mixed: paren-cast plus arithmetic still classified as paren-expr.
+    int n = 5
+    if ((n as int) + 1) > 5:
+        print(100)
+
+    # 5. if-statement one-liner: single stmt body on same line as `:`.
+    int a = 7
+    if a > 0: print(7)
+
+    # 6. if-one-liner with one-line else.
+    if a < 0: print(-1) else: print(1)
+
+    # 7. elif one-liner chain.
+    int g = 2
+    if g == 1: print(11)
+    elif g == 2: print(22)
+    elif g == 3: print(33)
+    else: print(44)
+
+    # 8. Mixed: one-liner if, indented-block else.
+    if a > 100: print(999)
+    else:
+        print(8)
+        print(80)
+
+    # 9. Nested one-liners.
+    int outer = 3
+    if outer > 0:
+        if outer < 10: print("small")
+        else: print("large")
+
+    # 10. One-liner with assignment as the body.
+    int y = 10
+    if y > 5: y = 0
+    print(y)

@@ -216,19 +216,19 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::If)?;
         let condition = self.parse_expr()?;
-        let then_body = self.parse_block()?;
+        let then_body = self.parse_block_or_inline_stmt()?;
 
         let mut elif_branches = Vec::new();
         let mut else_body = None;
 
         while self.match_elif() {
             let elif_cond = self.parse_expr()?;
-            let elif_body = self.parse_block()?;
+            let elif_body = self.parse_block_or_inline_stmt()?;
             elif_branches.push((elif_cond, elif_body));
         }
 
         if self.match_keyword(Keyword::Else) {
-            else_body = Some(self.parse_block()?);
+            else_body = Some(self.parse_block_or_inline_stmt()?);
         }
 
         let end = self.previous_span();

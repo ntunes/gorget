@@ -408,6 +408,30 @@ impl Parser {
         self.match_token(&Token::Newline);
     }
 
+    /// Parse `: <body>` where `<body>` is either an indented block OR a
+    /// single statement on the same line ("if-one-liner"). Used by
+    /// `if` / `elif` / `else` statement-form bodies — mirrors Python's
+    /// `if x: stmt` shape. The colon must be the current token; advance
+    /// past it and dispatch on the next token (Newline → indented block,
+    /// anything else → single inline statement).
+    pub fn parse_block_or_inline_stmt(&mut self) -> Result<Block, ParseError> {
+        let start = self.peek_span();
+        self.expect(&Token::Colon)?;
+        if self.check(&Token::Newline) {
+            return self.parse_block_body(start);
+        }
+        // One-liner: parse a single statement at the post-colon position.
+        // The wrapper Block has one stmt and a span covering the colon
+        // through the stmt's end. `parse_stmt` consumes its own trailing
+        // newline so the outer `if`/`elif`/`else` chain composes cleanly.
+        let stmt = self.parse_stmt()?;
+        let end = stmt.span;
+        Ok(Block {
+            stmts: vec![stmt],
+            span: start.merge(end),
+        })
+    }
+
     /// Parse a body that is either an indented block (→ `Expr::Do`) or a
     /// single expression on the same line. Used by rethrow and catch.
     pub fn parse_body_or_expr(&mut self, start: Span) -> Result<Spanned<Expr>, ParseError> {
