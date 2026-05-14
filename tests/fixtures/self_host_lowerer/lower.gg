@@ -2985,6 +2985,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
                 else:
                     lower_fail("SCompoundAssign target is neither EIdentifier nor EFieldAccess")
+        case SFor(pat, iter_expr, body, _own, else_body):
+            lower_for(&ctx, pat, iter_expr, body, else_body, &gmod, is_main)
         else:
             lower_fail("unhandled in lower_stmt: " + stmt_kind(stmt))
 
@@ -3620,6 +3622,188 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
     # exhaustiveness yet so we keep a safe fall-through).
     set_terminator(&ctx, GTJump(merge_bb))
     switch_to(&ctx, merge_bb)
+
+# Lower `for pat in iter_expr: body` over Vector / Deque collections.
+#
+# Architecturally: ONE arm in `lower_stmt`, ONE scaffold here, parameterised
+# by collection type only at the element-extract step. This is intentionally
+# unified — the Rust frontend currently has SEVEN separate `lower_for_*`
+# functions (one each for array, dict, set, string, iterable, enumerate,
+# range) that duplicate ~80% scaffold; self-host's reference-grade answer
+# is the single-scaffold + per-type extractor split documented below.
+# See TODO `lower_for: iterator-protocol fallback for non-Vector iterables`
+# for the path to extending this beyond Vector/Deque.
+#
+# Desugar shape (matches the manual idiom users write today):
+#
+#   for x in coll:                       int idx = 0
+#       <body>                           int len = coll.len()
+#                                  →     while idx < len:
+#                                            auto x = coll.get(idx).unwrap()
+#                                            <body>
+#                                            idx = idx + 1
+#
+#   for (i, x) in coll.enumerate():      <same scaffold, additionally>
+#       <body>                       →   bind `i` to a fresh copy of idx
+#                                        per iteration (immutable snapshot)
+#
+# Element extract: routed through the canonical `coll.get(idx).unwrap()`
+# chain via `emit_payload_read` (the resource auto-clone makes the binding
+# independent of the collection — same semantics as the manual idiom). No
+# AST synthesis, no recursive `lower_stmt` round-trip.
+#
+# Drop discipline: `coll_local` is owned by the caller (we don't consume
+# it); `OpBorrow(coll_local)` is passed to `__len` and `__get`. The element
+# binding owns its cloned copy; standard scope-exit drops handle release.
+#
+# Continue/break: continue jumps to `incr_bb` (so idx advances); break to
+# `exit_bb`. Stacks pushed/popped around `lower_stmts(body, ...)`.
+#
+# for-else (else_body): rare in self-host; emits a `lower_fail` diagnostic
+# rather than silently dropping. Wire the Python-semantics version (runs
+# only when the loop completes without break) when a self-host site
+# actually needs it.
+void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
+    if else_body.len() > 0:
+        lower_fail("SFor with else-body not yet implemented")
+        return
+    # Strip `.enumerate()` if present and remember the binding shape.
+    SpannedExpr coll_expr = iter_expr
+    bool is_enumerate = false
+    match iter_expr.expr:
+        case EMethodCall(recv_box, mname, margs, _):
+            if mname == "enumerate" and margs.len() == 0:
+                coll_expr = SpannedExpr((*recv_box).expr, (*recv_box).span)
+                is_enumerate = true
+        else:
+            pass
+    # Lower the collection. coll_local stays owned by the caller across
+    # the whole loop — every iteration borrows it for `__len` / `__get`.
+    int coll_local = lower_expr(&ctx, coll_expr, &gmod)
+    String coll_tn = local_type_name(coll_local, &ctx, &gmod)
+    if not (coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__")):
+        # Iterator-protocol fallback would land here (`coll.iter()` +
+        # `.next()` until None). Filed in TODO `lower_for: iterator-
+        # protocol fallback`. Until then, fail loudly so we don't
+        # silently no-op a for-loop over a Dict/Set/String/Range/user-
+        # iterable — better to surface the gap than mask it.
+        lower_fail("SFor over non-Vector/Deque iterable not yet implemented (coll type: " + coll_tn + ")")
+        return
+    String elem_name = collection_element_type(coll_tn)
+    if elem_name == "":
+        lower_fail("SFor: could not resolve element type for " + coll_tn)
+        return
+    int elem_tid = resolve_elem_type_id(elem_name, &gmod)
+    # ── Iteration state ──────────────────────────────────────
+    int idx_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIAssign(idx_local, OpConstI64(0)))
+    int len_local = add_local(&ctx, I64_TYPE, NO_NAME)
+    Vector[Operand] len_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(len_local, coll_tn + "__len", len_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `idx < len ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(idx_local), OpCopy(len_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: extract element, bind pattern, lower body.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    switch_to(&ctx, body_bb)
+    # `auto elem = coll.get(idx).unwrap()` — direct GIR emission via the
+    # canonical chain. `emit_payload_read` auto-clones resource payloads
+    # so the binding is independent of the collection element.
+    String opt_name = "Option__" + elem_name
+    int opt_tid = lookup_or_register_named(&gmod, opt_name)
+    int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement())
+    Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
+    emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
+    int elem_local = emit_payload_read(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod)
+    # Pattern bindings. Single-binding for `for x in coll`; 2-tuple for
+    # `for (i, x) in coll.enumerate()`. The index binding gets a fresh
+    # local (immutable snapshot of idx); the element binding takes the
+    # already-cloned elem_local.
+    if is_enumerate:
+        match pat.pat:
+            case PTuple(parts):
+                if parts.len() == 2:
+                    bind_for_local(&ctx, parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
+                    bind_for_local(&ctx, parts.get(1).unwrap(), elem_local, elem_tid, &gmod)
+                else:
+                    lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+            else:
+                lower_fail("SFor enumerate: expected tuple pattern")
+    else:
+        bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    # Fall through to `incr_bb` unless body explicitly terminated.
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pass
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `idx = idx + 1; goto header`.
+    switch_to(&ctx, incr_bb)
+    int new_idx = add_local(&ctx, I64_TYPE, NO_NAME)
+    emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Bind a for-loop pattern part to a GIR local. Allocates a fresh named
+# local + emits the assignment (op_consume picks Move for owned resources,
+# Copy for primitives), mirroring SVarDecl's binding shape.
+void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, GirModule &gmod):
+    match pat.pat:
+        case PBinding(name):
+            int bound = add_local(&ctx, tid, Some(name.clone()))
+            emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local)))
+            nl_put(&ctx, name, bound)
+        case PWildcard:
+            pass
+        else:
+            lower_fail("SFor: only PBinding / PWildcard supported in for-loop pattern (got nested pattern)")
+
+# Map a collection element type name (as produced by collection_element_type)
+# to a GIR type id. Mirrors the resolution chain in the EMethodCall unwrap
+# path (lines ~2014-2042) — primitive C-level names first, named-type fallback
+# second.
+int resolve_elem_type_id(String elem_name, GirModule &gmod):
+    int prim = prim_name_to_type(elem_name)
+    if prim >= 0:
+        return prim
+    if elem_name == "int64_t":
+        return I64_TYPE
+    if elem_name == "int32_t":
+        return I32_TYPE
+    if elem_name == "int16_t":
+        return I16_TYPE
+    if elem_name == "int8_t":
+        return I8_TYPE
+    if elem_name == "uint64_t":
+        return U64_TYPE
+    if elem_name == "uint32_t":
+        return U32_TYPE
+    if elem_name == "uint16_t":
+        return U16_TYPE
+    if elem_name == "uint8_t":
+        return U8_TYPE
+    if elem_name == "double":
+        return F64_TYPE
+    if elem_name == "float":
+        return F32_TYPE
+    if elem_name == "Str":
+        return lookup_or_register_named(&gmod, "GorgetString")
+    return lookup_or_register_named(&gmod, elem_name)
 
 void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, GirModule &gmod, bool is_main):
     int header_bb = new_block(&ctx)

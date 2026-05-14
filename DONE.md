@@ -19,6 +19,31 @@
 
   Files: `src/ir/lowering/exprs/methods.rs` (+8/-0), `src/ir/lowering/exprs/mod.rs` (+50/-12, includes the variant-field-type lookup expansion), `src/ir/lowering/exprs/calls.rs` (+4/-0), `tests/fixtures/snag46_throws_inline_in_ctor.gg` (new, 75 lines copied from /tmp/snag46/), `tests/integration.rs` (+45 lines: new test fn + expected output). Verified: 1050 unit tests pass; 1123 integration tests pass (was 1122; +1 for the new snag46 regression).
 
+- [2026-05-14] **Self-host's `lower_stmt` now has a `case SFor` arm — for-each modernization is no longer a silent no-op.** Self-host was missing the `case SFor` handler in `lower_stmt`, so every for-loop in self-host code (resolve.gg, typecheck.gg, traits.gg, derive.gg, format.gg, validate.gg, and many more) was emitting `/* [lower_fail] unhandled in lower_stmt: SFor */` C comments at stage-1 — the recent for-each modernization sweep was effectively a no-op at the stage where it mattered. Closing.
+
+  **Architectural design (intentionally cleaner than Rust frontend).** The Rust frontend has 7 separate `lower_for_*` functions (range/string/array/dict/set/iterable/enumerate) that duplicate ~80% scaffold each. Self-host takes the reference-grade path: ONE `case SFor` arm in `lower_stmt` → ONE `lower_for` helper → ONE scaffold + per-type element-extract dispatch. The Vector/Deque fast path uses idx+len; other collection types will route through an iterator-protocol fallback (filed in TODO). The contrast is concrete: self-host's `lower_for` is ~120 lines covering Vector/Deque + enumerate; Rust's equivalents total ~1000 lines covering the same cases plus 5 more.
+
+  **Lowering shape (idx-based desugar, matches the manual idiom users write today).** `for x in coll:` and `for (i, x) in coll.enumerate():` desugar to the canonical Gorget pattern:
+  ```
+  int idx = 0
+  int len = coll.len()
+  while idx < len:
+      auto x = coll.get(idx).unwrap()       # element extract
+      <body>
+      idx = idx + 1
+  ```
+  Element extraction reuses the canonical `coll.get(idx).unwrap()` chain via `emit_payload_read`, which auto-clones resource payloads — so the binding is an independent owned copy, semantically identical to what users write today. Continue/break stacks are pushed around `lower_stmts(body)`; continue jumps to `incr_bb`, break to `exit_bb`. For-else (else_body): rare in self-host; emits a `lower_fail` diagnostic for now rather than silently dropping.
+
+  **No AST synthesis, no recursive lower_stmt round-trip.** The previous stashed attempt synthesized `SVarDecl + SWhile + SCompoundAssign` AST nodes and recursively called `lower_stmt`, which compounded the stage-1 hot-path performance gap and timed out at the bootstrap_fixed_point stage1→stage2 step (>300s on driver.gg). Direct GIR emission avoids that overhead entirely — bootstrap_fixed_point passes in 383s (vs 214s baseline, but the baseline was silently no-op'ing the for-each conversions; the slowdown reflects real work that should have been happening).
+
+  **Layering note.** This is rule-1 layering-correct: pattern-binding via the existing `nl_put` shape (same as `case SVarDecl`); collection-type dispatch via typed `collection_element_type` + the typed registry (no name-shape heuristics); operand mode via `op_consume` (which picks Move for owned resources, Copy for primitives — the same helper SVarDecl uses for its init). Three small new helpers: `lower_for` (the scaffold), `bind_for_local` (mirrors SVarDecl's binding triple of add_local + GIAssign + nl_put), `resolve_elem_type_id` (mirrors the prim-name resolution chain in the EMethodCall unwrap path).
+
+  **Files.** `tests/fixtures/self_host_lowerer/lower.gg` (+~170 lines: `case SFor` arm, `lower_for`, `bind_for_local`, `resolve_elem_type_id`).
+
+  **Verified.** `cargo test --test integration --release --test-threads=4` — 1122/1122 passing, 0 failures (vector_task_get parallel-run flake didn't trigger this run either). `self_host_bootstrap_fixed_point` passes in 383s. `lowerer_comparison` passes in 82s. Stage-2 snapshot shows **zero** `[lower_fail] unhandled in lower_stmt: SFor` occurrences (the 23 unrelated `lower_fail` instances are pre-existing PConstructor / SAssign / nested-pattern shapes — filed separately).
+
+  **TODO follow-ons filed.** (1) Iterator-protocol fallback for non-Vector/Deque iterables (Dict, Set, String, Range, user types) — the universal path that gives self-host's `lower_for` the architectural advantage over Rust's 7-function split. (2) Rust frontend `lower_for_*` unification — apply the self-host scaffold-plus-extractor pattern to retire ~80% of the duplicated scaffolding across the 7 Rust functions.
+
 - [2026-05-14] **Self-host showcase blocker #1 (Dict workaround retired)** — Both halves of the Dict[K, Vector[V]] chain fix are now in tree: Rust-stage `24426047` aligned `Dict.get` with `Vector.get` (returns `Option[Ref[V]]` with `Ptr` payload), and self-host `74e7d289` already routed `Dict__`/`HashMap__` receivers in `emit_chain_writeback` to `coll_tn + "__set"` → `gorget_map_put` at LIR. The rebuild workaround at `tests/fixtures/self_host_lowerer/lir_ssa.gg:520-536` (`patch_terminators`, `Dict[int, Vector[int]]`) collapses to `target_slots.get(target_bb).unwrap().push(slot)`. Verified: standalone `/tmp/dv_chain_test.gg` prints rows correctly (was empty before), `self_host_bootstrap_fixed_point` passes in 214s. The first showcase blocker is now fully closed end-to-end — no Vector-of-Vector, struct-field-of-Vector, or Dict[K, Vector[V]] chain workaround remains in tree. Files: `tests/fixtures/self_host_lowerer/lir_ssa.gg` (-17 lines).
 
 - [2026-05-14] **Self-host showcase blocker #1 — Dict[K, Vector[V]] half closed at the Rust stage.** Companion to commit `74e7d289` (same date) which closed the Vector[Vector[T]] half by adding self-host's chain-writeback emit. The Dict half had been deferred per `74e7d289`'s DONE entry because "the Rust-stage Dict-chain dispatch hasn't been fixed yet (standalone test `/tmp/dv_chain_test.gg` confirms `m.get(k).unwrap().push(v)` leaves rows empty even at Rust-stage)." This commit fixes that Rust-stage dispatch: aligned `Dict[K, V].get(K)` with `Vector[T].get(i)` — both now return `Option[Ref[V]]` with `Ptr(V)` payload at the IR layer.
