@@ -3667,28 +3667,50 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     if else_body.len() > 0:
         lower_fail("SFor with else-body not yet implemented")
         return
-    # Strip `.enumerate()` if present and remember the binding shape.
-    SpannedExpr coll_expr = iter_expr
-    bool is_enumerate = false
+    # Detect `.enumerate()` and strip it for the Vector/Deque fast path —
+    # if `recv` turns out to be Vector/Deque, the idx-based scaffold can
+    # bind both the index and the element directly. For non-Vector
+    # receivers we DON'T strip (the strip would be wrong: on user-defined
+    # iterables `coll.enumerate()` is just a regular method call returning
+    # a wrapper iterator). The probe is purely speculative; we commit to
+    # the strip only after type-checking `recv`.
+    SpannedExpr probe_coll = iter_expr
+    bool probe_is_enumerate = false
     match iter_expr.expr:
         case EMethodCall(recv_box, mname, margs, _):
             if mname == "enumerate" and margs.len() == 0:
-                coll_expr = SpannedExpr((*recv_box).expr, (*recv_box).span)
-                is_enumerate = true
+                probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
+                probe_is_enumerate = true
         else:
             pass
-    # Lower the collection. coll_local stays owned by the caller across
-    # the whole loop — every iteration borrows it for `__len` / `__get`.
-    int coll_local = lower_expr(&ctx, coll_expr, &gmod)
+    # Lower the probe receiver once. If it's Vector/Deque, the
+    # `probe_is_enumerate` strip was correct and we take the fast path.
+    # Otherwise the strip was wrong, but for non-Vector enumeration
+    # self-host has no in-tree use case today — fail loudly with a
+    # diagnostic and let the iterator-protocol path handle the
+    # non-enumerate variant.
+    int coll_local = lower_expr(&ctx, probe_coll, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
-    if not (coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__")):
-        # Iterator-protocol fallback would land here (`coll.iter()` +
-        # `.next()` until None). Filed in TODO `lower_for: iterator-
-        # protocol fallback`. Until then, fail loudly so we don't
-        # silently no-op a for-loop over a Dict/Set/String/Range/user-
-        # iterable — better to surface the gap than mask it.
-        lower_fail("SFor over non-Vector/Deque iterable not yet implemented (coll type: " + coll_tn + ")")
+    if coll_tn.starts_with("Vector__") or coll_tn.starts_with("Deque__"):
+        lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
         return
+    if probe_is_enumerate:
+        # Non-Vector `.enumerate()` — would need either (a) an iterator-
+        # protocol path that also threads an index counter, or (b) a
+        # surface-language rewrite to `coll.iter().enumerate()`. Neither
+        # is exercised in self-host today; fail with a precise message.
+        lower_fail("SFor enumerate over non-Vector/Deque iterable not yet implemented (coll type: " + coll_tn + ")")
+        return
+    # Iterator-protocol fallback — universal path for Dict/Set/String/
+    # Range/user-iterables. Calls `coll.iter()` (or treats `coll` as the
+    # iterator if no iter() exists) and loops on `next() → Option[T]`
+    # until None.
+    lower_for_iterator(&ctx, pat, coll_local, coll_tn, body, &gmod, is_main)
+
+# Vector/Deque fast path: idx-based scaffold matching the manual idiom
+# users write today (`int i = 0; while i < x.len(): T v = x.get(i).unwrap();
+# ...; i += 1`). Direct GIR emission, no recursive lower_stmt round-trip.
+void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_enumerate, Vector[Stmt] body, GirModule &gmod, bool is_main):
     String elem_name = collection_element_type(coll_tn)
     if elem_name == "":
         lower_fail("SFor: could not resolve element type for " + coll_tn)
@@ -3711,13 +3733,10 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     int cond_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
     emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(idx_local), OpCopy(len_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
-    # Body: extract element, bind pattern, lower body.
+    # Body: extract element via `coll.get(idx).unwrap()`, bind pattern.
     ctx.loop_continue_stack.push(incr_bb)
     ctx.loop_break_stack.push(exit_bb)
     switch_to(&ctx, body_bb)
-    # `auto elem = coll.get(idx).unwrap()` — direct GIR emission via the
-    # canonical chain. `emit_payload_read` auto-clones resource payloads
-    # so the binding is independent of the collection element.
     String opt_name = "Option__" + elem_name
     int opt_tid = lookup_or_register_named(&gmod, opt_name)
     int got_local = add_local_with(&ctx, opt_tid, NO_NAME, LoBorrowed(), BoCollectionElement())
@@ -3725,10 +3744,6 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
     int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
     int elem_local = emit_payload_read(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod)
-    # Pattern bindings. Single-binding for `for x in coll`; 2-tuple for
-    # `for (i, x) in coll.enumerate()`. The index binding gets a fresh
-    # local (immutable snapshot of idx); the element binding takes the
-    # already-cloned elem_local.
     if is_enumerate:
         match pat.pat:
             case PTuple(parts):
@@ -3742,7 +3757,6 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     else:
         bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
     lower_stmts(&ctx, body, &gmod, is_main)
-    # Fall through to `incr_bb` unless body explicitly terminated.
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:
         case GTNone():
@@ -3757,6 +3771,102 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
     emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
     set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Iterator-protocol fallback — universal path for any type with the
+# `iter()` / `next() → Option[T]` chain. Covers Dict, Set, String, Range,
+# and user-defined iterables (anything that equips `Iterator[T]` per
+# `lib/std/iter.gg`).
+#
+# Architectural choice: this is one helper, not seven (Rust frontend has
+# `lower_for_string` / `lower_for_dict` / `lower_for_set` / `lower_for_range`
+# / `lower_for_iterable` etc., each duplicating ~80% scaffold). Self-host's
+# single-scaffold-plus-extractor design works because we let the user-
+# defined `Iterator[T]` trait protocol carry the per-type knowledge — the
+# loop just calls `iter()` and `next()` by name and reads `Option[T]`.
+# Whatever T is, however .next() decides when to yield None, the scaffold
+# is identical.
+#
+# Lowered shape:
+#   auto __iter = coll.iter()       # or `__iter = coll` if coll IS already
+#                                   # an iterator (next() but no iter())
+#   while true:
+#       Option[T] step = __iter.next()
+#       <if step is Some(x):
+#           <pattern binding>
+#           <body>
+#           continue → header>
+#       <if step is None:
+#           break → exit>
+#
+# Continue jumps to the header (re-call next()); break to exit.
+void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    # Locate iter() and next() in fn_sigs. If coll has `iter()`, we call it
+    # and loop on the returned iterator. If coll has `next()` but no
+    # `iter()`, it IS an iterator — skip the iter() call.
+    String iter_fn = coll_tn + "__iter"
+    bool has_iter = gmod.fn_sigs.contains(iter_fn)
+    int iter_type_tid = -1
+    String iter_type_name = ""
+    if has_iter:
+        iter_type_tid = gmod.fn_sigs.get(iter_fn).unwrap()
+        iter_type_name = type_id_to_name(iter_type_tid, &gmod)
+    else:
+        iter_type_tid = ctx.locals.get(coll_local).unwrap().type_id
+        iter_type_name = coll_tn
+    String next_fn = iter_type_name + "__next"
+    if not gmod.fn_sigs.contains(next_fn):
+        lower_fail("SFor: no iter()/next() chain on type " + coll_tn + " (looked for " + iter_fn + " or " + next_fn + ")")
+        return
+    int opt_ret_tid = gmod.fn_sigs.get(next_fn).unwrap()
+    String opt_type_name = type_id_to_name(opt_ret_tid, &gmod)
+    if not opt_type_name.starts_with("Option__"):
+        lower_fail("SFor: " + next_fn + " return type isn't Option__T (got " + opt_type_name + ")")
+        return
+    String elem_name = opt_type_name.slice(8, opt_type_name.len())
+    int elem_tid = resolve_elem_type_id(elem_name, &gmod)
+    # Materialise the iterator. For `has_iter`, call coll.iter() once; the
+    # returned iterator is what every subsequent next() reads from. For
+    # the self-iterator case (`coll` IS an iterator), reuse coll_local.
+    int iter_local = coll_local
+    if has_iter:
+        iter_local = add_local(&ctx, iter_type_tid, NO_NAME)
+        Vector[Operand] iter_args = [OpBorrow(coll_local)]
+        emit(&ctx, GICallExtern(iter_local, iter_fn, iter_args))
+    # ── Block layout ────────────────────────────────────────
+    # No incr_bb — `.next()` advances internally, so continue goes back
+    # to the header (which re-calls next()).
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: step = iter.next(); branch on Some/None tag.
+    switch_to(&ctx, header_bb)
+    int step_local = add_local(&ctx, opt_ret_tid, NO_NAME)
+    Vector[Operand] next_args = [OpBorrow(iter_local)]
+    emit(&ctx, GICallExtern(step_local, next_fn, next_args))
+    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, step_local)
+    int tag_local = emit_tag_read(&ctx, scr_ptr, opt_type_name, &gmod)
+    int cmp_local = add_local(&ctx, BOOL_TYPE, NO_NAME)
+    # Option tag layout: 0 = Some, 1 = None (matches emit_tag_read's contract,
+    # mirroring the unwrap_or path at lines ~2055-2076).
+    emit(&ctx, GICmp(cmp_local, CMP_EQ, I64_TYPE, OpCopy(tag_local), OpConstI64(0)))
+    set_terminator(&ctx, GTBranch(OpCopy(cmp_local), body_bb, exit_bb))
+    # Body: extract payload, bind pattern, lower body, jump back to header.
+    ctx.loop_continue_stack.push(header_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    switch_to(&ctx, body_bb)
+    int elem_local = emit_payload_read(&ctx, scr_ptr, opt_type_name, "Some", 0, elem_tid, &gmod)
+    bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            set_terminator(&ctx, GTJump(header_bb))
+        else:
+            pass
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
     switch_to(&ctx, exit_bb)
 
 # Bind a for-loop pattern part to a GIR local. Allocates a fresh named

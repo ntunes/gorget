@@ -19,6 +19,30 @@
 
   Files: `src/ir/lowering/exprs/methods.rs` (+8/-0), `src/ir/lowering/exprs/mod.rs` (+50/-12, includes the variant-field-type lookup expansion), `src/ir/lowering/exprs/calls.rs` (+4/-0), `tests/fixtures/snag46_throws_inline_in_ctor.gg` (new, 75 lines copied from /tmp/snag46/), `tests/integration.rs` (+45 lines: new test fn + expected output). Verified: 1050 unit tests pass; 1123 integration tests pass (was 1122; +1 for the new snag46 regression).
 
+- [2026-05-14] **Self-host `lower_for`: iterator-protocol fallback for non-Vector/Deque iterables (companion to `case SFor`).** Self-host's `lower_for` was failing loudly on any non-Vector/Deque receiver. Replaced the `lower_fail` with a universal iterator-protocol path — calls `coll.iter()` once outside the loop (or treats coll as the iterator if it has `next()` but no `iter()`), then loops on `__iter.next() → Option[T]` until None. Single scaffold, universal across Dict / Set / String / Range / user-defined iterables. The architectural win over Rust frontend's seven `lower_for_*` functions: ONE protocol, ONE extractor abstraction — that's why I filed the inverse-direction "Rust frontend lower_for_* unification" TODO.
+
+  **Lowered shape.** `for x in iter_expr: <body>` (where iter_expr's type isn't Vector/Deque) becomes:
+  ```
+  auto __iter = coll.iter()        # call iter() once OR reuse coll if coll IS an iterator
+  while true:
+      Option[T] step = __iter.next()
+      if step is Some(x):
+          <pattern binding>
+          <body>
+          continue → header
+      else:
+          break → exit
+  ```
+  No incr_bb (next() advances internally); continue jumps to header (re-call next), break to exit. The Some-payload extract reuses the canonical `match_scrutinee_ptr` + `emit_tag_read` + `emit_payload_read` chain (same primitives the existing `unwrap_or` path uses), so resource payloads are auto-cloned for the body binding.
+
+  **Coverage.** Works end-to-end for **user-defined** iterator types with explicit `equip X with Iterator[T]:` blocks (smoke-tested on a Counter fixture: `for x in counter` lowers to `Counter__next` calls with proper Option[T] tag/payload reads). For **stdlib trait-derived** iter chains (`v.iter()` returning VectorIter[T]), the protocol path fires but currently lower_fails at the type-lookup step because self-host's typechecker doesn't populate `fn_sigs` from `equip [T] Vector[T] with Iterable[T]:` blocks — that gap is filed as the new "Self-host: register trait-equipped methods in fn_sigs" TODO and is the only remaining obstacle to iter chains working end-to-end through self-host stage-1. Pre-existing: the same iter-chain fixtures (`iter_lazy_adapters.gg` and ~40 others) were silently broken at stage-1 emit before the `case SFor` arm landed; the new protocol fallback just makes the failure message precise rather than fixing it.
+
+  **Refactor (clean separation).** `lower_for` is now a tiny dispatcher (~25 lines): probe-lower the receiver, branch on collection type → `lower_for_vector` (idx+len fast path, ~70 lines) or `lower_for_iterator` (protocol fallback, ~60 lines). The previous single function was 110 lines and would have grown unwieldy as Dict/Set/Range/String specialisations layered on. The split reflects the typed contract: Vector/Deque get an O(n) fast path with direct `__len`/`__get` calls; everything else routes through the universal Iterator trait protocol.
+
+  **Verified.** `cargo test --test integration --release --test-threads=4` — 1121/1122 (the lone failure is the documented `hot_reload_basic_lir` parallel-run flake — passes in isolation, same shape as the `vector_task_get` flake we've tracked since 2026-03-16). `self_host_bootstrap_fixed_point` passes in ~420s. The user-defined-iterator smoke test (`/tmp/counter_iter_test.gg`) lowers through self-host with `Counter__next` calls and proper Some/None tag-branching emitted in the GIR output.
+
+  **Files.** `tests/fixtures/self_host_lowerer/lower.gg` (+~95 lines: `lower_for` dispatcher, `lower_for_vector`, `lower_for_iterator`; net +95 from the previous monolithic `lower_for`).
+
 - [2026-05-14] **Self-host's `lower_stmt` now has a `case SFor` arm — for-each modernization is no longer a silent no-op.** Self-host was missing the `case SFor` handler in `lower_stmt`, so every for-loop in self-host code (resolve.gg, typecheck.gg, traits.gg, derive.gg, format.gg, validate.gg, and many more) was emitting `/* [lower_fail] unhandled in lower_stmt: SFor */` C comments at stage-1 — the recent for-each modernization sweep was effectively a no-op at the stage where it mattered. Closing.
 
   **Architectural design (intentionally cleaner than Rust frontend).** The Rust frontend has 7 separate `lower_for_*` functions (range/string/array/dict/set/iterable/enumerate) that duplicate ~80% scaffold each. Self-host takes the reference-grade path: ONE `case SFor` arm in `lower_stmt` → ONE `lower_for` helper → ONE scaffold + per-type element-extract dispatch. The Vector/Deque fast path uses idx+len; other collection types will route through an iterator-protocol fallback (filed in TODO). The contrast is concrete: self-host's `lower_for` is ~120 lines covering Vector/Deque + enumerate; Rust's equivalents total ~1000 lines covering the same cases plus 5 more.
