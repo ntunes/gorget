@@ -491,9 +491,9 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
 
 # ── Extract element type from iterable type ───────────────
 
-int extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
+Option[int] extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
     if iterable_type < 0 or iterable_type >= types.types.len():
-        return -1
+        return None()
 
     ResolvedType rt = get_rtype_at(types.types, iterable_type)
 
@@ -501,8 +501,8 @@ int extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
     match rt:
         case RTPrimitive(name):
             if name == "str" or name == "String":
-                return types.string_id
-            return -1
+                return Some(types.string_id)
+            return None()
         else:
             pass
 
@@ -512,19 +512,19 @@ int extract_element_type(int iterable_type, ScopeTable scopes, TypeTable types):
             DefInfo d = scopes.get_def(def_id)
             if d.name == "Vector" or d.name == "Set" or d.name == "HashSet":
                 if type_args.len() >= 1:
-                    return get_int_at(type_args, 0)
-            return -1
+                    return Some(get_int_at(type_args, 0))
+            return None()
 
         case RTArray(elem_id, size):
-            return elem_id
+            return Some(elem_id)
 
         case RTSlice(elem_id):
-            return elem_id
+            return Some(elem_id)
 
         else:
             pass
 
-    return -1
+    return None()
 
 # ── Assign is-pattern types from if/while conditions ──────
 
@@ -653,7 +653,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             walk_expr_closures(*obj, scope_id, &scopes, &types, ctx)
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
-            int elem_type = extract_element_type(obj_type, scopes, types)
+            int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)
             # Resolve full method signature for closure-arg type propagation.
             # This lets (r): body get its param typed when passed to a method
             # expecting Callable[ReturnType(ParamType)].
@@ -963,8 +963,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                     if method_name == "enumerate":
                         is_enumerate = true
                         int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, ctx)
-                        int elem_type = extract_element_type(obj_type, scopes, types)
-                        if elem_type >= 0:
+                        if extract_element_type(obj_type, scopes, types) is Some(elem_type):
                             # Create (int, T) tuple type
                             Vector[int] tuple_elems = Vector[int]()
                             tuple_elems.push(types.int_id)
@@ -974,8 +973,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 else:
                     pass
             if not is_enumerate:
-                int elem_type = extract_element_type(iter_type, scopes, types)
-                if elem_type >= 0:
+                if extract_element_type(iter_type, scopes, types) is Some(elem_type):
                     assign_pattern_types(pat, elem_type, scope_id, &scopes, &types)
             type_check_stmts(body, scope_id, &scopes, &types, ctx)
 
