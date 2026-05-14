@@ -521,19 +521,7 @@ void patch_terminators(LirFunction &f, Dict[int, bool] &promotable, Dict[int, in
             Vector[int] new_slots = [slot]
             target_slots.put(target_bb, !new_slots)
         else:
-            # Rust-stage Dict.get → Option[Ref[V]] alignment shipped 2026-05-14
-            # (commit f261820d). Self-host writeback for Dict shipped 2026-05-14
-            # (commit 74e7d289). With both halves in place, this rebuild
-            # workaround SHOULD collapse to `target_slots.get(target_bb).unwrap().push(slot)`.
-            # Pending bootstrap_fixed_point verification before retirement.
-            Vector[int] old_slots = target_slots.get(target_bb).unwrap()
-            Vector[int] new_slots2 = []
-            int osi = 0
-            while osi < old_slots.len():
-                new_slots2.push(old_slots.get(osi).unwrap())
-                osi += 1
-            new_slots2.push(slot)
-            target_slots.put(target_bb, !new_slots2)
+            target_slots.get(target_bb).unwrap().push(slot)
         akpi += 1
 
     # For each predecessor→target edge, collect args in param order.
