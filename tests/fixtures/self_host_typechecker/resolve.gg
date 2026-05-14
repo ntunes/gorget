@@ -143,13 +143,11 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
         scopes.define(cname, DkImport(), Span(0, 0))
 
     # Register Option[T] and Result[T,E] enum types with variants
-    int opt_def = scopes.define("Option", DkEnum(), Span(0, 0))
-    if opt_def >= 0:
+    if scopes.define("Option", DkEnum(), Span(0, 0)) is Some(_):
         scopes.define("Some", DkVariant(), Span(0, 0))
         scopes.define("None", DkVariant(), Span(0, 0))
 
-    int res_def = scopes.define("Result", DkEnum(), Span(0, 0))
-    if res_def >= 0:
+    if scopes.define("Result", DkEnum(), Span(0, 0)) is Some(_):
         scopes.define("Ok", DkVariant(), Span(0, 0))
         scopes.define("Error", DkVariant(), Span(0, 0))
 
@@ -350,8 +348,7 @@ void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, Resol
 
     # Define parameters (always mutable — can reassign params in body)
     for p in f.params:
-        int def_id = scopes.define_with_mutability(p.param_name, DkVariable(), Span(0, 0), true)
-        if def_id >= 0:
+        if scopes.define_with_mutability(p.param_name, DkVariable(), Span(0, 0), true) is Some(def_id):
             scopes.set_def_param(def_id, true)
 
     # Resolve body
@@ -390,9 +387,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 Vector[String] parts = inner.split(", ")
                 for part in parts:
                     if part != "_":
-                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                        def_id = scopes.define(part, DkVariable(), Span(0, 0)).unwrap_or(-1)
             else:
-                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                def_id = scopes.define(name, DkVariable(), Span(0, 0)).unwrap_or(-1)
             # Emit RES entry for bindings that captured their name span
             # (shared vars and select recv vars)
             if def_id >= 0 and name_span >= 0:
@@ -498,9 +495,9 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 match arm.op:
                     case SORecv(name, name_span, channel):
                         resolve_expr(channel, &scopes, &ctx)
-                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
-                        if def_id >= 0 and name_span >= 0:
-                            ctx.resolution_map.put(name_span, def_id)
+                        if scopes.define(name, DkVariable(), Span(0, 0)) is Some(def_id):
+                            if name_span >= 0:
+                                ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)
@@ -751,9 +748,9 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 Vector[String] parts = inner.split(", ")
                 for part in parts:
                     if part != "_":
-                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                        def_id = scopes.define(part, DkVariable(), Span(0, 0)).unwrap_or(-1)
             else:
-                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                def_id = scopes.define(name, DkVariable(), Span(0, 0)).unwrap_or(-1)
             if sk > 0 and def_id >= 0 and name_span >= 0:
                 ctx.resolution_map.put(name_span, def_id)
 
@@ -847,9 +844,9 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 match arm.op:
                     case SORecv(name, name_span, channel):
                         resolve_expr(channel, &scopes, &ctx)
-                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
-                        if def_id >= 0 and name_span >= 0:
-                            ctx.resolution_map.put(name_span, def_id)
+                        if scopes.define(name, DkVariable(), Span(0, 0)) is Some(def_id):
+                            if name_span >= 0:
+                                ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
                         resolve_expr(channel, &scopes, &ctx)
                         resolve_expr(value, &scopes, &ctx)

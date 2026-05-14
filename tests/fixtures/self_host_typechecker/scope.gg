@@ -123,10 +123,10 @@ equip ScopeTable:
         Scope s = get_scope_at(self.scopes, id)
         return s.parent
 
-    int define(&self, String name, DefKind kind, Span !span):
+    Option[int] define(&self, String name, DefKind kind, Span !span):
         return self.define_with_mutability(name, kind, span, false)
 
-    int define_with_mutability(&self, String name, DefKind kind, Span !span, bool is_mutable):
+    Option[int] define_with_mutability(&self, String name, DefKind kind, Span !span, bool is_mutable):
         # Check for existing definition in current scope using name table
         if self.find_name_entry(self.current, name.clone()) is Some(ni):
             return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
@@ -136,10 +136,10 @@ equip ScopeTable:
         self.name_scope_ids.push(self.current)
         self.name_keys.push(name)
         self.name_def_ids.push(def_id)
-        return def_id
+        return Some(def_id)
 
     # Try to replace or fail for duplicate definition (extracted for borrow checker)
-    int define_replace_or_fail(&self, int ni, String name, DefKind kind, Span !span, bool is_mutable):
+    Option[int] define_replace_or_fail(&self, int ni, String name, DefKind kind, Span !span, bool is_mutable):
         int existing_def_id = self.name_def_ids.get(ni).unwrap()
         DefInfo existing = get_def_at(self.definitions, existing_def_id)
         bool existing_is_import = def_kind_is_import(existing.kind)
@@ -162,9 +162,9 @@ equip ScopeTable:
             DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false)
             self.definitions.push(info)
             self.name_def_ids.set(ni, def_id)
-            return def_id
-        # Duplicate definition error — return NO_DEF to signal failure
-        return NO_DEF
+            return Some(def_id)
+        # Duplicate definition error — return None to signal failure
+        return None()
 
     # Allocate a definition without inserting into the current scope's name table.
     # Used for non-generic enum variants which have def_ids but aren't in scope.
