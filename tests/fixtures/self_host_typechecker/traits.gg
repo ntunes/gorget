@@ -43,11 +43,11 @@ TraitRegistry new_trait_registry():
 
 # ── Helpers: parallel-Vector lookup ──────────────────────────
 
-int find_method_index(Vector[String] names, String target):
+Option[int] find_method_index(Vector[String] names, String target):
     for (i, n) in names.enumerate():
         if n == target:
-            return i
-    return -1
+            return Some(i)
+    return None()
 
 # ── AST type helpers ───────────────────────────────────────
 # Walk a Type checking whether `name` appears as a bare TNamed (no args).
@@ -90,14 +90,12 @@ bool type_mentions_name(Type ty, String name):
 int resolve_with_bindings(Type ty, Vector[String] bind_names, Vector[int] bind_tids, ScopeTable scopes, TypeTable &types):
     match ty:
         case TSelf():
-            int sidx = find_method_index(bind_names, "Self")
-            if sidx >= 0:
+            if find_method_index(bind_names, "Self") is Some(sidx):
                 return bind_tids.get(sidx).unwrap()
             return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
         case TNamed(name, generic_args):
             if generic_args.len() == 0:
-                int idx = find_method_index(bind_names, name)
-                if idx >= 0:
+                if find_method_index(bind_names, name) is Some(idx):
                     return bind_tids.get(idx).unwrap()
             if generic_args.len() > 0:
                 if scopes.lookup(name) is Some(def_id):
@@ -585,8 +583,7 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
             # `VectorIter[int]` when the receiver is `Vector[int]`.
             # Mirrors what (a2) does for trait DEFAULT methods, but
             # for IMPL-OVERRIDE methods.
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
+            if find_method_index(impl.method_names, method) is Some(idx):
                 FunctionSig sig = impl.method_sigs.get(idx).unwrap()
                 if impl.method_return_types_ast.len() > idx and impl.impl_generic_params.len() > 0:
                     Type ret_ast = impl.method_return_types_ast.get(idx).unwrap()
@@ -599,13 +596,11 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
             if impl.trait_def_id != NO_DEF:
                 for tinfo in registry.traits:
                     if tinfo.def_id == impl.trait_def_id:
-                        int midx = find_method_index(tinfo.method_names, method)
-                        if midx >= 0:
+                        if find_method_index(tinfo.method_names, method) is Some(midx):
                             bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
                             if has_default:
                                 FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
-                                int sidx = find_method_index(tinfo.default_shape_names, method)
-                                if sidx >= 0:
+                                if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
                                     MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
                                     int subst_ret = substitute_default_return_generic(impl, tinfo, shape, recv_type_id, impl_bind_names, impl_bind_tids, scopes, &types)
                                     if subst_ret >= 0 and subst_ret != types.error_id:
@@ -616,25 +611,21 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
 MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String method, ScopeTable scopes, TypeTable &types):
     for impl in registry.impls:
         if impl.self_type == type_id and impl.trait_def_id == NO_DEF:
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
+            if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
+            if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
             for tinfo in registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
-                    int midx = find_method_index(tinfo.method_names, method)
-                    if midx >= 0:
+                    if find_method_index(tinfo.method_names, method) is Some(midx):
                         bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
                         if has_default:
                             FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
-                            int sidx = find_method_index(tinfo.default_shape_names, method)
-                            if sidx >= 0:
+                            if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
                                 MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
                                 int subst_ret = substitute_default_return(impl, tinfo, shape, scopes, &types)
                                 if subst_ret >= 0 and subst_ret != types.error_id:
@@ -712,8 +703,7 @@ bool primitive_satisfies_trait(String prim_name, String trait_name):
 MethodResolution intrinsic_resolve(TraitRegistry registry, String prim_name, int prim_type_id, int err_id, String method):
     for tinfo in registry.traits:
         if primitive_satisfies_trait(prim_name, tinfo.name):
-            int midx = find_method_index(tinfo.method_names, method)
-            if midx >= 0:
+            if find_method_index(tinfo.method_names, method) is Some(midx):
                 FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
                 FunctionSig substituted = substitute_self_placeholders(sig, prim_type_id, err_id)
                 return MethodResolution(true, substituted, tinfo.def_id)
@@ -738,15 +728,13 @@ FunctionSig substitute_self_placeholders(FunctionSig sig, int self_tid, int err_
 MethodResolution resolve_method_by_name(TraitRegistry registry, String type_name, String method):
     for impl in registry.impls:
         if impl.self_type_name == type_name:
-            int idx = find_method_index(impl.method_names, method)
-            if idx >= 0:
+            if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type_name == type_name and impl.trait_def_id != NO_DEF:
             for tinfo in registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
-                    int midx = find_method_index(tinfo.method_names, method)
-                    if midx >= 0:
+                    if find_method_index(tinfo.method_names, method) is Some(midx):
                         bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
                         if has_default:
                             return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
@@ -757,15 +745,13 @@ MethodResolution resolve_method_by_name(TraitRegistry registry, String type_name
 ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String method):
     for impl in registry.impls:
         if impl.self_type == type_id:
-            int idx = find_method_index(impl.shape_method_names, method)
-            if idx >= 0:
+            if find_method_index(impl.shape_method_names, method) is Some(idx):
                 return ShapeResolution(true, impl.shape_method_shapes.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
             for tinfo in registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
-                    int midx = find_method_index(tinfo.shape_method_names, method)
-                    if midx >= 0:
+                    if find_method_index(tinfo.shape_method_names, method) is Some(midx):
                         return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
     return not_found_shape()
 
