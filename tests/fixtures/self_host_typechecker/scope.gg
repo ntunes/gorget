@@ -128,8 +128,7 @@ equip ScopeTable:
 
     int define_with_mutability(&self, String name, DefKind kind, Span !span, bool is_mutable):
         # Check for existing definition in current scope using name table
-        int ni = self.find_name_entry(self.current, name.clone())
-        if ni >= 0:
+        if self.find_name_entry(self.current, name.clone()) is Some(ni):
             return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
         int def_id = self.definitions.len()
         DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false)
@@ -175,21 +174,20 @@ equip ScopeTable:
         self.definitions.push(info)
         return def_id
 
-    # Find name entry index in flat table (returns -1 if not found)
-    int find_name_entry(self, int scope_id, String name):
+    # Find name entry index in flat table (returns None if not found)
+    Option[int] find_name_entry(self, int scope_id, String name):
         int i = self.name_scope_ids.len() - 1
         while i >= 0:
             if self.name_scope_ids.get(i).unwrap() == scope_id:
                 if self.name_keys.get(i).unwrap() == name:
-                    return i
+                    return Some(i)
             i = i - 1
-        return NO_DEF
+        return None()
 
     Option[int] lookup(self, String name):
         int scope_id = self.current
         while scope_id >= 0:
-            int ni = self.find_name_entry(scope_id, name)
-            if ni >= 0:
+            if self.find_name_entry(scope_id, name) is Some(ni):
                 return Some(self.name_def_ids.get(ni).unwrap())
             Scope s = get_scope_at(self.scopes, scope_id)
             scope_id = s.parent
@@ -198,16 +196,14 @@ equip ScopeTable:
     Option[int] lookup_from_scope(self, int scope_id, String name):
         int sid = scope_id
         while sid >= 0:
-            int ni = self.find_name_entry(sid, name)
-            if ni >= 0:
+            if self.find_name_entry(sid, name) is Some(ni):
                 return Some(self.name_def_ids.get(ni).unwrap())
             Scope s = get_scope_at(self.scopes, sid)
             sid = s.parent
         return None()
 
     Option[int] lookup_in_scope(self, int scope_id, String name):
-        int ni = self.find_name_entry(scope_id, name)
-        if ni >= 0:
+        if self.find_name_entry(scope_id, name) is Some(ni):
             return Some(self.name_def_ids.get(ni).unwrap())
         return None()
 
@@ -215,8 +211,7 @@ equip ScopeTable:
     # Returns the first matching def_id or None.
     Option[int] lookup_in_subtree(self, int root_scope, String name):
         # Check root scope first
-        int ni = self.find_name_entry(root_scope, name)
-        if ni >= 0:
+        if self.find_name_entry(root_scope, name) is Some(ni):
             return Some(self.name_def_ids.get(ni).unwrap())
         # Check all child scopes (any scope whose parent chain includes root_scope)
         int sid = root_scope + 1
@@ -234,8 +229,7 @@ equip ScopeTable:
                 else:
                     p = ps.parent
             if is_child:
-                int cni = self.find_name_entry(sid, name)
-                if cni >= 0:
+                if self.find_name_entry(sid, name) is Some(cni):
                     return Some(self.name_def_ids.get(cni).unwrap())
             sid = sid + 1
         return None()
@@ -244,8 +238,7 @@ equip ScopeTable:
     # Used by assign_pattern_types to find the correct def when the same name
     # appears in multiple match arm scopes.
     Option[int] lookup_in_subtree_untyped(self, int root_scope, String name):
-        int ni = self.find_name_entry(root_scope, name)
-        if ni >= 0:
+        if self.find_name_entry(root_scope, name) is Some(ni):
             int did = self.name_def_ids.get(ni).unwrap()
             DefInfo d = get_def_at(self.definitions, did)
             if d.type_id < 0:
@@ -264,8 +257,7 @@ equip ScopeTable:
                 else:
                     p = ps.parent
             if is_child:
-                int cni = self.find_name_entry(sid, name)
-                if cni >= 0:
+                if self.find_name_entry(sid, name) is Some(cni):
                     int cdid = self.name_def_ids.get(cni).unwrap()
                     DefInfo cd = get_def_at(self.definitions, cdid)
                     if cd.type_id < 0:
