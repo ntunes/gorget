@@ -5,7 +5,7 @@
 # call-redirect map so the lowerer can rewrite bare call names.
 
 from parser import parse_source, parse_source_with_offset
-from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef
+from ast import Module, Item, ImportStmt, FunctionDef, EquipBlock, EnumDef, StructDef, SpannedExpr, SpannedType, SpannedPattern, Stmt, ElseBranch, MatchArm, SelectArm, SelectOp, Expr, Type, Pattern, TraitDef, Param
 from derive import expand_derives
 from std.fs import read_file, file_exists
 from std.collections import Vector, Dict
@@ -35,6 +35,382 @@ String parent_dir(String path):
     if last_slash >= 0:
         return path.slice(0, last_slash)
     return "."
+
+# ── std.iter auto-import ────────────────────────────────
+#
+# Helpers ported from `src/loader.rs:115` (`module_should_auto_load_std_iter`).
+# The check itself is **inlined** at the load_imports entry point — see
+# Self-host snag #5 in TODO.md: factoring it into a top-level helper
+# triggers a Rust-stage codegen bug on the `Vector[Item]` match. These
+# free helpers (name_is_iter_marker / type_mentions_iter / …) don't
+# top-level-match-on-Item and compile fine when called transitively.
+
+bool name_is_iter_marker(String name):
+    if name == "Iterator" or name == "Iterable" or name == "IntoIterable" or name == "Drainable":
+        return true
+    if name == "VectorIter" or name == "VectorDrain":
+        return true
+    if name == "TakeIter" or name == "SkipIter" or name == "ChainIter":
+        return true
+    if name == "MapIter" or name == "FilterIter":
+        return true
+    if name == "TakeWhileIter" or name == "DropWhileIter":
+        return true
+    if name == "FilterMapIter" or name == "InspectIter":
+        return true
+    if name == "EnumerateIter" or name == "ZipIter":
+        return true
+    if name == "WindowsIter" or name == "ChunksIter":
+        return true
+    if name == "DictIter" or name == "SetIter":
+        return true
+    if name == "sum_iter" or name == "product_iter":
+        return true
+    if name == "min_iter" or name == "max_iter":
+        return true
+    if name == "join_iter" or name == "set_iter":
+        return true
+    return false
+
+bool type_mentions_iter(SpannedType ty):
+    match ty.ty:
+        case TNamed(name, targs):
+            if name_is_iter_marker(name):
+                return true
+            int i = 0
+            while i < targs.len():
+                SpannedType ta = targs.get(i).unwrap()
+                if type_mentions_iter(ta):
+                    return true
+                i += 1
+            return false
+        case TTuple(elems):
+            int j = 0
+            while j < elems.len():
+                SpannedType te = elems.get(j).unwrap()
+                if type_mentions_iter(te):
+                    return true
+                j += 1
+            return false
+        case TFunction(ret_box, params, _):
+            SpannedType ret_ty = *ret_box
+            if type_mentions_iter(ret_ty):
+                return true
+            int k = 0
+            while k < params.len():
+                SpannedType pt = params.get(k).unwrap()
+                if type_mentions_iter(pt):
+                    return true
+                k += 1
+            return false
+        case TArray(elem_box, _):
+            SpannedType arr_elem = *elem_box
+            return type_mentions_iter(arr_elem)
+        case TSlice(elem_box):
+            SpannedType sl_elem = *elem_box
+            return type_mentions_iter(sl_elem)
+        else:
+            return false
+
+bool expr_mentions_iter(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EIdentifier(name):
+            return name_is_iter_marker(name)
+        case EMethodCall(recv_box, mname, args, _):
+            if mname == "iter" or mname == "drain":
+                return true
+            SpannedExpr recv_e = *recv_box
+            if expr_mentions_iter(recv_e):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_mentions_iter(a):
+                    return true
+                i += 1
+            return false
+        case ECall(callee_box, args, _):
+            SpannedExpr callee_e = *callee_box
+            if expr_mentions_iter(callee_e):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_mentions_iter(a):
+                    return true
+                i += 1
+            return false
+        case EStructLiteral(name, _, args):
+            if name_is_iter_marker(name):
+                return true
+            int i = 0
+            while i < args.len():
+                SpannedExpr a = args.get(i).unwrap()
+                if expr_mentions_iter(a):
+                    return true
+                i += 1
+            return false
+        case EBinaryOp(lhs_box, _, rhs_box):
+            SpannedExpr lhs_e = *lhs_box
+            SpannedExpr rhs_e = *rhs_box
+            return expr_mentions_iter(lhs_e) or expr_mentions_iter(rhs_e)
+        case EUnaryOp(_, inner_box):
+            SpannedExpr inner_e = *inner_box
+            return expr_mentions_iter(inner_e)
+        case EFieldAccess(obj_box, _):
+            SpannedExpr obj_e = *obj_box
+            return expr_mentions_iter(obj_e)
+        case EIndex(obj_box, idx_box):
+            SpannedExpr ix_obj = *obj_box
+            SpannedExpr ix_idx = *idx_box
+            return expr_mentions_iter(ix_obj) or expr_mentions_iter(ix_idx)
+        case EArrayLiteral(elems):
+            int i = 0
+            while i < elems.len():
+                SpannedExpr el = elems.get(i).unwrap()
+                if expr_mentions_iter(el):
+                    return true
+                i += 1
+            return false
+        case ETupleLiteral(elems):
+            int i = 0
+            while i < elems.len():
+                SpannedExpr el = elems.get(i).unwrap()
+                if expr_mentions_iter(el):
+                    return true
+                i += 1
+            return false
+        case EDictLiteral(keys, values):
+            int i = 0
+            while i < keys.len():
+                SpannedExpr k = keys.get(i).unwrap()
+                if expr_mentions_iter(k):
+                    return true
+                i += 1
+            int j = 0
+            while j < values.len():
+                SpannedExpr v = values.get(j).unwrap()
+                if expr_mentions_iter(v):
+                    return true
+                j += 1
+            return false
+        case EClosure(_, body):
+            return block_mentions_iter(body)
+        case EBlock(body):
+            return block_mentions_iter(body)
+        case EFString(_, fexprs):
+            int i = 0
+            while i < fexprs.len():
+                SpannedExpr fe = fexprs.get(i).unwrap()
+                if expr_mentions_iter(fe):
+                    return true
+                i += 1
+            return false
+        case EMove(inner_box):
+            SpannedExpr mv_e = *inner_box
+            return expr_mentions_iter(mv_e)
+        case EMutableBorrow(inner_box):
+            SpannedExpr mb_e = *inner_box
+            return expr_mentions_iter(mb_e)
+        case EDeref(inner_box):
+            SpannedExpr de_e = *inner_box
+            return expr_mentions_iter(de_e)
+        case ETry(inner_box):
+            SpannedExpr try_e = *inner_box
+            return expr_mentions_iter(try_e)
+        case EAwait(inner_box):
+            SpannedExpr aw_e = *inner_box
+            return expr_mentions_iter(aw_e)
+        case ESpawn(inner_box):
+            SpannedExpr sp_e = *inner_box
+            return expr_mentions_iter(sp_e)
+        case ESpawnBlocking(inner_box):
+            SpannedExpr spb_e = *inner_box
+            return expr_mentions_iter(spb_e)
+        case EImplicitClosure(body_box):
+            SpannedExpr ic_e = *body_box
+            return expr_mentions_iter(ic_e)
+        case EDefaultOp(lhs_box, rhs_box):
+            SpannedExpr do_lhs = *lhs_box
+            SpannedExpr do_rhs = *rhs_box
+            return expr_mentions_iter(do_lhs) or expr_mentions_iter(do_rhs)
+        case EAs(inner_box, target_ty_box):
+            SpannedExpr as_e = *inner_box
+            SpannedType as_ty = *target_ty_box
+            return expr_mentions_iter(as_e) or type_mentions_iter(as_ty)
+        case ERange(start_opt, end_opt):
+            match start_opt:
+                case Some(s_box):
+                    SpannedExpr s_e = *s_box
+                    if expr_mentions_iter(s_e):
+                        return true
+                case None:
+                    pass
+            match end_opt:
+                case Some(e_box):
+                    SpannedExpr e_e = *e_box
+                    if expr_mentions_iter(e_e):
+                        return true
+                case None:
+                    pass
+            return false
+        case EIf(cond_box, then_body, branches):
+            SpannedExpr if_cond = *cond_box
+            if expr_mentions_iter(if_cond):
+                return true
+            if block_mentions_iter(then_body):
+                return true
+            int i = 0
+            while i < branches.len():
+                ElseBranch eb = branches.get(i).unwrap()
+                match eb.condition:
+                    case Some(ec):
+                        if expr_mentions_iter(ec):
+                            return true
+                    case None:
+                        pass
+                if block_mentions_iter(eb.body):
+                    return true
+                i += 1
+            return false
+        case EMatch(scrut_box, arms):
+            SpannedExpr scrut_e = *scrut_box
+            if expr_mentions_iter(scrut_e):
+                return true
+            int i = 0
+            while i < arms.len():
+                MatchArm arm = arms.get(i).unwrap()
+                if block_mentions_iter(arm.body):
+                    return true
+                match arm.guard:
+                    case Some(g):
+                        if expr_mentions_iter(g):
+                            return true
+                    case None:
+                        pass
+                i += 1
+            return false
+        case EDo(body):
+            return block_mentions_iter(body)
+        else:
+            return false
+
+bool stmt_mentions_iter(Stmt s):
+    match s:
+        case SVarDecl(ty, _, init, _, _, _):
+            if type_mentions_iter(ty):
+                return true
+            return expr_mentions_iter(init)
+        case SAssign(target, value):
+            return expr_mentions_iter(target) or expr_mentions_iter(value)
+        case SCompoundAssign(target, _, value):
+            return expr_mentions_iter(target) or expr_mentions_iter(value)
+        case SExpr(expr):
+            return expr_mentions_iter(expr)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(e):
+                    return expr_mentions_iter(e)
+                case None:
+                    return false
+        case SThrow(expr):
+            return expr_mentions_iter(expr)
+        case SBreak(opt_e):
+            match opt_e:
+                case Some(e):
+                    return expr_mentions_iter(e)
+                case None:
+                    return false
+        case SIf(cond, then_body, branches):
+            if expr_mentions_iter(cond):
+                return true
+            if block_mentions_iter(then_body):
+                return true
+            int i = 0
+            while i < branches.len():
+                ElseBranch eb = branches.get(i).unwrap()
+                match eb.condition:
+                    case Some(ec):
+                        if expr_mentions_iter(ec):
+                            return true
+                    case None:
+                        pass
+                if block_mentions_iter(eb.body):
+                    return true
+                i += 1
+            return false
+        case SWhile(cond, body):
+            return expr_mentions_iter(cond) or block_mentions_iter(body)
+        case SFor(_, iter_expr, body, _, else_body):
+            if expr_mentions_iter(iter_expr):
+                return true
+            if block_mentions_iter(body):
+                return true
+            return block_mentions_iter(else_body)
+        case SLoop(body):
+            return block_mentions_iter(body)
+        case SMatch(scrut, arms):
+            if expr_mentions_iter(scrut):
+                return true
+            int i = 0
+            while i < arms.len():
+                MatchArm arm = arms.get(i).unwrap()
+                if block_mentions_iter(arm.body):
+                    return true
+                match arm.guard:
+                    case Some(g):
+                        if expr_mentions_iter(g):
+                            return true
+                    case None:
+                        pass
+                i += 1
+            return false
+        case SWith(expr, _, body):
+            return expr_mentions_iter(expr) or block_mentions_iter(body)
+        case SAssert(expr, _):
+            return expr_mentions_iter(expr)
+        case SAssertReturn(expr, _):
+            return expr_mentions_iter(expr)
+        case SNamedScope(_, body):
+            return block_mentions_iter(body)
+        case SOnError(body):
+            return block_mentions_iter(body)
+        case SSnapshot(_, _, expr):
+            return expr_mentions_iter(expr)
+        case SMetaFor(body):
+            return block_mentions_iter(body)
+        case SMetaIf(then_body, branches):
+            if block_mentions_iter(then_body):
+                return true
+            int i = 0
+            while i < branches.len():
+                ElseBranch eb = branches.get(i).unwrap()
+                if block_mentions_iter(eb.body):
+                    return true
+                i += 1
+            return false
+        else:
+            return false
+
+bool block_mentions_iter(Vector[Stmt] stmts):
+    int i = 0
+    while i < stmts.len():
+        Stmt s = stmts.get(i).unwrap()
+        if stmt_mentions_iter(s):
+            return true
+        i += 1
+    return false
+
+bool function_mentions_iter(FunctionDef f):
+    int i = 0
+    while i < f.params.len():
+        Param fp = f.params.get(i).unwrap()
+        if type_mentions_iter(fp.param_type):
+            return true
+        i += 1
+    if type_mentions_iter(f.return_type):
+        return true
+    return block_mentions_iter(f.body)
 
 # ── Module-path mangling ────────────────────────────────
 
@@ -88,6 +464,67 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
             else:
                 pass
         ii += 1
+
+    # Auto-load `std.iter` when the entry module mentions iter-related
+    # names without an explicit import — mirrors `src/loader.rs:131`.
+    # Unblocks ~40 stdlib_iter_* fixtures whose iter chains rely on the
+    # fn_sigs + transitive-discovery foundation but don't `from std.iter
+    # import …` explicitly. Inlined (not factored into helpers) because
+    # cross-function calls receiving `Module` trigger a Rust-stage codegen
+    # bug — see TODO entry for `Vector[Item]` match-binding miscompile.
+    bool already_imports_iter = false
+    bool shadows_vec_iter = false
+    bool mentions_iter = false
+    int auto_ii = 0
+    while auto_ii < m.items.len():
+        Item auto_item = m.items.get(auto_ii).unwrap()
+        match auto_item:
+            case IImport(auto_imp):
+                if auto_imp.module_path == "std.iter":
+                    already_imports_iter = true
+            case IStruct(auto_sdef):
+                if auto_sdef.name == "VectorIter":
+                    shadows_vec_iter = true
+            case IEnum(auto_edef):
+                if auto_edef.name == "VectorIter":
+                    shadows_vec_iter = true
+            case ITypeAlias(auto_tname, _, _):
+                if auto_tname == "VectorIter":
+                    shadows_vec_iter = true
+            case INewtype(auto_nname, _):
+                if auto_nname == "VectorIter":
+                    shadows_vec_iter = true
+            case ITrait(auto_td):
+                if auto_td.name == "VectorIter":
+                    shadows_vec_iter = true
+            case IFunction(auto_f):
+                if function_mentions_iter(auto_f):
+                    mentions_iter = true
+            case IEquip(auto_eqblk):
+                if type_mentions_iter(auto_eqblk.target):
+                    mentions_iter = true
+                match auto_eqblk.trait_name:
+                    case Some(auto_tn):
+                        if name_is_iter_marker(auto_tn):
+                            mentions_iter = true
+                    case None:
+                        pass
+                Vector[FunctionDef] auto_eq_methods = auto_eqblk.methods
+                int auto_emi = 0
+                while auto_emi < auto_eq_methods.len():
+                    FunctionDef auto_em = auto_eq_methods.get(auto_emi).unwrap()
+                    if function_mentions_iter(auto_em):
+                        mentions_iter = true
+                    auto_emi += 1
+            else:
+                pass
+        auto_ii += 1
+    if mentions_iter and not already_imports_iter and not shadows_vec_iter:
+        String auto_iter = "std.iter"
+        if not loaded.contains(auto_iter):
+            import_paths.push(auto_iter.clone())
+            import_mod_paths.push(auto_iter.clone())
+            loaded.put(auto_iter.clone(), true)
 
     # Load each imported module
     int pi = 0
