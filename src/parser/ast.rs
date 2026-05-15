@@ -135,6 +135,11 @@ pub struct FunctionDef {
     /// ABI language tag for inline extern declarations: `extern "C" int foo() = "symbol"`.
     /// Determines string param marshalling (Some("C") → String params become CStr).
     pub extern_abi: Option<String>,
+    /// `extern borrowed T f(...)`: the FFI returns a non-owned pointer
+    /// (e.g. SDL_GetError's internal buffer). Callers must clone at the
+    /// ownership boundary; the IR layer is expected to insert that clone.
+    /// Only meaningful for extern functions; ignored otherwise.
+    pub returns_borrowed: bool,
 }
 
 #[derive(Debug, Clone, Default)]

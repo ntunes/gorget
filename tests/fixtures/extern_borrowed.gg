@@ -1,0 +1,20 @@
+# Test parser acceptance of the `borrowed` qualifier on extern return types.
+#
+# `extern borrowed T f(...)` signals that f's return value is a non-owned
+# pointer (e.g. SDL_GetError's internal buffer). The compiler is expected
+# to auto-clone at the ownership boundary so the caller gets an owned
+# value. The auto-clone consumer is currently a TODO; this fixture
+# exercises the parser+AST surface and confirms the rest of the pipeline
+# tolerates the new qualifier without regressing the runtime behaviour of
+# non-Borrowed externs.
+
+extern "C":
+    # `borrowed int` — semantically the same as bare int for primitives
+    # (no pointer/heap involved). Exercises the parser+AST surface.
+    extern borrowed int _llabs_borrowed(int x) = "llabs"
+
+void main():
+    int a = _llabs_borrowed(-42)
+    int b = _llabs_borrowed(10)
+    print(f"{a}")
+    print(f"{b}")

@@ -246,6 +246,17 @@ pub struct Module {
     /// Per-function return ABI kind: fn_name → AbiKind.
     /// Populated from extern block ABI string + return type during pre-scan.
     pub fn_return_abis: rustc_hash::FxHashMap<String, abi::AbiKind>,
+    /// Set of extern function names whose return value is `borrowed` —
+    /// a non-owned pointer (e.g. SDL_GetError's internal buffer) that the
+    /// caller must clone before treating as owned. Populated from
+    /// `FunctionDef.returns_borrowed` for both the Gorget-side name and
+    /// the bound C symbol (so call-site lookups find it via either).
+    ///
+    /// **Consumer not yet wired** — the call-site auto-clone insertion is
+    /// a separate TODO. Until then this map carries the metadata so the
+    /// parser/AST surface compiles, but the runtime behaviour matches
+    /// the pre-`borrowed` semantics (no clone). See TODO.md.
+    pub fn_returns_borrowed: rustc_hash::FxHashSet<String>,
     /// Tier 2c (snag #23 class) — typed registry of shallow-copy
     /// heap-allocating consumer extern names.
     ///
@@ -311,6 +322,7 @@ impl Module {
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),
             fn_return_abis: rustc_hash::FxHashMap::default(),
+            fn_returns_borrowed: rustc_hash::FxHashSet::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
             consume_externs: rustc_hash::FxHashSet::default(),
         }
@@ -734,6 +746,12 @@ pub struct ExternDecl {
     pub is_variadic: bool,
     /// Per-parameter ABI marshalling kind. Empty = all Auto.
     pub param_abis: Vec<abi::AbiKind>,
+    /// `extern borrowed T f(...)` — the return value is a non-owned pointer
+    /// (e.g. SDL_GetError's internal buffer). The IR/LIR layer is expected
+    /// to insert a clone at the ownership boundary so the caller gets an
+    /// owned value. Currently parser/AST-side only; the auto-clone consumer
+    /// in call lowering is a TODO. See TODO.md for follow-on work.
+    pub returns_borrowed: bool,
 }
 
 #[cfg(test)]
@@ -794,6 +812,7 @@ mod tests {
             return_type: UNIT_TYPE,
             is_variadic: true,
             param_abis: vec![],
+            returns_borrowed: false,
         });
         assert!(module.has_callable("printf"));
         assert!(!module.has_callable("missing"));

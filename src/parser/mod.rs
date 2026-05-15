@@ -1574,6 +1574,7 @@ impl Parser {
                 start,
                 false,
                 None,
+                false,
             )?;
             Ok(Item::Function(func))
         } else {
@@ -1645,6 +1646,25 @@ impl Parser {
             }
         }
 
+        // `extern borrowed T f(...)` — the FFI return value is a non-owned
+        // pointer; the caller must clone at the ownership boundary. Only
+        // recognised here when `is_extern` is set; everywhere else `borrowed`
+        // remains a regular identifier (no keyword reservation breakage).
+        let returns_borrowed = if is_extern {
+            if let Token::Identifier(sym) = self.peek() {
+                if sym.as_str() == "borrowed" {
+                    self.advance();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         // Parse return type and function name (type-first: `ReturnType name(params):`)
         // Parse potentially comma-separated return types (bare tuple syntax).
         // e.g. `str, int, bool f(...)` desugars to `(str, int, bool) f(...)`.
@@ -1665,7 +1685,7 @@ impl Parser {
         let name = self.expect_name()?;
 
         let result = self.finish_function_def(
-            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi,
+            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi, returns_borrowed,
         );
         self.in_extern_c = prev_extern_c;
         result
@@ -1684,6 +1704,7 @@ impl Parser {
         start: Span,
         is_extern: bool,
         extern_abi: Option<String>,
+        returns_borrowed: bool,
     ) -> Result<FunctionDef, ParseError> {
         let generic_params = self.try_parse_generic_params()?;
 
@@ -1742,6 +1763,7 @@ impl Parser {
             span: start.merge(end),
             param_abis: vec![],
             extern_abi,
+            returns_borrowed,
         })
     }
 

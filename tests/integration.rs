@@ -3762,6 +3762,29 @@ fn import_alias() {
 }
 
 #[test]
+fn import_wildcard() {
+    run_gg("import_wildcard.gg", "\
+true
+7
+2
+4.000000
+2.000000
+0.000000
+1.000000");
+}
+
+#[test]
+fn extern_borrowed() {
+    // Parser+AST acceptance test for `extern borrowed T f(...)`. The
+    // auto-clone consumer is a TODO; for now this fixture exercises the
+    // new qualifier with a primitive return type (no pointer involved),
+    // so the runtime behaviour matches a bare `extern int` declaration.
+    run_gg("extern_borrowed.gg", "\
+42
+10");
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",

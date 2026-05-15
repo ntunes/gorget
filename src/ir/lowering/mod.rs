@@ -449,6 +449,7 @@ pub fn lower_module(
         return_type: I32_TYPE,
         is_variadic: true,
         param_abis: vec![],
+        returns_borrowed: false,
     });
 
     // Move type_registry into LoweringContext for the lowering phase
@@ -716,6 +717,12 @@ pub fn lower_module(
                         ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
                         ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
                     }
+                    // `extern borrowed T f(...)` — record the function as
+                    // returning a borrowed pointer (auto-clone TODO).
+                    if func.returns_borrowed {
+                        ctx.fn_returns_borrowed.insert(name.clone());
+                        ctx.fn_returns_borrowed.insert(c_symbol.clone());
+                    }
                 }
             } else if !matches!(func.body, FunctionBody::Declaration) {
                 if let Some(ref mangled) = mangled_name {
@@ -827,6 +834,15 @@ pub fn lower_module(
                     ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
                     if let FunctionBody::Extern(c_symbol) = &func.body {
                         ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
+                    }
+                }
+                // `extern borrowed T f(...)` → record the function as
+                // returning a borrowed pointer. The call-site auto-clone
+                // consumer is not yet wired (see TODO.md).
+                if func.returns_borrowed {
+                    ctx.fn_returns_borrowed.insert(name.clone());
+                    if let FunctionBody::Extern(c_symbol) = &func.body {
+                        ctx.fn_returns_borrowed.insert(c_symbol.clone());
                     }
                 }
             }
@@ -1950,6 +1966,7 @@ pub fn lower_module(
     module.fn_extern_abi_kinds = ctx.fn_extern_abi_kinds.clone();
     module.yield_point_fns = ctx.yield_point_fns.clone();
     module.fn_return_abis = ctx.fn_return_abis.clone();
+    module.fn_returns_borrowed = ctx.fn_returns_borrowed.clone();
 
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();
@@ -2920,6 +2937,7 @@ fn auto_register_externs(module: &mut Module) {
             return_type: I32_TYPE,
             is_variadic: true,
             param_abis: vec![],
+            returns_borrowed: false,
         });
     }
 }
