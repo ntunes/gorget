@@ -90,6 +90,10 @@ pub struct ResolveContext {
     /// Generic type parameter bounds for structs/enums:
     /// (param_names, [(param_name, [trait_name, ...])])
     pub struct_generic_bounds: FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
+    /// Map from import-alias local name → source-module name.
+    /// Populated for every `from X import Y as Z`; rewritten in pass 2.6.
+    /// Empty when no aliased imports exist in the entry file.
+    pub import_aliases: FxHashMap<String, String>,
 }
 
 impl ResolveContext {
@@ -103,6 +107,7 @@ impl ResolveContext {
             module_private_names: Vec::new(),
             file_module_scopes: FxHashMap::default(),
             struct_generic_bounds: FxHashMap::default(),
+            import_aliases: FxHashMap::default(),
         }
     }
 }
@@ -186,6 +191,27 @@ pub fn collect_top_level(
             }
         }
     }
+
+    // Third pass: handle aliased imports (`from X import Y as Z`).
+    // The placeholder `Z` was registered at parse time; the source name `Y`
+    // is now bound to the real def via the FileModule export pass. Rebind
+    // `Z` → that DefId so name lookups during body resolution find the
+    // right def. We also record `Z → Y` in `ctx.import_aliases` so that
+    // a post-resolve AST rewrite can rename `Z` references back to `Y` —
+    // the IR backend lowers calls by surface name, so without the rename
+    // it would emit references to the local alias instead of the real
+    // C symbol.
+    for item in &module.items {
+        if let Item::Import(ImportStmt::From { names, .. }) = &item.node {
+            for n in names {
+                if let Some(alias) = &n.alias {
+                    let _ = scopes.rebind_alias(&n.name.node, &alias.node);
+                    ctx.import_aliases.insert(alias.node.clone(), n.name.node.clone());
+                }
+            }
+        }
+    }
+
 
     // Validate: detect imports of private items.
     // After all FileModules have exported their public names and glob imports ran,
@@ -725,8 +751,9 @@ fn collect_import(import: &ImportStmt, scopes: &mut ScopeTable, errors: &mut Vec
             }
         }
         ImportStmt::From { names, glob_types, .. } => {
-            for name in names {
-                if let Err(e) = scopes.define(name.node.clone(), DefKind::Import, name.span) {
+            for n in names {
+                let local = n.local_name();
+                if let Err(e) = scopes.define(local.node.clone(), DefKind::Import, local.span) {
                     errors.push(e);
                 }
             }
@@ -2068,7 +2095,10 @@ struct Point:
         let import_item = Spanned {
             node: Item::Import(ImportStmt::From {
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
-                names: vec![Spanned { node: "helper".to_string(), span: Span::new(100, 106) }],
+                names: vec![ImportName {
+                    name: Spanned { node: "helper".to_string(), span: Span::new(100, 106) },
+                    alias: None,
+                }],
                 glob_types: vec![],
                 span: dummy,
             }),
@@ -2120,7 +2150,10 @@ struct Point:
         let import_item = Spanned {
             node: Item::Import(ImportStmt::From {
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
-                names: vec![Spanned { node: "public_fn".to_string(), span: Span::new(100, 109) }],
+                names: vec![ImportName {
+                    name: Spanned { node: "public_fn".to_string(), span: Span::new(100, 109) },
+                    alias: None,
+                }],
                 glob_types: vec![],
                 span: dummy,
             }),
@@ -2166,7 +2199,10 @@ struct Point:
         let import_item = Spanned {
             node: Item::Import(ImportStmt::From {
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
-                names: vec![Spanned { node: "Secret".to_string(), span: Span::new(200, 206) }],
+                names: vec![ImportName {
+                    name: Spanned { node: "Secret".to_string(), span: Span::new(200, 206) },
+                    alias: None,
+                }],
                 glob_types: vec![],
                 span: dummy,
             }),

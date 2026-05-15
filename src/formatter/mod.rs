@@ -715,8 +715,15 @@ impl Formatter {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
-                // Merge regular names and glob types (with .* suffix), then sort.
-                let mut sorted: Vec<String> = names.iter().map(|n| n.node.clone()).collect();
+                // Merge regular names (with optional `as` alias) and glob types
+                // (with .* suffix), then sort.
+                let mut sorted: Vec<String> = names
+                    .iter()
+                    .map(|n| match &n.alias {
+                        Some(a) => format!("{} as {}", n.name.node, a.node),
+                        None => n.name.node.clone(),
+                    })
+                    .collect();
                 for gt in glob_types {
                     sorted.push(format!("{}.*", gt.node));
                 }

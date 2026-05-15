@@ -1,0 +1,12 @@
+# Import aliasing: `from X import Y as Z`.
+#
+# Rebinds `sin` and `cos` from std.math under local aliases.
+# Also exercises mixed alias-and-bare list form (`a, b as B, c`).
+
+from std.math import sin as msin, cos as mcos, abs
+
+void main():
+    # sin(0) = 0, cos(0) = 1, abs(-3) = 3 (bare import still works).
+    print(f"{msin(0.0)}")
+    print(f"{mcos(0.0)}")
+    print(f"{abs(-3)}")

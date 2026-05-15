@@ -27,6 +27,461 @@ pub fn rewrite_struct_calls(module: &mut Module, resolution_map: &ResolutionMap,
     errors
 }
 
+/// Rewrite imported-alias names back to their source names throughout the
+/// (entry-file portion of the) module AST.
+///
+/// For each `from X import Y as Z` in the entry file, every reference to
+/// `Z` in identifier or path-head position is rewritten to `Y`. The IR
+/// backend lowers calls and lookups by surface name; without this rewrite,
+/// it would emit references to the local alias `Z` (which doesn't exist
+/// at the C-symbol layer) instead of the real `Y`.
+///
+/// The walk skips `Item::Module` wrappers (i.e. imported modules) — only
+/// the entry file's items see its aliases. Type-position rewrites also
+/// apply (struct/enum aliases could be imported under another name).
+pub fn rewrite_import_aliases(
+    module: &mut Module,
+    aliases: &rustc_hash::FxHashMap<String, String>,
+) {
+    if aliases.is_empty() {
+        return;
+    }
+    for item in &mut module.items {
+        if matches!(&item.node, Item::Module { .. }) {
+            // Imported modules use their own (unaliased) names.
+            continue;
+        }
+        rename_item(&mut item.node, aliases);
+    }
+}
+
+fn rename_item(item: &mut Item, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match item {
+        Item::Function(f) => rename_function(f, aliases),
+        Item::Equip(eq) => {
+            rename_type(&mut eq.type_.node, aliases);
+            if let Some(et) = &mut eq.trait_ {
+                rename_type(&mut et.trait_name.node, aliases);
+            }
+            for method in &mut eq.items {
+                rename_function(&mut method.node, aliases);
+            }
+        }
+        Item::Trait(t) => {
+            for trait_item in &mut t.items {
+                if let TraitItem::Method(f) = &mut trait_item.node {
+                    rename_function(f, aliases);
+                }
+            }
+        }
+        Item::Struct(s) => {
+            for field in &mut s.fields {
+                rename_type(&mut field.node.type_.node, aliases);
+            }
+        }
+        Item::Enum(e) => {
+            for variant in &mut e.variants {
+                if let VariantFields::Tuple(fields) = &mut variant.node.fields {
+                    for field in fields {
+                        rename_type(&mut field.node, aliases);
+                    }
+                }
+            }
+        }
+        Item::ConstDecl(c) => {
+            rename_type(&mut c.type_.node, aliases);
+            rename_expr(&mut c.value, aliases);
+        }
+        Item::StaticDecl(s) => {
+            rename_type(&mut s.type_.node, aliases);
+            rename_expr(&mut s.value, aliases);
+        }
+        Item::TypeAlias(ta) => {
+            rename_type(&mut ta.type_.node, aliases);
+        }
+        Item::Newtype(n) => {
+            rename_type(&mut n.inner_type.node, aliases);
+        }
+        Item::Test(t) => rename_block(&mut t.body, aliases),
+        Item::Bench(b) => rename_block(&mut b.body, aliases),
+        Item::SuiteSetup(s) => rename_block(&mut s.body, aliases),
+        Item::SuiteTeardown(s) => rename_block(&mut s.body, aliases),
+        Item::ExternBlock(eb) => {
+            for f in &mut eb.items {
+                rename_function(&mut f.node, aliases);
+            }
+        }
+        Item::Module { .. }
+        | Item::Import(_)
+        | Item::Directive(_)
+        | Item::MetaConst(_)
+        | Item::MetaType(_)
+        | Item::MetaTypeFunc(_)
+        | Item::MetaAssert(_)
+        | Item::MetaIf(_)
+        | Item::MetaLog(_) => {}
+    }
+}
+
+fn rename_function(f: &mut FunctionDef, aliases: &rustc_hash::FxHashMap<String, String>) {
+    rename_type(&mut f.return_type.node, aliases);
+    for p in &mut f.params {
+        rename_type(&mut p.node.type_.node, aliases);
+        if let Some(default) = &mut p.node.default {
+            rename_expr(default, aliases);
+        }
+    }
+    if let Some(throws) = &mut f.throws {
+        rename_type(&mut throws.node, aliases);
+    }
+    match &mut f.body {
+        FunctionBody::Block(b) => rename_block(b, aliases),
+        FunctionBody::Expression(e) => rename_expr(e, aliases),
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+    }
+}
+
+fn rename_block(block: &mut Block, aliases: &rustc_hash::FxHashMap<String, String>) {
+    for stmt in &mut block.stmts {
+        rename_stmt(&mut stmt.node, aliases);
+    }
+}
+
+fn rename_stmt(stmt: &mut Stmt, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match stmt {
+        Stmt::Expr(e) => rename_expr(e, aliases),
+        Stmt::VarDecl { type_, value, .. } => {
+            rename_type(&mut type_.node, aliases);
+            rename_expr(value, aliases);
+        }
+        Stmt::Return(opt) => {
+            if let Some(v) = opt {
+                rename_expr(v, aliases);
+            }
+        }
+        Stmt::Throw(e) => rename_expr(e, aliases),
+        Stmt::Break(opt) => {
+            if let Some(v) = opt {
+                rename_expr(v, aliases);
+            }
+        }
+        Stmt::Continue | Stmt::Pass => {}
+        Stmt::Assign { target, value } => {
+            rename_expr(target, aliases);
+            rename_expr(value, aliases);
+        }
+        Stmt::CompoundAssign { target, value, .. } => {
+            rename_expr(target, aliases);
+            rename_expr(value, aliases);
+        }
+        Stmt::While { condition, body, else_body } => {
+            rename_expr(condition, aliases);
+            rename_block(body, aliases);
+            if let Some(e) = else_body { rename_block(e, aliases); }
+        }
+        Stmt::Loop { body } => rename_block(body, aliases),
+        Stmt::For { iterable, body, else_body, .. } => {
+            rename_expr(iterable, aliases);
+            rename_block(body, aliases);
+            if let Some(e) = else_body { rename_block(e, aliases); }
+        }
+        Stmt::If { condition, then_body, elif_branches, else_body } => {
+            rename_expr(condition, aliases);
+            rename_block(then_body, aliases);
+            for (c, b) in elif_branches {
+                rename_expr(c, aliases);
+                rename_block(b, aliases);
+            }
+            if let Some(e) = else_body { rename_block(e, aliases); }
+        }
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            rename_expr(scrutinee, aliases);
+            for arm in arms {
+                rename_match_item(arm, aliases);
+            }
+            if let Some(e) = else_arm { rename_block(e, aliases); }
+        }
+        Stmt::Select { arms, else_arm } => {
+            for arm in arms {
+                rename_select_arm(arm, aliases);
+            }
+            if let Some(e) = else_arm { rename_block(e, aliases); }
+        }
+        Stmt::With { bindings, body } => {
+            for b in bindings {
+                rename_expr(&mut b.expr, aliases);
+            }
+            rename_block(body, aliases);
+        }
+        Stmt::Unsafe { body } | Stmt::OnError { body } | Stmt::NamedScope { body, .. } => {
+            rename_block(body, aliases);
+        }
+        Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
+            rename_expr(condition, aliases);
+            if let Some(m) = message { rename_expr(m, aliases); }
+        }
+        Stmt::Snapshot { value, .. } => rename_expr(value, aliases),
+        Stmt::Item(inner) => rename_item(inner, aliases),
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            rename_expr(condition, aliases);
+            rename_block(then_body, aliases);
+            for (c, b) in elif_branches {
+                rename_expr(c, aliases);
+                rename_block(b, aliases);
+            }
+            if let Some(e) = else_body { rename_block(e, aliases); }
+        }
+        Stmt::MetaFor { range, body, .. } => {
+            rename_expr(range, aliases);
+            rename_block(body, aliases);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            rename_expr(scrutinee, aliases);
+            for (case_expr, body) in arms {
+                rename_expr(case_expr, aliases);
+                rename_block(body, aliases);
+            }
+            if let Some(e) = else_arm { rename_block(e, aliases); }
+        }
+        Stmt::MetaWhile { condition, body, .. } => {
+            rename_expr(condition, aliases);
+            rename_block(body, aliases);
+        }
+        Stmt::MetaConst { value, .. } => rename_expr(value, aliases),
+        Stmt::MetaLog { args, .. } => {
+            for a in args { rename_expr(a, aliases); }
+        }
+    }
+}
+
+fn rename_match_item(item: &mut MatchItem, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match item {
+        MatchItem::Arm(arm) => rename_match_arm(arm, aliases),
+        MatchItem::MetaFor { range, arm_template, .. } => {
+            rename_expr(range, aliases);
+            rename_match_arm(arm_template, aliases);
+        }
+    }
+}
+
+fn rename_match_arm(arm: &mut MatchArm, aliases: &rustc_hash::FxHashMap<String, String>) {
+    if let Some(g) = &mut arm.guard {
+        rename_expr(g, aliases);
+    }
+    rename_expr(&mut arm.body, aliases);
+}
+
+fn rename_select_arm(arm: &mut SelectArm, aliases: &rustc_hash::FxHashMap<String, String>) {
+    rename_select_op(&mut arm.op, aliases);
+    rename_block(&mut arm.body, aliases);
+}
+
+fn rename_select_op(op: &mut SelectOp, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match op {
+        SelectOp::Recv { channel, type_, .. } => {
+            rename_type(&mut type_.node, aliases);
+            rename_expr(channel, aliases);
+        }
+        SelectOp::Send { channel, value, .. } => {
+            rename_expr(channel, aliases);
+            rename_expr(value, aliases);
+        }
+    }
+}
+
+fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match &mut expr.node {
+        Expr::Identifier(name) => {
+            if let Some(src) = aliases.get(name) {
+                *name = src.clone();
+            }
+        }
+        Expr::Path { segments } => {
+            // Only the head segment refers to a top-level binding. Subsequent
+            // segments are field/variant names within the head's type and
+            // must not be rewritten.
+            if let Some(first) = segments.first_mut() {
+                if let Some(src) = aliases.get(&first.node) {
+                    first.node = src.clone();
+                }
+            }
+        }
+        Expr::UnaryOp { operand, .. } => rename_expr(operand, aliases),
+        Expr::BinaryOp { left, right, .. } => {
+            rename_expr(left, aliases);
+            rename_expr(right, aliases);
+        }
+        Expr::Call { callee, args, generic_args } => {
+            rename_expr(callee, aliases);
+            if let Some(gs) = generic_args {
+                for g in gs {
+                    rename_type(&mut g.node, aliases);
+                }
+            }
+            for arg in args {
+                rename_expr(&mut arg.node.value, aliases);
+            }
+        }
+        Expr::MethodCall { receiver, args, generic_args, .. } => {
+            rename_expr(receiver, aliases);
+            if let Some(gs) = generic_args {
+                for g in gs {
+                    rename_type(&mut g.node, aliases);
+                }
+            }
+            for arg in args {
+                rename_expr(&mut arg.node.value, aliases);
+            }
+        }
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. }
+        | Expr::OptionalChain { object, .. } => rename_expr(object, aliases),
+        Expr::Index { object, index } => {
+            rename_expr(object, aliases);
+            rename_expr(index, aliases);
+        }
+        Expr::DefaultOp { lhs, rhs } => {
+            rename_expr(lhs, aliases);
+            rename_expr(rhs, aliases);
+        }
+        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+        | Expr::Deref { expr: inner } | Expr::Await { expr: inner }
+        | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
+            rename_expr(inner, aliases);
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            rename_expr(condition, aliases);
+            rename_expr(then_branch, aliases);
+            for (c, b) in elif_branches {
+                rename_expr(c, aliases);
+                rename_expr(b, aliases);
+            }
+            if let Some(eb) = else_branch {
+                rename_expr(eb, aliases);
+            }
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            rename_expr(scrutinee, aliases);
+            for arm in arms {
+                if let Some(g) = &mut arm.guard {
+                    rename_expr(g, aliases);
+                }
+                rename_expr(&mut arm.body, aliases);
+            }
+            if let Some(ea) = else_arm {
+                rename_expr(ea, aliases);
+            }
+        }
+        Expr::Block(b) | Expr::Do { body: b } => rename_block(b, aliases),
+        Expr::Closure { body, .. } => {
+            // Closure params carry an optional type annotation via ClosureParam,
+            // but those types are name-resolved by the resolver, not by us.
+            // We could walk them, but they're internal to the closure's scope.
+            // Body is the load-bearing path for renaming.
+            rename_expr(body, aliases);
+        }
+        Expr::ImplicitClosure { body } => rename_expr(body, aliases),
+        Expr::ListComprehension { expr: e, iterable, condition, .. } => {
+            rename_expr(e, aliases);
+            rename_expr(iterable, aliases);
+            if let Some(c) = condition { rename_expr(c, aliases); }
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            rename_expr(key, aliases);
+            rename_expr(value, aliases);
+            rename_expr(iterable, aliases);
+            if let Some(c) = condition { rename_expr(c, aliases); }
+        }
+        Expr::SetComprehension { expr: e, iterable, condition, .. } => {
+            rename_expr(e, aliases);
+            rename_expr(iterable, aliases);
+            if let Some(c) = condition { rename_expr(c, aliases); }
+        }
+        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            for e in elems { rename_expr(e, aliases); }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                rename_expr(k, aliases);
+                rename_expr(v, aliases);
+            }
+        }
+        Expr::StructLiteral { args, generic_args, name } => {
+            // The struct name itself can be an aliased import.
+            if let Some(src) = aliases.get(&name.node) {
+                name.node = src.clone();
+            }
+            if let Some(gs) = generic_args {
+                for g in gs { rename_type(&mut g.node, aliases); }
+            }
+            for a in args { rename_expr(a, aliases); }
+        }
+        Expr::As { expr: inner, type_ } => {
+            rename_expr(inner, aliases);
+            rename_type(&mut type_.node, aliases);
+        }
+        Expr::Is { expr: inner, .. } => rename_expr(inner, aliases),
+        Expr::Range { start, end, .. } => {
+            if let Some(s) = start { rename_expr(s, aliases); }
+            if let Some(e) = end { rename_expr(e, aliases); }
+        }
+        Expr::DotShorthand { args, .. } => {
+            for arg in args.iter_mut() {
+                rename_expr(&mut arg.node.value, aliases);
+            }
+        }
+        Expr::MetaOpInfix { left, right, .. } => {
+            rename_expr(left, aliases);
+            rename_expr(right, aliases);
+        }
+        Expr::Rethrow { expr, transform, .. } => {
+            rename_expr(expr, aliases);
+            rename_expr(transform, aliases);
+        }
+        Expr::Catch { expr, recovery, .. } => {
+            rename_expr(expr, aliases);
+            rename_expr(recovery, aliases);
+        }
+        Expr::StringLiteral(_, interp_exprs) => {
+            for e in interp_exprs {
+                rename_expr(e, aliases);
+            }
+        }
+        Expr::MetaOpToken(_) | Expr::IntLiteral(_) | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_) | Expr::NoneLiteral | Expr::SelfExpr | Expr::It => {}
+    }
+}
+
+fn rename_type(ty: &mut Type, aliases: &rustc_hash::FxHashMap<String, String>) {
+    match ty {
+        Type::Named { name, generic_args } => {
+            if let Some(src) = aliases.get(&name.node) {
+                name.node = src.clone();
+            }
+            for arg in generic_args {
+                rename_type(&mut arg.node, aliases);
+            }
+        }
+        Type::Tuple(elems) => {
+            for e in elems {
+                rename_type(&mut e.node, aliases);
+            }
+        }
+        Type::Array { element, .. } | Type::Slice { element } => {
+            rename_type(&mut element.node, aliases);
+        }
+        Type::Function { params, return_type, .. } => {
+            rename_type(&mut return_type.node, aliases);
+            for p in params {
+                rename_type(&mut p.node, aliases);
+            }
+        }
+        Type::Ref(inner) | Type::Owned(inner) => {
+            rename_type(&mut inner.node, aliases);
+        }
+        _ => {}
+    }
+}
+
 fn rewrite_item(item: &mut Item, res: &ResolutionMap, scopes: &ScopeTable, errors: &mut Vec<(SemanticErrorKind, Span)>) {
     match item {
         Item::Function(f) => rewrite_function(f, res, scopes, errors),

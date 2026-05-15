@@ -1343,7 +1343,9 @@ impl Parser {
 
         self.expect_keyword(Keyword::Import)?;
 
-        // Parse import names, detecting `EnumName.*` glob syntax
+        // Parse import names, detecting:
+        //  - `EnumName.*` glob syntax
+        //  - `Y as Z` alias syntax
         let mut names = Vec::new();
         let mut glob_types = Vec::new();
 
@@ -1351,7 +1353,12 @@ impl Parser {
         if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
             glob_types.push(first_name);
         } else {
-            names.push(first_name);
+            let alias = if self.match_keyword(Keyword::As) {
+                Some(self.expect_name()?)
+            } else {
+                None
+            };
+            names.push(ImportName { name: first_name, alias });
         }
 
         while self.match_token(&Token::Comma) {
@@ -1359,7 +1366,12 @@ impl Parser {
             if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
                 glob_types.push(name);
             } else {
-                names.push(name);
+                let alias = if self.match_keyword(Keyword::As) {
+                    Some(self.expect_name()?)
+                } else {
+                    None
+                };
+                names.push(ImportName { name, alias });
             }
         }
 

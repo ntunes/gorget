@@ -324,9 +324,10 @@ pub(super) fn collect_imported_defs(
                         }
                     }
                     ImportStmt::From { names, glob_types, .. } => {
-                        for name in names {
-                            if let Some(def_id) = scopes.lookup(&name.node) {
-                                out.push((def_id, name.node.clone(), name.span));
+                        for n in names {
+                            let local = n.local_name();
+                            if let Some(def_id) = scopes.lookup(&local.node) {
+                                out.push((def_id, local.node.clone(), local.span));
                             }
                         }
                         // Skip glob_types — enum type imports are used implicitly

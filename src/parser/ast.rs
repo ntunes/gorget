@@ -302,14 +302,31 @@ pub enum ImportStmt {
     },
     /// `from std.fmt import Displayable, format`
     /// Also supports glob: `from xtd.log import LogLevel.*`
+    /// Also supports aliasing: `from std.math import sin as msin`
     /// Glob names are in `glob_types`; they import the type + all its variants bare.
     From {
         path: Vec<Spanned<String>>,
-        names: Vec<Spanned<String>>,
+        names: Vec<ImportName>,
         /// Type names imported with `.*` — bring type + all variants into scope.
         glob_types: Vec<Spanned<String>>,
         span: Span,
     },
+}
+
+/// One name in a `from X import ...` list, optionally aliased with `as Z`.
+/// `name` is the source-module name; `alias` is the local rebinding (when present).
+#[derive(Debug, Clone)]
+pub struct ImportName {
+    pub name: Spanned<String>,
+    pub alias: Option<Spanned<String>>,
+}
+
+impl ImportName {
+    /// The name the import is bound under in the importing scope.
+    /// Equals `alias` when aliased, `name` otherwise.
+    pub fn local_name(&self) -> &Spanned<String> {
+        self.alias.as_ref().unwrap_or(&self.name)
+    }
 }
 
 impl ImportStmt {

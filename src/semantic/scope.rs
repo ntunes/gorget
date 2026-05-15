@@ -528,6 +528,30 @@ impl ScopeTable {
         best.map(|(_, name)| name)
     }
 
+    /// Rebind an Import-placeholder name in the current scope to point at the
+    /// same DefId as another name (used by `from X import Y as Z` after the
+    /// imported module's exports have been merged into the parent scope).
+    ///
+    /// Walks the parent chain to find `source_name`'s DefId, then overwrites
+    /// the `local_name` entry in the current scope's type and value namespaces.
+    /// Returns the source DefId on success, or `None` if `source_name` is not
+    /// in scope. Caller decides what to do on miss (likely no-op — the source
+    /// module didn't export the requested name, which is a different error).
+    pub fn rebind_alias(&mut self, source_name: &str, local_name: &str) -> Option<DefId> {
+        let src_id = self.lookup(source_name)?;
+        let scope = &mut self.scopes[self.current.0 as usize];
+        // Overwrite only entries that currently exist (i.e. the placeholder we
+        // registered at parse time). The placeholder was inserted into BOTH
+        // namespaces (DefKind::Import → Namespace::Both), so update both.
+        if scope.types.contains_key(local_name) {
+            scope.types.insert(local_name.to_string(), src_id);
+        }
+        if scope.values.contains_key(local_name) {
+            scope.values.insert(local_name.to_string(), src_id);
+        }
+        Some(src_id)
+    }
+
     /// Return all `(name, DefId)` pairs defined directly in the current scope.
     /// Combines both namespaces.
     pub fn names_in_current_scope(&self) -> Vec<(String, DefId)> {

@@ -31,6 +31,36 @@ fn test_from_import() {
 }
 
 #[test]
+fn test_from_import_alias() {
+    let module = parse("from std.math import sin as msin, cos as mcos\n");
+    assert_eq!(module.items.len(), 1);
+    if let Item::Import(ImportStmt::From { names, .. }) = &module.items[0].node {
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].name.node, "sin");
+        assert_eq!(names[0].alias.as_ref().unwrap().node, "msin");
+        assert_eq!(names[1].name.node, "cos");
+        assert_eq!(names[1].alias.as_ref().unwrap().node, "mcos");
+    } else {
+        panic!("expected From import");
+    }
+}
+
+#[test]
+fn test_from_import_mixed_alias() {
+    let module = parse("from std.math import sin, cos as mcos\n");
+    assert_eq!(module.items.len(), 1);
+    if let Item::Import(ImportStmt::From { names, .. }) = &module.items[0].node {
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0].name.node, "sin");
+        assert!(names[0].alias.is_none());
+        assert_eq!(names[1].name.node, "cos");
+        assert_eq!(names[1].alias.as_ref().unwrap().node, "mcos");
+    } else {
+        panic!("expected From import");
+    }
+}
+
+#[test]
 fn test_simple_import() {
     let module = parse("import std.io\n");
     assert_eq!(module.items.len(), 1);

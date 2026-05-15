@@ -3754,6 +3754,14 @@ fn fstring_cross_module_callee() {
 }
 
 #[test]
+fn import_alias() {
+    run_gg("import_alias.gg", "\
+0.000000
+1.000000
+3");
+}
+
+#[test]
 fn import_collides_with_user_def() {
     check_gg_fails(
         "import_collides_with_user_def.gg",
@@ -9895,7 +9903,10 @@ fn format_import_canonical(imp: &ImportStmt) -> String {
                 .join(".");
             let name_list = names
                 .iter()
-                .map(|s| s.node.as_str())
+                .map(|n| match &n.alias {
+                    Some(a) => format!("{} as {}", n.name.node, a.node),
+                    None => n.name.node.clone(),
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("from {module_path} import {name_list}")

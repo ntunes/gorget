@@ -208,6 +208,13 @@ pub fn analyze_with_source_dir(
     // Pass 1: Collect top-level definitions
     let mut resolve_ctx = resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors);
 
+    // Pass 1.5: Rewrite import-alias names back to their source names.
+    // `from X import Y as Z` is handled mostly in resolution (rebinding the
+    // placeholder), but the IR backend lowers identifiers by surface name —
+    // so we have to physically rename `Z → Y` in the AST before body resolution.
+    // No-op when no aliases were declared.
+    rewrite::rewrite_import_aliases(module, &resolve_ctx.import_aliases);
+
     // Pass 2: Resolve names in all bodies
     let mut resolution_map = resolve::resolve_bodies(module, &mut scopes, &mut types, &mut errors, &mut resolve_ctx.function_info, &mut resolve_ctx.function_body_scopes, &resolve_ctx.file_module_scopes);
     // Merge any resolutions collected during pass 1
