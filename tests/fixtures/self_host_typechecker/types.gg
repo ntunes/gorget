@@ -146,6 +146,15 @@ struct TypeTable:
     # method still demote, because their def lives in the method's
     # body scope, not the equip scope.
     int trait_equip_scope_id
+    # Per-expression resolved type side-table — key: SpannedExpr.span.start,
+    # value: index into `types` (a ResolvedType id). Written by
+    # `infer_expr_type` on every call; subsequent calls overwrite (the
+    # last computation wins, mirroring Rust's late-binding inference
+    # behavior). Read by the lowerer to consume typed metadata without
+    # reconstructing expression types from scratch. Layering rule 3:
+    # one source of truth per axis — the typechecker computes
+    # expression types, the lowerer reads them. (Gap #2 Phase 1.)
+    Dict[int, int] expr_types
 
 equip TypeTable:
 
@@ -171,7 +180,8 @@ equip TypeTable:
         # 8: never
         types.push(RTNever())
         TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo]())
-        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1)
+        Dict[int, int] empty_expr_types = Dict[int, int]()
+        return TypeTable(types, Dict[int, int](), 0, 1, 2, 3, 4, 5, 6, 7, 8, -1, Dict[String, int](), 0, 0, Dict[String, String](), 1, empty_reg, Dict[int, bool](), -1, empty_expr_types)
 
     int add_type(&self, ResolvedType !ty):
         int id = self.types.len()

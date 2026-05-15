@@ -5,8 +5,8 @@
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
-from scope import ScopeTable
-from types import TypeTable
+from scope import ScopeTable, DefInfo
+from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
 from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
@@ -665,6 +665,139 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
         else:
             pass
     return "int64_t"
+
+# ── ResolvedType → GIR translation (Gap #2 Phase 2) ─────
+#
+# The typechecker computes per-expression types into `types.expr_types`
+# (a side-table keyed by `SpannedExpr.span.start`). Self-host's lowerer
+# reads from there as typed metadata — single source of truth for
+# expression types (Layering rule 3). These helpers translate the
+# typechecker's `ResolvedType` representation into the GIR type-id
+# space that the lowerer uses elsewhere.
+#
+# The two functions mirror `type_to_c_name` / `map_ast_type` but start
+# from a `ResolvedType` id (an index into `types.types`) rather than
+# an AST `SpannedType`. Substitutions in `gmod.type_subs` still apply
+# at primitive leaves so generic-equip method bodies under active mono
+# subs translate consistently.
+
+String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModule &gmod):
+    if rtid < 0 or rtid >= types.types.len():
+        return "int64_t"
+    ResolvedType rt = types.types.get(rtid).unwrap()
+    match rt:
+        case RTPrimitive(pname):
+            if gmod.type_subs.contains(pname):
+                return type_id_to_name(gmod.type_subs.get(pname).unwrap(), &gmod)
+            return prim_to_c_name(pname)
+        case RTDefined(def_id):
+            DefInfo di = scopes.get_def(def_id)
+            String name = di.name
+            if gmod.type_subs.contains(name):
+                return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
+            if name == "String":
+                return "GorgetString"
+            return name
+        case RTGeneric(def_id, type_args):
+            DefInfo di = scopes.get_def(def_id)
+            String mangled = di.name
+            int i = 0
+            while i < type_args.len():
+                int arg_rtid = type_args.get(i).unwrap()
+                String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
+                mangled = mangled + "__" + arg_name
+                i += 1
+            return mangled
+        case RTRef(inner_rtid):
+            # References at the type-name level are transparent — the C
+            # name reflects the pointee. The pointer-ness comes back when
+            # we go through `resolved_to_gir_type` (registers a Ptr).
+            return resolved_to_c_name(inner_rtid, types, scopes, &gmod)
+        case RTTuple(elem_rtids):
+            String tup_name = "Tuple"
+            int ti = 0
+            while ti < elem_rtids.len():
+                int et = elem_rtids.get(ti).unwrap()
+                tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
+                ti += 1
+            return tup_name
+        case RTArray(elem_rtid, _):
+            return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
+        case RTSlice(elem_rtid):
+            return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
+        else:
+            return "int64_t"
+
+int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule &gmod):
+    if rtid < 0 or rtid >= types.types.len():
+        return I64_TYPE
+    ResolvedType rt = types.types.get(rtid).unwrap()
+    match rt:
+        case RTVoid():
+            return UNIT_TYPE
+        case RTNever():
+            return UNIT_TYPE
+        case RTError():
+            return I64_TYPE
+        case RTPrimitive(pname):
+            if gmod.type_subs.contains(pname):
+                return gmod.type_subs.get(pname).unwrap()
+            int prim_tid = prim_name_to_type(pname)
+            if prim_tid >= 0:
+                return prim_tid
+            if pname == "String" or pname == "str":
+                return lookup_or_register_named(&gmod, "GorgetString")
+            return lookup_or_register_named(&gmod, pname)
+        case RTDefined(def_id):
+            DefInfo di = scopes.get_def(def_id)
+            String name = di.name
+            if gmod.type_subs.contains(name):
+                return gmod.type_subs.get(name).unwrap()
+            if name == "String":
+                return lookup_or_register_named(&gmod, "GorgetString")
+            return lookup_or_register_named(&gmod, name)
+        case RTGeneric(def_id, type_args):
+            DefInfo di = scopes.get_def(def_id)
+            String mangled = di.name
+            int i = 0
+            while i < type_args.len():
+                int arg_rtid = type_args.get(i).unwrap()
+                String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
+                mangled = mangled + "__" + arg_name
+                i += 1
+            return lookup_or_register_named(&gmod, mangled)
+        case RTRef(inner_rtid):
+            int inner_tid = resolved_to_gir_type(inner_rtid, types, scopes, &gmod)
+            return register_ptr(&gmod, inner_tid)
+        case RTTuple(elem_rtids):
+            # Mirror `mangle_type_name` for tuples — register the mangled
+            # Tuple__T1__T2__... name and let downstream code register
+            # the struct shape (existing tuple-literal lowering does this).
+            String tup_name = "Tuple"
+            int ti = 0
+            while ti < elem_rtids.len():
+                int et = elem_rtids.get(ti).unwrap()
+                tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
+                ti += 1
+            return lookup_or_register_named(&gmod, tup_name)
+        case RTArray(elem_rtid, _):
+            # Arrays map to GorgetArray (the C-level Vector backing); the
+            # element type is metadata stored elsewhere (type_infos).
+            return lookup_or_register_named(&gmod, "GorgetArray")
+        case RTSlice(elem_rtid):
+            return lookup_or_register_named(&gmod, "GorgetArray")
+        else:
+            return I64_TYPE
+
+# Convenience: query the typechecker's per-expression type for a given
+# SpannedExpr (by span.start) and translate to GIR. Returns -1 if no
+# entry is recorded; callers should fall back to their existing path.
+int lookup_expr_gir_type(SpannedExpr sexpr, TypeTable types, ScopeTable scopes, GirModule &gmod):
+    int span_start = sexpr.span.start
+    if not types.expr_types.contains(span_start):
+        return -1
+    int rtid = types.expr_types.get(span_start).unwrap()
+    return resolved_to_gir_type(rtid, types, scopes, &gmod)
 
 int map_ast_type(SpannedType stype, GirModule &gmod):
     match stype.ty:
