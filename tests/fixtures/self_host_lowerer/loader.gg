@@ -412,6 +412,64 @@ bool function_mentions_iter(FunctionDef f):
         return true
     return block_mentions_iter(f.body)
 
+bool module_shadows_vector_iter(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item it = m.items.get(i).unwrap()
+        match it:
+            case IStruct(sdef):
+                if sdef.name == "VectorIter":
+                    return true
+            case IEnum(edef):
+                if edef.name == "VectorIter":
+                    return true
+            case ITypeAlias(name, _, _):
+                if name == "VectorIter":
+                    return true
+            case INewtype(name, _):
+                if name == "VectorIter":
+                    return true
+            case ITrait(td):
+                if td.name == "VectorIter":
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
+bool module_imports_std_iter(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item it = m.items.get(i).unwrap()
+        match it:
+            case IImport(imp):
+                if imp.module_path == "std.iter":
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
+bool ast_mentions_std_iter_need(Module m):
+    int i = 0
+    while i < m.items.len():
+        Item it = m.items.get(i).unwrap()
+        match it:
+            case IFunction(f):
+                if function_mentions_iter(f):
+                    return true
+            else:
+                pass
+        i += 1
+    return false
+
+bool should_auto_load_std_iter(Module m):
+    if module_shadows_vector_iter(m):
+        return false
+    if module_imports_std_iter(m):
+        return false
+    return ast_mentions_std_iter_need(m)
+
 # ── Module-path mangling ────────────────────────────────
 
 String mangle_prefix(String module_path):
@@ -465,61 +523,8 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                 pass
         ii += 1
 
-    # Auto-load `std.iter` when the entry module mentions iter-related
-    # names without an explicit import — mirrors `src/loader.rs:131`.
-    # Unblocks ~40 stdlib_iter_* fixtures whose iter chains rely on the
-    # fn_sigs + transitive-discovery foundation but don't `from std.iter
-    # import …` explicitly. Inlined (not factored into helpers) because
-    # cross-function calls receiving `Module` trigger a Rust-stage codegen
-    # bug — see TODO entry for `Vector[Item]` match-binding miscompile.
-    bool already_imports_iter = false
-    bool shadows_vec_iter = false
-    bool mentions_iter = false
-    int auto_ii = 0
-    while auto_ii < m.items.len():
-        Item auto_item = m.items.get(auto_ii).unwrap()
-        match auto_item:
-            case IImport(auto_imp):
-                if auto_imp.module_path == "std.iter":
-                    already_imports_iter = true
-            case IStruct(auto_sdef):
-                if auto_sdef.name == "VectorIter":
-                    shadows_vec_iter = true
-            case IEnum(auto_edef):
-                if auto_edef.name == "VectorIter":
-                    shadows_vec_iter = true
-            case ITypeAlias(auto_tname, _, _):
-                if auto_tname == "VectorIter":
-                    shadows_vec_iter = true
-            case INewtype(auto_nname, _):
-                if auto_nname == "VectorIter":
-                    shadows_vec_iter = true
-            case ITrait(auto_td):
-                if auto_td.name == "VectorIter":
-                    shadows_vec_iter = true
-            case IFunction(auto_f):
-                if function_mentions_iter(auto_f):
-                    mentions_iter = true
-            case IEquip(auto_eqblk):
-                if type_mentions_iter(auto_eqblk.target):
-                    mentions_iter = true
-                match auto_eqblk.trait_name:
-                    case Some(auto_tn):
-                        if name_is_iter_marker(auto_tn):
-                            mentions_iter = true
-                    case None:
-                        pass
-                Vector[FunctionDef] auto_eq_methods = auto_eqblk.methods
-                int auto_emi = 0
-                while auto_emi < auto_eq_methods.len():
-                    FunctionDef auto_em = auto_eq_methods.get(auto_emi).unwrap()
-                    if function_mentions_iter(auto_em):
-                        mentions_iter = true
-                    auto_emi += 1
-            else:
-                pass
-        auto_ii += 1
-    if mentions_iter and not already_imports_iter and not shadows_vec_iter:
+    # Auto-load `std.iter` via factored helper (REPRO of Snag #5).
+    if should_auto_load_std_iter(m):
         String auto_iter = "std.iter"
         if not loaded.contains(auto_iter):
             import_paths.push(auto_iter.clone())

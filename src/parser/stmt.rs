@@ -646,10 +646,25 @@ impl Parser {
                 has_mutable_prefix
             };
 
-            if !matches!(p.peek(), Token::Identifier(_)) {
-                return None;
-            }
-            let name = p.expect_identifier().ok()?;
+            // Accept either a plain identifier or the contextual keyword `it`
+            // as the binding name. Without the `it` branch, `Type it = expr`
+            // silently splits into two statements (an `Type` expression stmt
+            // followed by an `it = expr` assignment) because `it` is a
+            // keyword in expression position. The downstream lowerer then
+            // emits a unit-typed local with elided init — see Self-host
+            // snag #5. `it` as a binding name is unambiguous here (we've
+            // already consumed a type and expect `=`), so accept it. The
+            // implicit-closure-param meaning of `it` stays scoped to closure
+            // bodies via name resolution — any binding shadows it locally.
+            let name = match p.peek() {
+                Token::Identifier(_) => p.expect_identifier().ok()?,
+                Token::Keyword(Keyword::It) => {
+                    let span = p.peek_span();
+                    p.advance();
+                    Spanned::new("it".to_string(), span)
+                }
+                _ => return None,
+            };
 
             p.match_token(&Token::Eq)
                 .then_some((is_mutable, type_, name))

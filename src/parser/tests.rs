@@ -298,6 +298,32 @@ fn test_var_decl() {
 }
 
 #[test]
+fn test_var_decl_with_it_binding() {
+    // Regression for Self-host snag #5: `Type it = expr` used to silently
+    // split into two statements (an expr stmt + an assignment to the `it`
+    // keyword) because `it` is the implicit-closure-parameter keyword.
+    // The downstream lowerer then emitted a unit-typed local with elided
+    // init, miscompiling the function. The parser now accepts `it` as a
+    // binding name in var-decl position.
+    let module = parse("void main():\n    int it = 5\n");
+    if let Item::Function(ref f) = module.items[0].node {
+        if let FunctionBody::Block(ref block) = f.body {
+            assert_eq!(block.stmts.len(), 1);
+            assert!(matches!(&block.stmts[0].node, Stmt::VarDecl { is_const: false, .. }));
+            if let Stmt::VarDecl { ref pattern, .. } = block.stmts[0].node {
+                assert!(matches!(&pattern.node, Pattern::Binding(name) if name == "it"));
+            } else {
+                panic!("Expected VarDecl");
+            }
+        } else {
+            panic!("Expected block body");
+        }
+    } else {
+        panic!("Expected function");
+    }
+}
+
+#[test]
 fn test_const_var_decl() {
     let module = parse("void main():\n    const int y = 10\n");
     if let Item::Function(ref f) = module.items[0].node {

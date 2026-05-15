@@ -22,14 +22,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
   Pri order: (1) closes the visible `[bug] EFieldAccess` on mono'd iter structs (~40 stdlib_iter_* fixtures gated on this); (2) when needed by a regression. [updated: 2026-05-15 — fn_sigs core + transitive discovery + auto-import shipped this session]
 
-- **Self-host snag #5: Rust-stage codegen miscompiles `Vector[Item]` match-binding when a function with `match` on a top-level enum is called from `load_imports`.** Surfaced 2026-05-15 during std.iter auto-import work. Symptom: when `should_auto_load_std_iter(m)` (a helper that internally does `match item: case IStruct(sdef): …` over `Vector[Item]`) is **called from** `load_imports`, the C codegen for the called function's match arm emits `__s8 = items.cap` (length read) into the `__gg_StructDef`-typed slot — incompatible-types C error. The SAME function compiles correctly when its body is left in place but never called: only the call activation triggers the bug.
-
-  Workaround in tree: the auto-import logic is inlined directly into `load_imports` (no cross-function call) — see `tests/fixtures/self_host_lowerer/loader.gg::load_imports` "Auto-load std.iter" block. Helpers `name_is_iter_marker` / `type_mentions_iter` / `expr_mentions_iter` / `stmt_mentions_iter` / `block_mentions_iter` / `function_mentions_iter` are still factored because none of them top-level-`match`-on-`Item`; the bug is specifically about the `Vector[Item]` iteration + match.
-
-  Repro: split the inlined block back into a helper `bool should_auto_load_std_iter(Module m)` and replace the inline check with `if should_auto_load_std_iter(m):`. The build fails with the C type-mismatch chain. Minimal isolated `.gg` files with the same pattern compile fine, so it requires the full `loader.gg` context — likely involves Rust-stage's safety-pass or layout inference reacting to the call-graph shape.
-
-  Fix locus: Rust frontend (probably `src/ir/lowering/stmts/match_stmt.rs` or `src/semantic/safety/check_expr.rs`'s match-binding analysis). Investigation should compare the emitted GIR for the helper before and after wiring up the call site. [added: 2026-05-15]
-
 - **Rust frontend: unify the 7 `lower_for_*` functions into a single scaffold + per-type element extractor.** Architectural cleanup opportunity surfaced by the self-host's `case SFor` work (2026-05-14). `src/ir/lowering/stmts/for_loops.rs` has 1159 lines covering 7 collection-specific lowering functions, each duplicating ~80% scaffold. Self-host's reference-grade `lower_for` (in `tests/fixtures/self_host_lowerer/lower.gg`) demonstrates the cleaner shape: ONE scaffold parameterised at the element-extract step (`lower_for_vector` fast path + `lower_for_iterator` protocol fallback). Rust frontend should mirror this.
 
   **Inventory** (`src/ir/lowering/stmts/for_loops.rs`):
