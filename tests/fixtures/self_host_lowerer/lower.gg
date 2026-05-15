@@ -2354,6 +2354,29 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         inner_tid = inner
                     else:
                         pass
+            # Box auto-deref: `box.field` is sugar for `(*box).field` — peel
+            # the Box wrapper so the field lookup hits the inner struct's
+            # fields, not Box's (which has no user fields). Without this,
+            # `expr.span` where `expr` is `Box[SpannedExpr]` (auto-boxed
+            # parameter, etc.) silently fell into the [bug] OpConstI64(0)
+            # placeholder. The inner-name extraction mirrors `case EDeref`'s
+            # byte-by-byte loop — stage-1 self-host's `.slice(5, len)` on
+            # a Box-prefixed type name returns empty for view-aliasing
+            # reasons (see EDeref comment at line ~2549), so we walk bytes.
+            if base_type_name.starts_with("Box__"):
+                int blen = base_type_name.byte_len()
+                String inner_name = ""
+                int bi = 5
+                while bi < blen:
+                    inner_name = inner_name + chr(base_type_name.byte_at(bi))
+                    bi += 1
+                int box_inner_tid = resolve_field_gir_type(inner_name, &gmod)
+                int derefed = add_local(&ctx, box_inner_tid, NO_NAME)
+                emit(&ctx, GIDeref(derefed, base, box_inner_tid))
+                base = derefed
+                base_tid = box_inner_tid
+                base_type_name = inner_name
+                inner_tid = box_inner_tid
             # Look up field info from type_infos. Resolve to
             # (field_name, field_type_name, field_index) tuples without
             # cloning the whole GirTypeInfo — the Vector clone path

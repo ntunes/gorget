@@ -1,5 +1,19 @@
 # DONE
 
+- [2026-05-15] **Self-host: three residual `[bug] EFieldAccess: unknown field` diagnostics in stage-2 output retired.** Follow-on to yesterday's `[lower_fail]` audit. Stage-2.c now has ZERO self-host-emitted diagnostic comments (both `[lower_fail]` and `[bug]` shapes are gone).
+
+  **Bug 1: `Parser__parse_statement: 'span' on 'SpannedToken'`.** Typo in `parser.gg:2633`: `snap_name_span = snap_name_tok.span`. `SpannedToken` (struct at `lexer.gg:86`) has `lex_token` / `lex_start` / `lex_end` — no `.span` field. `snap_name_span` is declared `int`; the intended access was `.lex_start` (the start byte position). **Fix:** one-line correction, `snap_name_tok.span` → `snap_name_tok.lex_start`.
+
+  **Bug 2: `resolve___resolve_expr: 'span' on 'Box__SpannedExpr'`.** Self-host's `lower.gg::EFieldAccess` handler peeled `GtPtr` / `GtMutPtr` (lines ~2348-2356) but didn't auto-deref Box-wrapped named types (`Box__T`). So `expr.span` where `expr` is `Box[SpannedExpr]` (auto-boxed parameter) failed the field lookup — Box has no user fields — and fell into the `OpConstI64(0)` placeholder. **Fix:** added a Box auto-deref step to the EFieldAccess handler: when `base_type_name.starts_with("Box__")`, emit a `GIDeref` to extract the inner T, then continue the field lookup against T's fields. Mirrors `case EDeref`'s existing Box handling (including the byte-by-byte inner-name extraction — stage-1 self-host's `.slice(5, len)` on a Box-prefixed type name returns empty for view-aliasing reasons, see EDeref comment at line ~2549).
+
+  **Bug 3: `resolve___resolve_expr: 'start' on 'int64_t'`.** Cascade from Bug 2 — once `.span` on `Box__SpannedExpr` fell into the I64 placeholder, the chained `.start` on that placeholder failed too (int64_t has no fields). Closing Bug 2 closes Bug 3 automatically.
+
+  **Layering note** — rule-1 layering-correct: Box's value-vs-pointer-ness was already typed metadata (`build_resource_metadata` returns `BkRegularBox` for parameterised boxes), but the EFieldAccess handler wasn't consulting it. The fix is a write-through — when the type registry says "this is a Box," emit the deref. No name-shape heuristics: the `starts_with("Box__")` check is the standard mangled-name protocol shared with EDeref and the C-emit boundary, not an ad-hoc string check.
+
+  **Verified.** `cargo test --test integration --release --test-threads=4` → 1123/1123 passing, 0 failures, 0 flake. `self_host_bootstrap_fixed_point` passes in 371s. Stage-2 snapshot has ZERO `[bug]` AND ZERO `[lower_fail]` comments. The 20 remaining `lower_fail` / `bug` string occurrences in stage-2 are the format-string literals + runtime helper definitions — no actual emitted diagnostics.
+
+  **Files.** `tests/fixtures/self_host_typechecker/parser.gg` (+1/-1 line: typo fix). `tests/fixtures/self_host_lowerer/lower.gg` (+~18 lines: Box auto-deref step in EFieldAccess).
+
 - [2026-05-14] **Self-host: three residual `[lower_fail]` patterns in stage-2 output retired.** Audited stage-2.c after the case SFor + iterator-protocol work — six `[lower_fail]` comments across three distinct shapes, each a silent gap in self-host's lowering. Closing all three.
 
   **Pattern 1: SAssign target EIt** (3 sites in `infer.gg` lines 581/585/589). `int it = ...; return it` shape. Self-host's lexer tokenizes `it` as the implicit-closure keyword (TkIt → EIt), so the parser couldn't recognize `int it = ...` as a var-decl (try_detect_var_decl's TOK_IDENT check fails on a keyword) and parsed it as two statements: SExpr(int) + SAssign(EIt, ...). The lowerer's SAssign target check only handles EIdentifier / EFieldAccess / EIndex; EIt fell to the fallback. **Fix:** the intermediate variable was a smell anyway — inlined to `return X` at all 3 sites. Idiomatic Gorget.

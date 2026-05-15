@@ -2630,7 +2630,7 @@ equip Parser:
             if self.check_tok(TOK_STRING):
                 SpannedToken snap_name_tok = self.advance()
                 snap_name = token_string_val(snap_name_tok.lex_token)
-                snap_name_span = snap_name_tok.span
+                snap_name_span = snap_name_tok.lex_start
             SpannedExpr snap_val = self.parse_expr()
             return SSnapshot(snap_name, snap_name_span, snap_val)
 
