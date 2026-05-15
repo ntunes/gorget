@@ -2543,7 +2543,35 @@ fn lower_match_expr(
 ) -> Operand {
     // Lower scrutinee to a temp local. Phase C: stage with the right
     // AssignMode by source shape — see stage_match_scrutinee.
+    //
+    // Snag #48: when the scrutinee is a `throws`-fn call (or any
+    // expression yielding a `Result[T, E]`) inside a `throws E`
+    // context, the operand is `Result[T, E]` at the IR layer. The
+    // match patterns are written against T (the unwrapped variant
+    // shape), so without auto-propagation the pattern condition /
+    // extraction reads Result's layout as if it were T — variant
+    // payloads come out as zero/discriminant garbage. Mirror the
+    // call-arg path: auto-propagate before staging so the scrutinee
+    // is the unwrapped T.
+    //
+    // GATE: skip auto-prop when arm patterns explicitly match
+    // Ok/Error/Some/None — that's user-written Result/Option
+    // discrimination, NOT throws-sugar. See `arms_match_result_or_option_arm`.
+    let user_matches_result_option = super::stmts::arms_match_result_or_option_arm(arms);
     let scrut_op = lower_expr(ctx, builder, scrutinee);
+    let scrut_op = if user_matches_result_option {
+        scrut_op
+    } else {
+        // Clear `expected_type` so a Result-typed surrounding context
+        // (e.g. `Result[T,E] r = match …`) doesn't block auto-prop
+        // via `maybe_auto_propagate`'s skip-on-Result-destination
+        // heuristic. Surrounding expected_type describes the MATCH
+        // RESULT slot, not the scrutinee.
+        let saved_expected = ctx.func_state.expected_type.take();
+        let op = maybe_auto_propagate(ctx, builder, scrut_op);
+        ctx.func_state.expected_type = saved_expected;
+        op
+    };
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)
@@ -3157,7 +3185,21 @@ fn lower_match_stmt_as_expr(
     // as Expr::Block, which routes the trailing match here). Without
     // this, the @DataFrame__col_* cluster's inner `match b:` produced
     // `_scrut = copy _b` shallow aliases.
+    //
+    // Snag #48: auto-propagate a Result-typed scrutinee in throws
+    // context — see `lower_match_expr` for the full rationale (and the
+    // arm-pattern gate that skips auto-prop when the user writes
+    // Ok/Error/Some/None arms).
+    let user_matches_result_option = super::stmts::arms_match_result_or_option_item(arms);
     let scrut_op = lower_expr(ctx, builder, scrutinee);
+    let scrut_op = if user_matches_result_option {
+        scrut_op
+    } else {
+        let saved_expected = ctx.func_state.expected_type.take();
+        let op = maybe_auto_propagate(ctx, builder, scrut_op);
+        ctx.func_state.expected_type = saved_expected;
+        op
+    };
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)

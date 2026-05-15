@@ -8,7 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
 use super::super::drops::DropScopeKind;
-use super::super::exprs::{lower_expr, infer_operand_type_full, resolve_none_tag};
+use super::super::exprs::{lower_expr, maybe_auto_propagate, infer_operand_type_full, resolve_none_tag};
 use super::lower_block;
 
 /// Stage a match scrutinee into a fresh temp with the right `AssignMode` and
@@ -132,6 +132,43 @@ pub fn arms_have_move_extract_exprs(
         }
     }
     false
+}
+
+/// Snag #48 follow-up: detect whether the user is explicitly matching on
+/// Result / Option variants (`case Ok(x):`, `case Error(e):`, `case Some(v):`,
+/// `case None:`). In that case the scrutinee must STAY as `Result[T, E]` /
+/// `Option[T]` — auto-propagating it would discard the very Ok/Error split
+/// the user wrote arms for.
+///
+/// The naive auto-prop-on-every-Result-scrutinee approach broke 3 fixtures
+/// (snag31 / snag41 / nested_match_return_from_inner_arm) — all of the
+/// `Completion c = match risky_call(): case Ok(x): … case Error(e): …`
+/// shape, which is canonical Result-discrimination, NOT throws-sugar.
+///
+/// The check is name-based on the prelude variants because the typechecker's
+/// resolved `expr_types` map isn't plumbed to IR-lowering. The prelude
+/// names are stable contract; user-defined enums shouldn't shadow them.
+pub fn arms_match_result_or_option_arm(arms: &[ast::MatchArm]) -> bool {
+    arms.iter().any(|arm| pattern_is_result_or_option(&arm.pattern))
+}
+
+pub fn arms_match_result_or_option_item(arms: &[ast::MatchItem]) -> bool {
+    arms.iter().any(|item| {
+        item.arm().map_or(false, |arm| pattern_is_result_or_option(&arm.pattern))
+    })
+}
+
+fn pattern_is_result_or_option(pat: &Spanned<ast::Pattern>) -> bool {
+    match &pat.node {
+        ast::Pattern::Constructor { path, .. } => {
+            let head = path.first().map(|s| s.node.as_str());
+            let second = path.get(1).map(|s| s.node.as_str());
+            matches!(head, Some("Ok" | "Error" | "Some" | "None"))
+                || (matches!(head, Some("Result" | "Option"))
+                    && matches!(second, Some("Ok" | "Error" | "Some" | "None")))
+        }
+        _ => false,
+    }
 }
 
 pub fn stage_match_scrutinee(
@@ -297,6 +334,24 @@ pub(super) fn lower_match_stmt(
     // For & params (MutPtr), lower_expr auto-derefs to a VALUE copy — creating
     // a shallow alias. For match, we want the original MutPtr so scrut_is_ptr
     // detects it and pattern extraction produces borrows, not copies.
+    //
+    // Snag #48: when the scrutinee is a `throws`-fn call inside a
+    // `throws E` context, the operand is `Result[T, E]` at the IR
+    // layer. The match patterns are written against T, so without
+    // auto-propagation the pattern condition / extraction reads
+    // Result's layout as if it were T — variant payloads come out
+    // as zero/discriminant garbage. Apply `maybe_auto_propagate` on
+    // the non-identifier scrutinee path (the identifier paths bind
+    // an already-named local, which is the `Tagged t = throws_fn();
+    // match t:` workaround shape that always worked — auto-prop
+    // already fired at the VarDecl site).
+    //
+    // GATE: when the arm patterns explicitly match `Ok(x)` / `Error(e)`
+    // / `Some(v)` / `None`, the user wants to discriminate the Result
+    // (or Option) directly — auto-propagating would discard the very
+    // split they wrote arms for. Skip auto-prop in that case. This is
+    // the snag31 / snag41 / nested_match_return_from_inner_arm shape.
+    let user_matches_result_option = arms_match_result_or_option_item(arms);
     let (scrut_op, scrut_type) = if let Expr::Identifier(name) = &scrutinee.node {
         if let Some((local_id, type_id)) = ctx.lookup_local(name) {
             if ctx.is_param_borrow_unique(builder, local_id) {
@@ -312,8 +367,16 @@ pub(super) fn lower_match_stmt(
             let ty = infer_operand_type_full(ctx, &op, builder);
             (op, ty)
         }
-    } else {
+    } else if user_matches_result_option {
+        // User wrote explicit Ok/Error/Some/None arms — keep scrutinee as-is.
         let op = lower_expr(ctx, builder, scrutinee);
+        let ty = infer_operand_type_full(ctx, &op, builder);
+        (op, ty)
+    } else {
+        let saved_expected = ctx.func_state.expected_type.take();
+        let op = lower_expr(ctx, builder, scrutinee);
+        let op = maybe_auto_propagate(ctx, builder, op);
+        ctx.func_state.expected_type = saved_expected;
         let ty = infer_operand_type_full(ctx, &op, builder);
         (op, ty)
     };

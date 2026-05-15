@@ -3211,6 +3211,45 @@ fn snag42_scrutinee_move_inside_arm() {
 }
 
 #[test]
+fn snag48_throws_match_scrutinee() {
+    // Snag #48 — `match <throws-fn-call>(): case Variant(x): x else: default`
+    // inside a `throws E` context read the variant payload as the enum's
+    // discriminant tag (int64_t), yielding zero/default values instead of
+    // the actual payload. Same family as Snag #46 (throws-fn return at a
+    // constructor-arg position): the call's `Result[T, E]` operand wasn't
+    // auto-propagated at the match-scrutinee boundary, so the pattern
+    // condition / extraction logic read Result's layout as if it were T.
+    //
+    // Root cause: `lower_match_expr` (`src/ir/lowering/exprs/mod.rs`),
+    // `lower_match_stmt_as_expr` (same file), and `lower_match_stmt`
+    // (`src/ir/lowering/stmts/patterns.rs`) all lowered the scrutinee
+    // via `lower_expr` without calling `maybe_auto_propagate`. The
+    // sibling call-arg / constructor-arg paths do.
+    //
+    // Fix: at each match-scrutinee boundary, save+clear expected_type
+    // (the outer destination doesn't apply to the scrutinee), lower
+    // the scrutinee, run `maybe_auto_propagate`, restore expected_type.
+    // The lower_match_stmt fix applies only on the non-identifier
+    // scrutinee path — identifier scrutinees bind an already-named
+    // local where auto-prop has already fired at the VarDecl boundary
+    // (this is the `Tagged t = throws_fn(); match t:` workaround that
+    // always worked).
+    //
+    // Discovered by gorget-js after Phase 9 made `member_lookup` itself
+    // `throws RuntimeException` — the inline-match pattern in
+    // `native_call` nid 7 (Object.prototype.toString reading [[Class]]
+    // from the proto chain) silently miscompiled.
+    let expected = "\
+case A inline (expected 'hello'): hello\n\
+case B inline (expected 42)        : 42\n\
+case C inline (expected true)      : true\n\
+case D local  (expected 'hello'): hello\n\
+case E local  (expected 42)        : 42\n\
+case F local  (expected true)      : true";
+    run_gg("snag48_throws_match_scrutinee.gg", expected);
+}
+
+#[test]
 fn snag46_throws_inline_in_ctor() {
     // Snag #46 — a `throws`-marked function's return value passed inline
     // to an enum-variant constructor (`Tagged.BoolV(fn_bool_throws())`)

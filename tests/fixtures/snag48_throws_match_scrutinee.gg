@@ -1,0 +1,139 @@
+# Snag #48 — match-as-expression on a `throws`-fn return value reads
+# the wrong field of the Result-wrapped enum variant payload.
+#
+# Almost certainly the same family as #46 (also `throws`-fn return
+# value miscompiled at a constructor-style use site); this one fires
+# at a match-as-expression rather than at an enum/struct constructor.
+#
+# Trigger: inline `<typed-binding> = match <throws-fn-call>(): case
+# <Variant>(x): x else: <default>` inside a `throws`-marked enclosing
+# function. The codegen seems to read the variant payload as if it
+# were the enum's discriminant tag (int64_t). What you observe
+# depends on the inner-field type:
+#
+#   - Variant carries String → fails to compile (the int64_t read
+#     can't be assigned to Gorget's `Str` type — the C compiler
+#     catches it).
+#   - Variant carries int    → compiles, but returns 0.
+#   - Variant carries bool   → compiles, but returns false.
+#
+# Workaround for all three: bind the throws-fn call to a local
+# first, then match the local. The codegen for that form is fine.
+#
+# Compiler: /workspace/gorget/target/debug/gg
+# Build:    gg build snag48.gg -o /tmp/snag48/snag48
+#
+# Run each variant separately (case A on its own won't even build):
+#   gg build snag48_int_only.gg  && /tmp/snag48/snag48_int_only
+#   gg build snag48_bool_only.gg && /tmp/snag48/snag48_bool_only
+#
+# Original site that surfaced this: src/eval.gg native_call nid 7
+# (Object.prototype.toString reading [[Class]] from the proto
+# chain). The trigger only appeared after a Phase 9 refactor made
+# `member_lookup` itself `throws RuntimeException` to propagate
+# getter exceptions properly; before that, the function wasn't
+# throws, so this miscompiled pattern hadn't existed.
+
+public struct MyException:
+    int code
+
+public enum Tagged:
+    StringV(String)
+    NumberV(int)
+    BoolV(bool)
+
+Tagged stringv_throws() throws MyException:
+    return Tagged.StringV("hello")
+
+Tagged numberv_throws() throws MyException:
+    return Tagged.NumberV(42)
+
+Tagged boolv_throws() throws MyException:
+    return Tagged.BoolV(true)
+
+# ── Case A (compile-time failure): inline match-as-expression
+#    extracting a String from a throws-fn's Tagged.StringV payload.
+#    Comment this out to see cases B + C run (with their runtime bugs).
+String case_string_inline() throws MyException:
+    String x = match stringv_throws():
+        case Tagged.StringV(s):
+            s
+        else:
+            ""
+    return x
+
+# ── Case B (runtime wrong value): same shape, extracting int.
+int case_int_inline() throws MyException:
+    int x = match numberv_throws():
+        case Tagged.NumberV(n):
+            n
+        else:
+            0
+    return x
+
+# ── Case C (runtime wrong value): same shape, extracting bool.
+bool case_bool_inline() throws MyException:
+    bool x = match boolv_throws():
+        case Tagged.BoolV(b):
+            b
+        else:
+            false
+    return x
+
+# ── Workaround: bind to a local first. All three of these
+#    compile + print the correct value.
+String case_string_local() throws MyException:
+    Tagged t = stringv_throws()
+    String x = match t:
+        case Tagged.StringV(s):
+            s
+        else:
+            ""
+    return x
+
+int case_int_local() throws MyException:
+    Tagged t = numberv_throws()
+    int x = match t:
+        case Tagged.NumberV(n):
+            n
+        else:
+            0
+    return x
+
+bool case_bool_local() throws MyException:
+    Tagged t = boolv_throws()
+    bool x = match t:
+        case Tagged.BoolV(b):
+            b
+        else:
+            false
+    return x
+
+void show_str(String label, Result[String, MyException] r):
+    match r:
+        case Ok(s):
+            print(f"{label}: {s}")
+        case Error(_):
+            print(f"{label}: unexpected throw")
+
+void show_int(String label, Result[int, MyException] r):
+    match r:
+        case Ok(n):
+            print(f"{label}: {n}")
+        case Error(_):
+            print(f"{label}: unexpected throw")
+
+void show_bool(String label, Result[bool, MyException] r):
+    match r:
+        case Ok(b):
+            print(f"{label}: {b}")
+        case Error(_):
+            print(f"{label}: unexpected throw")
+
+void main():
+    show_str("case A inline (expected 'hello')",   case_string_inline())
+    show_int("case B inline (expected 42)        ", case_int_inline())
+    show_bool("case C inline (expected true)      ", case_bool_inline())
+    show_str("case D local  (expected 'hello')",   case_string_local())
+    show_int("case E local  (expected 42)        ", case_int_local())
+    show_bool("case F local  (expected true)      ", case_bool_local())
