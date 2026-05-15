@@ -212,11 +212,20 @@ use super::{LirFunction, LirModule, Inst, ValueId};
 
 /// Derive the LIR type of a single instruction's result.
 /// Returns `None` for instructions that don't produce a value.
+///
+/// `pointee_types` is consulted for `Inst::Load` when the load's declared
+/// `ty` is `Void` (i.e. the lowerer didn't propagate a concrete pointee
+/// type onto the instruction). This requires `compute_module_pointee_types`
+/// to run BEFORE `compute_module_value_types` so the pointee table is
+/// populated. Pass an empty slice if pointee info isn't available yet —
+/// the function then degrades to the previous "trust the instruction's
+/// declared type" behaviour.
 fn infer_inst_type(
     inst: &Inst,
     func: &LirFunction,
     module: &LirModule,
     val_types: &[Option<LirType>],
+    pointee_types: &[Option<LirType>],
 ) -> Option<LirType> {
     match inst {
         Inst::SlotLoad { ty, .. } | Inst::ParamRef { ty, .. } => {
@@ -262,7 +271,17 @@ fn infer_inst_type(
             }
         }
 
-        Inst::Load { ty, .. } => Some(ty.clone()),
+        Inst::Load { ty, ptr, .. } => {
+            // When the lowerer emitted an under-specified `Load { ty: Void }`,
+            // fall back to the pointer's pointee type from `pointee_types`.
+            // Mirrors the C backend's local fallback, now consolidated upstream.
+            if matches!(ty, LirType::Void) {
+                if let Some(Some(pt)) = pointee_types.get(ptr.0 as usize) {
+                    return Some(pt.clone());
+                }
+            }
+            Some(ty.clone())
+        }
         Inst::FieldPtr { .. } | Inst::ElemPtr { .. } => Some(LirType::Ptr),
 
         Inst::Call { func: fid, .. } => {
@@ -530,12 +549,17 @@ pub fn compute_value_types(func: &mut LirFunction, module: &LirModule) {
         }
     }
 
-    // Instructions: derive from fields.
+    // Instructions: derive from fields. Reads `func.pointee_types` for the
+    // `Inst::Load { ty: Void }` fallback (matches C backend behaviour).
+    // Callers should run `compute_pointee_types` BEFORE this pass; otherwise
+    // pointee info is empty and the fallback degrades to "trust the
+    // declared ty" (same as the previous behaviour).
+    let pt = &func.pointee_types;
     for block in &func.blocks {
         for inst in &block.insts {
             if let Some(dst) = inst.dst() {
                 if (dst.0 as usize) < n {
-                    let ty = infer_inst_type(inst, func, module, &vt);
+                    let ty = infer_inst_type(inst, func, module, &vt, pt);
                     if ty.is_some() {
                         vt[dst.0 as usize] = ty;
                     }
@@ -872,12 +896,14 @@ pub fn compute_function_value_types_at(module: &mut LirModule, i: usize) {
         }
     }
 
-    // Instructions: derive from fields.
+    // Instructions: derive from fields. Reads `pointee_types` for the
+    // `Inst::Load { ty: Void }` fallback. See note on `compute_value_types`.
     for block in &module.functions[i].blocks {
         for inst in &block.insts {
             if let Some(dst) = inst.dst() {
                 if (dst.0 as usize) < n {
-                    let ty = infer_inst_type(inst, &module.functions[i], module, &vt);
+                    let pt = &module.functions[i].pointee_types;
+                    let ty = infer_inst_type(inst, &module.functions[i], module, &vt, pt);
                     if ty.is_some() {
                         vt[dst.0 as usize] = ty;
                     }

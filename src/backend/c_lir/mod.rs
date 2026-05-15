@@ -1036,10 +1036,19 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     }
 
     // Declare all values as their inferred types.
-    // Build a type map from instructions (two passes for arithmetic type propagation).
+    //
+    // Layering discipline (rule 3, one source of truth per axis): the
+    // LIR-canonical `func.value_types` and `func.pointee_types` (populated
+    // by `compute_module_value_types` / `compute_module_pointee_types` in
+    // `src/lir/types.rs`) are the source of truth. The C backend seeds its
+    // local `val_types` / `ptr_pointee` from those shared tables and then
+    // layers backend-specific fixups on top — CallExtern→SlotStore mismatch,
+    // guard accessor inference from consumers, cross-type combinator,
+    // consumer-driven back-propagation, InlineC→SlotStore. The fixups
+    // don't contradict the shared info; they refine it where the shared
+    // pass returns `None` (polymorphic combinators) or where the value's
+    // declared type doesn't match the C ABI the consumer expects.
     let mut val_types: Vec<Option<LirType>> = vec![None; max_val as usize];
-    // Track which values originate from StrLit instructions (raw `const char*`).
-    // Track the pointee type for Ptr-typed values.
     let mut ptr_pointee: Vec<Option<LirType>> = vec![None; max_val as usize];
     // Propagate pointee types through Ptr-typed slots (SlotStore → SlotLoad).
     let mut slot_pointee: Vec<Option<LirType>> = vec![None; func.slots.len()];
@@ -1051,14 +1060,40 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     let norm = |ty: LirType| -> LirType {
         if matches!(ty, LirType::PtrTo(_)) { LirType::Ptr } else { ty }
     };
+    // Seed from LIR-canonical typed sidecars.
+    for (i, ty) in func.value_types.iter().enumerate() {
+        if i >= max_val as usize { break; }
+        if let Some(t) = ty {
+            val_types[i] = Some(norm(t.clone()));
+        }
+    }
+    for (i, pt) in func.pointee_types.iter().enumerate() {
+        if i >= max_val as usize { break; }
+        if let Some(t) = pt {
+            ptr_pointee[i] = Some(t.clone());
+        }
+    }
     for block in &func.blocks {
         for (vid, ty) in &block.params {
-            val_types[vid.0 as usize] = Some(norm(ty.clone()));
+            // Shared seed should already have populated this; backfill only
+            // when the LIR-canonical pass left it None (defensive).
+            if val_types[vid.0 as usize].is_none() {
+                val_types[vid.0 as usize] = Some(norm(ty.clone()));
+            }
         }
         for inst in &block.insts {
-            if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee, func) {
-                if let Some(dst) = inst.dst() {
-                    val_types[dst.0 as usize] = Some(norm(ty));
+            // The shared seed has typed every value whose type is derivable
+            // from LIR alone. Run the local `infer_inst_type` only for holes
+            // — polymorphic externs whose return type the shared pass leaves
+            // `None` so backend context can resolve them.
+            let dst_typed = inst.dst().map_or(false, |d| {
+                val_types.get(d.0 as usize).and_then(|t| t.as_ref()).is_some()
+            });
+            if !dst_typed {
+                if let Some(ty) = infer_inst_type(inst, module, &val_types, &ptr_pointee, func) {
+                    if let Some(dst) = inst.dst() {
+                        val_types[dst.0 as usize] = Some(norm(ty));
+                    }
                 }
             }
             // Detect runtime struct returns that aren't in module.structs.
@@ -2259,7 +2294,24 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext) {
             if is_str_lit {
                 // String literal → store the static Str pointer directly.
                 write!(out, "*(Str*)({}) = {};", v(*ptr), v(*value)).unwrap();
-            } else if matches!(val_ty, Some(LirType::Ptr) | Some(LirType::FuncRef)) {
+            } else if matches!(val_ty, Some(LirType::FuncRef)) {
+                // FuncRef: a function pointer stored as a pointer-sized scalar.
+                // Distinct from the `Ptr` branch below, which assumes the source
+                // value is an aggregate REFERENCE (so it does memcpy through
+                // the pointee). For a function address there's no pointee
+                // struct, only the pointer-sized address — take the address of
+                // the value to write the bytes into the destination slot.
+                //
+                // Before this branch existed, `Inst::FuncAddr`/`Inst::NamedFuncAddr`
+                // values were typed `None` by the C backend's local pass (it
+                // had no case for them), so they fell through to the struct-by-
+                // value branch below. Once `func.value_types` (the shared LIR
+                // type table) became the seed and started tagging these as
+                // `FuncRef`, the Ptr branch grabbed them and emitted
+                // `memcpy(p, val, sizeof(*(val)))` — UB for `void*` source.
+                // The fix is here, not at the writer site.
+                write!(out, "memcpy({p}, &{val}, sizeof({val}));", p = v(*ptr), val = v(*value)).unwrap();
+            } else if matches!(val_ty, Some(LirType::Ptr)) {
                 // Source is a pointer-shaped value (raw Ptr, or Tier E §8.6 FuncRef
                 // which lowers identically at this layer) — either an aggregate
                 // reference (memcpy) or a raw pointer value (direct store).

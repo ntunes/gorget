@@ -47,8 +47,10 @@ mod tests {
         validate::assert_module_valid(&lir, "promote-runtime-calls");
         optimize::optimize_module(&mut lir);
         validate::assert_module_valid(&lir, "optimize");
-        crate::lir::types::compute_module_value_types(&mut lir);
+        // Order: pointee_types FIRST so value_types can read it for the
+        // `Inst::Load { ty: Void }` fallback.
         crate::lir::types::compute_module_pointee_types(&mut lir);
+        crate::lir::types::compute_module_value_types(&mut lir);
         crate::lir::types::compute_module_value_origins(&mut lir);
         validate::assert_module_valid(&lir, "compute-types");
 

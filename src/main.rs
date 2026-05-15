@@ -534,8 +534,11 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
-        gorget::lir::types::compute_module_value_types(&mut lir_module);
+        // Order matters: pointee_types FIRST so value_types can fall back
+        // through it for `Inst::Load { ty: Void }` (matches the C backend's
+        // local single-pass behaviour, now consolidated upstream).
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types");
         print!("{}", gorget::lir::display::dump_module(&lir_module));
@@ -568,8 +571,11 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
-        gorget::lir::types::compute_module_value_types(&mut lir_module);
+        // Order matters: pointee_types FIRST so value_types can fall back
+        // through it for `Inst::Load { ty: Void }` (matches the C backend's
+        // local single-pass behaviour, now consolidated upstream).
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
         let mut bir_module = gorget::bir::BirModule::from_lir(lir_module)
@@ -579,8 +585,8 @@ fn try_build_ir(
         // Optimize runs post-BIR so synth fns (when present) get DCE/fold/CSE.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
-        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
         let c_code = gorget::backend::c_lir::generate_c(bir_module.as_lir());
@@ -609,8 +615,11 @@ fn try_build_ir(
         gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
         gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
-        gorget::lir::types::compute_module_value_types(&mut lir_module);
+        // Order matters: pointee_types FIRST so value_types can fall back
+        // through it for `Inst::Load { ty: Void }` (matches the C backend's
+        // local single-pass behaviour, now consolidated upstream).
         gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+        gorget::lir::types::compute_module_value_types(&mut lir_module);
         gorget::lir::types::compute_module_value_origins(&mut lir_module);
         gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
 
@@ -624,8 +633,8 @@ fn try_build_ir(
         // etc.) rather than the opaque high-level shape.
         gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
-        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+        gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
         gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
         gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
 
@@ -1372,8 +1381,8 @@ fn try_profile(
     gorget::lir::validate::assert_module_valid(&lir_module, "wire-collection-bridges");
     gorget::lir::runtime::promote_runtime_calls(&mut lir_module);
     gorget::lir::validate::assert_module_valid(&lir_module, "promote-runtime-calls");
-    gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_pointee_types(&mut lir_module);
+    gorget::lir::types::compute_module_value_types(&mut lir_module);
     gorget::lir::types::compute_module_value_origins(&mut lir_module);
     gorget::lir::validate::assert_module_valid(&lir_module, "compute-types-pre-bir");
     let lir_functions = lir_module.functions.len();
@@ -1390,8 +1399,8 @@ fn try_profile(
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "bir-lowering");
     let lir_opt_stats = gorget::lir::optimize::optimize_module(bir_module.as_lir_mut());
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "optimize");
-    gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
     gorget::lir::types::compute_module_pointee_types(bir_module.as_lir_mut());
+    gorget::lir::types::compute_module_value_types(bir_module.as_lir_mut());
     gorget::lir::types::compute_module_value_origins(bir_module.as_lir_mut());
     gorget::lir::validate::assert_module_valid(bir_module.as_lir(), "compute-types-post-bir");
     let lir_optimize_ms = t.elapsed().as_secs_f64() * 1000.0;
