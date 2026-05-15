@@ -11,6 +11,101 @@ use super::super::drops::DropScopeKind;
 use super::super::exprs::{lower_expr, infer_operand_type_full};
 use super::{lower_block, lower_block_scoped, emit_pattern_bindings};
 
+// ============================================================================
+// Shared scaffolding helpers (Layer 1 + 2 dedup from per-collection lowerings).
+// ============================================================================
+
+/// Block IDs for a for-loop. `incr_bb` is `None` when the lowering advances
+/// the iterator inside the header (iterator protocol). `break_exit_bb` and
+/// `else_exit_bb` collapse to `exit_bb` when there is no `else` arm.
+struct ForBlocks {
+    header_bb: BlockId,
+    body_bb: BlockId,
+    incr_bb: Option<BlockId>,
+    exit_bb: BlockId,
+    break_exit_bb: BlockId,
+    else_exit_bb: BlockId,
+}
+
+/// Allocate the standard 4-6 blocks for a for-loop in the order
+/// `header, body, [incr,] exit, [break, else]`. Order is load-bearing for
+/// LIR/snapshot stability.
+fn alloc_for_blocks(builder: &mut FunctionBuilder, has_incr: bool, has_else: bool) -> ForBlocks {
+    let header_bb = builder.new_block();
+    let body_bb = builder.new_block();
+    let incr_bb = if has_incr { Some(builder.new_block()) } else { None };
+    let exit_bb = builder.new_block();
+    let (break_exit_bb, else_exit_bb) = if has_else {
+        (builder.new_block(), builder.new_block())
+    } else {
+        (exit_bb, exit_bb)
+    };
+    ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb }
+}
+
+/// Bind `iter_op` to a fresh local. Resource-typed iters use `Borrow` (the
+/// local is a non-owning view; the source still owns the heap data); value
+/// types use `Copy`. Shared by array/enumerate/dict/set/iterable.
+fn init_borrow_iter_local(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    iter_op: Operand,
+) -> (LocalId, TypeId) {
+    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+    let iter_local = builder.add_local(iter_type, None);
+    let mode = if ctx.type_registry.is_resource_type(iter_type) {
+        AssignMode::Borrow
+    } else {
+        AssignMode::Copy
+    };
+    builder.assign_mode(mode, Place::local(iter_local), iter_op);
+    (iter_local, iter_type)
+}
+
+/// Emit the trailing else-arm + break-exit dispatch. No-op when `else_arm`
+/// is `None`. Caller must have allocated distinct `break_exit_bb`/
+/// `else_exit_bb` (via `alloc_for_blocks(_, _, has_else=true)`).
+fn emit_else_arm_tail(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    else_arm: Option<&Block>,
+    blocks: &ForBlocks,
+) {
+    if let Some(else_body) = else_arm {
+        builder.switch_to(blocks.else_exit_bb);
+        lower_block_scoped(ctx, builder, else_body);
+        builder.jump(blocks.exit_bb);
+        builder.switch_to(blocks.break_exit_bb);
+        builder.jump(blocks.exit_bb);
+    }
+}
+
+/// Emit a `state == USED` filter for dict/set iteration: read the slot
+/// state at `idx_local`, branch to a fresh `elem_bb` on match (and switch
+/// to it), or to `incr_bb` on miss. Returns the new `elem_bb`.
+fn emit_state_filter(
+    builder: &mut FunctionBuilder,
+    ptr_local: LocalId,
+    idx_local: LocalId,
+    incr_bb: BlockId,
+) -> BlockId {
+    let state = builder.call_extern(
+        "gorget_map_iter_state",
+        vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local)],
+        I64_TYPE,
+    );
+    let state_ok = builder.cmp(
+        CmpOp::Eq,
+        I64_TYPE,
+        FunctionBuilder::copy(state),
+        Operand::Constant(Constant::I64(1)),
+    );
+    let elem_bb = builder.new_block();
+    builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
+    builder.switch_to(elem_bb);
+    elem_bb
+}
+
 /// Lower a for loop over a range (`for i in start..end`).
 pub(super) fn lower_for(
     ctx: &mut LoweringContext,
@@ -221,19 +316,8 @@ fn lower_for_string(
     };
     builder.assign(Place::local(len_local), Operand::Copy(len_place));
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    // break_exit_bb: where `break` jumps. If else arm exists, it's a separate block
-    // (break skips else); otherwise it's exit_bb directly.
-    // else_exit_bb: where the loop's natural exit goes. If else arm exists, it's the
-    // else block; otherwise it's exit_bb directly. No Option needed.
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ false, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, exit_bb, break_exit_bb, else_exit_bb, .. } = blocks;
 
     builder.jump(header_bb);
 
@@ -288,15 +372,7 @@ fn lower_for_string(
     ctx.restore_locals(builder, saved_str);
     builder.jump(header_bb);
 
-    // Else block
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -310,18 +386,7 @@ fn lower_for_array(
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
-    // Store the iterable in a local. Phase C: emit Borrow mode for
-    // resource-typed iters — iter_local is a non-owning view (no drop
-    // registration), the original local still owns the data. Same shape
-    // as the C2.6 fix in lower_for_iterable.
-    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
-    let iter_local = builder.add_local(iter_type, None);
-    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
-        crate::ir::instructions::AssignMode::Borrow
-    } else {
-        crate::ir::instructions::AssignMode::Copy
-    };
-    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
+    let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
 
     // idx = 0
     let idx = builder.add_local(I64_TYPE, None);
@@ -335,16 +400,9 @@ fn lower_for_array(
     };
     builder.assign(Place::local(len), Operand::Copy(len_place));
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let incr_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ true, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb } = blocks;
+    let incr_bb = incr_bb.unwrap();
 
     builder.jump(header_bb);
 
@@ -392,15 +450,7 @@ fn lower_for_array(
     builder.assign(Place::local(idx), FunctionBuilder::copy(new_idx));
     builder.jump(header_bb);
 
-    // Else block
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -449,15 +499,7 @@ fn lower_for_enumerate(
         (iter_op, raw_iter_type)
     };
 
-    // Store the iterable in a local. Phase C: Borrow mode for resource
-    // iters — non-owning view; original local owns the data.
-    let iter_local = builder.add_local(iter_type, None);
-    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
-        crate::ir::instructions::AssignMode::Borrow
-    } else {
-        crate::ir::instructions::AssignMode::Copy
-    };
-    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
+    let (iter_local, _) = init_borrow_iter_local(ctx, builder, iter_op);
 
     // idx = 0
     let idx = builder.add_local(I64_TYPE, None);
@@ -472,16 +514,9 @@ fn lower_for_enumerate(
     };
     builder.assign(Place::local(len), Operand::Copy(len_place));
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let incr_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ true, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb } = blocks;
+    let incr_bb = incr_bb.unwrap();
 
     builder.jump(header_bb);
 
@@ -531,15 +566,7 @@ fn lower_for_enumerate(
     builder.assign(Place::local(idx), FunctionBuilder::copy(new_idx));
     builder.jump(header_bb);
 
-    // Else block
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -552,18 +579,7 @@ fn lower_for_dict(
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
-    // Store the iterable in a local. Phase C: emit Borrow mode for
-    // resource-typed iters — iter_local is a non-owning view (no drop
-    // registration), the original local still owns the data. Same shape
-    // as the C2.6 fix in lower_for_iterable.
-    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
-    let iter_local = builder.add_local(iter_type, None);
-    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
-        crate::ir::instructions::AssignMode::Borrow
-    } else {
-        crate::ir::instructions::AssignMode::Copy
-    };
-    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
+    let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
 
     // Create a pointer to the dict for iterator accessor calls.
     let dict_ptr_type = ctx.register_ptr_type(iter_type);
@@ -589,16 +605,9 @@ fn lower_for_dict(
         I64_TYPE,
     );
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let incr_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ true, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb } = blocks;
+    let incr_bb = incr_bb.unwrap();
 
     builder.jump(header_bb);
 
@@ -618,17 +627,8 @@ fn lower_for_dict(
     let idx = builder.add_local(I64_TYPE, None);
     builder.assign(Place::local(idx), FunctionBuilder::copy(oi));
 
-    // state check: if states[idx] != 1, skip to incr
-    let state = builder.call_extern(
-        "gorget_map_iter_state",
-        vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx)],
-        I64_TYPE,
-    );
-    let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
-
-    let elem_bb = builder.new_block();
-    builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
-    builder.switch_to(elem_bb);
+    // Skip empty/tombstone slots; switch to elem_bb on match.
+    emit_state_filter(builder, dict_ptr, idx, incr_bb);
 
     // Extract key/value bindings via runtime output-parameter functions.
     match &pattern.node {
@@ -679,15 +679,7 @@ fn lower_for_dict(
     builder.assign(Place::local(oi), FunctionBuilder::copy(new_oi));
     builder.jump(header_bb);
 
-    // Else block
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -700,16 +692,7 @@ fn lower_for_set(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
-    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
-    let iter_local = builder.add_local(iter_type, None);
-    // Phase C: Borrow mode — iter_local is non-owning view; the original
-    // local still owns the Set's heap data.
-    let iter_assign_mode = if ctx.type_registry.is_resource_type(iter_type) {
-        crate::ir::instructions::AssignMode::Borrow
-    } else {
-        crate::ir::instructions::AssignMode::Copy
-    };
-    builder.assign_mode(iter_assign_mode, Place::local(iter_local), iter_op);
+    let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
     // Create pointer for iterator accessor calls
     let set_ptr_type = ctx.register_ptr_type(iter_type);
     let set_ptr = builder.add_local(set_ptr_type, None);
@@ -747,16 +730,9 @@ fn lower_for_set(
         )
     };
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let incr_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ true, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb } = blocks;
+    let incr_bb = incr_bb.unwrap();
 
     builder.jump(header_bb);
 
@@ -770,58 +746,29 @@ fn lower_for_set(
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
 
-    if is_ordered {
-        // For ordered sets: dereference order array to get the real bucket index
+    // Ordered sets index through `order[]`; unordered sets walk `states[]` directly.
+    // Both paths still need a state-USED filter (ordered: stale tombstones in order).
+    let key_idx = if is_ordered {
         let real_i = builder.call_extern(
             "gorget_map_iter_order",
             vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local)],
             I64_TYPE,
         );
-
-        // state check (still needed — deleted entries may leave stale order slots)
-        let state = builder.call_extern(
-            "gorget_map_iter_state",
-            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(real_i)],
-            I64_TYPE,
-        );
-        let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
-
-        let elem_bb = builder.new_block();
-        builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
-        builder.switch_to(elem_bb);
-
-        // Bind element using the real bucket index
-        let elem_local = builder.add_local(elem_type, Some(var_name));
-        let elem_ptr_type = ctx.register_ptr_type(elem_type);
-        let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
-        builder.call_extern_void(
-            "gorget_map_iter_key",
-            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(real_i), FunctionBuilder::copy(elem_ptr)],
-        );
-        ctx.register_local(var_name, elem_local, elem_type);
+        real_i
     } else {
-        // state check
-        let state = builder.call_extern(
-            "gorget_map_iter_state",
-            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local)],
-            I64_TYPE,
-        );
-        let state_ok = builder.cmp(CmpOp::Eq, I64_TYPE, FunctionBuilder::copy(state), Operand::Constant(Constant::I64(1)));
+        i_local
+    };
+    emit_state_filter(builder, set_ptr, key_idx, incr_bb);
 
-        let elem_bb = builder.new_block();
-        builder.branch(FunctionBuilder::copy(state_ok), elem_bb, incr_bb);
-        builder.switch_to(elem_bb);
-
-        // Bind element
-        let elem_local = builder.add_local(elem_type, Some(var_name));
-        let elem_ptr_type = ctx.register_ptr_type(elem_type);
-        let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
-        builder.call_extern_void(
-            "gorget_map_iter_key",
-            vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local), FunctionBuilder::copy(elem_ptr)],
-        );
-        ctx.register_local(var_name, elem_local, elem_type);
-    }
+    // Bind element via output-parameter call.
+    let elem_local = builder.add_local(elem_type, Some(var_name));
+    let elem_ptr_type = ctx.register_ptr_type(elem_type);
+    let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
+    builder.call_extern_void(
+        "gorget_map_iter_key",
+        vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(key_idx), FunctionBuilder::copy(elem_ptr)],
+    );
+    ctx.register_local(var_name, elem_local, elem_type);
 
     lower_block(ctx, builder, body);
 
@@ -835,14 +782,7 @@ fn lower_for_set(
     builder.assign(Place::local(i_local), FunctionBuilder::copy(new_i));
     builder.jump(header_bb);
 
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -927,18 +867,10 @@ fn lower_for_iterable(
         .unwrap_or("int64_t");
     let elem_type = ctx.type_mapper.lookup_named(elem_c_type).unwrap_or(I64_TYPE);
 
-    // 5. Store the iterable and (optionally) call iter().
-    // The collection_local is a non-owning view into the caller's data
-    // — same shape as the deref-Ptr case at line 54. Phase C: emit
-    // Borrow mode so the typed contract matches (no drop, no clone).
-    let iter_type_full = infer_operand_type_full(ctx, &iter_op, builder);
-    let collection_local = builder.add_local(iter_type_full, None);
-    let collection_assign_mode = if ctx.type_registry.is_resource_type(iter_type_full) {
-        crate::ir::instructions::AssignMode::Borrow
-    } else {
-        crate::ir::instructions::AssignMode::Copy
-    };
-    builder.assign_mode(collection_assign_mode, Place::local(collection_local), iter_op);
+    // 5. Store the iterable and (optionally) call iter(). The collection_local
+    // is a non-owning view into the caller's data — same shape as the deref-Ptr
+    // case at line 54.
+    let (collection_local, iter_type_full) = init_borrow_iter_local(ctx, builder, iter_op);
 
     let iterator_local = if let Some(ref iter_fn) = iter_fn_name {
         // Iterable path: Call iter(&collection) → iterator
@@ -954,16 +886,10 @@ fn lower_for_iterable(
         collection_local
     };
 
-    // 6. Build the loop structure
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    // 6. Build the loop structure. No incr_bb — `next()` advances the iterator
+    // internally, so `continue` jumps back to `header_bb`.
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ false, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, exit_bb, break_exit_bb, else_exit_bb, .. } = blocks;
 
     builder.jump(header_bb);
 
@@ -1015,15 +941,7 @@ fn lower_for_iterable(
     ctx.restore_locals(builder, saved_iter);
     builder.jump(header_bb);
 
-    // Else block
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
 
@@ -1102,17 +1020,9 @@ fn lower_for_range(
     builder.assign(Place::local(loop_var), start_val);
     ctx.register_local(var_name, loop_var, loop_type);
 
-    let header_bb = builder.new_block();
-    let body_bb = builder.new_block();
-    let incr_bb = builder.new_block();
-    let exit_bb = builder.new_block();
-
-    // For for-else: separate break target from natural exit
-    let (break_exit_bb, else_exit_bb) = if else_arm.is_some() {
-        (builder.new_block(), builder.new_block())
-    } else {
-        (exit_bb, exit_bb)
-    };
+    let blocks = alloc_for_blocks(builder, /*has_incr=*/ true, else_arm.is_some());
+    let ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb } = blocks;
+    let incr_bb = incr_bb.unwrap();
 
     // Jump to header
     builder.jump(header_bb);
@@ -1143,17 +1053,6 @@ fn lower_for_range(
 
     ctx.restore_locals(builder, saved_range);
 
-    // Else block: executed when loop completes naturally (no break)
-    if let Some(else_body) = else_arm {
-        builder.switch_to(else_exit_bb);
-        lower_block_scoped(ctx, builder, else_body);
-        builder.jump(exit_bb);
-
-        // Break exit goes directly to exit (skipping else)
-        builder.switch_to(break_exit_bb);
-        builder.jump(exit_bb);
-    }
-
-    // Exit
+    emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
 }
