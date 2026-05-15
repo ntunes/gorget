@@ -1898,13 +1898,24 @@ impl<'a> TypeChecker<'a> {
                 let object_type = self.infer_expr(object);
                 let index_type = self.infer_expr(index);
                 let resolved_obj = self.resolve_type(object_type);
+                // Snag #49 family: a `throws`-fn call returning `Result[K, E]`
+                // in index position should auto-propagate to the index type
+                // (str[int], Vector[T][int], Dict[K,V][K]) when the enclosing
+                // function can propagate. Skip the strict unify in that case
+                // so IR-lowering's centralized auto-prop hook handles the
+                // unwrap.
+                let try_index_unify = |this: &Self, expected: TypeId, found: TypeId| -> bool {
+                    !this.is_auto_propagation_compatible(expected, found)
+                };
                 // str[int] → str (codepoint view), str[Range] → str (codepoint range)
                 if resolved_obj == self.types.string_id {
                     if matches!(&index.node, Expr::Range { .. }) {
                         // Range bounds already inferred recursively
                         self.types.string_id
                     } else {
-                        self.unify(index_type, self.types.int_id, expr.span);
+                        if try_index_unify(self, self.types.int_id, index_type) {
+                            self.unify(index_type, self.types.int_id, expr.span);
+                        }
                         self.types.string_id
                     }
                 } else {
@@ -1923,7 +1934,9 @@ impl<'a> TypeChecker<'a> {
                         if matches!(&index.node, Expr::Range { .. }) {
                             resolved_obj
                         } else {
-                            self.unify(index_type, self.types.int_id, expr.span);
+                            if try_index_unify(self, self.types.int_id, index_type) {
+                                self.unify(index_type, self.types.int_id, expr.span);
+                            }
                             elem_tid
                         }
                     } else {
@@ -1939,7 +1952,9 @@ impl<'a> TypeChecker<'a> {
                             None
                         };
                         if let Some((key_tid, val_tid)) = map_info {
-                            self.unify(index_type, key_tid, index.span);
+                            if try_index_unify(self, key_tid, index_type) {
+                                self.unify(index_type, key_tid, index.span);
+                            }
                             val_tid
                         } else {
                             self.types.error_id
@@ -2890,7 +2905,15 @@ impl<'a> TypeChecker<'a> {
                 else_body,
             } => {
                 let cond_type = self.infer_expr(condition);
-                self.unify(cond_type, self.types.bool_id, condition.span);
+                // Snag #49 family: a `throws`-fn call returning `Result[bool, E]`
+                // in an if/while condition position should auto-propagate to
+                // `bool` (mirrors the call-arg / return / VarDecl gates) when
+                // the enclosing function can propagate. Skip the strict unify
+                // in that case so IR-lowering's centralized auto-prop hook
+                // handles the unwrap.
+                if !self.is_auto_propagation_compatible(self.types.bool_id, cond_type) {
+                    self.unify(cond_type, self.types.bool_id, condition.span);
+                }
                 // Assign types to all `is` pattern bindings (including compound conditions)
                 self.assign_compound_is_types(condition);
                 self.loop_depth += 1;
@@ -2914,14 +2937,19 @@ impl<'a> TypeChecker<'a> {
                 else_body,
             } => {
                 let cond_type = self.infer_expr(condition);
-                self.unify(cond_type, self.types.bool_id, condition.span);
+                // Snag #49 family: see `Stmt::While` above.
+                if !self.is_auto_propagation_compatible(self.types.bool_id, cond_type) {
+                    self.unify(cond_type, self.types.bool_id, condition.span);
+                }
                 // Assign types to all `is` pattern bindings (including compound conditions)
                 self.assign_compound_is_types(condition);
                 let then_type = self.check_block(then_body);
 
                 for (cond, body) in elif_branches {
                     let ct = self.infer_expr(cond);
-                    self.unify(ct, self.types.bool_id, cond.span);
+                    if !self.is_auto_propagation_compatible(self.types.bool_id, ct) {
+                        self.unify(ct, self.types.bool_id, cond.span);
+                    }
                     self.assign_compound_is_types(cond);
                     self.check_block(body);
                 }

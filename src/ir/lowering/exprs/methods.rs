@@ -3034,8 +3034,18 @@ pub(super) fn lower_index_access(
     object: &Spanned<Expr>,
     index: &Spanned<Expr>,
 ) -> Operand {
+    // Clear `expected_type` for the object and index sub-expressions — the
+    // surrounding destination type (e.g. the function's return slot when
+    // this index expression appears in `return v[i]`) describes the index
+    // *result*, not the object or the index. Without this, `lower_expr`'s
+    // centralized Result→T auto-prop hook would see a leaked `Result[_,_]`
+    // destination and skip the unwrap on a throws-fn-returning index like
+    // `v[throws_fn()]` — leaving the index slot holding the bytes of the
+    // Result struct rather than an int.
+    let saved_expected = ctx.func_state.expected_type.take();
     let obj = lower_expr(ctx, builder, object);
     let idx = lower_expr(ctx, builder, index);
+    ctx.func_state.expected_type = saved_expected;
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         // Infer element type from the base collection type

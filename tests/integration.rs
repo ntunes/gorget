@@ -3292,6 +3292,43 @@ case F fn-arg ident(inline)        : expected true, got true";
 }
 
 #[test]
+fn snag49a_throws_for_iter() {
+    // Snag #49a — auto-propagate `Result[T, E]` at a for-loop iterable
+    // position. One of the holdouts in the "consumer-site whack-a-mole"
+    // class (Snag #43 call args, Snag #46 constructor args, Snag #48
+    // match scrutinees). Without the centralized auto-prop hook, the
+    // for-loop would read the Result struct's bytes as the iterable's
+    // layout. Verified by the centralized producer-side hook in
+    // `lower_expr` — Call expressions returning Result auto-prop
+    // uniformly across every consumer.
+    run_gg("snag49a_throws_for_iter.gg", "sum: 6");
+}
+
+#[test]
+fn snag49b_throws_if_cond() {
+    // Snag #49b — auto-propagate `Result[bool, E]` at an if-condition.
+    // Same family as #49a. Without auto-prop the branch instruction
+    // would read the Result's tag/padding bytes as the bool predicate.
+    run_gg("snag49b_throws_if_cond.gg", "state: ready");
+}
+
+#[test]
+fn snag49c_throws_index() {
+    // Snag #49c — auto-propagate `Result[int, E]` at an index expression.
+    // Same family as #49a/b. Without auto-prop the index would be the
+    // Result's tag byte (0/1), not the actual int.
+    run_gg("snag49c_throws_index.gg", "got: 30");
+}
+
+#[test]
+fn snag49d_throws_while_cond() {
+    // Snag #49d — auto-propagate `Result[bool, E]` at a while-condition.
+    // Sibling of #49b — the loop guard predicate must be a bool, not
+    // the bytes of an unwrapped Result struct.
+    run_gg("snag49d_throws_while_cond.gg", "count: 3");
+}
+
+#[test]
 fn snag41_match_scrutinee_consume() {
     // Snag #41: match-scrutinee staging emitted a value-typed Borrow
     // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,

@@ -351,6 +351,13 @@ pub(super) fn lower_match_stmt(
     // (or Option) directly — auto-propagating would discard the very
     // split they wrote arms for. Skip auto-prop in that case. This is
     // the snag31 / snag41 / nested_match_return_from_inner_arm shape.
+    // `lower_expr`'s centralized auto-prop hook (producer-side, Call /
+    // MethodCall only) handles the throws-sugar unwrap when the scrutinee
+    // is a call. For Identifier scrutinees (the `Result[T,E] fr = ...;
+    // match fr:` shape) the hook does not fire because Identifier isn't a
+    // producer — fall back to the explicit unwrap step for the non-user-
+    // matches-Result/Option case. The one-shot `suppress_auto_prop` flag
+    // covers the Call/MethodCall case for `case Ok/Error/Some/None` arms.
     let user_matches_result_option = arms_match_result_or_option_item(arms);
     let (scrut_op, scrut_type) = if let Expr::Identifier(name) = &scrutinee.node {
         if let Some((local_id, type_id)) = ctx.lookup_local(name) {
@@ -359,6 +366,14 @@ pub(super) fn lower_match_stmt(
                 (Operand::Copy(Place::local(local_id)), type_id)
             } else {
                 let op = lower_expr(ctx, builder, scrutinee);
+                let op = if user_matches_result_option {
+                    op
+                } else {
+                    let saved_expected = ctx.func_state.expected_type.take();
+                    let op = maybe_auto_propagate(ctx, builder, op);
+                    ctx.func_state.expected_type = saved_expected;
+                    op
+                };
                 let ty = infer_operand_type_full(ctx, &op, builder);
                 (op, ty)
             }
@@ -367,15 +382,13 @@ pub(super) fn lower_match_stmt(
             let ty = infer_operand_type_full(ctx, &op, builder);
             (op, ty)
         }
-    } else if user_matches_result_option {
-        // User wrote explicit Ok/Error/Some/None arms — keep scrutinee as-is.
-        let op = lower_expr(ctx, builder, scrutinee);
-        let ty = infer_operand_type_full(ctx, &op, builder);
-        (op, ty)
     } else {
+        // Call / MethodCall / other expressions. Take `expected_type` so a
+        // Result-typed surrounding context doesn't block the hook (which
+        // would otherwise see the match's destination type and skip).
         let saved_expected = ctx.func_state.expected_type.take();
+        ctx.func_state.suppress_auto_prop = user_matches_result_option;
         let op = lower_expr(ctx, builder, scrutinee);
-        let op = maybe_auto_propagate(ctx, builder, op);
         ctx.func_state.expected_type = saved_expected;
         let ty = infer_operand_type_full(ctx, &op, builder);
         (op, ty)

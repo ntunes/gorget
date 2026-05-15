@@ -40,12 +40,49 @@ fn is_blocking_call_name(expr: &Expr) -> bool {
 }
 
 /// Lower an expression to GIR instructions, returning the result `Operand`.
+///
+/// Applies a centralized **producer-side** `Result → T` auto-propagation hook
+/// at the tail when the expression is a `Call` or `MethodCall`: if the call
+/// returns `Result[T, E]` AND the enclosing function can propagate (`throws E`
+/// or `Result[_,_]` return) AND the surrounding destination doesn't want a
+/// Result, the Result is unwrapped (forwarding the `Error` branch to the
+/// function's throws/Result return slot).
+///
+/// The hook centralizes what used to be N consumer-side `maybe_auto_propagate`
+/// calls (Snag #43 call args, Snag #46 constructor args, Snag #48 match
+/// scrutinees and similarly for-iter / if-cond / index — see TODO entry
+/// "Plug the `Result→T` auto-propagation consumer-site whack-a-mole class").
+/// The decision is purely typed: it reads the operand's IR type and the
+/// surrounding `expected_type`, no name-matching anywhere.
+///
+/// **Why only Call / MethodCall.** Auto-propagation is a transformation at the
+/// *producer* of a `Result`: the throws-sugar is what synthesizes the unwrap.
+/// Sub-expressions whose value happens to be `Result`-typed but didn't *just*
+/// come out of a call (identifier references to a Result-typed local, field
+/// access on a Result-typed struct, `risky().method()` *receiver*) are NOT
+/// candidates — `.unwrap()`-style methods on `Result` rely on receiving the
+/// raw value. Firing the hook on every `lower_expr` would auto-prop those
+/// receivers and break canonical Result discrimination. Restricting to Call
+/// / MethodCall mirrors the existing manual-call-site pattern.
+///
+/// Sites that need the raw `Result` operand even at a Call/MethodCall position
+/// (match scrutinee with Ok/Error patterns, rethrow inner, catch inner) set
+/// `func_state.suppress_auto_prop` to true before calling; it is a one-shot
+/// consumed at lower_expr entry so nested sub-expressions still auto-prop
+/// normally.
 pub fn lower_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     expr: &Spanned<Expr>,
 ) -> Operand {
-    lower_expr_inner(ctx, builder, expr, None)
+    let suppress = std::mem::replace(&mut ctx.func_state.suppress_auto_prop, false);
+    let is_producer = matches!(&expr.node, Expr::Call { .. } | Expr::MethodCall { .. });
+    let op = lower_expr_inner(ctx, builder, expr, None);
+    if suppress || !is_producer {
+        op
+    } else {
+        maybe_auto_propagate(ctx, builder, op)
+    }
 }
 
 /// Lower an expression with optional type registry access for mutable operations.
@@ -2557,21 +2594,28 @@ fn lower_match_expr(
     // GATE: skip auto-prop when arm patterns explicitly match
     // Ok/Error/Some/None — that's user-written Result/Option
     // discrimination, NOT throws-sugar. See `arms_match_result_or_option_arm`.
+    //
+    // `lower_expr`'s centralized auto-prop hook (producer-side, Call /
+    // MethodCall only) handles the throws-sugar unwrap when the scrutinee
+    // is a call. For Identifier / field-access scrutinees the hook does
+    // not fire — fall back to an explicit `maybe_auto_propagate` so a
+    // Result-typed local scrutinee against non-Ok/Error arms still
+    // unwraps. Clear `expected_type` so a Result-typed surrounding
+    // destination (`Result[T,E] r = match …`) doesn't block the hook /
+    // fallback — the surrounding type describes the MATCH RESULT slot,
+    // not the scrutinee.
     let user_matches_result_option = super::stmts::arms_match_result_or_option_arm(arms);
+    let saved_expected = ctx.func_state.expected_type.take();
+    ctx.func_state.suppress_auto_prop = user_matches_result_option;
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_op = if user_matches_result_option {
         scrut_op
     } else {
-        // Clear `expected_type` so a Result-typed surrounding context
-        // (e.g. `Result[T,E] r = match …`) doesn't block auto-prop
-        // via `maybe_auto_propagate`'s skip-on-Result-destination
-        // heuristic. Surrounding expected_type describes the MATCH
-        // RESULT slot, not the scrutinee.
-        let saved_expected = ctx.func_state.expected_type.take();
-        let op = maybe_auto_propagate(ctx, builder, scrut_op);
-        ctx.func_state.expected_type = saved_expected;
-        op
+        // Idempotent: no-op on Call/MethodCall (the hook already fired)
+        // or on non-Result operands.
+        maybe_auto_propagate(ctx, builder, scrut_op)
     };
+    ctx.func_state.expected_type = saved_expected;
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)
@@ -2888,6 +2932,9 @@ fn lower_rethrow_expr(
         }
     };
 
+    // Suppress lower_expr's centralized auto-prop hook — rethrow operates
+    // on the raw `Result[T, E]` value (extracts Ok/Error payloads itself).
+    ctx.func_state.suppress_auto_prop = true;
     let val = lower_expr(ctx, builder, inner);
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
@@ -3026,6 +3073,9 @@ fn lower_catch_expr(
         }
     };
 
+    // Suppress lower_expr's centralized auto-prop hook — catch operates
+    // on the raw `Result[T, E]` value (extracts Ok / binds Error itself).
+    ctx.func_state.suppress_auto_prop = true;
     let val = lower_expr(ctx, builder, inner);
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
@@ -3190,16 +3240,17 @@ fn lower_match_stmt_as_expr(
     // context — see `lower_match_expr` for the full rationale (and the
     // arm-pattern gate that skips auto-prop when the user writes
     // Ok/Error/Some/None arms).
+    // See `lower_match_expr` for the gate / fallback rationale.
     let user_matches_result_option = super::stmts::arms_match_result_or_option_item(arms);
+    let saved_expected = ctx.func_state.expected_type.take();
+    ctx.func_state.suppress_auto_prop = user_matches_result_option;
     let scrut_op = lower_expr(ctx, builder, scrutinee);
     let scrut_op = if user_matches_result_option {
         scrut_op
     } else {
-        let saved_expected = ctx.func_state.expected_type.take();
-        let op = maybe_auto_propagate(ctx, builder, scrut_op);
-        ctx.func_state.expected_type = saved_expected;
-        op
+        maybe_auto_propagate(ctx, builder, scrut_op)
     };
+    ctx.func_state.expected_type = saved_expected;
     let scrut_type = infer_operand_type_full(ctx, &scrut_op, builder);
     let source_at_last_use = if let Expr::Identifier(name) = &scrutinee.node {
         ctx.is_last_use_at(name, scrutinee.span)

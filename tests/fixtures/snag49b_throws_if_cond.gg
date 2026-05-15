@@ -1,0 +1,26 @@
+# Snag #49b — auto-propagate `Result[bool, E]` at an if-condition
+# position. Sibling to Snag #43 / #46 / #48. Without auto-prop the
+# branch reads the Result struct's bytes as the bool condition.
+
+struct E:
+    String msg
+
+bool is_ready() throws E:
+    return true
+
+bool is_done() throws E:
+    return false
+
+String describe() throws E:
+    if is_ready():
+        if is_done():
+            return "ready+done"
+        return "ready"
+    return "not ready"
+
+void main():
+    match describe():
+        case Ok(s):
+            print(f"state: {s}")
+        case Error(_):
+            print("err")

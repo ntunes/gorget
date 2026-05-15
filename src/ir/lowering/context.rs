@@ -225,6 +225,12 @@ pub struct FunctionState {
     /// Set when a for-loop uses `index_load_borrow` for string elements.
     /// If false, return materialization can be skipped (no views to materialize).
     pub has_string_borrows: bool,
+    /// One-shot suppression for `lower_expr`'s end-of-expression auto-prop hook.
+    /// Set by sites that need the raw `Result[T, E]` operand (match scrutinee with
+    /// `Ok`/`Error` arm patterns, rethrow inner, catch inner). Consumed (reset
+    /// to `false`) inside `lower_expr` before lowering, so nested sub-expressions
+    /// auto-prop normally. See `maybe_auto_propagate` for the routing.
+    pub suppress_auto_prop: bool,
 }
 
 /// Tracks lowering state within a function.
