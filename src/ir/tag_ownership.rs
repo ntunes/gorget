@@ -575,6 +575,7 @@ mod tests {
             return_type: crate::ir::types::I64_TYPE,
             is_variadic: false,
             param_abis: vec![],
+            returns_borrowed: false,
         });
 
         infer_fresh_owned(&mut module);

@@ -850,6 +850,7 @@ mod tests {
             return_type: I32_TYPE,
             is_variadic: true,
             param_abis: vec![],
+            returns_borrowed: false,
         });
 
         // Function
