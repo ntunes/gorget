@@ -878,6 +878,13 @@ impl<'a> LoweringContext<'a> {
             // path runs FIRST and replaces any synthesized `_0` placeholder
             // from `monomorphize_struct` (which can't see trait registration
             // because monomorphization runs before trait collection).
+            //
+            // This name-prefix scan is preserved (rather than migrated to
+            // `def.metadata.is_box`) because it's the LIR discovery loop —
+            // it must succeed for every Box TypeDef, including any new
+            // registration path that hasn't been audited to set `is_box`
+            // yet. The downstream `box_inner_type` field on the LIR struct
+            // is what carries the typed Box-ness past this point.
             if def.name.starts_with("Box__") {
                 let inner_name = &def.name["Box__".len()..];
                 let is_trait_box = self.gir.type_registry
@@ -1806,6 +1813,7 @@ mod tests {
             return_type: I32_TYPE,
             is_variadic: false,
             param_abis: vec![],
+            returns_borrowed: false,
         });
         module.functions.push(Function {
             name: "main".into(),
