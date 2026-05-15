@@ -6013,6 +6013,10 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
     # Transitive generic discovery: fixpoint loop to find instances needed
     # inside already-discovered generic function bodies (e.g. tensor_zeros[T]
     # inside tensor_sum_axis[float], meta-op calls like tensor_scalar_op[T](t, val, meta /)).
+    # Also walks generic-equip method return types + bodies so the
+    # iterator chain `Vector[int]` → `VectorIter[int]` → `next()` returns
+    # `Option[int]` cascade is discovered without explicit annotations
+    # at every call site.
     bool transitive_changed = true
     while transitive_changed:
         transitive_changed = false
@@ -6037,6 +6041,58 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
                     discover_transitive_stmts(tfix_tmpl.body, &type_sub_map, &seen_instances, &generic_instances)
                     if generic_instances.len() > prev_count:
                         transitive_changed = true
+            # Generic-equip transitive walk: for each instance whose target
+            # has equip blocks, harvest the method return types (with subs)
+            # AND walk method bodies for further generic call sites. This
+            # lets `Vector[int]` discover `VectorIter[int]`, `VectorDrain[int]`,
+            # … which in turn unlock their own `next()`/`iter()` cascades.
+            if equip_generic_names.contains(tinst.base_name):
+                int eqfi = 0
+                while eqfi < equip_templates.len():
+                    EquipBlock eqf_tmpl = equip_templates.get(eqfi).unwrap()
+                    String eqf_target = ""
+                    match eqf_tmpl.target.ty:
+                        case TNamed(etn, _):
+                            eqf_target = etn
+                        else:
+                            pass
+                    if eqf_target == tinst.base_name:
+                        Vector[String] eqf_tparams = extract_equip_type_params(eqf_tmpl)
+                        Dict[String, SpannedType] eqf_sub_map = {}
+                        int etpi = 0
+                        while etpi < eqf_tparams.len() and etpi < tinst.type_args.len():
+                            String etpname = eqf_tparams.get(etpi).unwrap()
+                            SpannedType etpta = tinst.type_args.get(etpi).unwrap()
+                            eqf_sub_map.put(etpname, etpta)
+                            etpi += 1
+                        int eqf_prev = generic_instances.len()
+                        int eqf_mi = 0
+                        while eqf_mi < eqf_tmpl.methods.len():
+                            FunctionDef eqf_meth = eqf_tmpl.methods.get(eqf_mi).unwrap()
+                            # Method return type — substitute and register as
+                            # a generic instance if it names a generic type
+                            # (e.g. `VectorIter[T]` → `VectorIter[int]`).
+                            SpannedType ret_sub = substitute_type(eqf_meth.return_type, &eqf_sub_map)
+                            match ret_sub.ty:
+                                case TNamed(rtname, rtargs):
+                                    if rtargs.len() > 0 and not has_type_variable(rtargs):
+                                        String rt_mangled = compute_mangled_name(rtargs, rtname)
+                                        if not seen_instances.contains(rt_mangled):
+                                            seen_instances.put(rt_mangled.clone(), true)
+                                            generic_instances.push(GenericInstance(rtname, rtargs, rt_mangled))
+                                else:
+                                    pass
+                            # Method body — walk for ECall sites with type
+                            # args (e.g. `return VectorIter[T](self, 0)`
+                            # discovers `VectorIter[int]` via the constructor
+                            # call). Skip method-level generics; those need
+                            # per-call-site mono and aren't reached here.
+                            if eqf_meth.type_params.len() == 0:
+                                discover_transitive_stmts(eqf_meth.body, &eqf_sub_map, &seen_instances, &generic_instances)
+                            eqf_mi += 1
+                        if generic_instances.len() > eqf_prev:
+                            transitive_changed = true
+                    eqfi += 1
             tfix_i += 1
 
     # Register monomorphized struct types as resource types if any substituted
@@ -6133,6 +6189,48 @@ GirModule lower_module(Module m, ScopeTable scopes, TypeTable types, Dict[String
             # Monomorphized generics use bare names (no module prefix)
             gmod.fn_sigs.put(inst.mangled_name.clone(), rt)
         si += 1
+
+    # Register fn_sigs for monomorphized generic-equip methods. Mirrors the
+    # function-template pre-pass above: fn_sigs entries must exist *before*
+    # function bodies are lowered (line ~6155+) so call-site return-type
+    # lookups (e.g. `v.iter()` in lower_for_iterator) resolve. The actual
+    # equip-method bodies are emitted later at line ~6481 by
+    # `lower_generic_equip` which strips trait_name and routes through
+    # lower_equip_block — produces `Target__method` naming with type subs
+    # applied. We mirror that naming here.
+    int eqsi = 0
+    while eqsi < generic_instances.len():
+        GenericInstance eqsi_inst = generic_instances.get(eqsi).unwrap()
+        if equip_generic_names.contains(eqsi_inst.base_name):
+            int eqsti = 0
+            while eqsti < equip_templates.len():
+                EquipBlock eqs_tmpl = equip_templates.get(eqsti).unwrap()
+                String eqs_target_name = ""
+                match eqs_tmpl.target.ty:
+                    case TNamed(etn, _):
+                        eqs_target_name = etn
+                    else:
+                        pass
+                if eqs_target_name == eqsi_inst.base_name:
+                    Vector[String] eqs_type_params = extract_equip_type_params(eqs_tmpl)
+                    setup_type_subs(&gmod, eqs_type_params, eqsi_inst.type_args)
+                    # `type_to_c_name(target, …)` substitutes type vars from
+                    # active subs — `Vector[T]` with T → int → `Vector__int64_t`.
+                    String eqs_mono_target = type_to_c_name(eqs_tmpl.target, &gmod)
+                    int eqsmi = 0
+                    while eqsmi < eqs_tmpl.methods.len():
+                        FunctionDef eqs_mdef = eqs_tmpl.methods.get(eqsmi).unwrap()
+                        # Method-level generics (`fold[A, F]` etc.) skip this
+                        # pre-pass; they need per-call-site mono of their own.
+                        if eqs_mdef.type_params.len() == 0:
+                            int eqs_ret = map_fn_return_type(eqs_mdef.return_type, &gmod)
+                            if eqs_ret >= 0:
+                                String eqs_mangled = eqs_mono_target + "__" + eqs_mdef.name
+                                gmod.fn_sigs.put(eqs_mangled, eqs_ret)
+                        eqsmi += 1
+                    clear_type_subs(&gmod)
+                eqsti += 1
+        eqsi += 1
 
     # Build trait lookup map for default method generation
     Dict[String, TraitDef] trait_defs = {}
