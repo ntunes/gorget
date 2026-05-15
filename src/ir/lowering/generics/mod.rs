@@ -2332,11 +2332,17 @@ fn monomorphize_struct(
     // ReadGuard[T] / WriteGuard[T] need Move + Trivial drop to release the pthread rwlock.
     // Collection types (Vector, Dict, etc.) get their own drop strategies.
     let metadata = if template.name.node == "Box" {
+        // Mirror `register_collection_alias`'s Box arm: tag `is_box: true` so
+        // downstream consumers reading `TypeRegistry::is_box(type_id)` see the
+        // truth at this registration path (the AST-template-driven monomorph
+        // path, distinct from the AST `Type::Named` recursion in
+        // `map_ast_type_mut`).
         TypeMetadata {
             size: None,
             align: None,
             copy_semantics: CopySemantics::Resource,
             drop_strategy: DropStrategy::Trivial("free".to_string()),
+            is_box: true,
             ..Default::default()
         }
     } else if matches!(template.name.node.as_str(), "ReadGuard" | "WriteGuard") {

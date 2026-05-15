@@ -117,13 +117,30 @@ pub(crate) fn get_or_register_type(
 }
 
 /// Ensure a Box type has a TypeDef in the registry so the C backend can emit its typedef.
+///
+/// Coherence-at-construction: tag `is_box: true` here so downstream
+/// consumers reading `TypeRegistry::is_box(type_id)` see the truth at
+/// every Box-TypeDef registration path. This is one of three Box-registration
+/// entry points (alongside `register_collection_alias`'s Box arm in
+/// `lowering/types.rs:789` and `monomorphize_struct`'s Box arm in
+/// `lowering/generics/mod.rs:2334`). All three must populate `is_box`
+/// uniformly — see `docs/internals/layering-discipline.md` rule 3
+/// (one source of truth per axis).
 pub fn ensure_box_type_def(ctx: &mut LoweringContext, box_type_name: &str, inner_type: TypeId) {
-    use crate::ir::types::{CopySemantics, DropStrategy};
-    use super::super::types::make_wrapper_type_def;
+    use crate::ir::types::{CopySemantics, DropStrategy, StructDef, StructField, TypeDef, TypeDefKind, TypeMetadata};
     if ctx.type_registry.get_type_def(box_type_name).is_some() { return; }
-    ctx.type_registry.add_type_def(
-        make_wrapper_type_def(box_type_name, inner_type, CopySemantics::Resource, DropStrategy::Trivial("free".to_string()))
-    );
+    ctx.type_registry.add_type_def(TypeDef {
+        name: box_type_name.to_string(),
+        kind: TypeDefKind::Struct(StructDef {
+            fields: vec![StructField { name: "_0".to_string(), type_id: inner_type }],
+        }),
+        metadata: TypeMetadata {
+            copy_semantics: CopySemantics::Resource,
+            drop_strategy: DropStrategy::Trivial("free".to_string()),
+            is_box: true,
+            ..Default::default()
+        },
+    });
 }
 
 /// Ensure a Shared[T] type has a TypeDef in the registry (Copy pointer, drop decrements refcount).

@@ -185,13 +185,15 @@ pub(super) fn lower_binary_op(
 
         // `in` operator → contains check
         AstOp::In => {
-            // Determine collection type to use the right contains function
+            // Determine collection type to use the right contains function.
+            // Read typed `metadata.collection_kind` rather than name-prefix
+            // probing — same answer, populated at every TypeDef registration
+            // path via the protocol table.
+            use crate::ir::types::CollectionKind;
             let rhs_type = infer_operand_type_full(ctx, &rhs, builder);
-            let rhs_type_name = ctx.type_name_for_id(rhs_type)
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            let is_map = rhs_type_name.starts_with("Dict__") || rhs_type_name.starts_with("HashMap__");
-            let is_set = rhs_type_name.starts_with("Set__") || rhs_type_name.starts_with("HashSet__");
+            let kind = ctx.type_registry.collection_kind(rhs_type);
+            let is_map = matches!(kind, Some(CollectionKind::Map) | Some(CollectionKind::OrderedMap));
+            let is_set = matches!(kind, Some(CollectionKind::Set) | Some(CollectionKind::OrderedSet));
             let is_string = ctx.type_mapper.is_string_type(rhs_type);
             if is_map || is_set {
                 // Map/Set contains: need pointer to collection and pointer to element

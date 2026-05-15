@@ -731,6 +731,14 @@ impl TypeRegistry {
         None
     }
 
+    /// Get the collection kind for a named type by NAME (not TypeId). Useful
+    /// for sites operating on mangled type names (e.g. LIR-level element
+    /// extraction) where a `TypeId` isn't readily available. Reads the same
+    /// `metadata.collection_kind` flag as the TypeId-keyed accessor.
+    pub fn collection_kind_by_name(&self, name: &str) -> Option<CollectionKind> {
+        self.get_type_def(name).and_then(|td| td.metadata.collection_kind)
+    }
+
     /// Whether the named type is a `Box__T` heap-allocated wrapper.
     /// Reads the typed `metadata.is_box` flag set at registration in
     /// `register_collection_alias`. Replaces downstream

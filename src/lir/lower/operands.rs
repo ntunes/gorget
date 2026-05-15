@@ -493,8 +493,10 @@ impl<'a> FuncLowering<'a> {
     pub(super) fn resolve_deref_gir_type_id(&self, gir_type_id: GirTypeId) -> GirTypeId {
         match self.gir_types.get(gir_type_id) {
             Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
-            Some(GirType::Named(name)) if name.starts_with("Box__") => {
-                // Box types are Named("Box__X") — the inner type is encoded in the name.
+            Some(GirType::Named(name)) if self.gir_types.is_box(gir_type_id) => {
+                // Box types — read the typed `metadata.is_box` flag rather
+                // than name-prefix probing. The inner type lives in the
+                // canonical `_0` field of the TypeDef.
                 if let Some(type_def) = self.gir_types.get_type_def(name.as_str()) {
                     if let crate::ir::types::TypeDefKind::Struct(ref s) = type_def.kind {
                         if let Some(f) = s.fields.first() {
@@ -752,10 +754,14 @@ impl<'a> FuncLowering<'a> {
             Some(GirType::Named(n)) => n.clone(),
             _ => return false,
         };
-        // Both must be Box__ types with different inner types.
-        if !dst_name.starts_with("Box__") || !src_name.starts_with("Box__") {
+        // Both must be Box types with different inner types. Read the typed
+        // `metadata.is_box` flag rather than probing the name prefix.
+        if !self.gir_types.is_box(dst_type_id) || !self.gir_types.is_box(src_type_id) {
             return false;
         }
+        // The Box__ prefix carries the mangled inner-type name; we still
+        // string-strip it because the inner name is what drives vtable /
+        // trait-obj struct lookup downstream (the mangling boundary).
         let dst_inner = &dst_name[5..];
         let src_inner = &src_name[5..];
         if dst_inner == src_inner {

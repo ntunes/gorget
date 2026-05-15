@@ -891,9 +891,9 @@ pub fn emit_pattern_bindings(
                 // Box types are excluded — user code explicitly dereferences
                 // them with `*a`, which requires a Box value, not a Ptr.
                 if scrut_is_ptr && ctx.type_registry.is_resource_type(field_type) {
-                    let is_box = ctx.type_registry.type_name(field_type)
-                        .map_or(false, |n| n.starts_with("Box__"));
-                    if !is_box {
+                    // Read the typed `metadata.is_box` flag at every Box-TypeDef
+                    // registration path (replaces a name-prefix probe).
+                    if !ctx.type_registry.is_box(field_type) {
                         field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
                     }
                 }
@@ -1078,9 +1078,9 @@ pub fn emit_pattern_bindings(
                 } else { I64_TYPE };
 
                 if scrut_is_ptr && ctx.type_registry.is_resource_type(field_type) {
-                    let is_box = ctx.type_registry.type_name(field_type)
-                        .map_or(false, |n| n.starts_with("Box__"));
-                    if !is_box {
+                    // Read the typed `metadata.is_box` flag at every Box-TypeDef
+                    // registration path (replaces a name-prefix probe).
+                    if !ctx.type_registry.is_box(field_type) {
                         field_type = ctx.type_registry.insert(GirType::Ptr(field_type));
                     }
                 }

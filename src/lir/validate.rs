@@ -920,7 +920,11 @@ pub fn validate_drop_completeness(module: &LirModule) -> Vec<LirError> {
         {
             return true;
         }
-        if sd.name.starts_with("Box__") {
+        // Box[T] structs are droppable via __gorget_box_free_<inner>. Read the
+        // typed `box_inner_type` (set at every Box-struct LIR registration
+        // site) rather than a name-prefix probe. Trait-object boxes are
+        // also tagged via `is_trait_box` and are droppable too.
+        if sd.box_inner_type.is_some() || sd.is_trait_box {
             return true;
         }
         false

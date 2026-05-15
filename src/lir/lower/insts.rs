@@ -1944,6 +1944,7 @@ impl<'a> FuncLowering<'a> {
     /// `CollectionCtor` directly — reads typed LIR metadata rather than
     /// re-matching on name strings downstream.
     pub(super) fn elem_type_to_meta(&self, name: &str) -> crate::lir::ElemMeta {
+        use crate::ir::types::CollectionKind;
         use crate::lir::{ElemMeta, ResourceKind};
         match name {
             "int64_t" | "uint64_t" => ElemMeta::Primitive(LirType::I64),
@@ -1959,16 +1960,34 @@ impl<'a> FuncLowering<'a> {
             "GorgetMap" => ElemMeta::Resource(ResourceKind::GorgetMap),
             "GorgetSet" => ElemMeta::Resource(ResourceKind::GorgetSet),
             "GorgetClosure" => ElemMeta::Resource(ResourceKind::GorgetClosure),
-            n if n.starts_with("Vector__") || n.starts_with("Deque__") => {
-                ElemMeta::Resource(ResourceKind::GorgetArray)
-            }
-            n if n.starts_with("Dict__") || n.starts_with("HashMap__") => {
-                ElemMeta::Resource(ResourceKind::GorgetMap)
-            }
-            n if n.starts_with("Set__") || n.starts_with("HashSet__") => {
-                ElemMeta::Resource(ResourceKind::GorgetSet)
-            }
             n => {
+                // Phase A: read typed `metadata.collection_kind` set at every
+                // collection TypeDef registration path (register_collection_alias,
+                // map_ast_type_mut, mod.rs pre-monomorphize pass, ensure_collection_type).
+                // This replaces a name-prefix probe with a metadata-driven decision.
+                // The legacy name-prefix arms remain as a defensive fallback for
+                // names that surface from mangling but whose TypeDef wasn't
+                // pre-registered (e.g. cross-module imports / monomorph synthetics
+                // racing with this lookup) — they are no-op when the typed read
+                // hits, but preserve correctness if registration order regresses.
+                if let Some(kind) = self.gir_types.collection_kind_by_name(n) {
+                    return match kind {
+                        CollectionKind::Array => ElemMeta::Resource(ResourceKind::GorgetArray),
+                        CollectionKind::Map | CollectionKind::OrderedMap =>
+                            ElemMeta::Resource(ResourceKind::GorgetMap),
+                        CollectionKind::Set | CollectionKind::OrderedSet =>
+                            ElemMeta::Resource(ResourceKind::GorgetSet),
+                    };
+                }
+                if n.starts_with("Vector__") || n.starts_with("Deque__") {
+                    return ElemMeta::Resource(ResourceKind::GorgetArray);
+                }
+                if n.starts_with("Dict__") || n.starts_with("HashMap__") {
+                    return ElemMeta::Resource(ResourceKind::GorgetMap);
+                }
+                if n.starts_with("Set__") || n.starts_with("HashSet__") {
+                    return ElemMeta::Resource(ResourceKind::GorgetSet);
+                }
                 if let Some(sid) = self.struct_reg.lookup(n) {
                     // Callable variants (Callable__T_args, MutCallable__T_args, …) are
                     // registered with `c_runtime_alias = "GorgetClosure"`. Read the typed
@@ -4254,9 +4273,9 @@ impl<'a> FuncLowering<'a> {
             let ty = self.resolve_place_type(place);
             // For Box deref of aggregate types (e.g. Box[Str]), we must emit a Load
             // because the pointer points to heap data that needs to be read.
+            // Read the typed `metadata.is_box` flag rather than a name probe.
             let is_box_deref = place.projections.first() == Some(&Projection::Deref)
-                && self.gir_types.get(self.gir_func.locals[place.local.0 as usize].type_id)
-                    .map_or(false, |t| matches!(t, GirType::Named(n) if n.starts_with("Box__")));
+                && self.gir_types.is_box(self.gir_func.locals[place.local.0 as usize].type_id);
             if ty.is_aggregate() && !is_box_deref {
                 addr // aggregates: the address IS the value
             } else {

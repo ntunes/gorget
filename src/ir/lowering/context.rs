@@ -300,6 +300,12 @@ pub struct LoweringContext<'a> {
     pub noreturn_fns: rustc_hash::FxHashSet<String>,
     /// Per-function return ABI kind.
     pub fn_return_abis: rustc_hash::FxHashMap<String, crate::ir::abi::AbiKind>,
+    /// Extern functions declared `borrowed T f(...)` — their return value is
+    /// a non-owned pointer (the FFI buffer's lifetime is not Gorget-managed).
+    /// Callers must clone at the ownership boundary; the IR layer is
+    /// expected to auto-insert that clone. Populated for both the Gorget
+    /// name and the bound C symbol.
+    pub fn_returns_borrowed: rustc_hash::FxHashSet<String>,
     /// Module-level global variable names (from StaticDecl items).
     /// Used by Expr::Identifier lowering to emit Constant::GlobalRef instead of I64(0).
     pub global_names: rustc_hash::FxHashSet<String>,
@@ -426,6 +432,7 @@ impl<'a> LoweringContext<'a> {
                 s
             },
             fn_return_abis: rustc_hash::FxHashMap::default(),
+            fn_returns_borrowed: rustc_hash::FxHashSet::default(),
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
@@ -2877,9 +2884,11 @@ impl<'a> LoweringContext<'a> {
         if let Some(inner) = self.pointee_type(type_id) {
             return Some(inner);
         }
-        // Then try Named Box types: TypeDef with a single "_0" field
-        if let Some(GirType::Named(name)) = self.type_registry.get(type_id) {
-            if name.starts_with("Box__") {
+        // Then try Named Box types: TypeDef with a single "_0" field.
+        // Reads the typed `metadata.is_box` flag (set at every Box-TypeDef
+        // registration path) rather than name-prefix matching.
+        if self.type_registry.is_box(type_id) {
+            if let Some(GirType::Named(name)) = self.type_registry.get(type_id) {
                 if let Some(type_def) = self.type_registry.get_type_def(name.as_str()) {
                     if let TypeDefKind::Struct(ref s) = type_def.kind {
                         if let Some(f) = s.fields.first() {

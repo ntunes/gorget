@@ -1211,8 +1211,13 @@ pub(super) fn lower_method_call(
     let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
 
     if let Some(type_name) = type_name {
+        // Box[T] methods — read the typed `metadata.is_box` flag rather than
+        // name-prefix-probing. `is_box_name` checks the TypeDef metadata at the
+        // registry, which every Box registration path now writes uniformly.
+        let type_is_box = ctx.type_registry.is_box_name(&type_name);
+
         // Box[T].get() → call Box__T__get(b) passing value directly (not borrow)
-        if type_name.starts_with("Box__") && method_name == "get" {
+        if type_is_box && method_name == "get" {
             let inner_type_name = &type_name["Box__".len()..];
             let inner_type = ctx.type_mapper.lookup_named(inner_type_name).unwrap_or(I64_TYPE);
             let mangled = format!("{type_name}__get");
@@ -1221,7 +1226,7 @@ pub(super) fn lower_method_call(
         }
 
         // Box[T].set(val) → call Box__T__set(&b, val) passing borrow of box + value
-        if type_name.starts_with("Box__") && method_name == "set" && !args.is_empty() {
+        if type_is_box && method_name == "set" && !args.is_empty() {
             let val = lower_expr(ctx, builder, &args[0].node.value);
             let mangled = format!("{type_name}__set");
             // set takes (&box, val) — pass pointer to the box local
@@ -1242,7 +1247,7 @@ pub(super) fn lower_method_call(
         }
 
         // Box[Trait] method dispatch — look up return type from VTable TypeDef
-        if type_name.starts_with("Box__") {
+        if type_is_box {
             let inner = &type_name["Box__".len()..];
             let vtable_name = format!("{inner}_VTable");
             if let Some(vtable_def) = ctx.type_registry.get_type_def(&vtable_name) {

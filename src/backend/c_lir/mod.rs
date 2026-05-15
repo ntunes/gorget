@@ -1061,12 +1061,36 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     val_types[dst.0 as usize] = Some(norm(ty));
                 }
             }
-            // Detect runtime struct returns that aren't in module.structs
+            // Detect runtime struct returns that aren't in module.structs.
+            //
+            // Layering rule 4 (resolve-once write-through): prefer the typed
+            // LIR extern declaration over a hardcoded name list. The extern's
+            // `return_type: LirType` carries the StructId (set at lowering
+            // time from the GIR ExternDecl's typed `return_type: TypeId`),
+            // so we can read the struct's name directly from `module.structs`.
+            //
+            // The legacy `runtime_fn_return_struct(name)` name-list fallback
+            // remains for runtime symbols whose return type didn't survive
+            // through the LIR layer as a Struct (e.g. some extern declarations
+            // use `LirType::Ptr` as the return type and the typed struct info
+            // travels via a sidecar). When the extern's return is `Struct(sid)`
+            // and the struct isn't in `module.structs` (i.e. it's a runtime
+            // singleton not emitted by the user), record the override.
             if let Inst::CallExtern { dst: Some(d), name, .. } = inst {
-                if let Some(rt_name) = runtime_fn_return_struct(name) {
+                let typed_override = module.externs.iter()
+                    .find(|e| &e.name == name)
+                    .and_then(|e| match &e.return_type {
+                        LirType::Struct(sid) => module.structs
+                            .get(sid.0 as usize)
+                            .map(|s| s.name.clone()),
+                        _ => None,
+                    });
+                let rt_name_owned: Option<String> = typed_override
+                    .or_else(|| runtime_fn_return_struct(name).map(String::from));
+                if let Some(rt_name) = rt_name_owned {
                     let in_module = module.structs.iter().any(|s| s.name == rt_name);
                     if !in_module {
-                        val_c_type_override[d.0 as usize] = Some(rt_name.to_string());
+                        val_c_type_override[d.0 as usize] = Some(rt_name);
                     }
                 }
             }

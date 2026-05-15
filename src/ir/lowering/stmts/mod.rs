@@ -252,9 +252,26 @@ fn lower_var_decl(
             };
             // Box[Callable[...]] variables pre-register with a "Box__Callable__unknown" type from the
             // generic collector. We need to reinfer from the actual RHS to get the real closure type.
-            let gir_type_is_box_callable = ctx.type_name_for_id(gir_type)
-                .map(|n| n.starts_with("Box__Callable__") || n.starts_with("Box__MutCallable__") || n.starts_with("Box__ConsumeCallable__"))
-                .unwrap_or(false);
+            // Read the typed `metadata.is_box` flag + inner-type's `c_runtime_alias == "GorgetClosure"`
+            // rather than probing the compound name prefix. Callable variants
+            // (Callable / MutCallable / ConsumeCallable) all carry the
+            // `c_runtime_alias = "GorgetClosure"` typed flag at registration.
+            let gir_type_is_box_callable = if ctx.type_registry.is_box(gir_type) {
+                if let Some(tn) = ctx.type_name_for_id(gir_type) {
+                    if let Some(inner_name) = tn.strip_prefix("Box__") {
+                        ctx.type_registry
+                            .get_type_def(inner_name)
+                            .and_then(|td| td.metadata.c_runtime_alias.as_deref())
+                            == Some("GorgetClosure")
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             let local_id = builder.add_local(gir_type, Some(name));
             ctx.register_local(name, local_id, gir_type);
             // Track callable return types for locals declared with a Callable

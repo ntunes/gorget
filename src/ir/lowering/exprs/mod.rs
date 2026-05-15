@@ -561,26 +561,21 @@ fn lower_expr_inner(
                 // In BOTH cases the resulting value is a shallow memcpy of
                 // the boxed data and its heap buffers are shared with the
                 // box's own drop chain — double-free if we drop-register dst.
+                // Read the typed `metadata.is_box` flag at every Box TypeDef
+                // registration site rather than probing by name prefix.
                 let source_is_box = {
                     let src_ty = if local_idx < builder.locals.len() {
                         builder.locals[local_idx].type_id
                     } else { I64_TYPE };
-                    let direct_box = matches!(
-                        ctx.type_registry.get(src_ty),
-                        Some(crate::ir::types::GirType::Named(n)) if n.starts_with("Box__"));
-                    let ptr_to_box = ctx.pointee_type(src_ty).map_or(false, |inner| {
-                        matches!(
-                            ctx.type_registry.get(inner),
-                            Some(crate::ir::types::GirType::Named(n)) if n.starts_with("Box__"))
-                    });
+                    let direct_box = ctx.type_registry.is_box(src_ty);
+                    let ptr_to_box = ctx.pointee_type(src_ty)
+                        .map_or(false, |inner| ctx.type_registry.is_box(inner));
                     direct_box || ptr_to_box
                 };
-                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(deref_type).cloned() {
-                    if n.starts_with("Box__") {
-                        if let Some(inner_ty) = ctx.deref_inner_type(deref_type) {
-                            deref_place.projections.push(Projection::Deref);
-                            deref_type = inner_ty;
-                        }
+                if ctx.type_registry.is_box(deref_type) {
+                    if let Some(inner_ty) = ctx.deref_inner_type(deref_type) {
+                        deref_place.projections.push(Projection::Deref);
+                        deref_type = inner_ty;
                     }
                 }
                 // For resource-containing types, emit a deep clone via the
