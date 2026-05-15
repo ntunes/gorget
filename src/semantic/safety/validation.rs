@@ -323,7 +323,7 @@ pub(super) fn collect_imported_defs(
                             }
                         }
                     }
-                    ImportStmt::From { names, glob_types, .. } => {
+                    ImportStmt::From { names, glob_types, wildcard, .. } => {
                         for n in names {
                             let local = n.local_name();
                             if let Some(def_id) = scopes.lookup(&local.node) {
@@ -333,6 +333,10 @@ pub(super) fn collect_imported_defs(
                         // Skip glob_types — enum type imports are used implicitly
                         // through their variants, which may not appear in resolution_map
                         let _ = glob_types;
+                        // Skip module-level wildcard — names are user-driven via
+                        // their use sites; the wildcard itself doesn't have a
+                        // single binding span.
+                        let _ = wildcard;
                     }
                 }
             }

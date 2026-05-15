@@ -1344,10 +1344,26 @@ impl Parser {
         self.expect_keyword(Keyword::Import)?;
 
         // Parse import names, detecting:
+        //  - bare module wildcard `*` (must be the only item: `from X import *`)
         //  - `EnumName.*` glob syntax
         //  - `Y as Z` alias syntax
         let mut names = Vec::new();
         let mut glob_types = Vec::new();
+        let mut wildcard = false;
+
+        // Bare `*` as first (and only) token after `import` → module wildcard.
+        if self.match_token(&Token::Star) {
+            wildcard = true;
+            let end = self.previous_span();
+            self.consume_newline();
+            return Ok(ImportStmt::From {
+                path,
+                names,
+                glob_types,
+                wildcard,
+                span: start.merge(end),
+            });
+        }
 
         let first_name = self.expect_name()?;
         if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
@@ -1382,6 +1398,7 @@ impl Parser {
             path,
             names,
             glob_types,
+            wildcard,
             span: start.merge(end),
         })
     }

@@ -1,0 +1,19 @@
+# Module-level wildcard import: `from X import *`
+#
+# Brings every public name from std.math into scope without naming
+# each one. Mirrors Rust's `use std::math::*`.
+
+from std.math import *
+
+void main():
+    # Constants
+    print(f"{PI > 3.14 and PI < 3.15}")
+    # Integer math
+    print(f"{abs(-7)}")
+    print(f"{min(2, 9)}")
+    # Float math
+    print(f"{sqrt(16.0)}")
+    print(f"{floor(2.9)}")
+    # Trig
+    print(f"{sin(0.0)}")
+    print(f"{cos(0.0)}")

@@ -552,6 +552,31 @@ impl ScopeTable {
         Some(src_id)
     }
 
+    /// Bind `local_name` in the current scope to the same DefId as `source_name`,
+    /// creating the entries (inserting into both type and value namespaces) if
+    /// they don't already exist. Used by wildcard imports (`from X import *`).
+    /// Returns `None` if `source_name` is not in scope.
+    pub fn bind_wildcard(&mut self, source_name: &str, local_name: &str) -> Option<DefId> {
+        let src_id = self.lookup(source_name)?;
+        let scope = &mut self.scopes[self.current.0 as usize];
+        scope.types.entry(local_name.to_string()).or_insert(src_id);
+        scope.values.entry(local_name.to_string()).or_insert(src_id);
+        Some(src_id)
+    }
+
+    /// Return all unique names defined directly in `scope_id` across both namespaces.
+    pub fn names_in_scope(&self, scope_id: ScopeId) -> Vec<String> {
+        let scope = &self.scopes[scope_id.0 as usize];
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut out = Vec::with_capacity(scope.types.len() + scope.values.len());
+        for name in scope.types.keys().chain(scope.values.keys()) {
+            if seen.insert(name.clone()) {
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+
     /// Return all `(name, DefId)` pairs defined directly in the current scope.
     /// Combines both namespaces.
     pub fn names_in_current_scope(&self) -> Vec<(String, DefId)> {

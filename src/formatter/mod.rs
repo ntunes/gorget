@@ -711,10 +711,15 @@ impl Formatter {
                 self.write_doc(&doc);
                 self.emitter.newline();
             }
-            ImportStmt::From { path, names, glob_types, .. } => {
+            ImportStmt::From { path, names, glob_types, wildcard, .. } => {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
+                if *wildcard {
+                    self.emitter.write("*");
+                    self.emitter.newline();
+                    return;
+                }
                 // Merge regular names (with optional `as` alias) and glob types
                 // (with .* suffix), then sort.
                 let mut sorted: Vec<String> = names

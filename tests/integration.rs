@@ -9918,12 +9918,15 @@ fn format_equip_canonical(eq: &EquipBlock) -> String {
 
 fn format_import_canonical(imp: &ImportStmt) -> String {
     match imp {
-        ImportStmt::From { path, names, .. } => {
+        ImportStmt::From { path, names, wildcard, .. } => {
             let module_path = path
                 .iter()
                 .map(|s| s.node.as_str())
                 .collect::<Vec<_>>()
                 .join(".");
+            if *wildcard {
+                return format!("from {module_path} import *");
+            }
             let name_list = names
                 .iter()
                 .map(|n| match &n.alias {

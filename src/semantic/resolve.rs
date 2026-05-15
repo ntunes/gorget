@@ -212,6 +212,35 @@ pub fn collect_top_level(
         }
     }
 
+    // Fourth pass: handle module-level wildcard imports (`from X import *`).
+    // The imported module's public names have already been exported to the
+    // current (parent) scope via `export_non_private`, so the names are
+    // technically already available. This pass exists for two reasons:
+    //   1. Symmetry with the private-import check below — any private name
+    //      that somehow leaked through the wildcard surface here would still
+    //      need to be flagged.
+    //   2. Future-proofing: if we ever tighten `export_non_private` to gate
+    //      exports on explicit imports, wildcard expansion becomes load-bearing.
+    // For now, the wildcard is mostly a no-op semantically (the path-based
+    // loader still loads the target module via `extract_imports`), but we
+    // record it as exercised so the unused-import check ignores it.
+    for item in &module.items {
+        if let Item::Import(ImportStmt::From { path, wildcard, .. }) = &item.node {
+            if !*wildcard {
+                continue;
+            }
+            // Find the imported FileModule scope and re-bind each public name
+            // into the current scope (no-op when the name is already bound to
+            // the same def from `export_non_private`; insert otherwise).
+            let mod_key = path.iter().map(|s| s.node.as_str()).collect::<Vec<_>>().join(".");
+            if let Some(&file_scope_id) = ctx.file_module_scopes.get(&mod_key) {
+                let names: Vec<String> = scopes.names_in_scope(file_scope_id);
+                for name in &names {
+                    let _ = scopes.bind_wildcard(name, name);
+                }
+            }
+        }
+    }
 
     // Validate: detect imports of private items.
     // After all FileModules have exported their public names and glob imports ran,
@@ -750,11 +779,16 @@ fn collect_import(import: &ImportStmt, scopes: &mut ScopeTable, errors: &mut Vec
                 }
             }
         }
-        ImportStmt::From { names, glob_types, .. } => {
-            for n in names {
-                let local = n.local_name();
-                if let Err(e) = scopes.define(local.node.clone(), DefKind::Import, local.span) {
-                    errors.push(e);
+        ImportStmt::From { names, glob_types, wildcard, .. } => {
+            // Module-level wildcard `from X import *` registers nothing up front —
+            // the wildcard expansion happens in a post-merge fixup pass once the
+            // imported module's public names are visible in the parent scope.
+            if !*wildcard {
+                for n in names {
+                    let local = n.local_name();
+                    if let Err(e) = scopes.define(local.node.clone(), DefKind::Import, local.span) {
+                        errors.push(e);
+                    }
                 }
             }
             // Glob type names (`EnumName.*`) register the type itself as Import (if not already).
@@ -2100,6 +2134,7 @@ struct Point:
                     alias: None,
                 }],
                 glob_types: vec![],
+                wildcard: false,
                 span: dummy,
             }),
             span: dummy,
@@ -2155,6 +2190,7 @@ struct Point:
                     alias: None,
                 }],
                 glob_types: vec![],
+                wildcard: false,
                 span: dummy,
             }),
             span: dummy,
@@ -2204,6 +2240,7 @@ struct Point:
                     alias: None,
                 }],
                 glob_types: vec![],
+                wildcard: false,
                 span: dummy,
             }),
             span: dummy,
@@ -2251,6 +2288,7 @@ struct Point:
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
                 names: vec![],
                 glob_types: vec![Spanned { node: "Status".to_string(), span: Span::new(300, 306) }],
+                wildcard: false,
                 span: dummy,
             }),
             span: dummy,

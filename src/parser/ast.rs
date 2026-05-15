@@ -308,12 +308,16 @@ pub enum ImportStmt {
     /// `from std.fmt import Displayable, format`
     /// Also supports glob: `from xtd.log import LogLevel.*`
     /// Also supports aliasing: `from std.math import sin as msin`
+    /// Also supports module-level wildcard: `from std.math import *`
     /// Glob names are in `glob_types`; they import the type + all its variants bare.
     From {
         path: Vec<Spanned<String>>,
         names: Vec<ImportName>,
         /// Type names imported with `.*` — bring type + all variants into scope.
         glob_types: Vec<Spanned<String>>,
+        /// True for module-level wildcard `from X import *` — bind all
+        /// public names from the module into the current scope.
+        wildcard: bool,
         span: Span,
     },
 }
