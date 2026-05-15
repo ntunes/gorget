@@ -658,6 +658,17 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             String sname = sdef.name.clone()
                             m.items.push(IStruct(sdef))
                             imported_fns.put("__imported_type__" + sname, true)
+                        else:
+                            # Generic struct template (`struct VectorIter[T]`,
+                            # `struct VectorDrain[T]`, …): merge so the
+                            # lowerer's `struct_templates` collector picks it
+                            # up and `lower_module`'s mono-fields pass at
+                            # line ~6100 registers field info for each
+                            # concrete instance (`VectorIter__int64_t.source`,
+                            # `.idx`, …). Don't tag `__imported_type__` —
+                            # the Rust preamble doesn't emit mono'd struct
+                            # bodies, so self-host must emit them itself.
+                            m.items.push(IStruct(sdef))
                     case IEquip(eqblk):
                         # Filter: real methods have >=2 body stmts, OR expression body,
                         # OR 1 stmt that isn't a string-literal extern stub marker.
