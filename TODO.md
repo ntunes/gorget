@@ -160,19 +160,12 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 - **LSP server.** `language-design.md` lists LSP as a design target but nothing ships today. The gorget-js agent flagged this as the single biggest developer-experience gap: estimated 50% of their loops were "what's that field again?" / "how is this method spelled?" — for a language with rich types, no autocomplete/hover/go-to-def is a heavy accessibility loss. Biggest payoff, biggest investment among the gorget-js critique items — don't start until the smaller papercuts (lint:suggest_throws, import aliasing, parser fixes, stack traces, --trace-cow) are addressed; those are days each, LSP is multi-week. The semantic analyzer already builds a complete typed scope tree (`ScopeTable` + `function_info` + `TypeRegistry`) — the foundation is there; the work is the LSP-protocol layer, file-watching for incremental updates, and the inevitable "what does Gorget's hover-on-`x.method` look like in practice" design pass. [added: 2026-05-12, from gorget-js critique]
 
-- **`is_box` consumer migration deferred** — `TypeMetadata::is_box: bool` field shipped (set in `register_collection_alias` for Box base_name; accessor `TypeRegistry::is_box(type_id)` / `is_box_name(name)`). Probed migrating `name.starts_with("Box__")` consumer sites in `context.rs`, `exprs/mod.rs`, `methods.rs`, `stmts/patterns.rs` to read the typed flag (2026-05-10) — regressed 7 trait-box tests (box_heap segfault, serializable/deserializable build failure, etc.). Root cause: `register_collection_alias` is the Box registration site for AST `Type::Named { name: "Box", ... }`, but cross-module imports (`from std.box import Box`) and other paths register Box TypeDefs via different paths that don't set `is_box: true`. Need to also set the flag at the cross-module import / monomorphization registration sites. Same shape as the `elem_type_to_meta` TODO. Reverted; framework kept for future migration. [added: 2026-05-10]
-
-- **`elem_type_to_meta` collection_kind migration deferred** — `lir/lower/insts.rs::elem_type_to_meta` (`:1941-1949`) routes `Vector__/Deque__` / `Dict__/HashMap__` / `Set__/HashSet__` element names to `ResourceKind::GorgetArray/Map/Set`. Probed migration to typed `gir_types.get_type_def(n).and_then(|td| td.metadata.collection_kind)` reads regressed `vector_task_get` (Got 2, expected 3) on 2026-05-10 — `register_collection_alias` doesn't always register the TypeDef before this path runs (cross-module, monomorph synthetics). The matching `is_monomorphized_wrapper_type` in `c_lir/mod.rs` and `box_inner_drop_fn` already use `struct_def_by_name` to handle this, but the GIR-side path here would need a similar registration-timing guarantee. Same shape as the `opaque_runtime_size` cleanup TODO. Reverted; left as the prefix-match fallback for now. [added: 2026-05-10]
-
 - **`panic` as builtin — option (a) follow-on: retire the hardcoded `gorget_panic` lowering at `assert`.** Option (b) shipped 2026-05-13: `panic(msg)` is callable from user code, typechecks as Never (compatible with any expected type), and registers `gorget_panic` in `noreturn_fns` for indirect call paths. The hardcoded `call_extern("gorget_panic", …)` at `src/ir/lowering/stmts/mod.rs:2132` for `assert` lowering remains. Option (a) (layering-discipline-correct answer) would: declare `panic` in a stdlib module as `extern noreturn void panic(String msg)`, route the `assert` failure path through a normal `panic(msg)` call, retire the name-match. Defer until the prelude / auto-import machinery is fit for purpose (today only enum variants prelude-import — `panic` needs to be globally available without `from std.X import panic`). Also audit `lib/freestanding/runtime.c` and `c_runtime.rs` for any other `_Noreturn` C functions exposed to Gorget (likely none today). [revised 2026-05-13 — option (b) shipped; option (a) deferred behind prelude work]
 
 - **ensure_owned_at_boundary migration — remaining specialized sites**: Core migration done. 5 remaining sites each have specialized logic beyond pure boundary-clones (fresh-string elision, last-use move, MutPtr wrapping, pattern extraction, field_access checks). Struct init was already covered. Enum variant init fixed (was missing `clone_multi_use_resource_args` at the `methods.rs` and `calls.rs` call sites — caused double-free on resource-typed fields in loops). [updated: 2026-04-16]
 
 
 - **dict[key].push() index-mutate**: Prototype works for MutPtr in-place mutation. Needs `is_storing_method` flag on BuiltinMethodDecl. [updated: 2026-03-28]
-
-
-- **Name-based dispatch: remaining migration**: ~96 `starts_with` sites in IR lowering, ~87 in LIR backend. Blocked on `register_collection_alias` TypeDef timing. [added: 2026-03-26]
 
 
 - **`@[no_alloc]` function annotation**: Compiler error on allocating operations. [added: 2026-03-21]
@@ -198,8 +191,6 @@ These are Gorget bugs that surface as workarounds in self-host code. Per `docs/i
 
 
 - **`shared static` support**: Thread-safe module-level statics. Workaround: explicit `Mutex[int]`. [added: 2026-03-10]
-
-- **C backend: `compute_type_overrides` should use TypeIds**: Fragile string-matching. [added: 2026-03-14]
 
 - **C backend: uninitialized return variable**: `_0` used uninitialized in some functions. [added: 2026-03-13]
 

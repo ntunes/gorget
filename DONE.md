@@ -50,6 +50,39 @@
 
   **Tests.** 1051 unit tests pass. Integration suite passes 1124/1124 (deterministic run); 1119/1120 with one flaky `vector_task_get` race that passes in isolation — unrelated to this change (shared-counter timing under contended multi-agent host).
 
+- [2026-05-15] **Box / collection metadata cluster — close 4 TODOs by populating typed metadata uniformly at every registration path.** Four deferred items shared one root cause (and one prior-probe regression family): `register_collection_alias` was THE registration site that wrote `TypeMetadata.is_box` / `collection_kind`, but cross-module imports and runtime synthesis took *other* TypeDef registration paths that defaulted `is_box: false` / `collection_kind: None`. Consumers that probed `name.starts_with("Box__")` / `name.starts_with("Vector__")` worked through name matching; consumers migrated to read typed metadata regressed on those secondary paths.
+
+  **Registration paths brought to parity.** Three Box-registration entry points now uniformly set `is_box: true`:
+  - `register_collection_alias` in `src/ir/lowering/types.rs:789` (AST `Type::Named { name: "Box", ... }`) — already correct, baseline.
+  - `monomorphize_struct` Box arm in `src/ir/lowering/generics/mod.rs:2334` (template-driven monomorphisation from imported `lib/std/collections.gg`) — added `is_box: true`. This was the gap that regressed `box_heap` / `serializable` / `deserializable` on the prior 2026-05-10 probe.
+  - `ensure_box_type_def` in `src/ir/lowering/exprs/type_reg.rs:120` (late on-the-fly registration from `Box(value)` call lowering) — replaced `make_wrapper_type_def` (which used `TypeMetadata::default()`) with an explicit literal that sets `is_box: true`.
+
+  Collection-kind registration paths were already correct at the three sites that drive them (`register_collection_alias`, `map_ast_type_mut`'s protocol-table branch, `mod.rs`'s pre-monomorphisation pre-register loop, `ensure_collection_type`). The `elem_type_to_meta` regression on the prior 2026-05-10 probe was a *call ordering* artefact rather than a missing registration path — the typed read is now the primary path, with the name-prefix arms preserved as a defensive fallback for any registration-timing gap that may surface in the future.
+
+  **Consumer migrations.** Replaced name-prefix probes with typed `TypeRegistry::is_box` / `is_box_name` / `collection_kind` / `collection_kind_by_name` reads at:
+  - `LoweringContext::deref_inner_type` (`src/ir/lowering/context.rs:2876`)
+  - `source_is_box` + Box-deref peel in `src/ir/lowering/exprs/mod.rs:527-548`
+  - Box[T].get / set / trait-method dispatch in `src/ir/lowering/exprs/methods.rs:1215-1247`
+  - Pattern-extract `is_box` check in `src/ir/lowering/stmts/patterns.rs:881,1067`
+  - `Box[Callable[...]]` reinference gate in `src/ir/lowering/stmts/mod.rs:255`
+  - `in` operator collection-kind dispatch in `src/ir/lowering/exprs/operators.rs:193`
+  - `elem_type_to_meta` (LIR) in `src/lir/lower/insts.rs:1946` — typed primary, name-prefix arms kept as fallback (rule 4 + rule 1)
+  - `resolve_deref_gir_type_id` (LIR) in `src/lir/lower/operands.rs:493`
+  - Trait-box vtable resolution in `src/lir/lower/operands.rs:756`
+  - `is_box_deref` decision for aggregate Load in `src/lir/lower/insts.rs:4276`
+  - LIR `is_droppable_type` Box arm in `src/lir/validate.rs:923` — reads `box_inner_type` / `is_trait_box` typed flags instead of name prefix
+  - C backend's runtime-fn return-struct override in `src/backend/c_lir/mod.rs:1064` — reads the LIR extern's typed `return_type: LirType::Struct(sid)`, with the hardcoded `runtime_fn_return_struct` name list as fallback.
+
+  **New accessor.** Added `TypeRegistry::collection_kind_by_name(name: &str)` for LIR-level sites that operate on mangled type names rather than `TypeId`s (`src/ir/types.rs:738`). Mirrors `is_box_name`.
+
+  **Verification.** `cargo test --lib` 1054/1054 pass. Targeted box/collection tests pass: `box_heap`, `box_callable`, `box_in_recursive_struct`, `box_deref_write`, `option_box_enum`, `snag41_audit_box_string_deref`, `vector_task_get`, `serializable`, `serialize_collections`, `deserializable`. Full integration sweep ran 1122/1124 passing (the 2 failures — `serializable` + `serialize_collections` — were OOM/signal kills under multi-agent CPU/memory contention; both pass standalone and in 10-test combined runs, and the failure shape `status=None` confirms signal-kill rather than test regression).
+
+  **TODOs closed.** "`is_box` consumer migration deferred" (Medium), "`elem_type_to_meta` collection_kind migration deferred" (Medium), "Name-based dispatch: remaining migration" (Medium, partial — closed the Vector/Dict/Set/Box cluster; ~150 remaining name-prefix sites are at the runtime-symbol / mangling boundary where the name IS the contract, or at the LIR-discovery loop where the typed metadata isn't yet available), and "C backend: `compute_type_overrides` should use TypeIds" (Low).
+
+  **Layering discipline citations.** Closes Rule 3 violations (one source of truth per axis) for Box-ness and collection-kind. Rule 4 (resolve once, write through) now holds for these axes — every Box / collection TypeDef registration path writes the same metadata, every downstream consumer reads the same typed accessor.
+
+  Files: `src/ir/types.rs` (+8), `src/ir/lowering/context.rs` (+8/-3), `src/ir/lowering/exprs/methods.rs` (+11/-3), `src/ir/lowering/exprs/mod.rs` (+9/-14), `src/ir/lowering/exprs/operators.rs` (+9/-5), `src/ir/lowering/exprs/type_reg.rs` (+18/-7), `src/ir/lowering/generics/mod.rs` (+6), `src/ir/lowering/stmts/mod.rs` (+19/-4), `src/ir/lowering/stmts/patterns.rs` (+4/-8), `src/lir/lower/insts.rs` (+33/-8), `src/lir/lower/operands.rs` (+10/-4), `src/lir/validate.rs` (+4/-2), `src/backend/c_lir/mod.rs` (+25/-5).
+
 - [2026-05-15] **Snag #48 — `match <throws-fn-call>(): case Variant(x): x …` read the variant payload as the enum's discriminant tag.** Same family as Snag #46 (constructor-arg position): the call's `Result[T, E]` operand wasn't auto-propagated at the match-scrutinee boundary, so pattern condition / extraction read Result's layout as if it were T. With variant-carries-int → returns 0; variant-carries-bool → returns false; variant-carries-String → compile error (int64_t → Str type clash that the C compiler catches). Discovered by gorget-js's `eval.gg` native_call nid 7 (Object.prototype.toString reading [[Class]]) after Phase 9 made `member_lookup` itself `throws RuntimeException`.
 
   **Root cause.** Three match-lowering sites all lowered the scrutinee via `lower_expr` without calling `maybe_auto_propagate`: `lower_match_expr` (`src/ir/lowering/exprs/mod.rs`), `lower_match_stmt_as_expr` (same file), `lower_match_stmt` (`src/ir/lowering/stmts/patterns.rs`). The sibling call-arg / constructor-arg paths do call `maybe_auto_propagate`. Same gap shape as Snag #43 / Snag #46.
