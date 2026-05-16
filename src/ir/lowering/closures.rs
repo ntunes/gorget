@@ -15,7 +15,7 @@ use crate::parser::ast::{self, ClosureParam, Expr, Ownership, Pattern, Stmt};
 use crate::span::Spanned;
 
 use super::context::{LoweringContext, ParamABI};
-use super::exprs::lower_expr;
+use super::exprs::{lower_expr, lower_stmt_as_tail_value};
 
 /// How a variable is captured by a closure.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -450,17 +450,51 @@ pub fn emit_closure_call_function(
         }
     }
 
-    // Restore expected_type from closure creation context so Ok/Error/Some/None
-    // constructors inside the body resolve to the correct Result/Option type.
+    // Body-level expected_type is the closure's own return type — this is
+    // what the body is contractually producing. Sub-expressions sizing their
+    // result slot from expected_type (match-as-expression, if-as-expression,
+    // Ok/Error/Some/None constructors) read the closure's return type, not
+    // whatever the outer surroundings happened to have on the stack.
+    //
+    // Snag #51 (2026-05-16) tail of the family: when an `auto`-typed VarDecl
+    // wraps a closure (`auto mk = (...)`), the outer var-decl sets
+    // expected_type=Some(I64) (the auto fallback for closure-RHS, since the
+    // closure's type isn't inferable without lowering it first). Pre-fix,
+    // that I64 was captured on the LiftedClosure and restored here as the
+    // body's expected_type. The body's match-as-tail then sized its
+    // result_local from I64 and short-circuited refinement
+    // (`result_type_refined = expected_type.is_some() && !is_result_wrapper`),
+    // forcing String/enum-arm values to memcpy into an I64-sized slot.
+    // The C codegen surfaced this as `Str = int64_t`.
+    //
+    // The closure's `return_type` is what we inferred from the body itself
+    // (via `infer_closure_return_type`, which is body-driven and free of
+    // outer-context pollution). Use that. If the closure was created in a
+    // typed target context where Ok/Some need an enclosing Result/Option
+    // type to monomorphize (the original motivation for capturing
+    // `expected_type`), that information is now carried by `return_type`
+    // when the inferer recognises an Ok/Error/Some/None tail.
     let prev_expected = ctx.func_state.expected_type;
-    ctx.func_state.expected_type = closure.expected_type;
+    ctx.func_state.expected_type = if closure.return_type == UNIT_TYPE {
+        None
+    } else {
+        Some(closure.return_type)
+    };
 
     // Lower the closure body. Both the expression-body case (`(x): x + 1`)
-    // and the block-with-tail-expression case (`(x):\n    let y = ...\n    x + y`)
-    // funnel through `emit_implicit_return` so the trailing expression's
-    // value reaches LocalId(0). A block whose tail isn't an expression
-    // (or whose only statements terminate explicitly) falls through to
-    // the default `ret` emission below.
+    // and the block-with-tail-value case (`(x):\n    let y = ...\n    x + y`,
+    // `(x):\n    match x: case _: 1`, `(x):\n    if x: 1 else: 0`) funnel
+    // through `emit_implicit_return` so the trailing value reaches
+    // LocalId(0). A block whose tail isn't a recognised value-producing
+    // form falls through to the default `ret` emission below.
+    //
+    // Snag #51 (2026-05-16): the block-arm originally only recognised
+    // `Stmt::Expr` as a tail value, so multi-stmt closure bodies ending
+    // in `match`/`if` saw the value silently dropped and `LocalId(0)`
+    // returned its zero-init default. The tail-value dispatch lives in
+    // `lower_stmt_as_tail_value` and is now shared with `lower_block_expr`
+    // so the closure path and the block-as-expression path can't diverge
+    // again — new tail-value shapes added there flow to both.
     let mut tail_handled = false;
     match &closure.body.node {
         Expr::Block(block) => {
@@ -470,17 +504,13 @@ pub fn emit_closure_call_function(
                     super::stmts::lower_stmt(ctx, &mut builder, stmt);
                 }
                 let last = &stmts[stmts.len() - 1];
-                if let ast::Stmt::Expr(e) = &last.node {
-                    let result = lower_expr(ctx, &mut builder, e);
-                    emit_implicit_return(ctx, &mut builder, closure, result, e.span);
+                if let Some(result) = lower_stmt_as_tail_value(ctx, &mut builder, last) {
+                    emit_implicit_return(ctx, &mut builder, closure, result, last.span);
                     tail_handled = true;
-                } else {
-                    super::stmts::lower_stmt(ctx, &mut builder, last);
                 }
             }
         }
         _ => {
-            // Bare-expression body: `(x): x + 1`.
             let body_span = closure.body.span;
             let result = lower_expr(ctx, &mut builder, &closure.body);
             emit_implicit_return(ctx, &mut builder, closure, result, body_span);
@@ -903,6 +933,65 @@ fn find_return_type_in_block(ctx: &mut LoweringContext, stmts: &[Spanned<Stmt>])
     None
 }
 
+/// Infer the type of a trailing statement when it appears as the tail
+/// value of a closure body's block. Mirrors `lower_stmt_as_tail_value`'s
+/// recognised shapes: `Stmt::Expr`, `Stmt::Match`, `Stmt::If`. For
+/// match/if statements at the tail, returns the type of the first
+/// non-divergent arm/branch body — sufficient for picking the closure's
+/// return-slot size; downstream `emit_implicit_return` overrides the
+/// slot's actual type when arms produce a more specific result.
+///
+/// Returns `None` for any other statement form (block-as-Unit fallback).
+/// Adding a new tail-value shape: extend this function, `lower_stmt_as_tail_value`,
+/// and any sibling dispatcher in lockstep.
+fn infer_stmt_tail_type(ctx: &mut LoweringContext, stmt: &Spanned<Stmt>) -> Option<TypeId> {
+    match &stmt.node {
+        Stmt::Expr(expr) => Some(infer_closure_return_type(ctx, expr)),
+        Stmt::Match { arms, else_arm, .. } => {
+            for item in arms {
+                if let ast::MatchItem::Arm(arm) = item {
+                    let ty = infer_closure_return_type(ctx, &arm.body);
+                    if ty != UNIT_TYPE {
+                        return Some(ty);
+                    }
+                }
+            }
+            if let Some(eb) = else_arm {
+                // else_arm is a Block; synthesize an Expr::Block at its span and recurse
+                let block_expr = Spanned::new(Expr::Block(eb.clone()), eb.span);
+                let ty = infer_closure_return_type(ctx, &block_expr);
+                if ty != UNIT_TYPE {
+                    return Some(ty);
+                }
+            }
+            Some(UNIT_TYPE)
+        }
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            let then_expr = Spanned::new(Expr::Block(then_body.clone()), then_body.span);
+            let ty = infer_closure_return_type(ctx, &then_expr);
+            if ty != UNIT_TYPE {
+                return Some(ty);
+            }
+            for (_, elif_body) in elif_branches {
+                let elif_expr = Spanned::new(Expr::Block(elif_body.clone()), elif_body.span);
+                let ty = infer_closure_return_type(ctx, &elif_expr);
+                if ty != UNIT_TYPE {
+                    return Some(ty);
+                }
+            }
+            if let Some(eb) = else_body {
+                let else_expr = Spanned::new(Expr::Block(eb.clone()), eb.span);
+                let ty = infer_closure_return_type(ctx, &else_expr);
+                if ty != UNIT_TYPE {
+                    return Some(ty);
+                }
+            }
+            Some(UNIT_TYPE)
+        }
+        _ => None,
+    }
+}
+
 /// Infer the return type of a closure body (simplified).
 fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) -> TypeId {
     match &body.node {
@@ -971,6 +1060,17 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
                         return type_id;
                     }
                 }
+            }
+            // Qualified enum variant constructor: `EnumName.Variant(args)`.
+            // Callee is `Expr::FieldAccess { object: Identifier(enum_name), field: variant }`.
+            if let Expr::FieldAccess { object, .. } = &callee.node {
+                if let Expr::Identifier(enum_name) = &object.node {
+                    if let Some(&type_id) = ctx.type_mapper.named_types.get(enum_name.as_str()) {
+                        return type_id;
+                    }
+                }
+            }
+            if let Expr::Identifier(name) = &callee.node {
                 // Known void builtins not in fn_sigs
                 if matches!(name.as_str(),
                     "print" | "println" | "eprint" | "eprintln" | "assert"
@@ -1005,10 +1105,18 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
             if let Some(ret_type) = find_return_type_in_block(ctx, &block.stmts) {
                 return ret_type;
             }
-            // Last statement as implicit return (tail expression)
+            // Last statement as implicit return (tail expression).
+            // Snag #51 (2026-05-16): keep the recognised tail-value shapes
+            // in lockstep with `lower_stmt_as_tail_value` in `exprs/mod.rs`
+            // — `Stmt::Expr`, `Stmt::Match`, `Stmt::If` are all tail values
+            // here. Pre-fix, only `Stmt::Expr` was recognised, so a
+            // multi-stmt closure body ending in `match`/`if` registered as
+            // UNIT_TYPE-returning. The caller's `auto x = mk()` slot
+            // landed at unit size, and the int that the match arm produced
+            // never made it across the call boundary (read back 0).
             if let Some(last) = block.stmts.last() {
-                if let Stmt::Expr(expr) = &last.node {
-                    return infer_closure_return_type(ctx, expr);
+                if let Some(ty) = infer_stmt_tail_type(ctx, last) {
+                    return ty;
                 }
             }
             UNIT_TYPE
@@ -1024,6 +1132,20 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
         // (`Result__T__int64_t` for a closure returning String),
         // causing a memcpy buffer overread.
         Expr::MethodCall { receiver, method, .. } => {
+            // Qualified enum variant constructor `EnumName.Variant(args)` parses
+            // as MethodCall with receiver = Identifier(enum_name). Detect this
+            // before the value-method path: if the receiver name is a registered
+            // type name, the call constructs that type. Closes the enum half of
+            // Snag #51 — without this, a closure body returning
+            // `Box.A("payload")` typed as I64 and the C codegen emitted
+            // `__gg_Box = int64_t`.
+            if let Expr::Identifier(name) = &receiver.node {
+                if ctx.lookup_local(name).is_none() {
+                    if let Some(&type_id) = ctx.type_mapper.named_types.get(name.as_str()) {
+                        return type_id;
+                    }
+                }
+            }
             // Resolve receiver type. For `e.to_upper()` where `e` is
             // a closure param, the param type hint sets `e`'s type
             // before this inference runs.

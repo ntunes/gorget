@@ -1,0 +1,168 @@
+# Snag #51 — A multi-statement closure body whose last statement is a
+# `match`/`if` used as a tail value silently returns the closure's
+# return-type zero-init default instead of the matched arm / taken
+# branch's trailing expression.
+#
+# Reproduced (pre-fix):
+#   - int-returning closures returned 0
+#   - String-returning closures hit C type-mismatch at compile
+#   - non-Copy enum-returning closures SIGSEGV'd (or hit the C type
+#     mismatch first)
+#
+# Did NOT reproduce when:
+#   - Closure body is a single expression (the bare-expression branch
+#     in `lower_closure`'s body lowering already routed through
+#     `emit_implicit_return`)
+#   - Same body shape in a regular function (block-as-expression at
+#     a function tail dispatches through `lower_block_expr`, which
+#     already handled `Stmt::If` / `Stmt::Match` as tail values)
+#   - The arm uses an explicit `return <expr>` (terminator emitted
+#     directly, bypassing the tail-value path entirely)
+#
+# Root cause (three sites, all closed by the family fix):
+#
+# 1. `src/ir/lowering/closures.rs` — the closure body's block-tail
+#    dispatcher only recognised `Stmt::Expr(_)` as a tail value.
+#    `Stmt::Match` and `Stmt::If` fell into the regular-statement
+#    branch, so the value never flowed into `LocalId(0)`. Sibling
+#    `lower_block_expr` in `exprs/mod.rs` already handled all three
+#    shapes — the two dispatchers had drifted. Fix: factor the
+#    recognised-shapes list into `lower_stmt_as_tail_value` and call
+#    it from both sites, so adding a new tail-value shape touches
+#    one place.
+#
+# 2. `src/ir/lowering/closures.rs::infer_closure_return_type` — the
+#    sibling type-inference walker mirrored the same incomplete tail
+#    dispatch. A multi-stmt closure body ending in `match`/`if`
+#    registered as `UNIT_TYPE`-returning, so the caller's `auto x =
+#    mk()` slot landed at unit size and the closure's real return
+#    value couldn't cross the call boundary. Fix: `infer_stmt_tail_type`
+#    handles all three shapes, including walking match/if branch
+#    bodies for the first non-divergent type.
+#
+# 3. `src/ir/lowering/exprs/mod.rs::build_if_chain_expr` — sized
+#    `result_id` at hardcoded `I64_TYPE` with no refinement from
+#    branch bodies (the exact bug Snag #29b fixed on the match side).
+#    Pre-fix this didn't surface because the `Stmt::If`-as-tail path
+#    was unreachable from closure bodies; with #1 + #2 in place,
+#    `if true: "yes" else: "no"` at a String-returning closure tail
+#    produced `Str = int64_t` in C. Fix: size from `expected_type` if
+#    set, else refine from the first non-divergent / non-Unit branch
+#    — identical pattern to `lower_match_stmt_as_expr` so the two
+#    tail-value forms stay layering-coherent.
+#
+# Also closed: `lower_closure` captured `ctx.func_state.expected_type`
+# from the closure's creation site, which for `auto`-typed VarDecls
+# was the fallback `I64_TYPE` (Closure's `infer_type_from_expr` arm
+# falls through to `I64_TYPE`). That polluted I64 then sized the
+# body's match-result-local and short-circuited refinement. Body
+# lowering now sets `expected_type = Some(closure.return_type)` —
+# the closure's own inferred return type — so sub-expressions size
+# their result slot against what the closure body actually produces.
+#
+# Family relationship: Snag #46 / #48 / #49 / #50 all dealt with
+# different "value-flow holes at match-as-expression boundaries"
+# (auto-propagation gaps, sibling-arm name-map leaks). Snag #51 is
+# the closure-body-tail boundary, which none of those reached. The
+# shared shape — block-tail dispatchers must recognise all
+# tail-value shapes, not just `Stmt::Expr` — is now enforced by a
+# single helper to prevent a future fourth dispatcher drifting again.
+
+enum Box:
+    A(String)
+    B(int)
+
+# ── Tail-value: int, match-on-literal
+int case_int_match_literal():
+    auto mk = ():
+        match 42:
+            case _:
+                1
+    return mk()
+
+# ── Tail-value: int, match-on-local
+int case_int_match_local():
+    auto mk = ():
+        int x = 42
+        match x:
+            case _:
+                1
+    return mk()
+
+# ── Tail-value: int, side-effecting arm (proves arm body runs)
+int case_int_match_side_effect():
+    auto mk = ():
+        int x = 42
+        match x:
+            case _:
+                print("arm executed")
+                1
+    return mk()
+
+# ── Single-stmt closure body: control case, was always correct
+int case_int_single_stmt():
+    auto mk = (): match 42:
+        case _:
+            1
+    return mk()
+
+# ── Tail-value: String via match
+String case_string_match():
+    auto mk = ():
+        match 42:
+            case _:
+                "hello"
+    return mk()
+
+# ── Tail-value: String via if
+String case_string_if():
+    auto mk = ():
+        if true:
+            "yes"
+        else:
+            "no"
+    return mk()
+
+# ── Tail-value: non-Copy enum via match
+Box case_enum_match():
+    auto mk = ():
+        match 42:
+            case _:
+                Box.A("from-match-arm")
+    return mk()
+
+# ── Tail-value: non-Copy enum via if
+Box case_enum_if():
+    auto mk = ():
+        if true:
+            Box.A("from-then-branch")
+        else:
+            Box.B(7)
+    return mk()
+
+# ── Tail-value: int via if-elif-else chain
+int case_int_if_elif_else():
+    auto mk = ():
+        int x = 2
+        if x == 1:
+            10
+        elif x == 2:
+            20
+        else:
+            30
+    return mk()
+
+void main():
+    print(f"int match-literal:    {case_int_match_literal()}")
+    print(f"int match-local:      {case_int_match_local()}")
+    print(f"int match-side-effect:{case_int_match_side_effect()}")
+    print(f"int single-stmt:      {case_int_single_stmt()}")
+    print(f"String match:         {case_string_match()}")
+    print(f"String if:            {case_string_if()}")
+    match case_enum_match():
+        case Box.A(s): print(f"Enum match: A('{s}')")
+        case Box.B(n): print(f"Enum match: B({n})")
+    match case_enum_if():
+        case Box.A(s): print(f"Enum if:    A('{s}')")
+        case Box.B(n): print(f"Enum if:    B({n})")
+    print(f"int if-elif-else:     {case_int_if_elif_else()}")

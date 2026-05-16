@@ -3209,29 +3209,46 @@ fn lower_block_expr(
         return Operand::Constant(Constant::Unit);
     }
 
-    // Lower all but the last statement normally
     for stmt in &block.stmts[..block.stmts.len() - 1] {
         super::stmts::lower_stmt(ctx, builder, stmt);
     }
 
-    // If the last statement is an expression or an if/match used as tail value,
-    // lower it and return as value
     let last = &block.stmts[block.stmts.len() - 1];
+    lower_stmt_as_tail_value(ctx, builder, last)
+        .unwrap_or(Operand::Constant(Constant::Unit))
+}
+
+/// Lower the *last* statement of a block as a tail value. Recognises the
+/// three tail-value shapes that any block-as-expression context produces:
+///   - `Stmt::Expr(expr)` — bare trailing expression
+///   - `Stmt::If { ... }` — `if`/`elif`/`else` chain used as a value
+///   - `Stmt::Match { ... }` — match statement used as a value
+/// Returns `Some(op)` for the three tail-value shapes. For any other
+/// statement form, lowers it as a regular statement and returns `None`;
+/// callers should treat that as "no tail value produced" (block-as-Unit,
+/// or implicit-return slot left at its zero-init default).
+///
+/// Both `lower_block_expr` and the closure-body lowerer must dispatch
+/// through this helper — keeping the recognised-tail-shapes list in one
+/// place is what closed snag #51 (the closure-body tail dispatcher only
+/// handled `Stmt::Expr`, so `match`/`if`-as-tail values vanished into
+/// `LocalId(0)`'s zero-init default). Add new tail-value shapes here.
+pub(super) fn lower_stmt_as_tail_value(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    last: &Spanned<ast::Stmt>,
+) -> Option<Operand> {
     match &last.node {
-        ast::Stmt::Expr(expr) => lower_expr(ctx, builder, expr),
-        // if/elif/else used as tail expression in a block
+        ast::Stmt::Expr(expr) => Some(lower_expr(ctx, builder, expr)),
         ast::Stmt::If { condition, then_body, elif_branches, else_body } => {
-            // Build Expr::If chain from the statement form
-            let else_expr = build_if_chain_expr(ctx, builder, condition, then_body, elif_branches, else_body);
-            else_expr
+            Some(build_if_chain_expr(ctx, builder, condition, then_body, elif_branches, else_body))
         }
-        // match used as tail expression
         ast::Stmt::Match { scrutinee, arms, else_arm } => {
-            lower_match_stmt_as_expr(ctx, builder, scrutinee, arms.as_slice(), else_arm.as_ref())
+            Some(lower_match_stmt_as_expr(ctx, builder, scrutinee, arms.as_slice(), else_arm.as_ref()))
         }
         _ => {
             super::stmts::lower_stmt(ctx, builder, last);
-            Operand::Constant(Constant::Unit)
+            None
         }
     }
 }
@@ -3384,6 +3401,16 @@ fn lower_match_stmt_as_expr(
 
 /// Build a value-producing if-chain from Stmt::If components.
 /// Each branch body's last statement is treated as the result expression.
+///
+/// Sizes `result_id` the same way `lower_match_stmt_as_expr` sizes its
+/// `result_local`: from `expected_type` if set (writer-side hint), else
+/// refined from the first non-divergent / non-Unit branch. Pre-Snag-#51
+/// this was hardcoded to I64, mirroring the bug snag #29b fixed on the
+/// match-as-tail side — `if true: "yes" else: "no"` at a String-returning
+/// tail position landed in an I64 slot, producing the `Str = int64_t`
+/// C type clash. Sizing rule, sibling refinement loop, and Unit-arm skip
+/// are kept lockstep with `lower_match_stmt_as_expr` so the two
+/// tail-value forms stay layering-coherent.
 fn build_if_chain_expr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -3393,7 +3420,12 @@ fn build_if_chain_expr(
     else_body: &Option<ast::Block>,
 ) -> Operand {
     let cond = lower_expr(ctx, builder, condition);
-    let result_id = builder.add_local(I64_TYPE, None);
+    let result_type_init = ctx.func_state.expected_type.unwrap_or(I64_TYPE);
+    let result_id = builder.add_local(result_type_init, None);
+    let expected_is_result_wrapper = ctx.func_state.expected_type
+        .map_or(false, |t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result));
+    let mut result_type_refined = ctx.func_state.expected_type.is_some()
+        && !expected_is_result_wrapper;
     let merge_bb = builder.new_block();
 
     let then_bb = builder.new_block();
@@ -3404,9 +3436,15 @@ fn build_if_chain_expr(
     builder.switch_to(then_bb);
     super::stmts::emit_is_bindings(ctx, builder, condition);
     let then_val = lower_block_expr(ctx, builder, then_body);
-    // Guard: if the branch terminated via return/break/continue, don't overwrite its terminator.
     if !builder.is_terminated() {
-        builder.assign(Place::local(result_id), then_val);
+        if !result_type_refined {
+            let ty = infer_operand_type_full(ctx, &then_val, builder);
+            if ty != UNIT_TYPE {
+                builder.locals[result_id.0 as usize].type_id = ty;
+                result_type_refined = true;
+            }
+        }
+        assign_match_arm_to_result(ctx, builder, result_id, then_val, then_body.span);
         builder.jump(merge_bb);
     }
 
@@ -3423,7 +3461,14 @@ fn build_if_chain_expr(
         super::stmts::emit_is_bindings(ctx, builder, elif_cond);
         let elif_val = lower_block_expr(ctx, builder, elif_body);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_id), elif_val);
+            if !result_type_refined {
+                let ty = infer_operand_type_full(ctx, &elif_val, builder);
+                if ty != UNIT_TYPE {
+                    builder.locals[result_id.0 as usize].type_id = ty;
+                    result_type_refined = true;
+                }
+            }
+            assign_match_arm_to_result(ctx, builder, result_id, elif_val, elif_body.span);
             builder.jump(merge_bb);
         }
 
@@ -3435,7 +3480,14 @@ fn build_if_chain_expr(
     if let Some(else_block) = else_body {
         let else_val = lower_block_expr(ctx, builder, else_block);
         if !builder.is_terminated() {
-            builder.assign(Place::local(result_id), else_val);
+            if !result_type_refined {
+                let ty = infer_operand_type_full(ctx, &else_val, builder);
+                if ty != UNIT_TYPE {
+                    builder.locals[result_id.0 as usize].type_id = ty;
+                    // No more branches after this; no need to track refined state.
+                }
+            }
+            assign_match_arm_to_result(ctx, builder, result_id, else_val, else_block.span);
             builder.jump(merge_bb);
         }
     } else {

@@ -3364,6 +3364,39 @@ fn snag50_match_as_expr_arm_locals_leak() {
 }
 
 #[test]
+fn snag51_closure_block_tail_value() {
+    // Snag #51 — multi-statement closure body whose last statement is
+    // a `match`/`if` used as a tail value silently returned the
+    // closure's return-type zero-init default instead of the matched
+    // arm / taken branch's trailing expression. Closes three sibling
+    // dispatchers that had drifted from `lower_block_expr`'s tail-value
+    // recognition (`Stmt::Expr` / `Stmt::Match` / `Stmt::If`):
+    //   - closure body lowering (`closures.rs`) — only handled Stmt::Expr
+    //   - closure return-type inference (`closures.rs`) — same gap
+    //   - if-chain expression result_id sizing (`exprs/mod.rs`) — was
+    //     hardcoded I64 with no refinement (sister to Snag #29b's
+    //     match-as-expression fix)
+    // Family: see Snag #46 / #48 / #49 / #50 — different value-flow
+    // boundaries with the same "zero-init default at a value-flow hole"
+    // symptom. The closure-body-tail boundary was the last unreached
+    // one. The fix is structural: the recognised-tail-shapes list lives
+    // in `lower_stmt_as_tail_value` (exprs/mod.rs), used by both
+    // `lower_block_expr` and the closure-body lowerer, so a future
+    // fourth dispatcher can't silently regress.
+    let expected = "int match-literal:    1\n\
+int match-local:      1\n\
+arm executed\n\
+int match-side-effect:1\n\
+int single-stmt:      1\n\
+String match:         hello\n\
+String if:            yes\n\
+Enum match: A('from-match-arm')\n\
+Enum if:    A('from-then-branch')\n\
+int if-elif-else:     20";
+    run_gg("snag51_closure_block_tail_value.gg", expected);
+}
+
+#[test]
 fn snag41_match_scrutinee_consume() {
     // Snag #41: match-scrutinee staging emitted a value-typed Borrow
     // (`[Bw] _scrut = copy _src`) for non-Copy non-collection scrutinees,
