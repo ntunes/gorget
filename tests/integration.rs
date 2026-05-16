@@ -13029,8 +13029,9 @@ fn lowerer_comparison() {
     let mut mismatched_error = 0; // rust=0 (error fixtures the Rust compiler rejects)
     let mut mismatched_real: Vec<(String, usize, usize)> = Vec::new(); // (name, rust, gorget)
     let mut crashes: Vec<(String, String)> = Vec::new();
-    // 3. Rust-side GIR emitter binary path
-    let gg_exe = manifest_dir.join("target/debug/gg");
+    // 3. Rust-side GIR emitter binary — profile-aware via CARGO_BIN_EXE_gg
+    //    (was a hardcoded `target/debug/gg`, which broke `--release` sweeps).
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
 
     enum Outcome {
         Matched,
@@ -13164,7 +13165,8 @@ fn c_emit_comparison() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let gg_exe = manifest_dir.join("target/debug/gg");
+    // Profile-aware gg binary via CARGO_BIN_EXE_gg (was hardcoded target/debug/gg).
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
 
     let fixtures_dir = manifest_dir.join("tests/fixtures");
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&fixtures_dir)
@@ -13909,7 +13911,8 @@ fn self_host_e2e() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let gg_exe = manifest_dir.join("target/debug/gg");
+    // Profile-aware gg binary via CARGO_BIN_EXE_gg (was hardcoded target/debug/gg).
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
 
     // Build a "kitchen-sink" preamble fixture once that imports + uses
     // every std module ordinary fixtures pull in (channel, async, sync,
