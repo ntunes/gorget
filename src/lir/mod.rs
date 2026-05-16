@@ -1188,6 +1188,14 @@ pub struct Block {
     pub params: Vec<(ValueId, LirType)>,
     pub insts: Vec<Inst>,
     pub terminator: Term,
+    /// Source span for each instruction in `insts`, parallel-indexed.
+    /// `span_map.len() == insts.len()` is the invariant once spans are filled
+    /// (stack-traces stage 1b); presently default-init to `vec![]` and not
+    /// enforced.
+    pub span_map: Vec<Option<crate::span::Span>>,
+    /// Source span for the block's terminator. `None` when the terminator is
+    /// synthetic or upstream lowering hasn't filled it yet.
+    pub terminator_span: Option<crate::span::Span>,
 }
 
 // ── Slots ───────────────────────────────────────────────────────────────────
@@ -1316,6 +1324,8 @@ impl LirFunction {
             params: Vec::new(),
             insts: Vec::new(),
             terminator: Term::Unreachable, // placeholder
+            span_map: Vec::new(),
+            terminator_span: None,
         });
         id
     }
