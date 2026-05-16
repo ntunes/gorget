@@ -1,0 +1,9 @@
+void main():
+    Dict[int, String] d = Dict[int, String]()
+    d.put(1, "alpha")
+    d.put(2, "beta")
+    d.put(3, "gamma")
+    int total = 0
+    for (k, v) in d:
+        total = total + k + v.len()
+    print(total)

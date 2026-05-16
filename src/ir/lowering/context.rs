@@ -2121,13 +2121,34 @@ impl<'a> LoweringContext<'a> {
     /// Recorded at `Inst::TupleInit` emission so the return path can
     /// MoveZero element sources when the tuple is returned. Replaces the
     /// `tuple_element_locals` sidecar — see unified-resource-model.md §6.3.
+    ///
+    /// Self-host snag #6: do NOT clobber an existing Owned / FreshOwned /
+    /// SharedHeap state. If the element local owned its data at TupleInit
+    /// time (e.g. `Some((!k, !v))` where `!v` produces a Move-assigned
+    /// temp tagged Owned), overwriting to Borrowed makes the consume-site
+    /// validator read `Borrowed` at the very TupleInit that's consuming
+    /// it — false positive. Layering discipline rule 1: this writer must
+    /// not drop the Owned invariant the upstream lowering established.
+    /// The TupleElement origin is only needed to track later return-path
+    /// MoveZero of borrow-sourced elements; Owned/FreshOwned elements are
+    /// handled instead by the unconditional `drops.unregister(local)` side
+    /// effect below (scope-exit won't double-drop them after the tuple
+    /// takes their data).
     pub fn set_tuple_element_borrow(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, tuple: LocalId, index: u32) {
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
-            builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
-                origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
-                mutability: crate::ir::Mutability::Shared,
-            };
+            let preserve = matches!(
+                builder.locals[idx].ownership,
+                crate::ir::LocalOwnership::Owned
+                | crate::ir::LocalOwnership::FreshOwned
+                | crate::ir::LocalOwnership::SharedHeap { .. }
+            );
+            if !preserve {
+                builder.locals[idx].ownership = crate::ir::LocalOwnership::Borrowed {
+                    origin: crate::ir::BorrowOrigin::TupleElement { tuple, index },
+                    mutability: crate::ir::Mutability::Shared,
+                };
+            }
         }
         // The element's drop responsibility transfers to the tuple: unregister the
         // elem_local from the drops tracker so that scope-exit doesn't drop it a

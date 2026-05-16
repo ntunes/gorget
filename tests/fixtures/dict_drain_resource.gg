@@ -1,0 +1,36 @@
+# `Drainable[(K, V)]` for `Dict[K, V]` with resource-typed K and V
+# — `d.drain()` consumes the dict and yields owned `(K, V)` pairs in
+# insertion order, where both K and V are String. Source is unusable
+# after drain; the underlying map's drop sees tombstoned slots and skips
+# them (no double-free).
+
+from std.iter import DictDrain
+
+int main():
+    Dict[String, String] d = Dict[String, String]()
+    d.put("alpha", "one")
+    d.put("beta", "two")
+    d.put("gamma", "three")
+
+    int total_klen = 0
+    int total_vlen = 0
+    for p in d.drain():
+        total_klen = total_klen + p.0.len()
+        total_vlen = total_vlen + p.1.len()
+    print(total_klen)                               # 5 + 4 + 5 = 14
+    print(total_vlen)                               # 3 + 3 + 5 = 11
+
+    # Verify drain count via a Dict[int, String] (key trivial, value resource).
+    Dict[int, String] d2 = Dict[int, String]()
+    d2.put(1, "alpha")
+    d2.put(2, "beta")
+    d2.put(3, "gamma")
+    int n = 0
+    int vsum = 0
+    for p in d2.drain():
+        n = n + 1
+        vsum = vsum + p.1.len()
+    print(n)                                        # 3
+    print(vsum)                                     # 14
+
+    return 0

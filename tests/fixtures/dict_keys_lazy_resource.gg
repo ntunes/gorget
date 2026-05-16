@@ -1,0 +1,18 @@
+# Lazy `DictKeysIter[K, V]` with String keys — walks the Dict's
+# bucket array yielding String keys without materialising a
+# Vector[String].
+
+from std.iter import DictKeysIter
+
+int main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("alpha", 1)
+    d.put("beta", 2)
+    d.put("gamma", 3)
+
+    int total = 0
+    for k in d.keys_iter():
+        total = total + k.len()
+    print(total)                                    # 5 + 4 + 5 = 14
+
+    return 0

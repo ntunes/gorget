@@ -1,0 +1,18 @@
+# Lazy `DictValuesIter[K, V]` with String values — walks the
+# Dict's bucket array yielding String values without materialising
+# a Vector[String].
+
+from std.iter import DictValuesIter
+
+int main():
+    Dict[int, String] d = Dict[int, String]()
+    d.put(1, "alpha")
+    d.put(2, "beta")
+    d.put(3, "gamma")
+
+    int total = 0
+    for v in d.values_iter():
+        total = total + v.len()
+    print(total)                                    # 5 + 4 + 5 = 14
+
+    return 0

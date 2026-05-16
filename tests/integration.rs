@@ -20659,3 +20659,53 @@ big len: 9
 big roundtrip: 999999999",
     );
 }
+
+// ─── Self-host snag #6: DictIter on resource K/V ─────────────────────
+//
+// Pre-fix: `DictIter[K, V] with Iterator[(K, V)]`'s `next` body
+// `Some((!k, !v))` panicked at Tier 2a consume-site validation when
+// monomorphized with String K/V — the tuple-init writer overwrote the
+// move-temp's Owned ownership with Borrowed{TupleElement}, and the
+// validator at the same TupleInit then read the Borrowed state and
+// flagged "borrowed source consumed at consuming position". Fix at
+// `set_tuple_element_borrow` (src/ir/lowering/context.rs) preserves
+// Owned/FreshOwned/SharedHeap state.
+
+#[test]
+fn snag_6_dict_iter_resource_value() {
+    run_gg(
+        "snag_6_dict_iter_resource_value.gg",
+        "20",
+    );
+}
+
+// ─── Snag #6 follow-up: resource-typed Dict iterators ────────────────
+//
+// These three fixtures previously had to use `Dict[int, int]` to dodge
+// the Tier 2a violation; now exercise resource-typed K and/or V
+// directly. See dict_drain_basic.gg / dict_keys_lazy.gg /
+// dict_values_lazy.gg for the trivial-K/V workaround variants.
+
+#[test]
+fn dict_drain_resource() {
+    run_gg(
+        "dict_drain_resource.gg",
+        "14\n11\n3\n14",
+    );
+}
+
+#[test]
+fn dict_keys_lazy_resource() {
+    run_gg(
+        "dict_keys_lazy_resource.gg",
+        "14",
+    );
+}
+
+#[test]
+fn dict_values_lazy_resource() {
+    run_gg(
+        "dict_values_lazy_resource.gg",
+        "14",
+    );
+}

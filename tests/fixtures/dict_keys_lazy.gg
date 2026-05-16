@@ -5,12 +5,6 @@
 # Pairs with `d.values_iter()` for symmetric lazy projections.
 # Eager `d.keys()` / `d.values()` (returning Vector[K] / Vector[V])
 # still ship for callers that need the materialised collection.
-#
-# NOTE: this fixture uses Dict[int, int] only — resource-typed K
-# or V triggers a pre-existing Tier 2a violation in DictIter's
-# `Some((!k, !v))` shape. The Dict[K, V] iter trait gets monoised
-# whenever a Dict[K, V] is constructed in a module that imports
-# std.iter, so we can't side-step that path here.
 
 from std.iter import DictKeysIter
 
