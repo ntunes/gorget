@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 mod emit_call_extern;
+mod emit_hof;
 mod emit_types;
 pub mod helpers;
 use self::helpers::*;

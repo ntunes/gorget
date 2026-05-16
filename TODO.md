@@ -147,7 +147,7 @@
   - Ret-from-function backfill — Ret(value) implies function return type when value is untyped.
   Each of these is *cross-instruction* reasoning. To push them upstream, the shared `compute_module_value_types` would need a fixed-point pass or a multi-phase walk that today only the local pass has. Scope: medium — half-day for any one of them, plus tests. [updated: 2026-05-15, after partial seed migration shipped]
 
-- **Decompose emit_call_extern.rs (~1,850 lines)**: Tier 1-3 lifts complete — ~490 lines of inline expansion removed. Remaining: HOF inlining (map/filter/each/fold ~590 lines), printf rewriting (~130 lines), out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-04-15]
+- **Decompose emit_call_extern.rs (~988 lines)**: Tier 1-3 lifts done; HOF cluster lifted 2026-05-16 (Option/Result combinator inlining → `emit_hof.rs`, -200 lines). The original "Vector HOF inline handlers" mentioned in the pre-2026-04-15 entry had already been migrated to LIR's `HofExpand` op (commits `79ab2cc2` and friends). Remaining clusters in `emit_call_extern.rs`: printf rewriting (~130 lines), out-parameter adaptation (~178 lines), collection drop/clone injection (~70 lines). These are genuinely backend-specific patterns. [updated: 2026-05-16]
 
 ## Medium
 
