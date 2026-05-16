@@ -117,6 +117,15 @@ pub struct ScopeTable {
     scopes: Vec<Scope>,
     definitions: Vec<DefInfo>,
     current: ScopeId,
+    /// Reverse index: name → DefIds of every definition with that name, in
+    /// insertion order (so the last entry has the highest DefId). Maintained
+    /// incrementally alongside `definitions`. Turns the O(N_defs) linear scans
+    /// in `lookup_within_function`, `is_global_def`, and `lookup_def_by_span`
+    /// into O(K) lookups (K = number of defs sharing a name, typically 1–5).
+    /// At self-host-lowerer scale, the safety pass calls `find_def_by_name`
+    /// thousands of times across ~10K total defs — the linear scan was
+    /// quadratic-in-module-size and dominated the semantic phase (~75%).
+    name_index: FxHashMap<String, Vec<DefId>>,
 }
 
 impl ScopeTable {
@@ -131,6 +140,7 @@ impl ScopeTable {
             scopes: vec![root],
             definitions: Vec::new(),
             current: ScopeId(0),
+            name_index: FxHashMap::default(),
         }
     }
 
@@ -182,6 +192,7 @@ impl ScopeTable {
     /// Used for user-defined enum variants that should only be accessible via qualified paths.
     pub fn alloc_def(&mut self, name: String, kind: DefKind, span: Span) -> DefId {
         let def_id = DefId(self.definitions.len() as u32);
+        self.name_index.entry(name.clone()).or_default().push(def_id);
         self.definitions.push(DefInfo {
             name,
             kind,
@@ -257,6 +268,7 @@ impl ScopeTable {
         }
 
         let def_id = DefId(self.definitions.len() as u32);
+        self.name_index.entry(name.clone()).or_default().push(def_id);
         self.definitions.push(DefInfo {
             name: name.clone(),
             kind,
@@ -360,24 +372,26 @@ impl ScopeTable {
     /// Look up a name within a function scope tree: searches the scope itself,
     /// all descendant scopes, and all ancestor scopes. Returns the most recent
     /// definition (highest DefId) whose scope is within the function tree.
+    ///
+    /// Uses the per-name DefId index (`name_index`) so the inner loop runs over
+    /// only the (typically 1–5) defs sharing this name, rather than scanning
+    /// all ~10K module-wide definitions. The previous linear scan was
+    /// quadratic-in-module-size and dominated the semantic phase.
     pub fn lookup_within_function(&self, fn_scope_id: ScopeId, name: &str) -> Option<DefId> {
-        let mut best: Option<DefId> = None;
-        for (i, def) in self.definitions.iter().enumerate() {
-            if def.name == name
-                && matches!(
-                    def.kind,
-                    DefKind::Variable | DefKind::Const | DefKind::Function
-                )
-                && self.is_descendant_of(def.scope, fn_scope_id)
-            {
-                best = Some(DefId(i as u32));
+        if let Some(ids) = self.name_index.get(name) {
+            // Iterate in reverse so the highest matching DefId wins (matches
+            // the previous "best = last-match-in-order" semantic).
+            for &def_id in ids.iter().rev() {
+                let def = &self.definitions[def_id.0 as usize];
+                if matches!(def.kind, DefKind::Variable | DefKind::Const | DefKind::Function)
+                    && self.is_descendant_of(def.scope, fn_scope_id)
+                {
+                    return Some(def_id);
+                }
             }
         }
-        // Also check ancestors (module scope, etc.)
-        if best.is_none() {
-            best = self.lookup_from_scope(fn_scope_id, name);
-        }
-        best
+        // Fall back to ancestor walk for module-scope names.
+        self.lookup_from_scope(fn_scope_id, name)
     }
 
     /// Check if `child` is `parent` or a descendant of `parent`.
@@ -461,9 +475,12 @@ impl ScopeTable {
     /// Look up a definition by name and definition span. This is reliable even with
     /// shadowing because each definition has a unique (name, span) pair.
     pub fn lookup_def_by_span(&self, name: &str, span: Span) -> Option<DefId> {
-        for (i, def) in self.definitions.iter().enumerate() {
-            if def.name == name && def.span == span {
-                return Some(DefId(i as u32));
+        // Use the per-name index: only scan defs sharing this name.
+        let ids = self.name_index.get(name)?;
+        for &def_id in ids {
+            let def = &self.definitions[def_id.0 as usize];
+            if def.span == span {
+                return Some(def_id);
             }
         }
         None
@@ -472,18 +489,20 @@ impl ScopeTable {
     /// Check if a name refers to a global definition (function, enum variant, struct, etc.)
     /// that doesn't need to be captured by closures.
     pub fn is_global_def(&self, name: &str) -> bool {
-        for def in self.definitions.iter().rev() {
-            if def.name == name {
-                return matches!(
-                    def.kind,
-                    DefKind::Function
-                        | DefKind::Variant
-                        | DefKind::Enum
-                        | DefKind::Struct
-                        | DefKind::Newtype
-                        | DefKind::Trait
-                );
-            }
+        let Some(ids) = self.name_index.get(name) else { return false };
+        // Reverse iteration mirrors the prior `definitions.iter().rev()` semantic:
+        // the most recent definition with this name decides the answer.
+        if let Some(&def_id) = ids.last() {
+            let def = &self.definitions[def_id.0 as usize];
+            return matches!(
+                def.kind,
+                DefKind::Function
+                    | DefKind::Variant
+                    | DefKind::Enum
+                    | DefKind::Struct
+                    | DefKind::Newtype
+                    | DefKind::Trait
+            );
         }
         false
     }
