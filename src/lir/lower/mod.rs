@@ -114,6 +114,12 @@ pub(super) struct FuncLowering<'a> {
     /// tags that match the closure's actual signature.
     pub(super) closure_call_sigs:
         &'a std::collections::HashMap<String, ClosureCallSig>,
+    /// Source span attached to instructions pushed during the current
+    /// lowering step. Set per GIR instruction by the dispatch loop in
+    /// `lower()`; consumed by `push_inst`. `None` for synthetic preamble
+    /// instructions (param load-in, etc.) that don't correspond to user
+    /// source.
+    pub(super) current_span: Option<crate::span::Span>,
 }
 
 /// Signature snapshot for a closure's `__call` function, used to
@@ -1463,7 +1469,28 @@ impl<'a> FuncLowering<'a> {
             extern_abi_kinds,
             return_abi_kinds,
             closure_call_sigs,
+            current_span: None,
         }
+    }
+
+    /// Push an instruction into block `bb`, tagging it with the active
+    /// `current_span` (set per-GIR-instruction by the dispatch loop).
+    /// Maintains `span_map.len() == insts.len()` per-block invariant.
+    pub(super) fn push_inst(&mut self, bb: BlockId, inst: Inst) {
+        let span = self.current_span;
+        self.lir_func.block_mut(bb).push_inst(inst, span);
+    }
+
+    /// Set a block's terminator together with its source span (the active
+    /// `current_span`). Use for intra-instruction CFG splits emitted while
+    /// lowering a single GIR instruction; the dispatch-loop entry/exit
+    /// terminator path in `lower()` writes `terminator_span` directly from
+    /// the GIR block's own `terminator_span`.
+    pub(super) fn set_terminator(&mut self, bb: BlockId, term: Term) {
+        let span = self.current_span;
+        let block = self.lir_func.block_mut(bb);
+        block.terminator = term;
+        block.terminator_span = span;
     }
 
     pub(super) fn lower(&mut self) {
@@ -1489,12 +1516,12 @@ impl<'a> FuncLowering<'a> {
                             }
                         }
                     }
-                    self.lir_func.block_mut(entry_bb).insts.push(Inst::ParamRef {
+                    self.push_inst(entry_bb, Inst::ParamRef {
                         dst: param_val,
                         index: param_idx as u32,
                         ty: slot_ty,
                     });
-                    self.lir_func.block_mut(entry_bb).insts.push(Inst::SlotStore {
+                    self.push_inst(entry_bb, Inst::SlotStore {
                         slot,
                         value: param_val,
                         is_move: false,
@@ -1511,15 +1538,20 @@ impl<'a> FuncLowering<'a> {
             // the block by creating new basic blocks and a Branch terminator, then
             // return the merge block as the new continuation point.
             let mut current_bb = lir_bb;
-            for inst in &gir_block.instructions {
+            for (idx, inst) in gir_block.instructions.iter().enumerate() {
+                self.current_span = gir_block.span_map.get(idx).copied().flatten();
                 current_bb = self.lower_instruction(inst, current_bb);
             }
 
             // Lower terminator into the current continuation block.
             if let Some(ref term) = gir_block.terminator {
+                self.current_span = gir_block.terminator_span;
                 let lir_term = self.lower_terminator(term, current_bb);
-                self.lir_func.block_mut(current_bb).terminator = lir_term;
+                let block = self.lir_func.block_mut(current_bb);
+                block.terminator = lir_term;
+                block.terminator_span = gir_block.terminator_span;
             }
+            self.current_span = None;
             // If no terminator, leave as Unreachable (the default).
         }
     }

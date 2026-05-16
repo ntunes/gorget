@@ -675,6 +675,21 @@ pub fn lower_module(gir: &ir::Module) -> LirModule {
         );
     }
 
+    #[cfg(debug_assertions)]
+    {
+        for func in &module.functions {
+            for block in &func.blocks {
+                debug_assert_eq!(
+                    block.span_map.len(),
+                    block.insts.len(),
+                    "LIR block {:?} in fn '{}' violates span_map.len() == insts.len() invariant",
+                    block.id,
+                    func.name,
+                );
+            }
+        }
+    }
+
     module
 }
 

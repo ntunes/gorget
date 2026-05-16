@@ -28,15 +28,9 @@ impl<'a> FuncLowering<'a> {
         };
         let has_deref = place.projections.first() == Some(&Projection::Deref);
         if (is_ref_local || is_ptr_to_slot) && !has_deref {
-            self.lir_func
-                .block_mut(bb)
-                .insts
-                .push(Inst::SlotLoad { dst: addr, slot, ty: LirType::Ptr });
+            self.push_inst(bb, Inst::SlotLoad { dst: addr, slot, ty: LirType::Ptr });
         } else {
-            self.lir_func
-                .block_mut(bb)
-                .insts
-                .push(Inst::SlotAddr { dst: addr, slot });
+            self.push_inst(bb, Inst::SlotAddr { dst: addr, slot });
         }
 
         // Track the current GIR type through each projection step.
@@ -55,7 +49,7 @@ impl<'a> FuncLowering<'a> {
                 Projection::Field(field) => {
                     let struct_id = self.resolve_struct_id_for_field(current_gir_type, *field, self.module_structs);
                     let next = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: next,
                         base: addr,
                         struct_id,
@@ -68,13 +62,13 @@ impl<'a> FuncLowering<'a> {
                 Projection::Index(idx_local) => {
                     let idx_slot = self.local_to_slot[idx_local.0 as usize];
                     let idx = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                    self.push_inst(bb, Inst::SlotLoad {
                         dst: idx,
                         slot: idx_slot,
                         ty: LirType::I64,
                     });
                     let next = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                    self.push_inst(bb, Inst::ElemPtr {
                         dst: next,
                         base: addr,
                         index: idx,
@@ -85,7 +79,7 @@ impl<'a> FuncLowering<'a> {
                 Projection::Deref => {
                     // Load the pointer from addr, then use that as the new addr.
                     let ptr_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: ptr_val,
                         ptr: addr,
                         ty: LirType::Ptr,
@@ -136,7 +130,7 @@ impl<'a> FuncLowering<'a> {
                     // Load the global's value: take address, then load.
                     let addr = self.lir_func.next_value();
                     let global_ty = self.module_globals[gid.0 as usize].ty.clone();
-                    self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr { dst: addr, global: gid });
+                    self.push_inst(bb, Inst::GlobalAddr { dst: addr, global: gid });
                     Inst::Load { dst, ptr: addr, ty: global_ty }
                 } else {
                     Inst::NullPtr { dst }
@@ -150,7 +144,7 @@ impl<'a> FuncLowering<'a> {
                 }
             }
         };
-        self.lir_func.block_mut(bb).insts.push(inst);
+        self.push_inst(bb, inst);
         dst
     }
 
@@ -332,10 +326,7 @@ impl<'a> FuncLowering<'a> {
 
     pub(super) fn store_to_local(&mut self, local: ir::types::LocalId, value: ValueId, bb: BlockId) {
         let slot = self.local_to_slot[local.0 as usize];
-        self.lir_func
-            .block_mut(bb)
-            .insts
-            .push(Inst::SlotStore { slot, value, is_move: false });
+        self.push_inst(bb, Inst::SlotStore { slot, value, is_move: false });
     }
 
     pub(super) fn store_to_place(&mut self, place: &Place, value: ValueId, bb: BlockId) {
@@ -343,17 +334,14 @@ impl<'a> FuncLowering<'a> {
             self.store_to_local(place.local, value, bb);
         } else {
             let addr = self.lower_place_addr(place, bb);
-            self.lir_func
-                .block_mut(bb)
-                .insts
-                .push(Inst::Store { ptr: addr, value });
+            self.push_inst(bb, Inst::Store { ptr: addr, value });
         }
     }
 
     /// Emit an I64 constant and return its ValueId.
     pub(super) fn emit_i64_const(&mut self, bb: BlockId, value: i64) -> ValueId {
         let val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+        self.push_inst(bb, Inst::IConst {
             dst: val, ty: LirType::I64, value,
         });
         val
@@ -362,7 +350,7 @@ impl<'a> FuncLowering<'a> {
     /// Emit an I32 constant and return its ValueId.
     pub(super) fn emit_i32_const(&mut self, bb: BlockId, value: i64) -> ValueId {
         let val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::IConst {
+        self.push_inst(bb, Inst::IConst {
             dst: val, ty: LirType::I32, value,
         });
         val
@@ -375,7 +363,7 @@ impl<'a> FuncLowering<'a> {
     /// see the module.
     pub(super) fn emit_size_of(&mut self, bb: BlockId, ty: LirType) -> ValueId {
         let val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SizeOf {
+        self.push_inst(bb, Inst::SizeOf {
             dst: val, ty,
         });
         val
@@ -624,14 +612,14 @@ impl<'a> FuncLowering<'a> {
             // Simple local: write tag into the local's slot.
             let slot = self.local_to_slot[local_idx];
             let base = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
+            self.push_inst(bb, Inst::SlotAddr { dst: base, slot });
             base
         } else {
             // Projected field: compute the field address, then write tag there.
             self.lower_place_addr(dst, bb)
         };
         // Canonical `Inst::EnumInit` — unit variant with explicit parent type.
-        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+        self.push_inst(bb, Inst::EnumInit {
             target: base,
             struct_id,
             variant_tag: tag_ordinal as u32,
@@ -706,10 +694,10 @@ impl<'a> FuncLowering<'a> {
 
         let src_slot = self.local_to_slot[src_idx];
         let base = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot: src_slot });
+        self.push_inst(bb, Inst::SlotAddr { dst: base, slot: src_slot });
 
         let fptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+        self.push_inst(bb, Inst::FieldPtr {
             dst: fptr,
             base,
             struct_id,
@@ -718,7 +706,7 @@ impl<'a> FuncLowering<'a> {
 
         let field_ty = self.resolve_enum_field_type(src_type_id, if is_option { "Some" } else { "Ok" }, 0);
         let result = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+        self.push_inst(bb, Inst::Load {
             dst: result,
             ptr: fptr,
             ty: field_ty,
@@ -790,7 +778,7 @@ impl<'a> FuncLowering<'a> {
         // field 1 (vtable) = &vtable_global
         let dst_slot = self.local_to_slot[dst_idx];
         let dst_base = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: dst_base,
             slot: dst_slot,
         });
@@ -801,12 +789,12 @@ impl<'a> FuncLowering<'a> {
         // need to explicitly load the pointer value from the slot.
         let src_slot = self.local_to_slot[src_idx];
         let src_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: src_addr,
             slot: src_slot,
         });
         let src_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+        self.push_inst(bb, Inst::Load {
             dst: src_val,
             ptr: src_addr,
             ty: LirType::Ptr,
@@ -814,31 +802,31 @@ impl<'a> FuncLowering<'a> {
 
         // Store data pointer (field 0).
         let data_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+        self.push_inst(bb, Inst::FieldPtr {
             dst: data_ptr,
             base: dst_base,
             struct_id: trait_obj_sid,
             field: 0,
         });
-        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+        self.push_inst(bb, Inst::Store {
             ptr: data_ptr,
             value: src_val,
         });
 
         // Store vtable pointer (field 1).
         let vtable_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr {
+        self.push_inst(bb, Inst::GlobalAddr {
             dst: vtable_addr,
             global: vtable_gid,
         });
         let vtable_ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+        self.push_inst(bb, Inst::FieldPtr {
             dst: vtable_ptr,
             base: dst_base,
             struct_id: trait_obj_sid,
             field: 1,
         });
-        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+        self.push_inst(bb, Inst::Store {
             ptr: vtable_ptr,
             value: vtable_addr,
         });
@@ -926,7 +914,7 @@ impl<'a> FuncLowering<'a> {
 
         // Get slot address.
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot: dst_slot,
         });
 
@@ -936,7 +924,7 @@ impl<'a> FuncLowering<'a> {
         let zero_byte = self.emit_i32_const(bb, 0);
         self.ensure_extern("memset", &[LirType::Ptr, LirType::I32, LirType::I64], &LirType::Ptr);
         let abis = self.lookup_arg_abis("memset");
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: None,
             name: "memset".to_string(),
             args: vec![slot_addr, zero_byte, size_val],
@@ -947,7 +935,7 @@ impl<'a> FuncLowering<'a> {
         //    The parent struct id (Result__T__E or Option__T) is explicit on the
         //    instruction, so backends don't need to infer the parent enum type
         //    from dst or surrounding context — they read it off the inst.
-        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+        self.push_inst(bb, Inst::EnumInit {
             target: slot_addr,
             struct_id: slot_sid,
             variant_tag: 0,
@@ -1043,12 +1031,12 @@ impl<'a> FuncLowering<'a> {
         // Create a temporary slot of the enum type.
         let slot = self.lir_func.add_slot(LirType::Struct(struct_id), None);
         let base = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot });
+        self.push_inst(bb, Inst::SlotAddr { dst: base, slot });
 
         // Canonical `Inst::EnumInit` — no payload, just the tag for the null
         // variant. BIR expansion writes the tag field; the rest of the slot
         // stays zero from the slot's zero-init.
-        self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+        self.push_inst(bb, Inst::EnumInit {
             target: base,
             struct_id,
             variant_tag: tag_ordinal as u32,
@@ -1207,7 +1195,7 @@ impl<'a> FuncLowering<'a> {
         let ptr = if dst.projections.is_empty() {
             let slot = self.local_to_slot[dst.local.0 as usize];
             let addr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: addr, slot });
+            self.push_inst(bb, Inst::SlotAddr { dst: addr, slot });
             addr
         } else {
             self.lower_place_addr(dst, bb)
@@ -1216,7 +1204,7 @@ impl<'a> FuncLowering<'a> {
         // Emit: memset(ptr, 0, size)
         let zero = self.emit_i32_const(bb, 0);
         let sz = self.emit_i64_const(bb, size as i64);
-        self.lir_func.block_mut(bb).insts.push(Inst::Memset { ptr, byte: zero, size: sz });
+        self.push_inst(bb, Inst::Memset { ptr, byte: zero, size: sz });
         true
     }
 
@@ -1266,8 +1254,8 @@ impl<'a> FuncLowering<'a> {
         if let Operand::Constant(Constant::FuncRef(name)) = value {
             if let Some(&func_id) = self.func_index.get(name) {
                 let null_env = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_env });
-                self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+                self.push_inst(bb, Inst::NullPtr { dst: null_env });
+                self.push_inst(bb, Inst::ClosurePack {
                     slot: dst_slot,
                     env_ptr: null_env,
                     call_func: func_id,
@@ -1319,7 +1307,7 @@ impl<'a> FuncLowering<'a> {
         let heap_ptr = self.lir_func.next_value();
         self.ensure_extern("__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr);
         let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(heap_ptr),
             name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
@@ -1328,18 +1316,18 @@ impl<'a> FuncLowering<'a> {
 
         // Emit: memcpy(env_ptr, &src_slot, env_size)
         let src_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: src_addr,
             slot: src_slot,
         });
-        self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
+        self.push_inst(bb, Inst::Memcpy {
             dst_ptr: heap_ptr,
             src_ptr: src_addr,
             size: size_val,
         });
 
         // Emit: ClosurePack { slot: dst_slot, env_ptr: heap_ptr, call_func }
-        self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+        self.push_inst(bb, Inst::ClosurePack {
             slot: dst_slot,
             env_ptr: heap_ptr,
             call_func,
@@ -1399,15 +1387,15 @@ impl<'a> FuncLowering<'a> {
                 };
                 let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
                 let null_env = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_env });
-                self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+                self.push_inst(bb, Inst::NullPtr { dst: null_env });
+                self.push_inst(bb, Inst::ClosurePack {
                     slot: tmp_slot,
                     env_ptr: null_env,
                     call_func: func_id,
                     needs_adapter: true,
                 });
                 let addr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                self.push_inst(bb, Inst::SlotAddr {
                     dst: addr,
                     slot: tmp_slot,
                 });
@@ -1456,7 +1444,7 @@ impl<'a> FuncLowering<'a> {
                         let tmp_slot = self.lir_func.add_slot(LirType::Struct(gc_sid), None);
                         let src_slot = self.local_to_slot[src_idx];
                         let src_addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        self.push_inst(bb, Inst::SlotAddr {
                             dst: src_addr, slot: src_slot,
                         });
                         let cloned = self.lir_func.next_value();
@@ -1466,17 +1454,17 @@ impl<'a> FuncLowering<'a> {
                             &LirType::Struct(gc_sid),
                         );
                         let abis = self.lookup_arg_abis("gorget_closure_clone_to_owned");
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(cloned),
                             name: "gorget_closure_clone_to_owned".to_string(),
                             args: vec![src_addr],
                             arg_abis: abis,
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                        self.push_inst(bb, Inst::SlotStore {
                             slot: tmp_slot, value: cloned, is_move: false,
                         });
                         let addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        self.push_inst(bb, Inst::SlotAddr {
                             dst: addr, slot: tmp_slot,
                         });
                         lir_args[i] = addr;
@@ -1531,7 +1519,7 @@ impl<'a> FuncLowering<'a> {
         let heap_ptr = self.lir_func.next_value();
         self.ensure_extern("__gorget_closure_env_alloc", &[LirType::I64], &LirType::Ptr);
         let alloc_abis = self.lookup_arg_abis("__gorget_closure_env_alloc");
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(heap_ptr),
             name: "__gorget_closure_env_alloc".to_string(),
             args: vec![size_val],
@@ -1539,24 +1527,24 @@ impl<'a> FuncLowering<'a> {
         });
 
         let src_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: src_addr,
             slot: src_slot,
         });
-        self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
+        self.push_inst(bb, Inst::Memcpy {
             dst_ptr: heap_ptr,
             src_ptr: src_addr,
             size: size_val,
         });
 
-        self.lir_func.block_mut(bb).insts.push(Inst::ClosurePack {
+        self.push_inst(bb, Inst::ClosurePack {
             slot: tmp_slot,
             env_ptr: heap_ptr,
             call_func,
             needs_adapter: false,
         });
         let addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: addr,
             slot: tmp_slot,
         });

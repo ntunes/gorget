@@ -49,7 +49,7 @@ impl<'a> FuncLowering<'a> {
                     // Move: emit SlotStore with is_move flag so C backend can use
                     // memcpy instead of clone for resource types (strings, etc.).
                     let slot = self.local_to_slot[dst.local.0 as usize];
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                    self.push_inst(bb, Inst::SlotStore {
                         slot, value: val, is_move: true,
                     });
                 } else {
@@ -82,7 +82,7 @@ impl<'a> FuncLowering<'a> {
                         .map(LirType::Struct).unwrap_or(LirType::Ptr);
                     self.ensure_extern("gorget_array_clone", &[LirType::Ptr], &arr_ty);
                     let abis = self.lookup_arg_abis("gorget_array_clone");
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: Some(result),
                         name: "gorget_array_clone".to_string(),
                         args: vec![l],
@@ -90,7 +90,7 @@ impl<'a> FuncLowering<'a> {
                     });
                     self.ensure_extern("gorget_array_extend", &[LirType::Ptr, LirType::Ptr], &LirType::Void);
                     let abis = self.lookup_arg_abis("gorget_array_extend");
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None,
                         name: "gorget_array_extend".to_string(),
                         args: vec![result, r],
@@ -101,7 +101,7 @@ impl<'a> FuncLowering<'a> {
                     let result = self.lir_func.next_value();
                     let ty = self.map_type(type_id);
                     let inst = lower_binop(result, *op, l, r, ty, self.overflow_wrap);
-                    self.lir_func.block_mut(bb).insts.push(inst);
+                    self.push_inst(bb, inst);
                     self.store_to_local(*dst, result, bb);
                 }
             }
@@ -116,7 +116,7 @@ impl<'a> FuncLowering<'a> {
                 let result = self.lir_func.next_value();
                 let ty = self.map_type(type_id);
                 let inst = lower_unop(result, *op, val, ty);
-                self.lir_func.block_mut(bb).insts.push(inst);
+                self.push_inst(bb, inst);
                 self.store_to_local(*dst, result, bb);
             }
 
@@ -154,7 +154,7 @@ impl<'a> FuncLowering<'a> {
                                 &[str_ty.clone(), str_ty.clone()], &LirType::Bool);
                             let abis = self.lookup_arg_abis("gorget_str_eq");
                             let eq_result = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            self.push_inst(bb, Inst::CallExtern {
                                 dst: Some(eq_result),
                                 name: "gorget_str_eq".to_string(),
                                 args: vec![l, r],
@@ -162,7 +162,7 @@ impl<'a> FuncLowering<'a> {
                             });
                             if lir_op == CmpOp::Ne {
                                 let not_result = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::Not {
+                                self.push_inst(bb, Inst::Not {
                                     dst: not_result,
                                     operand: eq_result,
                                 });
@@ -177,7 +177,7 @@ impl<'a> FuncLowering<'a> {
                                 &[str_ty.clone(), str_ty.clone()], &LirType::I64);
                             let abis = self.lookup_arg_abis("gorget_str_cmp");
                             let cmp_result = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            self.push_inst(bb, Inst::CallExtern {
                                 dst: Some(cmp_result),
                                 name: "gorget_str_cmp".to_string(),
                                 args: vec![l, r],
@@ -185,7 +185,7 @@ impl<'a> FuncLowering<'a> {
                             });
                             let zero = self.emit_i64_const(bb, 0);
                             let result = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                            self.push_inst(bb, Inst::Cmp {
                                 dst: result,
                                 op: lir_op,
                                 lhs: cmp_result,
@@ -198,7 +198,7 @@ impl<'a> FuncLowering<'a> {
                     let l = self.lower_operand(lhs, bb);
                     let r = self.lower_operand(rhs, bb);
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                    self.push_inst(bb, Inst::Cmp {
                         dst: result,
                         op: map_cmp_op(*op),
                         lhs: l,
@@ -287,7 +287,7 @@ impl<'a> FuncLowering<'a> {
                         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
                         let abis = self.lookup_arg_abis("gorget_str_from_cstr");
                         let cstr_result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(cstr_result),
                             name: "gorget_str_from_cstr".to_string(),
                             args: vec![val],
@@ -301,7 +301,7 @@ impl<'a> FuncLowering<'a> {
                         self.ensure_extern("gorget_string_clone", &[LirType::Ptr], &str_ty);
                         let abis = self.lookup_arg_abis("gorget_string_clone");
                         let clone_result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(clone_result),
                             name: "gorget_string_clone".to_string(),
                             args: vec![val],
@@ -324,7 +324,7 @@ impl<'a> FuncLowering<'a> {
                     let abis = self.lookup_arg_abis(conv_fn);
                     // Emit CallExtern to the conversion function (returns const char*).
                     let cstr_result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: Some(cstr_result),
                         name: conv_fn.to_string(),
                         args: vec![val],
@@ -361,7 +361,7 @@ impl<'a> FuncLowering<'a> {
                             &[str_ty], &LirType::I64);
                         let abis = self.lookup_arg_abis("gorget_str_ord");
                         let ord_result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(ord_result),
                             name: "gorget_str_ord".to_string(),
                             args: vec![val],
@@ -398,7 +398,7 @@ impl<'a> FuncLowering<'a> {
                         } else {
                             Inst::IntCast { dst: result, value: val, to }
                         };
-                        self.lir_func.block_mut(bb).insts.push(inst);
+                        self.push_inst(bb, inst);
                         self.store_to_local(*dst, result, bb);
                     }
                 }
@@ -412,7 +412,7 @@ impl<'a> FuncLowering<'a> {
                 let val = self.lower_operand(value, bb);
                 let to = self.map_type(target_type);
                 let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
+                self.push_inst(bb, Inst::Bitcast {
                     dst: result,
                     value: val,
                     to,
@@ -423,10 +423,7 @@ impl<'a> FuncLowering<'a> {
             Instruction::PtrCast { dst, value, .. } => {
                 let val = self.lower_operand(value, bb);
                 let result = self.lir_func.next_value();
-                self.lir_func
-                    .block_mut(bb)
-                    .insts
-                    .push(Inst::PtrCast { dst: result, value: val });
+                self.push_inst(bb, Inst::PtrCast { dst: result, value: val });
                 self.store_to_local(*dst, result, bb);
             }
 
@@ -448,7 +445,7 @@ impl<'a> FuncLowering<'a> {
                         self.wrap_closure_call_args(args, &mut lir_args, bb);
                     }
                     let result = dst.map(|_| self.lir_func.next_value());
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                    self.push_inst(bb, Inst::Call {
                         dst: result,
                         func: *fid,
                         args: lir_args,
@@ -477,7 +474,7 @@ impl<'a> FuncLowering<'a> {
                                 if let Operand::Constant(Constant::GlobalRef(name)) = a {
                                     if let Some(&gid) = self.global_index.get(name) {
                                         let addr = self.lir_func.next_value();
-                                        self.lir_func.block_mut(bb).insts.push(
+                                        self.push_inst(bb, 
                                             Inst::GlobalAddr { dst: addr, global: gid },
                                         );
                                         return addr;
@@ -534,7 +531,7 @@ impl<'a> FuncLowering<'a> {
                             let method_name = format!("{type_name}__len");
                             if let Some(&fid) = self.func_index.get(method_name.as_str()) {
                                 let result = dst.map(|_| self.lir_func.next_value());
-                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                self.push_inst(bb, Inst::Call {
                                     dst: result,
                                     func: fid,
                                     args: lir_args.clone(),
@@ -592,7 +589,7 @@ impl<'a> FuncLowering<'a> {
                     let lir_args: Vec<ValueId> =
                         args.iter().map(|a| self.lower_operand(a, bb)).collect();
                     let result = dst.map(|_| self.lir_func.next_value());
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                    self.push_inst(bb, Inst::Call {
                         dst: result,
                         func: *fid,
                         args: lir_args,
@@ -637,7 +634,7 @@ impl<'a> FuncLowering<'a> {
                             if let Operand::Constant(Constant::GlobalRef(name)) = a {
                                 if let Some(&gid) = self.global_index.get(name) {
                                     let addr = self.lir_func.next_value();
-                                    self.lir_func.block_mut(bb).insts.push(
+                                    self.push_inst(bb, 
                                         Inst::GlobalAddr { dst: addr, global: gid },
                                     );
                                     return addr;
@@ -696,7 +693,7 @@ impl<'a> FuncLowering<'a> {
                     }
                     None => LirType::Void,
                 };
-                self.lir_func.block_mut(bb).insts.push(Inst::CallPtr {
+                self.push_inst(bb, Inst::CallPtr {
                     dst: result,
                     callee: callee_val,
                     args: lir_args,
@@ -723,7 +720,7 @@ impl<'a> FuncLowering<'a> {
 
                 let slot = self.local_to_slot[dst.0 as usize];
                 let base = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                self.push_inst(bb, Inst::SlotAddr {
                     dst: base,
                     slot,
                 });
@@ -753,13 +750,13 @@ impl<'a> FuncLowering<'a> {
                                 // payload bytes are already zero. We only need to initialize the
                                 // nested enum's tag — emit FieldPtr + EnumInit (payload=None).
                                 let fptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                self.push_inst(bb, Inst::FieldPtr {
                                     dst: fptr,
                                     base,
                                     struct_id,
                                     field: i as u32,
                                 });
-                                self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                                self.push_inst(bb, Inst::EnumInit {
                                     target: fptr,
                                     struct_id: field_enum_sid,
                                     variant_tag: tag_ordinal as u32,
@@ -782,7 +779,7 @@ impl<'a> FuncLowering<'a> {
                 }
 
                 if !init_fields.is_empty() {
-                    self.lir_func.block_mut(bb).insts.push(Inst::StructInit {
+                    self.push_inst(bb, Inst::StructInit {
                         target: base,
                         struct_id,
                         fields: init_fields,
@@ -808,7 +805,7 @@ impl<'a> FuncLowering<'a> {
                         .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
                 if !is_ref_local && matches!(self.gir_types.get(effective_type), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
                     let deref = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: deref,
                         ptr: base_val,
                         ty: LirType::Ptr,
@@ -817,7 +814,7 @@ impl<'a> FuncLowering<'a> {
                 }
                 let struct_id = self.resolve_struct_id_for_field(effective_type, *field, self.module_structs);
                 let fptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                self.push_inst(bb, Inst::FieldPtr {
                     dst: fptr,
                     base: base_val,
                     struct_id,
@@ -842,17 +839,17 @@ impl<'a> FuncLowering<'a> {
                     let dst_slot_ty = self.lir_func.slots[dst_slot.0 as usize].ty.clone();
                     if matches!(field_ty, LirType::Ptr) && dst_slot_ty.is_aggregate() {
                         let ptr_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: ptr_val, ptr: fptr, ty: LirType::Ptr,
                         });
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: result, ptr: ptr_val, ty: dst_slot_ty,
                         });
                         self.store_to_local(*dst, result, bb);
                     } else {
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: result,
                             ptr: fptr,
                             ty: field_ty,
@@ -895,19 +892,19 @@ impl<'a> FuncLowering<'a> {
                     let range_val = self.lower_place_addr(range_place, bb);
                     let range_sid = self.struct_reg.lookup("GorgetRange").unwrap_or(StructId(0));
                     let start_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: start_ptr, base: range_val, struct_id: range_sid, field: 0,
                     });
                     let start = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: start, ptr: start_ptr, ty: LirType::I64,
                     });
                     let end_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: end_ptr, base: range_val, struct_id: range_sid, field: 1,
                     });
                     let end = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: end, ptr: end_ptr, ty: LirType::I64,
                     });
                     let fn_name = if is_str { "gorget_str_slice" } else { "gorget_array_slice" };
@@ -923,7 +920,7 @@ impl<'a> FuncLowering<'a> {
                     self.ensure_extern(fn_name, &arg_types, &ret_ty);
                     let abis = self.lookup_arg_abis(fn_name);
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: Some(result),
                         name: fn_name.to_string(),
                         args: vec![base_val, start, end],
@@ -940,7 +937,7 @@ impl<'a> FuncLowering<'a> {
                     self.ensure_extern("gorget_str_index", &[str_ty.clone(), LirType::I64], &str_ty);
                     let abis = self.lookup_arg_abis("gorget_str_index");
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: Some(result),
                         name: "gorget_str_index".to_string(),
                         args: vec![base_val, idx],
@@ -963,7 +960,7 @@ impl<'a> FuncLowering<'a> {
                         && !is_ref_local
                     {
                         let deref = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: deref, ptr: base_val, ty: LirType::Ptr,
                         });
                         base_val = deref;
@@ -973,7 +970,7 @@ impl<'a> FuncLowering<'a> {
                     self.ensure_extern(fn_name, &[LirType::Ptr, LirType::I64], &LirType::Ptr);
                     let abis = self.lookup_arg_abis(fn_name);
                     let ptr_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: Some(ptr_val),
                         name: fn_name.to_string(),
                         args: vec![base_val, idx],
@@ -1044,7 +1041,7 @@ impl<'a> FuncLowering<'a> {
                         self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
                         let abis = self.lookup_arg_abis(&actual_fn);
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(result),
                             name: actual_fn,
                             args: vec![ptr_val],
@@ -1062,7 +1059,7 @@ impl<'a> FuncLowering<'a> {
                             self.ensure_extern(&clone_fn, &[LirType::Ptr], &ret_ty);
                             let abis = self.lookup_arg_abis(&clone_fn);
                             let result = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                            self.push_inst(bb, Inst::CallExtern {
                                 dst: Some(result),
                                 name: clone_fn,
                                 args: vec![ptr_val],
@@ -1072,7 +1069,7 @@ impl<'a> FuncLowering<'a> {
                         } else {
                             // Other non-collection element: Load + move-zero
                             let result = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            self.push_inst(bb, Inst::Load {
                                 dst: result,
                                 ty: elem_ty.clone(),
                                 ptr: ptr_val,
@@ -1092,7 +1089,7 @@ impl<'a> FuncLowering<'a> {
                             if byte_size > 0 {
                                 let zero = self.emit_i32_const(bb, 0);
                                 let sz = self.emit_i64_const(bb, byte_size);
-                                self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                                self.push_inst(bb, Inst::Memset {
                                     ptr: ptr_val, byte: zero, size: sz,
                                 });
                             }
@@ -1115,14 +1112,14 @@ impl<'a> FuncLowering<'a> {
                         _ => 8,
                     };
                     let elem_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+                    self.push_inst(bb, Inst::ElemPtr {
                         dst: elem_ptr,
                         base: base_val,
                         index: idx,
                         elem_size,
                     });
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: result,
                         ptr: elem_ptr,
                         ty: elem_ty,
@@ -1145,7 +1142,7 @@ impl<'a> FuncLowering<'a> {
 
                 let slot = self.local_to_slot[dst.0 as usize];
                 let base = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                self.push_inst(bb, Inst::SlotAddr {
                     dst: base,
                     slot,
                 });
@@ -1178,7 +1175,7 @@ impl<'a> FuncLowering<'a> {
                 }
 
                 // Emit the canonical EnumInit — writes tag + all non-Null payload fields.
-                self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                self.push_inst(bb, Inst::EnumInit {
                     target: base,
                     struct_id,
                     variant_tag: tag_ordinal as u32,
@@ -1189,11 +1186,11 @@ impl<'a> FuncLowering<'a> {
                 // slot, then a unit EnumInit to set the nested enum's tag byte.
                 for (abs_field_idx, nested_sid, nested_tag) in nested_null_inits {
                     let fptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: fptr, base, struct_id,
                         field: abs_field_idx,
                     });
-                    self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+                    self.push_inst(bb, Inst::EnumInit {
                         target: fptr,
                         struct_id: nested_sid,
                         variant_tag: nested_tag,
@@ -1219,7 +1216,7 @@ impl<'a> FuncLowering<'a> {
                                             "GorgetArray" | "GorgetMap" | "GorgetSet" | "GorgetString" | "GorgetClosure"
                                         ));
                                     if needs_move {
-                                        self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot {
+                                        self.push_inst(bb, Inst::MoveSlot {
                                             slot: src_slot,
                                         });
                                     }
@@ -1241,14 +1238,14 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     StructId(0) // fallback
                 };
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                self.push_inst(bb, Inst::FieldPtr {
                     dst: tag_ptr,
                     base: val,
                     struct_id,
                     field: 0,
                 });
                 let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                self.push_inst(bb, Inst::Load {
                     dst: result,
                     ptr: tag_ptr,
                     ty: LirType::I32,
@@ -1285,7 +1282,7 @@ impl<'a> FuncLowering<'a> {
                 let effective_ty = self.effective_place_type(base);
                 if !is_ref_local && matches!(self.gir_types.get(effective_ty), Some(GirType::Ptr(_) | GirType::MutPtr(_))) {
                     let deref = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: deref,
                         ptr: base_val,
                         ty: LirType::Ptr,
@@ -1320,7 +1317,7 @@ impl<'a> FuncLowering<'a> {
                     && !variant_field_is_ptr
                 {
                     let fptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: fptr,
                         base: base_val,
                         struct_id,
@@ -1344,7 +1341,7 @@ impl<'a> FuncLowering<'a> {
                     // payload_field + declared field type explicitly. BIR
                     // expands to `FieldPtr + Load` (same as before).
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::EnumExtract {
+                    self.push_inst(bb, Inst::EnumExtract {
                         dst: result,
                         value: base_val,
                         struct_id,
@@ -1367,15 +1364,15 @@ impl<'a> FuncLowering<'a> {
                         && matches!(mode, crate::ir::instructions::EnumFieldLoadMode::Move);
                     if do_zero {
                         let fptr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        self.push_inst(bb, Inst::FieldPtr {
                             dst: fptr,
                             base: base_val,
                             struct_id,
                             field: payload_field_idx,
                         });
                         let null_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
-                        self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                        self.push_inst(bb, Inst::NullPtr { dst: null_val });
+                        self.push_inst(bb, Inst::Store {
                             ptr: fptr,
                             value: null_val,
                         });
@@ -1390,7 +1387,7 @@ impl<'a> FuncLowering<'a> {
                 // open-coded version emitted. Parity with `Instruction::StructInit`.
                 let slot = self.local_to_slot[dst.0 as usize];
                 let base = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                self.push_inst(bb, Inst::SlotAddr {
                     dst: base,
                     slot,
                 });
@@ -1403,7 +1400,7 @@ impl<'a> FuncLowering<'a> {
                     .collect();
 
                 if !init_fields.is_empty() {
-                    self.lir_func.block_mut(bb).insts.push(Inst::StructInit {
+                    self.push_inst(bb, Inst::StructInit {
                         target: base,
                         struct_id,
                         fields: init_fields,
@@ -1426,7 +1423,7 @@ impl<'a> FuncLowering<'a> {
                 // Projected places (field-level moves): Memset (MoveSlot is whole-slot).
                 if place.projections.is_empty() {
                     let slot = self.local_to_slot[place.local.0 as usize];
-                    self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot { slot });
+                    self.push_inst(bb, Inst::MoveSlot { slot });
                 } else {
                     let addr = self.lower_place_addr(place, bb);
                     let zero = self.emit_i32_const(bb, 0);
@@ -1448,7 +1445,7 @@ impl<'a> FuncLowering<'a> {
                         _ => crate::lir::types::scalar_size(&effective_ty).unwrap_or(8) as i64,
                     };
                     let size = self.emit_i64_const(bb, byte_size);
-                    self.lir_func.block_mut(bb).insts.push(Inst::Memset {
+                    self.push_inst(bb, Inst::Memset {
                         ptr: addr,
                         byte: zero,
                         size,
@@ -1502,18 +1499,18 @@ impl<'a> FuncLowering<'a> {
                 let deref_val = self.lir_func.next_value();
                 if needs_two_step {
                     let ptr_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: ptr_val,
                         ptr: src_addr,
                         ty: LirType::Ptr,
                     });
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: deref_val,
                         ptr: ptr_val,
                         ty: field_ty,
                     });
                 } else {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: deref_val,
                         ptr: src_addr,
                         ty: field_ty,
@@ -1527,12 +1524,12 @@ impl<'a> FuncLowering<'a> {
                 let dst_addr = self.lower_place_addr(dst, bb);
                 // Deref the Ptr to get the target address
                 let target = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                self.push_inst(bb, Inst::Load {
                     dst: target,
                     ptr: dst_addr,
                     ty: LirType::Ptr,
                 });
-                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                self.push_inst(bb, Inst::Store {
                     ptr: target,
                     value: val,
                 });
@@ -1549,7 +1546,7 @@ impl<'a> FuncLowering<'a> {
                 self.ensure_extern("__gorget_alloc", &[LirType::Ptr], &LirType::Ptr);
                 let abis = self.lookup_arg_abis("__gorget_alloc");
                 let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: Some(result),
                     name: "__gorget_alloc".into(),
                     args: vec![alloc],
@@ -1569,7 +1566,7 @@ impl<'a> FuncLowering<'a> {
                 self.ensure_extern("__gorget_alloc_array", &[LirType::I64, LirType::Ptr], &LirType::Ptr);
                 let abis = self.lookup_arg_abis("__gorget_alloc_array");
                 let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: Some(result),
                     name: "__gorget_alloc_array".into(),
                     args: vec![cnt, alloc],
@@ -1583,7 +1580,7 @@ impl<'a> FuncLowering<'a> {
                 let a = self.lower_operand(allocator, bb);
                 self.ensure_extern("__gorget_dealloc", &[LirType::Ptr, LirType::Ptr], &LirType::Void);
                 let abis = self.lookup_arg_abis("__gorget_dealloc");
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: None,
                     name: "__gorget_dealloc".into(),
                     args: vec![p, a],
@@ -1595,7 +1592,7 @@ impl<'a> FuncLowering<'a> {
                 let tls_name = format!("__gorget_tls_{name}");
                 self.ensure_extern(&tls_name, &[], &LirType::Ptr);
                 let result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: Some(result),
                     name: tls_name,
                     args: vec![],
@@ -1608,7 +1605,7 @@ impl<'a> FuncLowering<'a> {
                 let alloc = self.lower_operand(allocator, bb);
                 self.ensure_extern("__gorget_push_allocator", &[LirType::Ptr], &LirType::Void);
                 let abis = self.lookup_arg_abis("__gorget_push_allocator");
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: None,
                     name: "__gorget_push_allocator".into(),
                     args: vec![alloc],
@@ -1618,7 +1615,7 @@ impl<'a> FuncLowering<'a> {
 
             Instruction::PopAllocator => {
                 self.ensure_extern("__gorget_pop_allocator", &[], &LirType::Void);
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: None,
                     name: "__gorget_pop_allocator".into(),
                     args: vec![],
@@ -1651,17 +1648,17 @@ impl<'a> FuncLowering<'a> {
                         // defaults to void*, which breaks collection push/put
                         // for scalar Dict keys.
                         let addr_dummy = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        self.push_inst(bb, Inst::SlotAddr {
                             dst: addr_dummy,
                             slot,
                         });
                         let val = self.lir_func.next_value();
                         // Emit InlineC with a dst, then store to slot.
-                        self.lir_func.block_mut(bb).insts.push(Inst::InlineC {
+                        self.push_inst(bb, Inst::InlineC {
                             dst: Some(val),
                             code: code.clone(),
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                        self.push_inst(bb, Inst::SlotStore {
                             slot,
                             value: val,
                             is_move: false,
@@ -1675,7 +1672,7 @@ impl<'a> FuncLowering<'a> {
                 };
                 if !dst_val {
                     // No assignment pattern — emit as passthrough without dst.
-                    self.lir_func.block_mut(bb).insts.push(Inst::InlineC {
+                    self.push_inst(bb, Inst::InlineC {
                         dst: None,
                         code: code.clone(),
                     });
@@ -1686,20 +1683,20 @@ impl<'a> FuncLowering<'a> {
                 if let Some(&gid) = self.global_index.get(name) {
                     let val = self.lower_operand(value, bb);
                     let addr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::GlobalAddr { dst: addr, global: gid });
+                    self.push_inst(bb, Inst::GlobalAddr { dst: addr, global: gid });
                     let global_ty = &self.module_globals[gid.0 as usize].ty;
                     if global_ty.is_scalar() {
                         // Scalar store: dereference and assign.
-                        self.lir_func.block_mut(bb).insts.push(Inst::Store { ptr: addr, value: val });
+                        self.push_inst(bb, Inst::Store { ptr: addr, value: val });
                     } else {
                         // Aggregate store: memcpy.
-                        self.lir_func.block_mut(bb).insts.push(Inst::Store { ptr: addr, value: val });
+                        self.push_inst(bb, Inst::Store { ptr: addr, value: val });
                     }
                 }
             }
 
             Instruction::Nop => {
-                self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                self.push_inst(bb, Inst::Nop);
             }
         }
         bb
@@ -1766,7 +1763,7 @@ impl<'a> FuncLowering<'a> {
                 let result = dst.map(|_| self.lir_func.next_value());
 
                 if let Some(fid) = self.func_index.get(func) {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                    self.push_inst(bb, Inst::Call {
                         dst: result,
                         func: *fid,
                         args: lir_args,
@@ -1780,7 +1777,7 @@ impl<'a> FuncLowering<'a> {
                     }).unwrap_or(LirType::Void);
                     self.ensure_extern(func, &arg_types, &ret_ty);
                     let abis = self.lookup_arg_abis(func);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: result,
                         name: func.clone(),
                         args: lir_args,
@@ -1821,7 +1818,7 @@ impl<'a> FuncLowering<'a> {
                         if local_idx < self.local_to_slot.len() {
                             let slot = self.local_to_slot[local_idx];
                             let dummy = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                            self.push_inst(bb, Inst::SlotAddr {
                                 dst: dummy,
                                 slot,
                             });
@@ -1860,7 +1857,7 @@ impl<'a> FuncLowering<'a> {
     /// is resolved statically by the elaboration pass.
     fn emit_move_zero_for_local(&mut self, local_idx: usize, bb: BlockId) {
         let slot = self.local_to_slot[local_idx];
-        self.lir_func.block_mut(bb).insts.push(Inst::MoveSlot { slot });
+        self.push_inst(bb, Inst::MoveSlot { slot });
     }
 
     /// Emit post-call zeroing for all Move operands in a call's argument list.
@@ -1878,20 +1875,20 @@ impl<'a> FuncLowering<'a> {
     ) {
         for (offset, fn_name) in stores {
             let fn_ptr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::NamedFuncAddr {
+            self.push_inst(bb, Inst::NamedFuncAddr {
                 dst: fn_ptr,
                 name: fn_name.clone(),
             });
             // Use ElemPtr with elem_size=1 to compute byte offset.
             let idx_val = self.emit_i64_const(bb, *offset as i64);
             let field_ptr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::ElemPtr {
+            self.push_inst(bb, Inst::ElemPtr {
                 dst: field_ptr,
                 base: collection_val,
                 index: idx_val,
                 elem_size: 1,
             });
-            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            self.push_inst(bb, Inst::Store {
                 ptr: field_ptr,
                 value: fn_ptr,
             });
@@ -2267,7 +2264,7 @@ impl<'a> FuncLowering<'a> {
                 };
                 let inner_lty = self.map_type(&inner_gid);
                 let addr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::AddressOf {
+                self.push_inst(bb, Inst::AddressOf {
                     dst: addr,
                     value: arg_val,
                     ty: inner_lty,
@@ -2316,7 +2313,7 @@ impl<'a> FuncLowering<'a> {
                 "TraitCall lowering: method `{method}` not found in `{vtable_name}` (trait `{trait_name}`)."
             )) as u32;
 
-        self.lir_func.block_mut(bb).insts.push(Inst::TraitCall {
+        self.push_inst(bb, Inst::TraitCall {
             dst: dst_val,
             object: self_val,
             trait_obj_struct,
@@ -2520,7 +2517,7 @@ impl<'a> FuncLowering<'a> {
         };
         let init_id = if is_fold { Some(lir_args_wrapped[1]) } else { None };
 
-        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+        self.push_inst(bb, Inst::HofExpand {
             coll: lir_args_wrapped[0],
             hof_op,
             element_ty: key_ty,
@@ -2688,7 +2685,7 @@ impl<'a> FuncLowering<'a> {
             Some(LirType::Ptr)
         };
 
-        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+        self.push_inst(bb, Inst::HofExpand {
             coll: lir_args_wrapped[0],
             hof_op,
             element_ty: elem_ty,
@@ -2800,7 +2797,7 @@ impl<'a> FuncLowering<'a> {
         // via AddressOf (spills to a slot if the source isn't already
         // slot-backed).
         let key_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::AddressOf {
+        self.push_inst(bb, Inst::AddressOf {
             dst: key_addr,
             value: key_arg,
             ty: key_ty,
@@ -2810,7 +2807,7 @@ impl<'a> FuncLowering<'a> {
         // as the starting value for get_or_put's put side, which also
         // needs default-by-address further below).
         let result_slot = self.lir_func.add_slot(val_ty.clone(), None);
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+        self.push_inst(bb, Inst::SlotStore {
             slot: result_slot,
             value: default_arg,
             is_move: false,
@@ -2818,7 +2815,7 @@ impl<'a> FuncLowering<'a> {
 
         // ptr = gorget_map_get(map, key_addr).
         let ptr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(ptr),
             name: "gorget_map_get".to_string(),
             args: vec![map_arg, key_addr],
@@ -2827,12 +2824,9 @@ impl<'a> FuncLowering<'a> {
 
         // is_present = ptr != NULL.
         let null_val = self.lir_func.next_value();
-        self.lir_func
-            .block_mut(bb)
-            .insts
-            .push(Inst::NullPtr { dst: null_val });
+        self.push_inst(bb, Inst::NullPtr { dst: null_val });
         let is_present = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: is_present,
             op: CmpOp::Ne,
             lhs: ptr,
@@ -2847,64 +2841,59 @@ impl<'a> FuncLowering<'a> {
             merge_bb
         };
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: is_present,
             then_block: hit_bb,
             then_args: vec![],
             else_block: miss_bb,
             else_args: vec![],
-        };
+        });
 
         // hit_bb: load (or clone-from) the map's value into result_slot.
         let payload_val = self.lir_func.next_value();
         if val_is_str {
-            self.lir_func.block_mut(hit_bb).insts.push(Inst::CallExtern {
+            self.push_inst(hit_bb, Inst::CallExtern {
                 dst: Some(payload_val),
                 name: "gorget_string_clone_to_owned".to_string(),
                 args: vec![ptr],
                 arg_abis: vec![AbiKind::Ptr],
             });
         } else {
-            self.lir_func.block_mut(hit_bb).insts.push(Inst::Load {
+            self.push_inst(hit_bb, Inst::Load {
                 dst: payload_val,
                 ptr,
                 ty: val_ty.clone(),
             });
         }
-        self.lir_func.block_mut(hit_bb).insts.push(Inst::SlotStore {
+        self.push_inst(hit_bb, Inst::SlotStore {
             slot: result_slot,
             value: payload_val,
             is_move: false,
         });
-        self.lir_func.block_mut(hit_bb).terminator =
-            Term::Jump(merge_bb, vec![]);
+        self.set_terminator(hit_bb, Term::Jump(merge_bb, vec![]));
 
         // miss_bb (get_or_put only): insert default into map; fall
         // through to merge. result_slot already holds default from
         // the initial SlotStore, so nothing else is needed.
         if is_put {
             let default_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(miss_bb).insts.push(Inst::AddressOf {
+            self.push_inst(miss_bb, Inst::AddressOf {
                 dst: default_addr,
                 value: default_arg,
                 ty: val_ty.clone(),
             });
-            self.lir_func
-                .block_mut(miss_bb)
-                .insts
-                .push(Inst::CallExtern {
+            self.push_inst(miss_bb, Inst::CallExtern {
                     dst: None,
                     name: "gorget_map_put".to_string(),
                     args: vec![map_arg, key_addr, default_addr],
                     arg_abis: vec![AbiKind::Ptr, AbiKind::VoidElem, AbiKind::VoidElem],
                 });
-            self.lir_func.block_mut(miss_bb).terminator =
-                Term::Jump(merge_bb, vec![]);
+            self.set_terminator(miss_bb, Term::Jump(merge_bb, vec![]));
         }
 
         // merge_bb: result = SlotLoad(result_slot); store to dst.
         let result = self.lir_func.next_value();
-        self.lir_func.block_mut(merge_bb).insts.push(Inst::SlotLoad {
+        self.push_inst(merge_bb, Inst::SlotLoad {
             dst: result,
             slot: result_slot,
             ty: val_ty,
@@ -3163,7 +3152,7 @@ impl<'a> FuncLowering<'a> {
             None
         };
 
-        self.lir_func.block_mut(bb).insts.push(Inst::HofExpand {
+        self.push_inst(bb, Inst::HofExpand {
             coll: lir_args_wrapped[0],
             hof_op,
             element_ty,
@@ -3253,21 +3242,21 @@ impl<'a> FuncLowering<'a> {
                     };
                     // Load the `ptr` field (field index 1: "ptr")
                     let ptr_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: ptr_val,
                         base: guard_ptr,
                         struct_id: sid,
                         field: 1,
                     });
                     let data_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: data_ptr,
                         ptr: ptr_val,
                         ty: LirType::Ptr,
                     });
                     // Dereference to the concrete inner type.
                     let result = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: result,
                         ptr: data_ptr,
                         ty: inner_ty,
@@ -3301,14 +3290,14 @@ impl<'a> FuncLowering<'a> {
                     .and_then(|name| self.struct_reg.lookup(name));
                 if let Some(sid) = guard_sid {
                     let ptr_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: ptr_val,
                         base: guard_ptr,
                         struct_id: sid,
                         field: 1,
                     });
                     let data_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: data_ptr,
                         ptr: ptr_val,
                         ty: LirType::Ptr,
@@ -3414,7 +3403,7 @@ impl<'a> FuncLowering<'a> {
                 let to_name = format!("{emit_name}_to");
                 let slot = self.local_to_slot[d.0 as usize];
                 let slot_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                self.push_inst(bb, Inst::SlotAddr {
                     dst: slot_ptr,
                     slot,
                 });
@@ -3423,7 +3412,7 @@ impl<'a> FuncLowering<'a> {
                 arg_types.push(LirType::Ptr);
                 self.ensure_extern(&to_name, &arg_types, &LirType::Void);
                 let abis = self.lookup_arg_abis(&to_name);
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: None,
                     name: to_name,
                     args: lir_args,
@@ -3501,7 +3490,7 @@ impl<'a> FuncLowering<'a> {
             }
             let is_void_ret = matches!(ret_ty, LirType::Void);
             let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
-            self.lir_func.block_mut(bb).insts.push(Inst::CallClosure {
+            self.push_inst(bb, Inst::CallClosure {
                 dst: result,
                 kind,
                 closure: closure_val,
@@ -3667,41 +3656,41 @@ impl<'a> FuncLowering<'a> {
                         if is_unwrap_or && lir_args.len() > 1 {
                             // unwrap_or: tag check + branch
                             let tag_val = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            self.push_inst(bb, Inst::Load {
                                 dst: tag_val, ptr: arg_ptr, ty: LirType::I32,
                             });
                             let zero = self.emit_i32_const(bb, 0);
                             let is_some = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                            self.push_inst(bb, Inst::Cmp {
                                 dst: is_some, op: CmpOp::Eq, lhs: tag_val, rhs: zero,
                             });
 
                             // Store default to temp slot for SSA threading
                             let result_slot = self.lir_func.add_slot(payload_ty.clone(), None);
                             let default_val = lir_args[1];
-                            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                            self.push_inst(bb, Inst::SlotStore {
                                 slot: result_slot, value: default_val, is_move: false,
                             });
 
                             let some_bb = self.lir_func.add_block();
                             let merge_bb = self.lir_func.add_block();
 
-                            self.lir_func.block_mut(bb).terminator = Term::Branch {
+                            self.set_terminator(bb, Term::Branch {
                                 cond: is_some,
                                 then_block: some_bb, then_args: vec![],
                                 else_block: merge_bb, else_args: vec![],
-                            };
+                            });
 
                             // Some: extract payload, store to result slot
                             let fptr = self.lir_func.next_value();
-                            self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
+                            self.push_inst(some_bb, Inst::FieldPtr {
                                 dst: fptr, base: arg_ptr, struct_id: sid, field: payload_field,
                             });
                             let payload_val = self.lir_func.next_value();
-                            self.lir_func.block_mut(some_bb).insts.push(Inst::Load {
+                            self.push_inst(some_bb, Inst::Load {
                                 dst: payload_val, ptr: fptr, ty: payload_ty.clone(),
                             });
-                            self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+                            self.push_inst(some_bb, Inst::SlotStore {
                                 slot: result_slot, value: payload_val, is_move: false,
                             });
                             if payload_is_resource {
@@ -3709,19 +3698,19 @@ impl<'a> FuncLowering<'a> {
                                 // so the source Option/Result won't double-drop the payload
                                 // when the struct containing it is later dropped.
                                 let tag_fptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(some_bb).insts.push(Inst::FieldPtr {
+                                self.push_inst(some_bb, Inst::FieldPtr {
                                     dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
                                 });
                                 let consumed_tag = self.emit_i32_const(some_bb, 2);
-                                self.lir_func.block_mut(some_bb).insts.push(Inst::Store {
+                                self.push_inst(some_bb, Inst::Store {
                                     ptr: tag_fptr, value: consumed_tag,
                                 });
                             }
-                            self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+                            self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
                             // Merge: load result from slot
                             let result = self.lir_func.next_value();
-                            self.lir_func.block_mut(merge_bb).insts.push(Inst::SlotLoad {
+                            self.push_inst(merge_bb, Inst::SlotLoad {
                                 dst: result, slot: result_slot, ty: payload_ty,
                             });
                             self.store_to_local(d, result, merge_bb);
@@ -3730,11 +3719,11 @@ impl<'a> FuncLowering<'a> {
                         } else {
                             // Plain unwrap/expect: just extract payload (no tag check)
                             let fptr = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                            self.push_inst(bb, Inst::FieldPtr {
                                 dst: fptr, base: arg_ptr, struct_id: sid, field: payload_field,
                             });
                             let payload_val = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                            self.push_inst(bb, Inst::Load {
                                 dst: payload_val, ptr: fptr, ty: payload_ty,
                             });
                             self.store_to_local(d, payload_val, bb);
@@ -3743,11 +3732,11 @@ impl<'a> FuncLowering<'a> {
                                 // so the source Option/Result won't double-drop the payload
                                 // when the struct containing it is later dropped.
                                 let tag_fptr = self.lir_func.next_value();
-                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                self.push_inst(bb, Inst::FieldPtr {
                                     dst: tag_fptr, base: arg_ptr, struct_id: sid, field: 0,
                                 });
                                 let consumed_tag = self.emit_i32_const(bb, 2);
-                                self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                                self.push_inst(bb, Inst::Store {
                                     ptr: tag_fptr, value: consumed_tag,
                                 });
                             }
@@ -3762,21 +3751,21 @@ impl<'a> FuncLowering<'a> {
                         let offset_val = self.emit_i64_const(bb, payload_offset);
                         // Cast arg_ptr to i64 for pointer arithmetic
                         let ptr_as_int = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
+                        self.push_inst(bb, Inst::Bitcast {
                             dst: ptr_as_int, value: arg_ptr, to: LirType::I64,
                         });
                         let payload_addr_int = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Add {
+                        self.push_inst(bb, Inst::Add {
                             dst: payload_addr_int, ty: LirType::I64,
                             lhs: ptr_as_int, rhs: offset_val,
                             overflow: crate::lir::Overflow::Wrap,
                         });
                         let payload_addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Bitcast {
+                        self.push_inst(bb, Inst::Bitcast {
                             dst: payload_addr, value: payload_addr_int, to: LirType::Ptr,
                         });
                         let payload_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: payload_val, ptr: payload_addr, ty: payload_ty,
                         });
                         self.store_to_local(d, payload_val, bb);
@@ -3784,7 +3773,7 @@ impl<'a> FuncLowering<'a> {
                             // Set tag to consumed sentinel via direct store to arg_ptr
                             // (tag is I32 at offset 0 of the Option/Result struct).
                             let consumed_tag = self.emit_i32_const(bb, 2);
-                            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+                            self.push_inst(bb, Inst::Store {
                                 ptr: arg_ptr, value: consumed_tag,
                             });
                         }
@@ -3810,13 +3799,13 @@ impl<'a> FuncLowering<'a> {
                     let ptr = lir_args[0]; // pointer to Option/Result struct
                     // Load tag as I32 from offset 0 (tag is always int32_t at field 0).
                     let tag_val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: tag_val, ptr, ty: LirType::I32,
                     });
                     let zero = self.emit_i32_const(bb, 0);
                     let result = self.lir_func.next_value();
                     let op = if is_some_ok { CmpOp::Eq } else { CmpOp::Ne };
-                    self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+                    self.push_inst(bb, Inst::Cmp {
                         dst: result, op, lhs: tag_val, rhs: zero,
                     });
                     self.store_to_local(d, result, bb);
@@ -3844,16 +3833,16 @@ impl<'a> FuncLowering<'a> {
                         let val = lir_args[0];
                         let result = self.lir_func.next_value();
                         if src_is_int || src_is_bool {
-                            self.lir_func.block_mut(bb).insts.push(Inst::IntToFloat {
+                            self.push_inst(bb, Inst::IntToFloat {
                                 dst: result, value: val, to: LirType::F64,
                             });
                         } else if src_is_float {
-                            self.lir_func.block_mut(bb).insts.push(Inst::FloatCast {
+                            self.push_inst(bb, Inst::FloatCast {
                                 dst: result, value: val, to: LirType::F64,
                             });
                         } else {
                             // Fallback: IntToFloat for unknown types
-                            self.lir_func.block_mut(bb).insts.push(Inst::IntToFloat {
+                            self.push_inst(bb, Inst::IntToFloat {
                                 dst: result, value: val, to: LirType::F64,
                             });
                         }
@@ -3868,7 +3857,7 @@ impl<'a> FuncLowering<'a> {
                         self.ensure_extern("gorget_str_ord", &[str_ty], &LirType::I64);
                         let abis = self.lookup_arg_abis("gorget_str_ord");
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(result),
                             name: "gorget_str_ord".to_string(),
                             args: lir_args,
@@ -3882,15 +3871,15 @@ impl<'a> FuncLowering<'a> {
                         let val = lir_args[0];
                         let result = self.lir_func.next_value();
                         if src_is_float {
-                            self.lir_func.block_mut(bb).insts.push(Inst::FloatToInt {
+                            self.push_inst(bb, Inst::FloatToInt {
                                 dst: result, value: val, to: LirType::I64,
                             });
                         } else if src_is_bool || src_is_int {
-                            self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                            self.push_inst(bb, Inst::IntCast {
                                 dst: result, value: val, to: LirType::I64,
                             });
                         } else {
-                            self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                            self.push_inst(bb, Inst::IntCast {
                                 dst: result, value: val, to: LirType::I64,
                             });
                         }
@@ -3901,7 +3890,7 @@ impl<'a> FuncLowering<'a> {
                     "bool" => {
                         let val = lir_args[0];
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                        self.push_inst(bb, Inst::IntCast {
                             dst: result, value: val, to: LirType::Bool,
                         });
                         self.store_to_local(d, result, bb);
@@ -3939,7 +3928,7 @@ impl<'a> FuncLowering<'a> {
                     let abis = self.lookup_arg_abis(conv_fn);
                     if let Some(d) = *dst {
                         let result = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: Some(result),
                             name: conv_fn.to_string(),
                             args: vec![lir_args[1]], // skip the empty string, pass only the value
@@ -3974,7 +3963,7 @@ impl<'a> FuncLowering<'a> {
                 self.ensure_extern(typed_fn, &[LirType::Ptr, arg1_ty.clone()], &LirType::Void);
                 // First arg is GorgetString* (pass by pointer), second is scalar value
                 let abis = vec![crate::ir::abi::AbiKind::Ptr, crate::ir::abi::AbiKind::Scalar];
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: None,
                     name: typed_fn.to_string(),
                     args: lir_args,
@@ -4030,7 +4019,7 @@ impl<'a> FuncLowering<'a> {
             let val = val_type.as_deref().map(|n| self.elem_type_to_meta(n));
             let collection_elem_fns = self.infer_fn_ptr_stores_from_types(
                 kind, &elem_type, val_type.as_deref(), str_keyed);
-            self.lir_func.block_mut(bb).insts.push(Inst::CollectionCtor {
+            self.push_inst(bb, Inst::CollectionCtor {
                 dst: dst_val,
                 kind,
                 elem_or_key,
@@ -4050,7 +4039,7 @@ impl<'a> FuncLowering<'a> {
                 if let Some(d) = dst {
                     let slot = self.local_to_slot[d.0 as usize];
                     let slot_addr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                    self.push_inst(bb, Inst::SlotAddr {
                         dst: slot_addr,
                         slot,
                     });
@@ -4061,7 +4050,7 @@ impl<'a> FuncLowering<'a> {
             return bb;
         }
 
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: result,
             name: actual_emit_name,
             args: lir_args,
@@ -4108,7 +4097,7 @@ impl<'a> FuncLowering<'a> {
                     if let Operand::Constant(Constant::Str(fmt_str)) = arg {
                         let fixed = fix_printf_format(fmt_str, &arg_kinds[1..]);
                         let fixed_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::StrLit {
+                        self.push_inst(bb, Inst::StrLit {
                             dst: fixed_val,
                             value: fixed,
                         });
@@ -4136,17 +4125,17 @@ impl<'a> FuncLowering<'a> {
                     // For Ptr slots: the slot holds a pointer TO the struct — load it.
                     let str_base = if is_ptr_to_str {
                         let addr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        self.push_inst(bb, Inst::SlotAddr {
                             dst: addr, slot,
                         });
                         let loaded = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: loaded, ptr: addr, ty: LirType::Ptr,
                         });
                         loaded
                     } else {
                         let base = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+                        self.push_inst(bb, Inst::SlotAddr {
                             dst: base, slot,
                         });
                         base
@@ -4155,20 +4144,20 @@ impl<'a> FuncLowering<'a> {
                     // 32-byte Str fields: 0=data (Ptr), 1=cap (I64), 2=len (I64), 3=alloc (Ptr)
                     // Load .len (field 2) → cast to I32 for printf %.*s precision
                     let len_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: len_ptr,
                         base: str_base,
                         struct_id,
                         field: 2,
                     });
                     let len_load = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: len_load,
                         ptr: len_ptr,
                         ty: LirType::I64,
                     });
                     let len_i32 = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::IntCast {
+                    self.push_inst(bb, Inst::IntCast {
                         dst: len_i32,
                         value: len_load,
                         to: LirType::I32,
@@ -4177,14 +4166,14 @@ impl<'a> FuncLowering<'a> {
 
                     // Load .data (field 0) — const char*
                     let data_ptr = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                    self.push_inst(bb, Inst::FieldPtr {
                         dst: data_ptr,
                         base: str_base,
                         struct_id,
                         field: 0,
                     });
                     let data_load = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                    self.push_inst(bb, Inst::Load {
                         dst: data_load,
                         ptr: data_ptr,
                         ty: LirType::Ptr,
@@ -4199,7 +4188,7 @@ impl<'a> FuncLowering<'a> {
                 let ty = self.operand_lir_type(arg);
                 if ty == LirType::F32 {
                     let promoted = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::FloatCast {
+                    self.push_inst(bb, Inst::FloatCast {
                         dst: promoted,
                         value: float_val,
                         to: LirType::F64,
@@ -4222,14 +4211,14 @@ impl<'a> FuncLowering<'a> {
                 self.ensure_extern("gorget_bool_to_str", &[LirType::Bool], &str_struct_ty);
                 let abis = self.lookup_arg_abis("gorget_bool_to_str");
                 let str_result = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                self.push_inst(bb, Inst::CallExtern {
                     dst: Some(str_result),
                     name: "gorget_bool_to_str".to_string(),
                     args: vec![bool_val],
                     arg_abis: abis,
                 });
                 // Store result to slot
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+                self.push_inst(bb, Inst::SlotStore {
                     slot: str_slot,
                     value: str_result,
                     is_move: true,
@@ -4238,21 +4227,21 @@ impl<'a> FuncLowering<'a> {
                 // Decompose: load .len (field 2 under 32-byte layout) → i32, load .data (field 0) → ptr
                 let str_sid = self.struct_reg.lookup("GorgetString").unwrap();
                 let base = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base, slot: str_slot });
+                self.push_inst(bb, Inst::SlotAddr { dst: base, slot: str_slot });
                 let len_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: len_ptr, base, struct_id: str_sid, field: 2 });
+                self.push_inst(bb, Inst::FieldPtr { dst: len_ptr, base, struct_id: str_sid, field: 2 });
                 let len_load = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load { dst: len_load, ptr: len_ptr, ty: LirType::I64 });
+                self.push_inst(bb, Inst::Load { dst: len_load, ptr: len_ptr, ty: LirType::I64 });
                 let len_i32 = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::IntCast { dst: len_i32, value: len_load, to: LirType::I32 });
+                self.push_inst(bb, Inst::IntCast { dst: len_i32, value: len_load, to: LirType::I32 });
                 lir_args.push(len_i32);
 
                 let base2 = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr { dst: base2, slot: str_slot });
+                self.push_inst(bb, Inst::SlotAddr { dst: base2, slot: str_slot });
                 let data_ptr = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr { dst: data_ptr, base: base2, struct_id: str_sid, field: 0 });
+                self.push_inst(bb, Inst::FieldPtr { dst: data_ptr, base: base2, struct_id: str_sid, field: 0 });
                 let data_load = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load { dst: data_load, ptr: data_ptr, ty: LirType::Ptr });
+                self.push_inst(bb, Inst::Load { dst: data_load, ptr: data_ptr, ty: LirType::Ptr });
                 lir_args.push(data_load);
             } else {
                 lir_args.push(self.lower_operand(arg, bb));
@@ -4270,14 +4259,11 @@ impl<'a> FuncLowering<'a> {
             if slot_ty.is_aggregate() {
                 // For aggregates, return address of slot.
                 let addr = self.lir_func.next_value();
-                self.lir_func
-                    .block_mut(bb)
-                    .insts
-                    .push(Inst::SlotAddr { dst: addr, slot });
+                self.push_inst(bb, Inst::SlotAddr { dst: addr, slot });
                 addr
             } else {
                 let dst = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                self.push_inst(bb, Inst::SlotLoad {
                     dst,
                     slot,
                     ty: slot_ty,
@@ -4297,7 +4283,7 @@ impl<'a> FuncLowering<'a> {
                 addr // aggregates: the address IS the value
             } else {
                 let dst = self.lir_func.next_value();
-                self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                self.push_inst(bb, Inst::Load {
                     dst,
                     ptr: addr,
                     ty,

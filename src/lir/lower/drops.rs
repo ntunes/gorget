@@ -84,7 +84,7 @@ impl<'a> FuncLowering<'a> {
         if place.projections.is_empty() {
             if let Some(local) = self.gir_func.locals.get(local_idx) {
                 if local.ownership.is_pure_borrow_for(place.local) {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                    self.push_inst(bb, Inst::Nop);
                     return;
                 }
             }
@@ -139,21 +139,21 @@ impl<'a> FuncLowering<'a> {
                     let addr = self.lower_place_addr(place, bb);
                     if conditional {
                         let byte_size = self.compute_place_byte_size(place);
-                        self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                        self.push_inst(bb, Inst::DropGuardOpen {
                             kind: DropGuardKind::NonZero { size: byte_size as u32 },
                             value: addr,
                         });
                     }
                     let addr2 = self.lower_place_addr(place, bb);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                     if conditional {
-                        self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+                        self.push_inst(bb, Inst::DropGuardClose);
                     }
                 } else {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+                    self.push_inst(bb, Inst::Nop);
                 }
             }
             DropStrategy::Trivial(ref fn_name) if fn_name == "free" => {
@@ -161,7 +161,7 @@ impl<'a> FuncLowering<'a> {
                 if conditional {
                     let guard_addr = self.lower_place_addr(place, bb);
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                    self.push_inst(bb, Inst::DropGuardOpen {
                         kind: DropGuardKind::NonZero { size: byte_size as u32 },
                         value: guard_addr,
                     });
@@ -185,19 +185,19 @@ impl<'a> FuncLowering<'a> {
                     // Find the struct_id for this Box type
                     if let Some(sid) = self.struct_reg.lookup(type_name.as_deref().unwrap_or("")) {
                         let data_ptr = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                        self.push_inst(bb, Inst::FieldPtr {
                             dst: data_ptr,
                             base: addr,
                             struct_id: sid,
                             field: 0, // data is field 0
                         });
                         let data_val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::Load {
+                        self.push_inst(bb, Inst::Load {
                             dst: data_val,
                             ptr: data_ptr,
                             ty: LirType::Ptr,
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![data_val],
@@ -206,10 +206,10 @@ impl<'a> FuncLowering<'a> {
                     } else {
                         // Fallback: just free the whole value
                         let val = self.lir_func.next_value();
-                        self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                        self.push_inst(bb, Inst::SlotLoad {
                             dst: val, slot, ty: slot_ty,
                         });
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: None,
                             name: "free".to_string(),
                             args: vec![val],
@@ -237,15 +237,15 @@ impl<'a> FuncLowering<'a> {
                             // Load as Ptr (not the struct type) so the C backend passes by
                             // value instead of by reference — Box is typedef'd as void*.
                             let box_val = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                            self.push_inst(bb, Inst::SlotLoad {
                                 dst: box_val, slot, ty: LirType::Ptr,
                             });
                             if let Some(&fid) = self.func_index.get(drop_fn.as_str()) {
-                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                self.push_inst(bb, Inst::Call {
                                     dst: None, func: fid, args: vec![box_val],
                                 });
                             } else {
-                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                self.push_inst(bb, Inst::CallExtern {
                                     dst: None, name: drop_fn, args: vec![box_val],
                                     arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                 });
@@ -261,13 +261,13 @@ impl<'a> FuncLowering<'a> {
                     // `src/backend/c_lir/emit_types.rs:emit_runtime_helpers`
                     // alongside the matching `__gorget_box_alloc_<inner>`.
                     let val = self.lir_func.next_value();
-                    self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+                    self.push_inst(bb, Inst::SlotLoad {
                         dst: val, slot, ty: LirType::Ptr,
                     });
                     let free_fn = inner_name
                         .map(|inner| format!("__gorget_box_free_{inner}"))
                         .unwrap_or_else(|| "free".to_string());
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None,
                         name: free_fn,
                         args: vec![val],
@@ -275,7 +275,7 @@ impl<'a> FuncLowering<'a> {
                     });
                 }
                 if conditional {
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+                    self.push_inst(bb, Inst::DropGuardClose);
                 }
             }
             DropStrategy::Trivial(ref fn_name) => {
@@ -284,24 +284,24 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 if conditional {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                    self.push_inst(bb, Inst::DropGuardOpen {
                         kind: DropGuardKind::NonZero { size: byte_size as u32 },
                         value: addr,
                     });
                 }
                 let drop_addr = if conditional { self.lower_place_addr(place, bb) } else { addr };
                 if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                    self.push_inst(bb, Inst::Call {
                         dst: None, func: fid, args: vec![drop_addr],
                     });
                 } else {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: fn_name.clone(), args: vec![drop_addr],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 }
                 if conditional {
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+                    self.push_inst(bb, Inst::DropGuardClose);
                 }
             }
             DropStrategy::Custom(ref fn_name) => {
@@ -310,7 +310,7 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                    self.push_inst(bb, Inst::DropGuardOpen {
                         kind: DropGuardKind::NonZero { size: byte_size as u32 },
                         value: addr,
                     });
@@ -321,7 +321,7 @@ impl<'a> FuncLowering<'a> {
                     .map(|info| info.drop_fn_name.clone());
                 if let Some(drop_fn) = unified_drop_fn {
                     let addr2 = self.lower_place_addr(place, bb);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
@@ -329,11 +329,11 @@ impl<'a> FuncLowering<'a> {
                     // Fallback: call user fn + inline field drops
                     let addr2 = self.lower_place_addr(place, bb);
                     if let Some(&fid) = self.func_index.get(fn_name.as_str()) {
-                        self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                        self.push_inst(bb, Inst::Call {
                             dst: None, func: fid, args: vec![addr2],
                         });
                     } else {
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: None, name: fn_name.clone(), args: vec![addr2],
                             arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
@@ -341,7 +341,7 @@ impl<'a> FuncLowering<'a> {
                     self.lower_field_drops(place, &type_name, bb);
                 }
                 {
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+                    self.push_inst(bb, Inst::DropGuardClose);
                 }
             }
             DropStrategy::Recursive => {
@@ -349,7 +349,7 @@ impl<'a> FuncLowering<'a> {
                 let addr = self.lower_place_addr(place, bb);
                 {
                     let byte_size = self.compute_place_byte_size(place);
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+                    self.push_inst(bb, Inst::DropGuardOpen {
                         kind: DropGuardKind::NonZero { size: byte_size as u32 },
                         value: addr,
                     });
@@ -360,7 +360,7 @@ impl<'a> FuncLowering<'a> {
                     .map(|info| info.drop_fn_name.clone());
                 if let Some(drop_fn) = unified_drop_fn {
                     let addr2 = self.lower_place_addr(place, bb);
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![addr2],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
@@ -373,7 +373,7 @@ impl<'a> FuncLowering<'a> {
                     if is_enum_drop {
                         let drop_fn = format!("{}__drop", type_name.as_ref().unwrap());
                         let addr2 = self.lower_place_addr(place, bb);
-                        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                        self.push_inst(bb, Inst::CallExtern {
                             dst: None, name: drop_fn, args: vec![addr2],
                             arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                         });
@@ -382,7 +382,7 @@ impl<'a> FuncLowering<'a> {
                     }
                 }
                 {
-                    self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+                    self.push_inst(bb, Inst::DropGuardClose);
                 }
             }
         }
@@ -427,18 +427,18 @@ impl<'a> FuncLowering<'a> {
 
         // No drop strategy registered → nothing to do.
         if matches!(strategy, DropStrategy::None) {
-            self.lir_func.block_mut(bb).insts.push(Inst::Nop);
+            self.push_inst(bb, Inst::Nop);
             return;
         }
 
         // Open the guard on the slot's pointer bits (8 bytes).
         if conditional {
             let guard_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            self.push_inst(bb, Inst::SlotAddr {
                 dst: guard_addr,
                 slot,
             });
-            self.lir_func.block_mut(bb).insts.push(Inst::DropGuardOpen {
+            self.push_inst(bb, Inst::DropGuardOpen {
                 kind: DropGuardKind::NonZero { size: 8 },
                 value: guard_addr,
             });
@@ -446,7 +446,7 @@ impl<'a> FuncLowering<'a> {
 
         // Load the pointer value for the drop call.
         let drop_arg = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotLoad {
+        self.push_inst(bb, Inst::SlotLoad {
             dst: drop_arg,
             slot,
             ty: LirType::Ptr,
@@ -463,11 +463,11 @@ impl<'a> FuncLowering<'a> {
                     .map(|info| info.drop_fn_name.clone());
                 let drop_fn = unified_drop_fn.unwrap_or_else(|| fn_name.clone());
                 if let Some(&fid) = self.func_index.get(drop_fn.as_str()) {
-                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                    self.push_inst(bb, Inst::Call {
                         dst: None, func: fid, args: vec![drop_arg],
                     });
                 } else {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![drop_arg],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
@@ -478,13 +478,13 @@ impl<'a> FuncLowering<'a> {
                     .and_then(|tn| self.type_drop_fns.get(tn.as_str()))
                     .map(|info| info.drop_fn_name.clone());
                 if let Some(drop_fn) = unified_drop_fn {
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![drop_arg],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
                 } else if let Some(ref tn) = type_name {
                     let drop_fn = format!("{tn}__drop");
-                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                    self.push_inst(bb, Inst::CallExtern {
                         dst: None, name: drop_fn, args: vec![drop_arg],
                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                     });
@@ -494,7 +494,7 @@ impl<'a> FuncLowering<'a> {
         }
 
         if conditional {
-            self.lir_func.block_mut(bb).insts.push(Inst::DropGuardClose);
+            self.push_inst(bb, Inst::DropGuardClose);
         }
     }
 
@@ -586,18 +586,18 @@ impl<'a> FuncLowering<'a> {
                         };
                         if let Some(drop_fn_name) = drop_fn {
                             let field_ptr = self.lir_func.next_value();
-                            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                            self.push_inst(bb, Inst::FieldPtr {
                                 dst: field_ptr,
                                 base: base_addr,
                                 struct_id,
                                 field: field_idx as u32,
                             });
                             if let Some(&fid) = self.func_index.get(drop_fn_name.as_str()) {
-                                self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                self.push_inst(bb, Inst::Call {
                                     dst: None, func: fid, args: vec![field_ptr],
                                 });
                             } else {
-                                self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                self.push_inst(bb, Inst::CallExtern {
                                     dst: None, name: drop_fn_name, args: vec![field_ptr],
                                     arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                 });
@@ -610,7 +610,7 @@ impl<'a> FuncLowering<'a> {
                                     if let crate::ir::types::TypeDefKind::Struct(ref sub_sdef) = sub_def.kind {
                                         let sub_struct_id = self.struct_reg.lookup(ftn).unwrap_or(StructId(0));
                                         let field_ptr = self.lir_func.next_value();
-                                        self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                        self.push_inst(bb, Inst::FieldPtr {
                                             dst: field_ptr,
                                             base: base_addr,
                                             struct_id,
@@ -631,18 +631,18 @@ impl<'a> FuncLowering<'a> {
                                             };
                                             if let Some(sub_fn) = sub_drop_fn {
                                                 let sub_ptr = self.lir_func.next_value();
-                                                self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+                                                self.push_inst(bb, Inst::FieldPtr {
                                                     dst: sub_ptr,
                                                     base: field_ptr,
                                                     struct_id: sub_struct_id,
                                                     field: sub_idx as u32,
                                                 });
                                                 if let Some(&fid) = self.func_index.get(sub_fn.as_str()) {
-                                                    self.lir_func.block_mut(bb).insts.push(Inst::Call {
+                                                    self.push_inst(bb, Inst::Call {
                                                         dst: None, func: fid, args: vec![sub_ptr],
                                                     });
                                                 } else {
-                                                    self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+                                                    self.push_inst(bb, Inst::CallExtern {
                                                         dst: None, name: sub_fn, args: vec![sub_ptr],
                                                         arg_abis: vec![crate::ir::abi::AbiKind::Opaque],
                                                     });

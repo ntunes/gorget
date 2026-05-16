@@ -95,7 +95,7 @@ impl<'a> FuncLowering<'a> {
         let raw_ptr = self.lir_func.next_value();
         self.ensure_extern(emit_name, arg_types, &LirType::Ptr);
         let call_abis = self.lookup_arg_abis(emit_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
@@ -105,23 +105,23 @@ impl<'a> FuncLowering<'a> {
         // 2. Store raw_ptr to a temp slot so the SSA pass can thread it
         //    across the branch blocks (raw ValueIds aren't tracked by SSA).
         let raw_slot = self.lir_func.add_slot(LirType::Ptr, None);
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+        self.push_inst(bb, Inst::SlotStore {
             slot: raw_slot, value: raw_ptr, is_move: false,
         });
 
         // 3. Get slot address and zero the struct
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(opt_sid), bb);
 
         // 3. Null check → Branch
         let null_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+        self.push_inst(bb, Inst::NullPtr { dst: null_val });
         let is_not_null = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: is_not_null, op: CmpOp::Ne, lhs: raw_ptr, rhs: null_val,
         });
 
@@ -129,16 +129,16 @@ impl<'a> FuncLowering<'a> {
         let none_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: is_not_null,
             then_block: some_bb, then_args: vec![],
             else_block: none_bb, else_args: vec![],
-        };
+        });
 
         // 5. Some branch: reload raw_ptr from slot, materialize the payload
         // value, then EnumInit with tag=0.
         let raw_in_some = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotLoad {
+        self.push_inst(some_bb, Inst::SlotLoad {
             dst: raw_in_some, slot: raw_slot, ty: LirType::Ptr,
         });
 
@@ -148,7 +148,7 @@ impl<'a> FuncLowering<'a> {
             let cloned = self.lir_func.next_value();
             self.ensure_extern(&clone_fn, &[LirType::Ptr], &payload_ty);
             let abis = self.lookup_arg_abis(&clone_fn);
-            self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
+            self.push_inst(some_bb, Inst::CallExtern {
                 dst: Some(cloned),
                 name: clone_fn,
                 args: vec![raw_in_some],
@@ -158,11 +158,11 @@ impl<'a> FuncLowering<'a> {
                 // Clone returns an aggregate by value — stash in a slot so
                 // EnumInit can Memcpy from its address.
                 let slot = self.lir_func.add_slot(payload_ty.clone(), None);
-                self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+                self.push_inst(some_bb, Inst::SlotStore {
                     slot, value: cloned, is_move: true,
                 });
                 let addr = self.lir_func.next_value();
-                self.lir_func.block_mut(some_bb).insts.push(Inst::SlotAddr {
+                self.push_inst(some_bb, Inst::SlotAddr {
                     dst: addr, slot,
                 });
                 addr
@@ -175,24 +175,24 @@ impl<'a> FuncLowering<'a> {
             raw_in_some
         } else {
             let loaded = self.lir_func.next_value();
-            self.lir_func.block_mut(some_bb).insts.push(Inst::Load {
+            self.push_inst(some_bb, Inst::Load {
                 dst: loaded, ptr: raw_in_some, ty: payload_ty.clone(),
             });
             loaded
         };
 
-        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+        self.push_inst(some_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 0, fields: vec![(1, payload_val)],
         });
-        self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
         // 5. None branch: tag=1 (no payload)
-        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+        self.push_inst(none_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 1, fields: vec![],
         });
-        self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(none_bb, Term::Jump(merge_bb, vec![]));
 
         // 6. Post-call zeros in merge block
         self.emit_post_call_zeros(args, merge_bb);
@@ -215,7 +215,7 @@ impl<'a> FuncLowering<'a> {
         let raw_ptr = self.lir_func.next_value();
         self.ensure_extern(emit_name, arg_types, &LirType::Ptr);
         let call_abis = self.lookup_arg_abis(emit_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
@@ -225,16 +225,16 @@ impl<'a> FuncLowering<'a> {
         // 2. Slot address + zero
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(opt_sid), bb);
 
         // 3. Null check → Branch
         let null_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+        self.push_inst(bb, Inst::NullPtr { dst: null_val });
         let is_not_null = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: is_not_null, op: CmpOp::Ne, lhs: raw_ptr, rhs: null_val,
         });
 
@@ -242,11 +242,11 @@ impl<'a> FuncLowering<'a> {
         let none_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: is_not_null,
             then_block: some_bb, then_args: vec![],
             else_block: none_bb, else_args: vec![],
-        };
+        });
 
         // 4. Some branch: wrap cstr via gorget_str_from_cstr, then EnumInit
         // with tag=0, payload=wrapped.
@@ -258,32 +258,32 @@ impl<'a> FuncLowering<'a> {
         // temp slot so we can pass its address to EnumInit (aggregate payloads
         // are copied via Memcpy from a ptr).
         let wrapped = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::CallExtern {
+        self.push_inst(some_bb, Inst::CallExtern {
             dst: Some(wrapped),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![raw_ptr],
             arg_abis: abis,
         });
         let wrapped_slot = self.lir_func.add_slot(str_ty.clone(), None);
-        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotStore {
+        self.push_inst(some_bb, Inst::SlotStore {
             slot: wrapped_slot, value: wrapped, is_move: true,
         });
         let wrapped_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(some_bb).insts.push(Inst::SlotAddr {
+        self.push_inst(some_bb, Inst::SlotAddr {
             dst: wrapped_addr, slot: wrapped_slot,
         });
-        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+        self.push_inst(some_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 0, fields: vec![(1, wrapped_addr)],
         });
-        self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
         // 5. None branch: tag=1
-        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+        self.push_inst(none_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 1, fields: vec![],
         });
-        self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(none_bb, Term::Jump(merge_bb, vec![]));
 
         // 6. Post-call zeros
         self.emit_post_call_zeros(args, merge_bb);
@@ -313,7 +313,7 @@ impl<'a> FuncLowering<'a> {
         let raw_result = self.lir_func.next_value();
         self.ensure_extern(emit_name, arg_types, &ok_ty);
         let call_abis = self.lookup_arg_abis(emit_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(raw_result),
             name: emit_name.to_string(),
             args: lir_args,
@@ -324,7 +324,7 @@ impl<'a> FuncLowering<'a> {
         let err_ptr = self.lir_func.next_value();
         self.ensure_extern(err_fn_name, &[], &LirType::Ptr);
         let err_abis = self.lookup_arg_abis(err_fn_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(err_ptr),
             name: err_fn_name.to_string(),
             args: vec![],
@@ -334,16 +334,16 @@ impl<'a> FuncLowering<'a> {
         // 3. Slot address + zero
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(result_sid), bb);
 
         // 4. Null check on error → Branch
         let null_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+        self.push_inst(bb, Inst::NullPtr { dst: null_val });
         let has_error = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: has_error, op: CmpOp::Ne, lhs: err_ptr, rhs: null_val,
         });
 
@@ -351,11 +351,11 @@ impl<'a> FuncLowering<'a> {
         let ok_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: has_error,
             then_block: err_bb, then_args: vec![],
             else_block: ok_bb, else_args: vec![],
-        };
+        });
 
         // 5. Error branch: wrap error cstr, then EnumInit with tag=1, variant_idx=1.
         //    (Result layout: field 0 = tag, field 1 = Ok payload, field 2 = Error payload.)
@@ -364,47 +364,47 @@ impl<'a> FuncLowering<'a> {
         self.ensure_extern("gorget_str_from_cstr", &[LirType::Ptr], &str_ty);
         let abis = self.lookup_arg_abis("gorget_str_from_cstr");
         let err_str = self.lir_func.next_value();
-        self.lir_func.block_mut(err_bb).insts.push(Inst::CallExtern {
+        self.push_inst(err_bb, Inst::CallExtern {
             dst: Some(err_str),
             name: "gorget_str_from_cstr".to_string(),
             args: vec![err_ptr],
             arg_abis: abis,
         });
         let err_slot = self.lir_func.add_slot(str_ty.clone(), None);
-        self.lir_func.block_mut(err_bb).insts.push(Inst::SlotStore {
+        self.push_inst(err_bb, Inst::SlotStore {
             slot: err_slot, value: err_str, is_move: true,
         });
         let err_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(err_bb).insts.push(Inst::SlotAddr {
+        self.push_inst(err_bb, Inst::SlotAddr {
             dst: err_addr, slot: err_slot,
         });
-        self.lir_func.block_mut(err_bb).insts.push(Inst::EnumInit {
+        self.push_inst(err_bb, Inst::EnumInit {
             target: slot_addr, struct_id: result_sid,
             variant_tag: 1, fields: vec![(2, err_addr)],
         });
-        self.lir_func.block_mut(err_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(err_bb, Term::Jump(merge_bb, vec![]));
 
         // 6. Ok branch: EnumInit with tag=0, variant_idx=0, payload=raw_result.
         //    For aggregate ok types, raw_result is the aggregate value — stash
         //    it in a slot so EnumInit can Memcpy from its address.
         let ok_payload: ValueId = if ok_ty.is_aggregate() {
             let ok_slot = self.lir_func.add_slot(ok_ty.clone(), None);
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotStore {
+            self.push_inst(ok_bb, Inst::SlotStore {
                 slot: ok_slot, value: raw_result, is_move: true,
             });
             let ok_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(ok_bb).insts.push(Inst::SlotAddr {
+            self.push_inst(ok_bb, Inst::SlotAddr {
                 dst: ok_addr, slot: ok_slot,
             });
             ok_addr
         } else {
             raw_result
         };
-        self.lir_func.block_mut(ok_bb).insts.push(Inst::EnumInit {
+        self.push_inst(ok_bb, Inst::EnumInit {
             target: slot_addr, struct_id: result_sid,
             variant_tag: 0, fields: vec![(1, ok_payload)],
         });
-        self.lir_func.block_mut(ok_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(ok_bb, Term::Jump(merge_bb, vec![]));
 
         // 7. Post-call zeros
         self.emit_post_call_zeros(args, merge_bb);
@@ -431,7 +431,7 @@ impl<'a> FuncLowering<'a> {
         let raw_val = self.lir_func.next_value();
         self.ensure_extern(emit_name, arg_types, &ext_ret_ty);
         let call_abis = self.lookup_arg_abis(emit_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(raw_val),
             name: emit_name.to_string(),
             args: lir_args,
@@ -441,7 +441,7 @@ impl<'a> FuncLowering<'a> {
         // 2. Slot address + zero
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(opt_sid), bb);
@@ -450,7 +450,7 @@ impl<'a> FuncLowering<'a> {
             // 3. Sentinel check: raw >= 0 → Some, else None
             let zero = self.emit_i64_const(bb, 0);
             let is_valid = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+            self.push_inst(bb, Inst::Cmp {
                 dst: is_valid, op: CmpOp::Ge, lhs: raw_val, rhs: zero,
             });
 
@@ -458,31 +458,31 @@ impl<'a> FuncLowering<'a> {
             let none_bb = self.lir_func.add_block();
             let merge_bb = self.lir_func.add_block();
 
-            self.lir_func.block_mut(bb).terminator = Term::Branch {
+            self.set_terminator(bb, Term::Branch {
                 cond: is_valid,
                 then_block: some_bb, then_args: vec![],
                 else_block: none_bb, else_args: vec![],
-            };
+            });
 
             // Some branch: EnumInit { tag=0, payload=raw_val }
-            self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+            self.push_inst(some_bb, Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
                 variant_tag: 0, fields: vec![(1, raw_val)],
             });
-            self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+            self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
             // None branch: EnumInit { tag=1 }
-            self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+            self.push_inst(none_bb, Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
                 variant_tag: 1, fields: vec![],
             });
-            self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
+            self.set_terminator(none_bb, Term::Jump(merge_bb, vec![]));
 
             self.emit_post_call_zeros(args, merge_bb);
             merge_bb
         } else {
             // Unsigned/float: always Some (this case is rare)
-            self.lir_func.block_mut(bb).insts.push(Inst::EnumInit {
+            self.push_inst(bb, Inst::EnumInit {
                 target: slot_addr, struct_id: opt_sid,
                 variant_tag: 0, fields: vec![(1, raw_val)],
             });
@@ -513,7 +513,7 @@ impl<'a> FuncLowering<'a> {
         // Use output pointer for aggregate return.
         let match_slot = self.lir_func.add_slot(match_ty.clone(), None);
         let match_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: match_addr, slot: match_slot,
         });
 
@@ -533,20 +533,20 @@ impl<'a> FuncLowering<'a> {
             self.ensure_extern(emit_name, arg_types, &match_ty);
             let abis = self.lookup_arg_abis(emit_name);
             let raw_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            self.push_inst(bb, Inst::CallExtern {
                 dst: Some(raw_val),
                 name: emit_name.to_string(),
                 args: call_args[..call_args.len()-1].to_vec(),
                 arg_abis: abis,
             });
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+            self.push_inst(bb, Inst::SlotStore {
                 slot: match_slot, value: raw_val, is_move: true,
             });
             // Skip the CallExtern below
             (String::new(), vec![], vec![])
         };
         if !final_name.is_empty() {
-            self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+            self.push_inst(bb, Inst::CallExtern {
                 dst: None,
                 name: final_name,
                 args: final_args,
@@ -557,11 +557,11 @@ impl<'a> FuncLowering<'a> {
         // 2. Read .start field (field 0) of the match struct
         let start_field = if let Some(sid) = match_sid {
             let fptr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::FieldPtr {
+            self.push_inst(bb, Inst::FieldPtr {
                 dst: fptr, base: match_addr, struct_id: sid, field: 0,
             });
             let start_val = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::Load {
+            self.push_inst(bb, Inst::Load {
                 dst: start_val, ptr: fptr, ty: LirType::I64,
             });
             start_val
@@ -572,14 +572,14 @@ impl<'a> FuncLowering<'a> {
         // 3. Check start != -1
         let neg_one = self.emit_i64_const(bb, -1);
         let is_valid = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: is_valid, op: CmpOp::Ne, lhs: start_field, rhs: neg_one,
         });
 
         // 4. Slot address + zero
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(opt_sid), bb);
@@ -588,26 +588,26 @@ impl<'a> FuncLowering<'a> {
         let none_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: is_valid,
             then_block: some_bb, then_args: vec![],
             else_block: none_bb, else_args: vec![],
-        };
+        });
 
         // 5. Some: EnumInit with payload = ptr to match struct (aggregate → Memcpy).
         let _ = match_ty; // payload field type is looked up by struct_id in EnumInit
-        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+        self.push_inst(some_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 0, fields: vec![(1, match_addr)],
         });
-        self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
         // 6. None: tag=1
-        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+        self.push_inst(none_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 1, fields: vec![],
         });
-        self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(none_bb, Term::Jump(merge_bb, vec![]));
 
         self.emit_post_call_zeros(args, merge_bb);
         merge_bb
@@ -633,7 +633,7 @@ impl<'a> FuncLowering<'a> {
         let raw_ptr = self.lir_func.next_value();
         self.ensure_extern(emit_name, arg_types, &LirType::Ptr);
         let call_abis = self.lookup_arg_abis(emit_name);
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: Some(raw_ptr),
             name: emit_name.to_string(),
             args: lir_args,
@@ -643,16 +643,16 @@ impl<'a> FuncLowering<'a> {
         // 2. Slot address + zero
         let slot = self.local_to_slot[d.0 as usize];
         let slot_addr = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+        self.push_inst(bb, Inst::SlotAddr {
             dst: slot_addr, slot,
         });
         self.emit_memset_zero(slot_addr, &LirType::Struct(opt_sid), bb);
 
         // 3. Null check → Branch
         let null_val = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::NullPtr { dst: null_val });
+        self.push_inst(bb, Inst::NullPtr { dst: null_val });
         let is_not_null = self.lir_func.next_value();
-        self.lir_func.block_mut(bb).insts.push(Inst::Cmp {
+        self.push_inst(bb, Inst::Cmp {
             dst: is_not_null, op: CmpOp::Ne, lhs: raw_ptr, rhs: null_val,
         });
 
@@ -660,27 +660,27 @@ impl<'a> FuncLowering<'a> {
         let none_bb = self.lir_func.add_block();
         let merge_bb = self.lir_func.add_block();
 
-        self.lir_func.block_mut(bb).terminator = Term::Branch {
+        self.set_terminator(bb, Term::Branch {
             cond: is_not_null,
             then_block: some_bb, then_args: vec![],
             else_block: none_bb, else_args: vec![],
-        };
+        });
 
         // 4. Some: EnumInit (tag=0, payload=raw_ptr). For aggregate payload types,
         //    raw_ptr is a ptr to the aggregate and BIR expansion will Memcpy.
         let _ = payload_ty; // payload type is carried via struct_id in EnumInit
-        self.lir_func.block_mut(some_bb).insts.push(Inst::EnumInit {
+        self.push_inst(some_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 0, fields: vec![(1, raw_ptr)],
         });
-        self.lir_func.block_mut(some_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(some_bb, Term::Jump(merge_bb, vec![]));
 
         // 5. None: tag=1
-        self.lir_func.block_mut(none_bb).insts.push(Inst::EnumInit {
+        self.push_inst(none_bb, Inst::EnumInit {
             target: slot_addr, struct_id: opt_sid,
             variant_tag: 1, fields: vec![],
         });
-        self.lir_func.block_mut(none_bb).terminator = Term::Jump(merge_bb, vec![]);
+        self.set_terminator(none_bb, Term::Jump(merge_bb, vec![]));
 
         self.emit_post_call_zeros(args, merge_bb);
         merge_bb
@@ -694,7 +694,7 @@ impl<'a> FuncLowering<'a> {
         let zero_byte = self.emit_i32_const(bb, 0);
         self.ensure_extern("memset", &[LirType::Ptr, LirType::I32, LirType::I64], &LirType::Ptr);
         let abis = self.lookup_arg_abis("memset");
-        self.lir_func.block_mut(bb).insts.push(Inst::CallExtern {
+        self.push_inst(bb, Inst::CallExtern {
             dst: None,
             name: "memset".to_string(),
             args: vec![ptr, zero_byte, size_val],
@@ -782,20 +782,20 @@ impl<'a> FuncLowering<'a> {
         if ty.is_aggregate() && sz > 0 {
             // Aggregate with known size: temp slot → memcpy
             let temp_slot = self.lir_func.add_slot(ty.clone(), None);
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotStore {
+            self.push_inst(bb, Inst::SlotStore {
                 slot: temp_slot, value, is_move: true,
             });
             let temp_addr = self.lir_func.next_value();
-            self.lir_func.block_mut(bb).insts.push(Inst::SlotAddr {
+            self.push_inst(bb, Inst::SlotAddr {
                 dst: temp_addr, slot: temp_slot,
             });
             let sz_val = self.emit_size_of(bb, ty.clone());
-            self.lir_func.block_mut(bb).insts.push(Inst::Memcpy {
+            self.push_inst(bb, Inst::Memcpy {
                 dst_ptr: field_ptr, src_ptr: temp_addr, size: sz_val,
             });
         } else {
             // Scalar or opaque type: direct store
-            self.lir_func.block_mut(bb).insts.push(Inst::Store {
+            self.push_inst(bb, Inst::Store {
                 ptr: field_ptr, value,
             });
         }

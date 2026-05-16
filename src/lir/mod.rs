@@ -1198,14 +1198,15 @@ pub struct Block {
     pub terminator_span: Option<crate::span::Span>,
 }
 
-// ── Block helpers (stack-traces stage 1c) ───────────────────────────────────
+// ── Block helpers (stack-traces stages 1b + 1c) ─────────────────────────────
 //
 // Span-aware mutation helpers. Every mutation of `insts` must also touch
 // `span_map` to preserve the `span_map.len() == insts.len()` invariant
 // Stage 1b's writer code establishes. Use these helpers in preference to
 // direct `block.insts.push(...)` so the parallel array stays in lockstep.
 impl Block {
-    /// Append an instruction with an explicit span (Stage 1b writers).
+    /// Push an instruction and its source span in lockstep.
+    /// Maintains the `span_map.len() == insts.len()` invariant.
     pub fn push_inst(&mut self, inst: Inst, span: Option<crate::span::Span>) {
         self.insts.push(inst);
         self.span_map.push(span);
