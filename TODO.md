@@ -1,5 +1,51 @@
 # TODO
 
+## Profile snapshot 2026-05-16
+
+Fresh `gg profile` snapshot taken on `gorget-1` HEAD (a35ea90d) after the recent LW 3818ms→600ms wins. Goal: identify the **next** dominant phase **outside** the known/handled zones (drop_elab, semantic name-index, safety borrow-state-reset).
+
+**Workloads profiled** (release build):
+
+| Fixture                                             | total_ms | LIR insts | C lines |
+|-----------------------------------------------------|---------:|----------:|--------:|
+| `hello.gg` (baseline, 2 LOC)                        |    24.0  |         4 |   2 610 |
+| `generic_nested_collections.gg` (15 LOC)            |    21.7  |       112 |   2 846 |
+| `yaml_parse.gg` (453 LOC, single file)              |    38.8  |    18 417 |  44 923 |
+| `httpserver_router_extended.gg` (75 LOC + imports)  |    66.7  |    20 258 |  27 153 |
+| `self_host_typechecker/driver.gg` (~12k aggregate)  |   254.1  |    76 784 | 196 154 |
+| `self_host_lowerer/driver.gg` (~30k aggregate)      |   798.0  |   197 119 | 540 202 |
+
+The self-host lowerer dominates and is the right magnifying glass for the next round.
+
+**Phase breakdown on `self_host_lowerer/driver.gg` (798ms)** — sorted by absolute time, with KNOWN/HANDLED rows annotated:
+
+| Phase                              | ms     | % total | Notes |
+|------------------------------------|-------:|--------:|---|
+| `lir_optimize` (total)             | 226.3  | 28.4%   | of which `drop_elaboration` 141.4 (KNOWN), `propagate_copies` 18.6, `eliminate_dead_code` 13.3, `post_elab_dce` 5.9, `fold_constants` 5.0, `cse` 5.0, `eliminate_dead_functions` 5.0, `merge_linear_blocks` 3.0, `simplify_algebraic` 2.7, rest <2ms |
+| `gir_lower`                        | 155.2  | 19.4%   | Monolithic — **no sub-pass timing today** |
+| `codegen` (c_lir)                  | 136.3  | 17.1%   | C string assembly + serialization |
+| `semantic` (total)                 |  86.5  | 10.8%   | of which `meta_consts` 33.4, `typecheck_module` 23.1, `safety_check_module` 19.5 (KNOWN — borrow-state-reset), `safety::check_items_recursive` 16.4 (KNOWN), `resolve_bodies` 5.5, `collect_top_level` 3.0, rest <2ms |
+| `load_imports`                     |  67.1  |  8.4%   | File I/O + parse for each imported module |
+| `lir_ssa`                          |  44.2  |  5.5%   | Critical-edge split + SSA construction (dominators, phi insertion, renaming) |
+| `lir_lower`                        |  30.9  |  3.9%   | GIR → LIR translation |
+| `gir_optimize`                     |  27.0  |  3.4%   | dead_drop / nop_elim / dead_block / dead_store passes |
+
+**Top-5 cheap-win candidates (excluding drop_elab, semantic name-index, safety borrow-state):**
+
+1. **`codegen` (136ms on lowerer, 37ms on typechecker, 7.5ms on http_router) — `src/backend/c_lir/`. CHEAP-WIN likely.** C emission scales with C line count (540k lines on lowerer). Almost certainly dominated by `String::push_str`, `format!`, and small-buffer growth. Cheap wins: pre-sized output buffer (peak is ~5MB of C — one `with_capacity(8 << 20)` saves dozens of reallocations), `write!` to a `Vec<u8>` instead of intermediate `format!()` returns, hoist any per-instruction `HashMap` lookups out of the hot path. Caveat: `src/backend/` is in the other-agents zone — flagged for that agent's next pass, not for direct work here. [priority: high, ~1-3 day investigation]
+
+2. **`gir_lower` (155ms, no breakdown) — `src/ir/lowering/`. MEDIUM, profile-blind today.** This is the second-largest phase but ships as a single number. First action is **instrument the phase** — split into monomorphization, drop-insertion, closure synthesis, type lowering. Without sub-pass timing the cheap-win surface is invisible. `src/ir/lowering/` is in the other-agents zone — coordinate the instrumentation patch. [priority: high — unblocks targeted optimization, ~half day to add timings]
+
+3. **`lir_optimize` non-drop-elab tail (~85ms) — `src/lir/optimize.rs`. CHEAP-WIN.** Confirmed: `propagate_copies` (18.6ms) uses default `std::collections::HashMap` (lines 1306/1343/1344/1396/1502/1529 grep-confirmed SipHash). A drop-in `rustc_hash::FxHashMap` swap is the canonical 2-5× hashing win and should shave several ms on lowerer. Similar audit needed for `cse` (uses `HashMap<CseKey, ValueId>` at line 994 — already a candidate). Each of the 11 fixpoint sub-passes also walks every block + every inst; a one-pass merge of `eliminate_dead_code` + `post_elab_dce` + `propagate_copies` (they all touch the same data) is worth scoping. `src/lir/` is in the other-agents zone. [priority: medium, FxHashMap swap is literally a `use` change + type aliases, ~1 hour]
+
+4. **`load_imports` (67ms on lowerer, 39ms on typechecker, 19ms on http_router) — `src/loader.rs` (NOT in any forbidden zone). CHEAP-WIN.** Scales linearly with import count; serial today. Two independent wins: (a) `rayon::par_iter` the per-import file-read + parse — embarrassingly parallel and parses are CPU-bound at ~1-5ms each, ~3-4× speedup on multi-file drivers; (b) inspect for redundant re-reads of the same path (transitive imports). On self_host_lowerer (~30 imports) this could drop 67ms → ~20ms. **This is the only top-5 candidate in a non-forbidden zone — best fit for the next direct-edit agent.** [priority: medium-high, ~half day]
+
+5. **`lir_ssa` (44ms on lowerer, 13ms on typechecker) — `src/lir/ssa.rs`. MEDIUM, likely structural.** SSA construction is dominator-tree + phi-insertion + renaming. Standard Cytron-style implementations are O(n α(n)); the cost is mostly intrinsic to the work. Cheap-win surface: check whether `Bitset` / `IndexVec` are used for dominator frontiers vs `HashSet<BlockId>`, and whether the renaming walk allocates per-block scratch maps. If using stdlib HashMaps anywhere, FxHashMap swap. Otherwise structural. `src/lir/` is in the other-agents zone. [priority: medium]
+
+**Honorable mention — `meta_consts` (33.4ms in semantic, lowerer):** `src/semantic/meta.rs:440 evaluate_meta_consts`. This is the single largest semantic sub-pass outside the known-handled set. Hypothesis: re-evaluates the same `meta` constants each module load (no memoization). `src/semantic/` is in the other-agents zone, but worth flagging — a 30%+ reduction here would clip ~10ms off any non-trivial build.
+
+**Where I'd point the next optimization agent:** `load_imports` parallelization is the standout — it's a 67ms phase on the worst-case workload, it's in a non-forbidden zone (`src/loader.rs`), the win is mechanical (wrap the existing per-import loop in `rayon::par_iter`), there are no layering-discipline traps, and the speedup is bounded only by the host's core count and the slowest single-file parse. Estimated 40-50ms saved on `self_host_lowerer/driver.gg` alone (~6% off total compile), with proportional wins on every multi-file fixture. The FxHashMap swap in `lir/optimize.rs::propagate_copies` is the smallest-touch alternative (1-hour patch, a few ms shaved) and pairs well as a warmup. [filed 2026-05-16]
+
 ## High
 
 - **Gorget-arena snag #1 — `String s = expr as String` followed by `s = s + ...` panics Tier 2a (AssignIntoOwnedSlot, untracked source).** Discovered while bringing `target/gorget-arena` up to date (2026-05-16). Surface: `gg check` passes, but `gg build` / `gg profile` panic with `Tier 2a consume-site violation: ... AssignIntoOwnedSlot(dst: GorgetString) — untracked source consumed (ownership not decided)` at the binary-`+` assignment site. Workaround in arena: drop the redundant `as String` cast (`char_at(i) as String` → `char_at(i)`) — `String__char_at` already returns String so the cast is a no-op at the language level, but the lowering of `as Type` to a self-same-type loses the source's ownership tag and the next mutating consume of the variable trips the Tier 2a validator. Minimal repro:
