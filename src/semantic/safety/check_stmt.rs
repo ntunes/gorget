@@ -1377,6 +1377,15 @@ impl<'a> BorrowChecker<'a> {
         self.closure_capture_sets.clear();
         self.vars_containing_closures.clear();
         self.pending_capture_set = None;
+        // Per-function caches that previously leaked across function bodies.
+        // `index_borrow_sources` dominates `save_branch_state` cost — without
+        // a per-function clear it accumulated every `.get()`/`vec[i]` binding
+        // module-wide, so each branch-state save cloned a map growing linearly
+        // with module size (LW: ~170 entries/save × 11k saves → ~2M clones).
+        // `reassignment_invalidated` has the same semantic shape; clearing it
+        // here also keeps the diagnostic state strictly per-function.
+        self.index_borrow_sources.clear();
+        self.reassignment_invalidated.clear();
     }
 
     pub(super) fn check_function(&mut self, func: &FunctionDef) {
