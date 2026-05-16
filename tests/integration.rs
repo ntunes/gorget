@@ -20757,3 +20757,37 @@ out_b[0]: StringV(first)
 out_b[1]: StringV(second)",
     );
 }
+
+// ─── Empty literal `[]` contextual typing (TODO 2026-05-14) ──────────
+//
+// Regression suite for elem_size propagation when an empty `[]` is
+// assigned into a slot whose declared element type is wider than 8 bytes
+// (String=32B, GorgetArray=40B, etc.). Pre-fix, the empty literal was
+// always sized for 8-byte elements; pushes truncated and reads returned
+// garbage/empty. Fix: src/ir/lowering/stmts/assigns.rs propagates the
+// collection's value type as `expected_type` before lowering the RHS
+// of an index assignment.
+
+#[test]
+fn empty_literal_dict_value() {
+    run_gg(
+        "empty_literal_dict_value.gg",
+        "Alice\nBob",
+    );
+}
+
+#[test]
+fn empty_literal_nested() {
+    run_gg(
+        "empty_literal_nested.gg",
+        "Alice\nBob",
+    );
+}
+
+#[test]
+fn empty_literal_struct_field() {
+    run_gg(
+        "empty_literal_struct_field.gg",
+        "Alice\nBob\nCarol",
+    );
+}

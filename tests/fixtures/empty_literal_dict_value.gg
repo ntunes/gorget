@@ -1,0 +1,16 @@
+# Regression: empty `[]` assigned into a Dict value slot must inherit the
+# declared element type from context. Without contextual type propagation
+# the literal was lowered with elem_size=8 (Ptr default), truncating
+# 32-byte Str pushes silently — `print(first)` produced empty output.
+# Fix: src/ir/lowering/stmts/assigns.rs lower_index_assign sets
+# expected_type to the collection's value type before lowering the RHS.
+
+void main():
+    Dict[String, Vector[String]] g = {}
+    g["k"] = []
+    g.get("k").unwrap().push("Alice")
+    g.get("k").unwrap().push("Bob")
+    String first = g.get("k").unwrap().get(0).unwrap()
+    print(first)
+    String second = g.get("k").unwrap().get(1).unwrap()
+    print(second)

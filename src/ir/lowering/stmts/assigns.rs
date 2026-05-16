@@ -728,13 +728,25 @@ pub(super) fn lower_index_assign(
         (lower_expr(ctx, builder, object), None)
     };
     let idx = lower_expr(ctx, builder, index);
-    let val = lower_expr(ctx, builder, value);
 
     // Determine the receiver type to dispatch correctly.
     // Use the resolved field type if we resolved through a field access,
     // since infer_operand_type_full doesn't walk projections.
-    let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
-    let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
+    let obj_type_raw = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
+    let obj_type = ctx.pointee_type(obj_type_raw).unwrap_or(obj_type_raw);
+
+    // Propagate the collection's element/value type as `expected_type` so an
+    // empty `[]` / `{}` RHS sizes its allocation correctly. Without this,
+    // `Dict[String, Vector[String]] g = {}; g["k"] = []` lowers `[]` with
+    // expected_type=None → elem_size=sizeof(I64)=8, silently truncating
+    // 32-byte Str elements on subsequent push. Mirrors the bare-init path
+    // (line 109) which sets expected_type = declared local type.
+    let value_expected_type = infer_collection_element_type(ctx, obj_type);
+    let prev_expected = ctx.func_state.expected_type;
+    ctx.func_state.expected_type = Some(value_expected_type);
+    let val = lower_expr(ctx, builder, value);
+    ctx.func_state.expected_type = prev_expected;
+
     let type_name = ctx.type_name_for_id(obj_type).unwrap_or("").to_string();
     // Read typed `collection_kind` from TypeMetadata (Phase A) instead of
     // matching `type_name.starts_with("Vector__"/"Dict__"/...)`. The kind

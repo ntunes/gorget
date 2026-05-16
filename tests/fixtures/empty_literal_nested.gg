@@ -1,0 +1,14 @@
+# Regression: nested empty literal `[[]]` for `Vector[Vector[T]]` —
+# the outer Vector's expected_type propagates element-wise through
+# lower_array_literal's nonempty_expected_override (collections.rs)
+# so the inner `[]` sees expected_type = Vector[String] and sizes its
+# allocation for 32-byte Str elements.
+
+void main():
+    Vector[Vector[String]] v = [[]]
+    v.get(0).unwrap().push("Alice")
+    v.get(0).unwrap().push("Bob")
+    String first = v.get(0).unwrap().get(0).unwrap()
+    String second = v.get(0).unwrap().get(1).unwrap()
+    print(first)
+    print(second)
