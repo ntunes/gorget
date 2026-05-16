@@ -301,10 +301,18 @@ pub static VECTOR: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "reduce", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "any", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "all", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_bool },
-        // `each` migrated to user-space `equip [T] Vector[T]: void each[F]
-        // (&self, F f): self.iter().for_each[F](f)` — see lib/std/iter.gg.
-        // The BIR HofOp::Each variant stays for Dict.each / Set.each.
-        BuiltinMethodDecl { name: "for_each", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
+        // `each` / `for_each` migrated to user-space `equip [T] Vector[T]:
+        // void each[F](&self, F f): self.iter().for_each[F](f)` (and the
+        // matching `for_each` wrapper) — see lib/std/iter.gg. Both
+        // BuiltinMethodDecl entries were retired (Vector.each in commit
+        // 1b0e7022; Vector.for_each in this commit). The BIR HofOp::Each
+        // variant stays for Dict.each / Set.each. The remaining
+        // typed-return Vector HOF entries below (filter / map / fold / …)
+        // are signature-load-bearing — IR-lowering reads their declared
+        // return types via `resolve_builtin_method_return_type` when the
+        // user-space wrapper's sig hasn't been registered yet (e.g.
+        // during early generic mono); deletion blocks on a separate
+        // signature source.
         BuiltinMethodDecl { name: "find", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_option_elem },
         BuiltinMethodDecl { name: "find_index", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
         BuiltinMethodDecl { name: "count", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_int },
